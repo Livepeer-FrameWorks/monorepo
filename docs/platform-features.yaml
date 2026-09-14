@@ -54,7 +54,7 @@ features:
   - slug: streams
     name: Live streams
     area: streaming
-    description: Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources.
+    description: Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources.
     status: shipped
     required_surfaces:
       graphql: { required: true }

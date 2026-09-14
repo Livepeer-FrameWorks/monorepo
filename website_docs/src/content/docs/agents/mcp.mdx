@@ -224,10 +224,10 @@ Actions the agent can perform.
 | `create_stream`                       | Create a push or pull stream                       | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config       | Auth                                                                                  |
 | `delete_stream`                       | Delete a stream                                    | Auth + Confirm                                                                        |
-| `list_stream_keys`                    | List stream ingest keys                            | Auth                                                                                  |
-| `create_stream_key`                   | Create an additional ingest key                    | Auth + Confirm                                                                        |
-| `delete_stream_key`                   | Deactivate an ingest key                           | Auth + Confirm                                                                        |
-| `refresh_stream_key`                  | Rotate the primary stream key                      | Auth + Confirm                                                                        |
+| `list_stream_keys`                    | List push-stream ingest keys                       | Auth                                                                                  |
+| `create_stream_key`                   | Create an additional push-stream ingest key        | Auth + Confirm                                                                        |
+| `delete_stream_key`                   | Deactivate a push-stream ingest key                | Auth + Confirm                                                                        |
+| `refresh_stream_key`                  | Rotate a push stream's primary key                 | Auth + Confirm                                                                        |
 | `validate_stream_key`                 | Validate an ingest key                             | Auth                                                                                  |
 | `list_push_targets`                   | List masked multistream destinations               | Auth                                                                                  |
 | `create_push_target`                  | Add a multistream destination                      | Auth                                                                                  |

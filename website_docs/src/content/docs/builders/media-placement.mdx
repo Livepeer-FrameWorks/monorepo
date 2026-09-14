@@ -6,8 +6,10 @@ description: Inspect draft ingest and viewer placement against authorized capaci
 ## Availability
 
 Placement ships in 0.3.0, and live routing and final admission resolve through it. Read-only
-capacity preview and source-aware preview for owned push streams are implemented; a managed pull
-or Mist-native input previews capacity only, though routing places it like any other stream.
+capacity preview and source-aware preview for owned push streams are implemented. Pull and managed
+streams can configure viewer policy, but their stream-specific preview is deliberately unavailable:
+a truthful result must observe whether their configured source can originate or relay, and a
+capacity-only answer would not prove a playable route. Live routing still places those streams.
 Saving placement intent must not be treated as proof that every media path enforces it: rules
 take effect once every cell holding the content acknowledges them.
 

@@ -1,6 +1,6 @@
 ---
 title: "Streams"
-description: "Create live streams, understand stream keys and playback IDs, and choose push or pull ingest."
+description: "Create live streams, understand stream keys and playback IDs, and choose the right source mode."
 sidebar:
   order: 2
 ---
@@ -21,12 +21,14 @@ watch.
 
 ## Stream Types
 
-FrameWorks supports two ingest models:
+FrameWorks exposes three source models. Builders create push and pull streams; deployment operators
+can also declare managed local sources for loops, playlists, and site-local workflows.
 
-| Model | How media arrives                                          | Creation path                       |
-| ----- | ---------------------------------------------------------- | ----------------------------------- |
-| Push  | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks | Dashboard or GraphQL `createStream` |
-| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you  | Dashboard or GraphQL `createStream` |
+| Model   | How media arrives                                                     | Creation path                         |
+| ------- | --------------------------------------------------------------------- | ------------------------------------- |
+| Push    | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks            | Dashboard or GraphQL `createStream`   |
+| Pull    | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you             | Dashboard or GraphQL `createStream`   |
+| Managed | The deployment supplies a local file, playlist, or controlled process | Operator bootstrap configuration only |
 
 Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
 upstream origins that cannot push into FrameWorks. See [Pull-input streams](/builders/pull-streams)
@@ -43,6 +45,10 @@ hand-wiring RTSP URLs.
   URI is stored server-side, encrypted at rest, and resolved only by the media plane when a viewer
   wakes the stream.
 </Aside>
+
+Managed streams also have no usable `streamKey`. Their literal source paths and process arguments
+are deployment secrets and are never returned by the tenant API. The API exposes only a safe
+summary: source kind, always-on state, placement count, and allowed source clusters.
 
 ## Create a Push Stream in the Dashboard
 
@@ -153,10 +159,12 @@ resolution.
 - **Live** - The media edge is receiving or pulling source media.
 - **Recording** - If recording is enabled, DVR assets are produced while the stream is live.
 - **Idle pull input** - Pull streams do not fetch upstream media until a viewer requests playback.
+- **Managed source** - The deployment reconciler owns the source; an always-on source can remain
+  active without a viewer.
 
 Playback access policies, multistream targets, recordings, thumbnails, and analytics attach to the
-stream regardless of whether the media arrives by push or pull. The difference is only how the
-source media gets into the platform.
+stream regardless of source mode. Push streams alone accept publisher credentials. Pull and
+managed streams expose source state instead of encoder URLs or stream-key controls.
 
 ## Related Guides
 

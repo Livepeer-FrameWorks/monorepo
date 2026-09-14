@@ -1,6 +1,12 @@
 # Managed streams under multi-Foghorn HA
 
 `mist_native` streams reconcile through Foghorn's managed-stream reconciler.
+
+Public stream reads project this internal mode as GraphQL `MANAGED`. They expose a
+`ManagedSourceView` containing only `source_kind`, `always_on`, `placement_count`, and
+`allowed_cluster_ids`; the literal source specification is never returned. Managed streams do not
+accept publisher credentials: GraphQL returns a null `streamKey`, and Commodore rejects primary or
+secondary stream-key management for every non-push mode.
 The implementation uses Foghorn's existing HA primitives — Redis-backed
 cluster-wide node state and the command-relay forwarding service — so
 multi-Foghorn-per-cluster deployments place streams correctly without any

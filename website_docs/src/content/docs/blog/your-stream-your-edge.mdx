@@ -34,6 +34,11 @@ Perhaps you have already paid for capacity in your own rack. You want it used fi
 
 Placement policies make those choices explicit. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
 
+That split also keeps source types honest. Push streams have publisher placement and stream keys.
+Pull streams have upstream-source pins plus viewer placement. Deployment-managed loops and local
+feeds keep their operator-owned source location while viewer policy decides where audiences are
+served. A local source is not disguised as a publisher just to fit the UI.
+
 "Prefer" and "never" mean different things. A preference can have a fallback. A prohibition cannot be outscored by a closer edge. If a private-only policy has no available private capacity, the answer is unavailable, not a surprise move onto paid capacity. A geographic hole is a configured distance threshold, not a guess based on a continent label.
 
 ## Decisions you can inspect

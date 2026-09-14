@@ -224,10 +224,10 @@ Actions the agent can perform.
 | `create_stream`                       | Create a push or pull stream                       | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config       | Auth                                                                                  |
 | `delete_stream`                       | Delete a stream                                    | Auth + Confirm                                                                        |
-| `list_stream_keys`                    | List stream ingest keys                            | Auth                                                                                  |
-| `create_stream_key`                   | Create an additional ingest key                    | Auth + Confirm                                                                        |
-| `delete_stream_key`                   | Deactivate an ingest key                           | Auth + Confirm                                                                        |
-| `refresh_stream_key`                  | Rotate the primary stream key                      | Auth + Confirm                                                                        |
+| `list_stream_keys`                    | List push-stream ingest keys                       | Auth                                                                                  |
+| `create_stream_key`                   | Create an additional push-stream ingest key        | Auth + Confirm                                                                        |
+| `delete_stream_key`                   | Deactivate a push-stream ingest key                | Auth + Confirm                                                                        |
+| `refresh_stream_key`                  | Rotate a push stream's primary key                 | Auth + Confirm                                                                        |
 | `validate_stream_key`                 | Validate an ingest key                             | Auth                                                                                  |
 | `list_push_targets`                   | List masked multistream destinations               | Auth                                                                                  |
 | `create_push_target`                  | Add a multistream destination                      | Auth                                                                                  |
@@ -1689,6 +1689,11 @@ There is another perfectly reasonable answer to the same routing question: "Use 
 Perhaps you have already paid for capacity in your own rack. You want it used first, with spillover only when it is full or too far from the audience. Perhaps you never want platform-official media capacity used. Or perhaps a marketplace operator offers a better price within the regions you care about.
 
 Placement policies make those choices explicit. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
+
+That split also keeps source types honest. Push streams have publisher placement and stream keys.
+Pull streams have upstream-source pins plus viewer placement. Deployment-managed loops and local
+feeds keep their operator-owned source location while viewer policy decides where audiences are
+served. A local source is not disguised as a publisher just to fit the UI.
 
 "Prefer" and "never" mean different things. A preference can have a fallback. A prohibition cannot be outscored by a closer edge. If a private-only policy has no available private capacity, the answer is unavailable, not a surprise move onto paid capacity. A geographic hole is a configured distance threshold, not a guess based on a continent label.
 
@@ -4768,8 +4773,10 @@ https://logbook.frameworks.network/builders/media-placement
 ## Availability
 
 Placement ships in 0.3.0, and live routing and final admission resolve through it. Read-only
-capacity preview and source-aware preview for owned push streams are implemented; a managed pull
-or Mist-native input previews capacity only, though routing places it like any other stream.
+capacity preview and source-aware preview for owned push streams are implemented. Pull and managed
+streams can configure viewer policy, but their stream-specific preview is deliberately unavailable:
+a truthful result must observe whether their configured source can originate or relay, and a
+capacity-only answer would not prove a playable route. Live routing still places those streams.
 Saving placement intent must not be treated as proof that every media path enforces it: rules
 take effect once every cell holding the content acknowledges them.
 
@@ -8868,12 +8875,14 @@ watch.
 
 ## Stream Types
 
-FrameWorks supports two ingest models:
+FrameWorks exposes three source models. Builders create push and pull streams; deployment operators
+can also declare managed local sources for loops, playlists, and site-local workflows.
 
-| Model | How media arrives                                          | Creation path                       |
-| ----- | ---------------------------------------------------------- | ----------------------------------- |
-| Push  | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks | Dashboard or GraphQL `createStream` |
-| Pull  | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you  | Dashboard or GraphQL `createStream` |
+| Model   | How media arrives                                                     | Creation path                         |
+| ------- | --------------------------------------------------------------------- | ------------------------------------- |
+| Push    | Your encoder opens RTMP/E-RTMP, SRT, or WHIP to FrameWorks            | Dashboard or GraphQL `createStream`   |
+| Pull    | FrameWorks opens RTSP, SRT, RIST, HLS, DTSC, or TS to you             | Dashboard or GraphQL `createStream`   |
+| Managed | The deployment supplies a local file, playlist, or controlled process | Operator bootstrap configuration only |
 
 Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
 upstream origins that cannot push into FrameWorks. See [Pull-input streams](/builders/pull-streams)
@@ -8890,6 +8899,10 @@ hand-wiring RTSP URLs.
   URI is stored server-side, encrypted at rest, and resolved only by the media plane when a viewer
   wakes the stream.
 </Aside>
+
+Managed streams also have no usable `streamKey`. Their literal source paths and process arguments
+are deployment secrets and are never returned by the tenant API. The API exposes only a safe
+summary: source kind, always-on state, placement count, and allowed source clusters.
 
 ## Create a Push Stream in the Dashboard
 
@@ -9000,10 +9013,12 @@ resolution.
 - **Live** - The media edge is receiving or pulling source media.
 - **Recording** - If recording is enabled, DVR assets are produced while the stream is live.
 - **Idle pull input** - Pull streams do not fetch upstream media until a viewer requests playback.
+- **Managed source** - The deployment reconciler owns the source; an always-on source can remain
+  active without a viewer.
 
 Playback access policies, multistream targets, recordings, thumbnails, and analytics attach to the
-stream regardless of whether the media arrives by push or pull. The difference is only how the
-source media gets into the platform.
+stream regardless of source mode. Push streams alone accept publisher credentials. Pull and
+managed streams expose source state instead of encoder URLs or stream-key controls.
 
 ## Related Guides
 
@@ -22766,7 +22781,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
-| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
 | ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
@@ -22913,7 +22928,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
+| **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
 | ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
