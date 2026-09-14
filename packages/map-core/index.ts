@@ -86,7 +86,7 @@ export function readRuntimePublicConfig(): RuntimePublicConfig {
 export async function loadMapLibre(): Promise<MapLibreModule> {
   const [module, workerAsset] = await Promise.all([
     import("maplibre-gl"),
-    import("maplibre-gl/dist/maplibre-gl-worker.mjs?url"),
+    import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url"),
   ]);
   module.setWorkerUrl(workerAsset.default);
   return module;

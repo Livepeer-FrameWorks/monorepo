@@ -116,12 +116,23 @@ for (const relativePath of staticFiles) {
 
 const assetsDir = join(clientDir, "assets");
 const mapLibreWorker = existsSync(assetsDir)
-  ? readdirSync(assetsDir).find((name) => /^maplibre-gl-worker-[^/]+\.mjs$/.test(name))
+  ? readdirSync(assetsDir)
+      .filter((name) => /^maplibre-gl-worker-[^/]+\.js$/.test(name))
+      .sort(
+        (left, right) =>
+          statSync(join(assetsDir, right)).size - statSync(join(assetsDir, left)).size
+      )[0]
   : undefined;
 if (!mapLibreWorker) {
   failures.push("missing bundled MapLibre worker asset");
-} else if (statSync(join(assetsDir, mapLibreWorker)).size < 10_000) {
+} else if (statSync(join(assetsDir, mapLibreWorker)).size < 100_000) {
   failures.push(`bundled MapLibre worker asset is unexpectedly small: ${mapLibreWorker}`);
+} else if (
+  readFileSync(join(assetsDir, mapLibreWorker), "utf8").includes("maplibre-gl-shared.mjs")
+) {
+  failures.push(
+    `bundled MapLibre worker still references a missing shared module: ${mapLibreWorker}`
+  );
 }
 
 // Non-content artifacts need explicit noindex headers because they are copied

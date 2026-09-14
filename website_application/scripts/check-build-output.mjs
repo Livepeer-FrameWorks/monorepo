@@ -1,17 +1,22 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const assetsDir = join(
+const workerDir = join(
   process.cwd(),
   ".svelte-kit",
   "output",
   "client",
   "_app",
   "immutable",
-  "assets"
+  "workers"
 );
-const workerAsset = existsSync(assetsDir)
-  ? readdirSync(assetsDir).find((name) => /^maplibre-gl-worker\.[^/]+\.mjs$/.test(name))
+const workerAsset = existsSync(workerDir)
+  ? readdirSync(workerDir)
+      .filter((name) => /^maplibre-gl-worker[.-][^/]+\.js$/.test(name))
+      .sort(
+        (left, right) =>
+          statSync(join(workerDir, right)).size - statSync(join(workerDir, left)).size
+      )[0]
   : undefined;
 
 if (!workerAsset) {
@@ -19,9 +24,16 @@ if (!workerAsset) {
   process.exit(1);
 }
 
-if (statSync(join(assetsDir, workerAsset)).size < 10_000) {
+if (statSync(join(workerDir, workerAsset)).size < 100_000) {
   console.error(
     `Frontend build output check failed: MapLibre worker is unexpectedly small: ${workerAsset}`
+  );
+  process.exit(1);
+}
+
+if (readFileSync(join(workerDir, workerAsset), "utf8").includes("maplibre-gl-shared.mjs")) {
+  console.error(
+    `Frontend build output check failed: MapLibre worker references a missing shared module: ${workerAsset}`
   );
   process.exit(1);
 }
