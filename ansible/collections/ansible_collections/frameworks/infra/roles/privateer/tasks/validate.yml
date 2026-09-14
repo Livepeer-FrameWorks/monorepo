@@ -15,3 +15,6 @@
   ansible.builtin.command: getent hosts quartermaster.internal
   register: privateer_internal_resolution
   changed_when: false
+  retries: 12
+  delay: 5
+  until: privateer_internal_resolution.rc == 0

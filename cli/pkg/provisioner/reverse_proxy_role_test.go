@@ -600,6 +600,8 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 	for _, want := range []string{
 		"status_code: [200, 503]",
 		"getent hosts quartermaster.internal",
+		"retries: 12",
+		"until: privateer_internal_resolution.rc == 0",
 	} {
 		if !strings.Contains(validate, want) {
 			t.Fatalf("privateer validate task missing %q:\n%s", want, validate)
