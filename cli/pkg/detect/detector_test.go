@@ -2,6 +2,8 @@ package detect
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,16 +21,17 @@ type fakeResponse struct {
 	exitCode    int
 	stdout      string
 	stderr      string
+	err         error
 }
 
-func (f *fakeRunner) runSSH(_ context.Context, cmd string) (int, string, string) {
+func (f *fakeRunner) runSSH(_ context.Context, cmd string) (int, string, string, error) {
 	f.calls = append(f.calls, cmd)
 	for _, r := range f.responses {
 		if r.matchPrefix == "" || startsWith(cmd, r.matchPrefix) {
-			return r.exitCode, r.stdout, r.stderr
+			return r.exitCode, r.stdout, r.stderr, r.err
 		}
 	}
-	return -1, "", "no response configured"
+	return -1, "", "no response configured", nil
 }
 
 func startsWith(s, prefix string) bool {
@@ -65,6 +68,29 @@ func TestDetect_InventoryMissServiceFoundInDocker(t *testing.T) {
 	}
 	if state.Version != "v1" {
 		t.Fatalf("version=%q, want v1", state.Version)
+	}
+}
+
+func TestDetect_TransportFailureIsNotReportedAsMissingService(t *testing.T) {
+	for _, exitCode := range []int{-1, 255} {
+		exitCode := exitCode
+		t.Run(fmt.Sprintf("exit_%d", exitCode), func(t *testing.T) {
+			t.Parallel()
+			r := &fakeRunner{responses: []fakeResponse{{
+				matchPrefix: "cat /etc/frameworks/inventory.json",
+				exitCode:    exitCode,
+				err:         errors.New("connection timed out"),
+			}}}
+			d := newDetectorWithRunner(inventory.Host{Name: "regional-eu-2", ExternalIP: "1.2.3.4", User: "root"}, r)
+
+			state, err := d.Detect(context.Background(), "foredeck")
+			if err == nil || !strings.Contains(err.Error(), "connection timed out") {
+				t.Fatalf("Detect error = %v, want transport failure", err)
+			}
+			if state != nil {
+				t.Fatalf("transport failure returned misleading state: %+v", state)
+			}
+		})
 	}
 }
 
@@ -116,6 +142,33 @@ func TestDetect_DockerVersionFromDigestPinnedImage(t *testing.T) {
 	}
 	if state.Version != "1.29.3-alpine" {
 		t.Fatalf("version=%q, want 1.29.3-alpine", state.Version)
+	}
+}
+
+func TestDetect_InventoryDockerCapturesPinnedImage(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{
+				matchPrefix: "cat /etc/frameworks/inventory.json",
+				exitCode:    0,
+				stdout:      `{"services":{"foredeck":{"mode":"docker","version":"v0.3.0","provisioned_at":"2026-09-14T12:00:00Z"}}}`,
+			},
+			{
+				matchPrefix: "docker inspect",
+				exitCode:    0,
+				stdout:      "true|livepeerframeworks/frameworks-foredeck:v0.3.0@sha256:abc123",
+			},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "foredeck")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !state.Running || state.Metadata["image"] != "livepeerframeworks/frameworks-foredeck:v0.3.0@sha256:abc123" {
+		t.Fatalf("inventory-backed Docker detection lost immutable image identity: %+v", state)
 	}
 }
 
@@ -196,6 +249,9 @@ func TestDetect_SystemdReadsNativePlatformVersion(t *testing.T) {
 					"LoadState=loaded",
 					"ActiveState=active",
 					"SubState=running",
+					"User=frameworks",
+					"WorkingDirectory=/opt/frameworks/quartermaster",
+					"EnvironmentFiles=/etc/frameworks/quartermaster.env (ignore_errors=no)",
 					"ExecStart={ path=/opt/frameworks/quartermaster/quartermaster ; argv[]=/opt/frameworks/quartermaster/quartermaster serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
 				}, "\n"),
 			},
@@ -217,5 +273,28 @@ func TestDetect_SystemdReadsNativePlatformVersion(t *testing.T) {
 	}
 	if state.Metadata["binary_path"] != "/opt/frameworks/quartermaster/quartermaster" {
 		t.Fatalf("binary_path=%q", state.Metadata["binary_path"])
+	}
+	if state.Metadata["environment_file"] != "/etc/frameworks/quartermaster.env" {
+		t.Fatalf("environment_file=%q", state.Metadata["environment_file"])
+	}
+	if state.Metadata["working_directory"] != "/opt/frameworks/quartermaster" {
+		t.Fatalf("working_directory=%q", state.Metadata["working_directory"])
+	}
+	if state.Metadata["service_user"] != "frameworks" {
+		t.Fatalf("service_user=%q", state.Metadata["service_user"])
+	}
+}
+
+func TestSystemdEnvironmentFile(t *testing.T) {
+	t.Parallel()
+
+	for input, want := range map[string]string{
+		"/etc/frameworks/commodore.env (ignore_errors=no)":  "/etc/frameworks/commodore.env",
+		"-/etc/frameworks/optional.env (ignore_errors=yes)": "/etc/frameworks/optional.env",
+		"": "",
+	} {
+		if got := systemdEnvironmentFile(input); got != want {
+			t.Fatalf("systemdEnvironmentFile(%q)=%q, want %q", input, got, want)
+		}
 	}
 }

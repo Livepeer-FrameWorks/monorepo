@@ -15,7 +15,7 @@ import (
 // sshRunner is the minimal interface Detector needs. Production wraps a
 // *fwssh.Pool; tests inject a stub.
 type sshRunner interface {
-	runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string)
+	runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string, err error)
 }
 
 // Detector performs multi-method service detection
@@ -32,7 +32,7 @@ func NewDetector(pool *fwssh.Pool, host inventory.Host) *Detector {
 }
 
 // runSSH delegates to the configured runner.
-func (d *Detector) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string) {
+func (d *Detector) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string, err error) {
 	return d.runner.runSSH(ctx, cmd)
 }
 
@@ -45,7 +45,7 @@ type poolRunner struct {
 // runSSH invokes a command via the shared pool. Non-zero exit codes are
 // reported in ExitCode rather than propagated as errors so the detection
 // chain can treat "command ran but said no" as "try next method."
-func (r *poolRunner) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string) {
+func (r *poolRunner) runSSH(ctx context.Context, cmd string) (exitCode int, stdout, stderr string, runErr error) {
 	cfg := &fwssh.ConnectionConfig{
 		Address:  r.host.ExternalIP,
 		Port:     22,
@@ -53,11 +53,20 @@ func (r *poolRunner) runSSH(ctx context.Context, cmd string) (exitCode int, stdo
 		HostName: r.host.Name,
 		Timeout:  10 * time.Second,
 	}
-	result, _ := r.pool.Run(ctx, cfg, cmd) //nolint:errcheck // detection reads ExitCode; see type doc
+	result, err := r.pool.Run(ctx, cfg, cmd)
 	if result == nil {
-		return -1, "", ""
+		if err == nil {
+			err = fmt.Errorf("SSH command returned no result")
+		}
+		return -1, "", "", err
 	}
-	return result.ExitCode, result.Stdout, result.Stderr
+	// A remote command's ordinary non-zero exit is a valid negative probe.
+	// Process failures use a negative code and OpenSSH reserves 255 for
+	// transport failures; both must remain visible.
+	if err != nil && (result.ExitCode < 0 || result.ExitCode == 255) {
+		return result.ExitCode, result.Stdout, result.Stderr, err
+	}
+	return result.ExitCode, result.Stdout, result.Stderr, nil
 }
 
 // Detect attempts to detect a service using multiple methods
@@ -79,7 +88,7 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 	for _, method := range methods {
 		result, err := method(ctx, serviceName, state)
 		if err != nil {
-			continue // Try next method
+			return nil, err
 		}
 		if result.Success && result.State != nil {
 			return result.State, nil
@@ -93,7 +102,10 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 
 // detectFromInventory checks /etc/frameworks/inventory.json
 func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
-	exitCode, stdout, _ := d.runSSH(ctx, "cat /etc/frameworks/inventory.json")
+	exitCode, stdout, _, err := d.runSSH(ctx, "cat /etc/frameworks/inventory.json")
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s inventory on %s: %w", serviceName, d.host.Name, err)
+	}
 
 	if exitCode != 0 {
 		return &DetectionResult{Method: "inventory", Success: false}, nil
@@ -126,9 +138,13 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 	// Still need to check if it's actually running
 	switch svc.Mode {
 	case "docker":
-		d.checkDockerRunning(ctx, serviceName, state)
+		if err := d.checkDockerRunning(ctx, serviceName, state); err != nil {
+			return nil, err
+		}
 	case "native":
-		d.checkSystemdRunning(ctx, serviceName, state)
+		if err := d.checkSystemdRunning(ctx, serviceName, state); err != nil {
+			return nil, err
+		}
 	}
 
 	return &DetectionResult{Method: "inventory", Success: true, State: state}, nil
@@ -144,7 +160,10 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 
 	for _, containerName := range containerNames {
 		cmd := fmt.Sprintf("docker ps -a --filter name=%s --format '{{.Names}}|{{.State}}|{{.Image}}'", containerName)
-		exitCode, stdout, _ := d.runSSH(ctx, cmd)
+		exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s Docker state on %s: %w", serviceName, d.host.Name, err)
+		}
 
 		if exitCode != 0 {
 			continue
@@ -213,8 +232,11 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 	}
 
 	for _, svcName := range serviceNames {
-		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState,ExecStart", svcName)
-		exitCode, stdout, _ := d.runSSH(ctx, cmd)
+		cmd := fmt.Sprintf("systemctl show %s --property=LoadState,ActiveState,SubState,ExecStart,EnvironmentFiles,WorkingDirectory,User", svcName)
+		exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s systemd state on %s: %w", serviceName, d.host.Name, err)
+		}
 
 		if exitCode != 0 {
 			continue
@@ -240,11 +262,18 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 		state.Metadata["systemd_service"] = svcName
 		state.Metadata["active_state"] = props["ActiveState"]
 		state.Metadata["sub_state"] = props["SubState"]
+		state.Metadata["service_user"] = props["User"]
+		state.Metadata["working_directory"] = props["WorkingDirectory"]
+		state.Metadata["environment_file"] = systemdEnvironmentFile(props["EnvironmentFiles"])
 		if props["ExecStart"] != "" {
 			state.Metadata["exec_start"] = props["ExecStart"]
 			if bin := systemdExecPath(props["ExecStart"]); bin != "" {
 				state.Metadata["binary_path"] = bin
-				if version := d.readNativePlatformVersion(ctx, bin); version != "" {
+				version, err := d.readNativePlatformVersion(ctx, bin)
+				if err != nil {
+					return nil, err
+				}
+				if version != "" {
 					state.Version = version
 				}
 			}
@@ -256,6 +285,15 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 	return &DetectionResult{Method: "systemd", Success: false}, nil
 }
 
+func systemdEnvironmentFile(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	first, _, _ := strings.Cut(value, " ")
+	return strings.TrimPrefix(first, "-")
+}
+
 // detectFromPort checks if service is listening on expected port
 func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state *ServiceState) (*DetectionResult, error) {
 	port := getDefaultPort(serviceName)
@@ -264,7 +302,10 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 	}
 
 	cmd := fmt.Sprintf("ss -tlnp | grep ':%d ' || lsof -iTCP:%d -sTCP:LISTEN", port, port)
-	exitCode, stdout, _ := d.runSSH(ctx, cmd)
+	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s listener on %s: %w", serviceName, d.host.Name, err)
+	}
 
 	if exitCode != 0 || strings.TrimSpace(stdout) == "" {
 		return &DetectionResult{Method: "port", Success: false}, nil
@@ -280,51 +321,66 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 	return &DetectionResult{Method: "port", Success: true, State: state}, nil
 }
 
-func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, state *ServiceState) {
+func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, state *ServiceState) error {
 	containerName := fmt.Sprintf("frameworks-%s", serviceName)
-	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}' %s", containerName)
-	exitCode, stdout, _ := d.runSSH(ctx, cmd)
+	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}|{{.Config.Image}}' %s", containerName)
+	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("inspect %s Docker runtime on %s: %w", serviceName, d.host.Name, err)
+	}
 
 	if exitCode == 0 {
-		state.Running = strings.TrimSpace(stdout) == "true"
+		parts := strings.SplitN(strings.TrimSpace(stdout), "|", 2)
+		state.Running = parts[0] == "true"
+		if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+			state.Metadata["image"] = strings.TrimSpace(parts[1])
+		}
 	}
+	return nil
 }
 
-func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, state *ServiceState) {
+func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, state *ServiceState) error {
 	svcName := fmt.Sprintf("frameworks-%s", serviceName)
 	cmd := fmt.Sprintf("systemctl is-active %s", svcName)
-	exitCode, stdout, _ := d.runSSH(ctx, cmd)
+	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("inspect %s systemd runtime on %s: %w", serviceName, d.host.Name, err)
+	}
 
 	if exitCode == 0 {
 		state.Running = strings.TrimSpace(stdout) == "active"
 	}
+	return nil
 }
 
-func (d *Detector) readNativePlatformVersion(ctx context.Context, binaryPath string) string {
+func (d *Detector) readNativePlatformVersion(ctx context.Context, binaryPath string) (string, error) {
 	quoted := shellQuote(binaryPath)
 	cmd := fmt.Sprintf("%s version --json 2>/dev/null || %s version 2>/dev/null", quoted, quoted)
-	exitCode, stdout, _ := d.runSSH(ctx, cmd)
+	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("inspect native version on %s: %w", d.host.Name, err)
+	}
 	if exitCode != 0 {
-		return ""
+		return "", nil
 	}
 	out := strings.TrimSpace(stdout)
 	if out == "" {
-		return ""
+		return "", nil
 	}
 
 	var payload struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal([]byte(out), &payload); err == nil && strings.TrimSpace(payload.Version) != "" {
-		return strings.TrimSpace(payload.Version)
+		return strings.TrimSpace(payload.Version), nil
 	}
 
 	for _, line := range strings.Split(out, "\n") {
 		if before, after, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(before) == "platform version" {
-			return strings.TrimSpace(after)
+			return strings.TrimSpace(after), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func systemdExecPath(execStart string) string {
