@@ -1,14 +1,7 @@
 import { motion } from "framer-motion";
 import { Cable, Coins } from "lucide-react";
 import config from "../../config";
-import {
-  ChartBarIcon,
-  SparklesIcon,
-  FilmIcon,
-  GlobeAltIcon,
-  CpuChipIcon,
-  LockClosedIcon,
-} from "@heroicons/react/24/outline";
+import { ChartBarIcon, SparklesIcon, FilmIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 import { Section, SectionContainer } from "@/components/ui/section";
 import StatusTag from "../shared/StatusTag";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -150,8 +143,6 @@ const About = () => {
   const pipelineFeatures = [
     {
       title: "Auto-Discovery App",
-      badge: "Industry First",
-      icon: SparklesIcon,
       tone: "cyan",
       description:
         "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
@@ -160,8 +151,6 @@ const About = () => {
     },
     {
       title: "Multi-stream Compositing",
-      badge: "Advanced Feature",
-      icon: FilmIcon,
       tone: "yellow",
       description:
         "Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
@@ -170,8 +159,6 @@ const About = () => {
     },
     {
       title: "Live AI Processing",
-      badge: "AI Powered",
-      icon: CpuChipIcon,
       tone: "orange",
       description:
         "AI-native live video: transcribe, analyze, automate, and transform streams in real time.",
@@ -180,8 +167,6 @@ const About = () => {
     },
     {
       title: "DRM Content Protection",
-      badge: "Studio Grade",
-      icon: LockClosedIcon,
       tone: "violet",
       description:
         "FairPlay, Widevine, and PlayReady protection for premium and licensed content, built natively into MistServer.",
@@ -192,11 +177,8 @@ const About = () => {
   ];
 
   const pipelineCards = pipelineFeatures.map((item) => ({
-    icon: item.icon,
     tone: item.tone,
-    iconTone: item.tone,
     title: item.title,
-    badge: item.badge,
     description: item.description,
     meta: <StatusTag status={item.status} note={item.statusNote} />,
     hover: "subtle",
@@ -320,7 +302,7 @@ const About = () => {
         surface="gradient"
         surfaceTone="accent"
         surfaceIntensity="raised"
-        support="Open stack • Live video processing • Flexible deployments"
+        support="Open stack. Live video processing. Flexible deployments."
         accents={aboutHeroAccents}
       />
 

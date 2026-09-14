@@ -1,5 +1,11 @@
 /* Marketing component styles: Network topology map */
 @layer components {
+  /* Reserved while the map chunk and its status data load; removed once the
+     map renders or turns out to have nothing to draw. */
+  .network-viz-pending {
+    min-height: 500px;
+  }
+
   .network-viz {
     position: relative;
     border: 1px solid var(--fx-seam-strong);

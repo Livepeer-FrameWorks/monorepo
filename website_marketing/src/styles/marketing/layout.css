@@ -249,6 +249,28 @@
     }
   }
 
+  /* Ratio variants: copy beside a figure reads better at 5/7 than 1/1. They
+     only apply once the split is two columns. */
+  @media (min-width: 768px) {
+    .marketing-grid-split--stack-md.marketing-grid-split--ratio-narrow-wide {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    }
+
+    .marketing-grid-split--stack-md.marketing-grid-split--ratio-wide-narrow {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .marketing-grid-split--stack-lg.marketing-grid-split--ratio-narrow-wide {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    }
+
+    .marketing-grid-split--stack-lg.marketing-grid-split--ratio-wide-narrow {
+      grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    }
+  }
+
   /* Slab zone system: structured header/body/actions within grid-split */
   .slab-zone {
     display: flex;

@@ -515,17 +515,6 @@
     }
   }
 
-  .marketing-feature-grid--deployment .marketing-feature-card__icon {
-    background: linear-gradient(
-      145deg,
-      rgba(var(--primary-rgb) / 0.5),
-      rgba(var(--brand-cyan-rgb) / 0.34)
-    );
-    border: 1px solid rgba(var(--primary-rgb) / 0.28);
-    box-shadow: none;
-    color: rgba(var(--fx-rgb-13-24-44) / 0.92);
-  }
-
   .marketing-feature__cell .marketing-feature,
   .marketing-feature__cell.marketing-feature {
     --feature-accent: hsl(var(--primary));

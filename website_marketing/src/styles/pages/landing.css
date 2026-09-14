@@ -155,9 +155,6 @@
     width: min(66%, 300px);
     height: auto;
   }
-  .network-viz-deferred {
-    min-height: 500px;
-  }
   @media (min-width: 640px) {
     .hero-player-card__stage {
       height: 380px;

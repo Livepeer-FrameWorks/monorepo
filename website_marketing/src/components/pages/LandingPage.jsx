@@ -12,13 +12,14 @@ import {
   MarketingCTAButton,
   MarketingComparisonGrid,
   MarketingComparisonCard,
-  MarketingFeatureWall,
   MarketingHero,
   MarketingGridSplit,
   IconList,
   SectionDivider,
   SkipperConversationPreview,
   AgentPipelineStrip,
+  DeploymentModes,
+  MultistreamFanout,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -30,14 +31,6 @@ import {
 } from "@/components/ui/accordion";
 import { useState, useEffect, useMemo, useRef } from "react";
 import config from "../../config";
-import {
-  ServerStackIcon,
-  CodeBracketIcon,
-  ChartBarIcon,
-  SignalIcon,
-  TvIcon,
-  BoltIcon,
-} from "@heroicons/react/24/outline";
 
 const createSeededRandom = (seed) => {
   let state = seed;
@@ -92,7 +85,10 @@ function DeferredNetworkMap() {
   }, [NetworkMapComponent]);
 
   return (
-    <div ref={containerRef} className="network-viz-deferred">
+    <div
+      ref={containerRef}
+      className={`network-viz-deferred${NetworkMapComponent ? "" : " network-viz-pending"}`}
+    >
       {NetworkMapComponent ? <NetworkMapComponent /> : null}
     </div>
   );
@@ -227,43 +223,52 @@ const LandingPage = () => {
 
   const corePillars = [
     {
+      id: "developer-first",
       title: "Developer-First",
       description:
         "Typed SDKs over a GraphQL API. Agents discover via skill.json, authenticate with a wallet, and pay through MCP.",
-      icon: CodeBracketIcon,
       tone: "accent",
-      badge: "Core",
     },
     {
+      id: "analytics",
       title: "End-to-End Analytics",
       description:
         "Routing decisions, QoE metrics, and player telemetry show why viewer X connected to edge Y.",
-      icon: ChartBarIcon,
       tone: "green",
-      badge: "Core",
     },
     {
-      title: "Sovereignty Without Pain",
+      id: "sovereignty",
+      title: (
+        <>
+          Sovereignty Without Pain <SovereigntyNote />
+        </>
+      ),
       description:
         "Run the whole stack on your own hardware. No licensing fees. Switch to hybrid for burst capacity or extra geo coverage.",
-      icon: ServerStackIcon,
       tone: "yellow",
-      badge: "Core",
     },
   ];
 
-  const pillarCards = corePillars.map((pillar) => ({
-    icon: pillar.icon,
-    iconTone: pillar.tone,
-    tone: pillar.tone,
-    badge: pillar.badge,
-    title: pillar.title,
-    description: pillar.description,
-    meta: pillar.title === "Sovereignty Without Pain" ? <SovereigntyNote /> : undefined,
-    hover: "subtle",
-    stripe: true,
-    flush: true,
-  }));
+  const multistreamPoints = [
+    {
+      id: "push",
+      title: "Native RTMP and SRT push",
+      description:
+        "MistServer pushes from the origin node itself, so there is no relay hop, no added latency, and no proxy bandwidth bill.",
+    },
+    {
+      id: "presets",
+      title: "Platform presets",
+      description:
+        "Twitch, YouTube, Facebook, Kick, and X are built in. Paste a stream key, or point at any custom RTMP, RTMPS, or SRT endpoint.",
+    },
+    {
+      id: "lifecycle",
+      title: "Automatic lifecycle",
+      description:
+        "Targets activate when the stream goes live and stop when it ends, with status, error reporting, and a per-target toggle.",
+    },
+  ];
 
   const freeTierFeatures = [
     "All self-hosted features",
@@ -382,7 +387,7 @@ const LandingPage = () => {
         accents={landingHeroAccents}
         title="Sovereign Video Infrastructure"
         description="FrameWorks is live streaming infrastructure for sovereign video operations. Most streaming platforms lock you into their ecosystem; we give you the keys."
-        support="SaaS → Hybrid (self-hosted edge) → Fully self-hosted • One platform, three modes • Public domain licensed."
+        support="Hosted, hybrid, or fully self-hosted. One platform, three modes. Public domain licensed."
         primaryAction={{
           label: "Start Free",
           href: config.appUrl,
@@ -635,7 +640,21 @@ const LandingPage = () => {
                   </CTACluster>
                 }
               />
-              <MarketingFeatureWall items={pillarCards} columns={3} />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={corePillars}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                  </div>
+                </div>
+                <div className="marketing-figure-cell">
+                  <DeploymentModes />
+                </div>
+              </MarketingGridSplit>
               <DeferredNetworkMap />
             </MarketingBand>
           </SectionContainer>
@@ -853,7 +872,7 @@ const LandingPage = () => {
               <HeadlineStack
                 eyebrow="Multistreaming"
                 title="One Stream, Every Platform"
-                subtitle="Push to Twitch, YouTube, Kick, Facebook, X, and any custom RTMP/SRT destination simultaneously. No third-party restreaming service required."
+                subtitle="Push to Twitch, YouTube, Kick, Facebook, X, and any custom RTMP/SRT destination at the same time, from the origin node."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -868,44 +887,21 @@ const LandingPage = () => {
                   </CTACluster>
                 }
               />
-              <MarketingFeatureWall
-                items={[
-                  {
-                    icon: SignalIcon,
-                    iconTone: "accent",
-                    tone: "accent",
-                    title: "Native RTMP/SRT Push",
-                    description:
-                      "MistServer pushes directly from the origin node. No transcoding middleman, no added latency, no bandwidth tax from a proxy service.",
-                    hover: "subtle",
-                    stripe: true,
-                    flush: true,
-                  },
-                  {
-                    icon: TvIcon,
-                    iconTone: "green",
-                    tone: "green",
-                    title: "Platform Presets",
-                    description:
-                      "Built-in presets for Twitch, YouTube, Facebook, Kick, and X. Paste your stream key and go, or use a custom RTMP/RTMPS/SRT endpoint.",
-                    hover: "subtle",
-                    stripe: true,
-                    flush: true,
-                  },
-                  {
-                    icon: BoltIcon,
-                    iconTone: "yellow",
-                    tone: "yellow",
-                    title: "Automatic Lifecycle",
-                    description:
-                      "Push targets activate when your stream goes live and stop when it ends. Status tracking, error reporting, and per-target enable/disable toggles.",
-                    hover: "subtle",
-                    stripe: true,
-                    flush: true,
-                  },
-                ]}
-                columns={3}
-              />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="wide-narrow">
+                <div className="marketing-figure-cell">
+                  <MultistreamFanout />
+                </div>
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={multistreamPoints}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                  </div>
+                </div>
+              </MarketingGridSplit>
             </MarketingBand>
           </SectionContainer>
         </Section>

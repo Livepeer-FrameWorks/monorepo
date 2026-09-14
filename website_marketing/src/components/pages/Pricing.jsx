@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import config from "../../config";
 import InfoTooltip from "../shared/InfoTooltip";
@@ -10,7 +9,6 @@ import {
   MarketingHero,
   MarketingSlab,
   MarketingSlabHeader,
-  MarketingIconBadge,
   IconList,
   MarketingFinalCTA,
   MarketingScrollProgress,
@@ -19,13 +17,12 @@ import {
   MarketingComparisonCard,
   MarketingCTAButton,
   HeadlineStack,
-  MarketingStack,
-  MarketingFeatureWall,
-  MarketingFeatureCard,
   CTACluster,
   SectionDivider,
   ComparisonTable,
   PricingTierOutline,
+  MarketingGridSplit,
+  DeploymentModes,
 } from "@/components/marketing";
 import {
   Accordion,
@@ -33,15 +30,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { cn } from "@/lib/utils";
-import {
-  HomeIcon,
-  GlobeAltIcon,
-  CloudIcon,
-  BuildingOfficeIcon,
-  BanknotesIcon,
-  CpuChipIcon,
-} from "@heroicons/react/24/outline";
+import { HomeIcon, BanknotesIcon, CpuChipIcon } from "@heroicons/react/24/outline";
 
 const freeTier = {
   id: "free",
@@ -204,75 +193,34 @@ const tierColumns = [
   { key: "production", label: "Production" },
 ];
 
-const deploymentOptions = [
+const deploymentModes = [
   {
-    id: "managed-pipeline",
-    title: "Fully Hosted (SaaS)",
-    tagline: "We run everything",
+    id: "hosted",
     tone: "accent",
-    icon: CloudIcon,
-    summary: "Ingest, delivery, processing, and ops, fully managed.",
-    modal: {
-      description:
-        "FrameWorks runs ingest, delivery, observability, and processing orchestration. Your team keeps the dashboards, logs, and runbooks.",
-      bullets: [
-        "SLO-backed operations with shared runbooks and direct-to-engineer escalation.",
-        "Managed load balancers, CDN federation, and advanced-processing scheduling with per-tier usage breakdowns.",
-        "Managed rollouts for additional regions, codecs, or processing pools, with usage shown per line item.",
-      ],
-    },
+    title: "Fully hosted",
+    description:
+      "FrameWorks runs ingest, delivery, processing, and operations. Your team keeps the dashboards, logs, and runbooks, with managed load balancers and per-line-item usage.",
   },
   {
-    id: "hybrid-network",
-    title: "Hybrid (Self-hosted Edge)",
-    tagline: "Shared control",
+    id: "hybrid",
     tone: "green",
-    icon: GlobeAltIcon,
-    summary: "You run edge nodes. We run the control plane and hosted burst capacity.",
-    modal: {
-      description:
-        "Federate your POPs with FrameWorks so you can shift workloads between your sites and ours with one control plane and one set of dashboards.",
-      bullets: [
-        "Automatic failover and traffic steering with full audit trails and policy controls.",
-        "Unified dashboards for bandwidth, viewer load, processing load, and AI usage across every region.",
-        "Per-minute burst pricing with line-item dashboards for finance and network ops.",
-      ],
-    },
+    title: "Hybrid, self-hosted edge",
+    description:
+      "You run edge nodes. FrameWorks runs the control plane and hosted burst capacity, with one set of dashboards, failover, and traffic steering across your sites and ours.",
   },
   {
     id: "self-hosted",
-    title: "Fully Self-Hosted",
-    tagline: "You run it all",
-    tone: "accent",
-    icon: HomeIcon,
-    summary:
-      "Run control plane, databases, and edge on your infrastructure, with or without our support.",
-    modal: {
-      description:
-        "Keep the video workload and control plane under your control by running Mist ingest, delivery, and FrameWorks services inside your footprint. S3-compatible storage and DNS remain external integrations today.",
-      bullets: [
-        "Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.",
-        "Joint dashboards, runbooks, and on-call assistance without surrendering shell access.",
-        "Optional burst into hosted processing, CDN, or orchestration capacity when traffic surges.",
-      ],
-    },
+    tone: "green",
+    title: "Fully self-hosted",
+    description:
+      "You run the control plane, databases, and edge on bare metal, VMs, or Kubernetes. S3-compatible storage and DNS stay external integrations today. Burst into hosted capacity when you choose.",
   },
   {
-    id: "enterprise-custom",
-    title: "Enterprise & regulated",
-    tagline: "Co-managed scale",
+    id: "enterprise",
     tone: "yellow",
-    icon: BuildingOfficeIcon,
-    summary: "Reserved clusters, private consoles, and compliance workflows.",
-    modal: {
-      description:
-        "Design custom deployments alongside our engineers when you need dedicated capacity, compliance, and co-managed operations across regulated environments.",
-      bullets: [
-        "Security and compliance reviews aligned to your policies with artifact-ready evidence packs.",
-        "Custom SLAs, reserved processing and edge pools, and direct engineer-to-engineer escalation.",
-        "Integrations for billing exports, finance reports, training, and automation workflows.",
-      ],
-    },
+    title: "Enterprise and regulated",
+    description:
+      "Reserved clusters, custom SLAs, security and compliance reviews, and co-managed operations with our engineers for regulated environments.",
   },
 ];
 
@@ -400,27 +348,6 @@ const pricingHeroHighlights = [
 ];
 
 const Pricing = () => {
-  const [activeOption, setActiveOption] = useState(null);
-
-  useEffect(() => {
-    if (!activeOption) return;
-
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        setActiveOption(null);
-      }
-    };
-
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activeOption]);
-
   const tierCards = paidTiers.map((plan, index) => {
     const isInternalLink = plan.ctaLink.startsWith("/");
     const actionProps = isInternalLink
@@ -780,55 +707,22 @@ const Pricing = () => {
                   <MarketingCTAButton intent="primary" to="/contact" label="Talk to our team" />
                 }
               />
-              <MarketingStack gap="none" className="deployment-stack">
-                <MarketingFeatureWall
-                  items={deploymentOptions}
-                  columns={4}
-                  flush
-                  variant="grid"
-                  className="marketing-feature-grid--deployment"
-                  renderItem={(option, index) => {
-                    const Icon = option.icon;
-                    const isActive = activeOption?.id === option.id;
-                    return (
-                      <motion.button
-                        key={option.id ?? index}
-                        type="button"
-                        className={cn("deployment-option", isActive && "deployment-option--active")}
-                        onClick={() => setActiveOption(option)}
-                        aria-pressed={isActive}
-                        initial={{ opacity: 0, y: 12 }}
-                        whileInView={{ opacity: 1, y: 0 }}
-                        viewport={{ once: true }}
-                        transition={{ duration: 0.35, delay: index * 0.05 }}
-                      >
-                        <MarketingFeatureCard
-                          icon={Icon}
-                          iconTone={option.tone}
-                          tone={option.tone}
-                          title={option.title}
-                          subtitle={option.tagline}
-                          hover="none"
-                          flush
-                          headingLevel="h3"
-                          meta={
-                            <span className="deployment-option__indicator" aria-hidden="true">
-                              +
-                            </span>
-                          }
-                          metaAlign="end"
-                          className="deployment-option__card"
-                        >
-                          <p className="deployment-option__quote">{option.summary}</p>
-                        </MarketingFeatureCard>
-                      </motion.button>
-                    );
-                  }}
-                />
-                <div className="deployment-calculator">
-                  <SavingsCalculator variant="compact" />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="wide-narrow">
+                <div className="marketing-figure-cell">
+                  <DeploymentModes />
                 </div>
-              </MarketingStack>
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={deploymentModes}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                  </div>
+                </div>
+              </MarketingGridSplit>
+              <SavingsCalculator variant="compact" />
             </MarketingBand>
           </motion.div>
         </SectionContainer>
@@ -903,62 +797,6 @@ const Pricing = () => {
       </Section>
 
       <MarketingScrollProgress />
-
-      {activeOption ? (
-        <div
-          className="pricing-architecture-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${activeOption.title} details`}
-        >
-          <div
-            className="pricing-architecture-modal__backdrop"
-            onClick={() => setActiveOption(null)}
-            onKeyDown={(e) => e.key === "Escape" && setActiveOption(null)}
-            role="button"
-            tabIndex={0}
-            aria-label="Close modal"
-          />
-          <div className="pricing-architecture-modal__panel">
-            <button
-              type="button"
-              className="pricing-architecture-modal__close"
-              onClick={() => setActiveOption(null)}
-              aria-label="Close deployment option details"
-            >
-              ×
-            </button>
-            <div className="pricing-architecture-modal__header">
-              <MarketingIconBadge
-                tone={activeOption.tone}
-                variant="neutral"
-                className="pricing-architecture-modal__icon"
-              >
-                {(() => {
-                  const Icon = activeOption.icon;
-                  return <Icon className="pricing-architecture-modal__icon-symbol" />;
-                })()}
-              </MarketingIconBadge>
-              <div className="pricing-architecture-modal__meta">
-                <h3>{activeOption.title}</h3>
-                {activeOption.tagline ? <p>{activeOption.tagline}</p> : null}
-              </div>
-            </div>
-            {activeOption.modal?.description ? (
-              <p className="pricing-architecture-modal__description">
-                {activeOption.modal.description}
-              </p>
-            ) : null}
-            {activeOption.modal?.bullets?.length ? (
-              <ul className="pricing-architecture-modal__list">
-                {activeOption.modal.bullets.map((item) => (
-                  <li key={`${activeOption.id}-detail-${item}`}>{item}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };

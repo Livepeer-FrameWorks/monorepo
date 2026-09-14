@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import Navigation from "../src/components/Navigation";
 import Footer from "../src/components/Footer";
 import ScrollToTop from "../src/components/shared/ScrollToTop";
+import FigureDefs from "../src/components/marketing/figures/FigureDefs";
 import { baseMeta } from "./seo";
 import "../src/index.css";
 
@@ -69,6 +70,7 @@ export default function Root() {
   return (
     <>
       <ScrollToTop />
+      <FigureDefs />
       <div className="App">
         <Navigation />
         <main id="main-content">

@@ -20,6 +20,7 @@
 @import "./styles/marketing/skipper.css";
 @import "./styles/marketing/network.css";
 @import "./styles/marketing/dashboards.css";
+@import "./styles/marketing/figures.css";
 
 /* Page-specific styles */
 @import "./styles/pages/about.css";

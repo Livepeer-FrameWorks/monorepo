@@ -1,0 +1,229 @@
+/* Diagram primitives for marketing figures. The class vocabulary matches the
+   mistserver.com figure set (node / edge / chip / label) so a drawing can move
+   between the two sites; only the colour mapping differs. Sizes are in viewBox
+   units and scale with the container. */
+
+@layer components {
+  .fig-wrap {
+    container-type: inline-size;
+    margin: 0;
+    width: 100%;
+  }
+
+  .fig-wrap figcaption {
+    margin-top: 0.85rem;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    color: hsl(var(--muted-foreground));
+  }
+
+  svg.fig {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    font-family: inherit;
+  }
+
+  .fig text {
+    fill: hsl(var(--foreground));
+    font-size: 24px;
+    font-weight: 600;
+    text-anchor: middle;
+    dominant-baseline: middle;
+  }
+
+  .fig text.sub {
+    fill: hsl(var(--muted-foreground));
+    font-size: 20px;
+    font-weight: 400;
+  }
+
+  .fig text.label {
+    fill: hsl(var(--muted-foreground));
+    font-size: 21px;
+    font-weight: 400;
+  }
+
+  .fig text.left {
+    text-anchor: start;
+  }
+
+  .fig text.right {
+    text-anchor: end;
+  }
+
+  /* Spot figures sit beside copy inside a section rather than carrying one, so
+     they run a tighter type scale. */
+  .fig--spot text {
+    font-size: 21px;
+  }
+
+  .fig--spot text.sub {
+    font-size: 18px;
+  }
+
+  .fig--spot text.label {
+    font-size: 17px;
+  }
+
+  .fig .node rect,
+  .fig .node circle {
+    fill: hsl(var(--card));
+    stroke: hsl(var(--border));
+    stroke-width: 2;
+  }
+
+  /* hot = FrameWorks runs it */
+  .fig .node.hot rect,
+  .fig .node.hot circle {
+    fill: hsl(var(--accent) / 0.16);
+    stroke: hsl(var(--accent));
+    stroke-width: 2.5;
+  }
+
+  .fig .node.hot text {
+    fill: hsl(var(--accent));
+  }
+
+  /* you = the customer runs it */
+  .fig .node.you rect,
+  .fig .node.you circle {
+    fill: hsl(var(--brand-green) / 0.14);
+    stroke: hsl(var(--brand-green));
+    stroke-width: 2.5;
+  }
+
+  .fig .node.you text {
+    fill: hsl(var(--brand-green));
+  }
+
+  /* dim = external integration or optional */
+  .fig .node.dim rect,
+  .fig .node.dim circle {
+    fill: transparent;
+    stroke: hsl(var(--brand-comment));
+    stroke-dasharray: 6 6;
+  }
+
+  .fig .node.dim text {
+    fill: hsl(var(--muted-foreground));
+  }
+
+  .fig .node.bad rect {
+    fill: hsl(var(--brand-red) / 0.1);
+    stroke: hsl(var(--brand-red));
+  }
+
+  .fig .node.bad text {
+    fill: hsl(var(--brand-red));
+  }
+
+  .fig .edge {
+    fill: none;
+    stroke: hsl(var(--accent));
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    marker-end: url(#fig-arrow);
+  }
+
+  .fig .edge.plain {
+    marker-end: none;
+  }
+
+  .fig .edge.warm {
+    stroke: hsl(var(--brand-yellow));
+    marker-end: url(#fig-arrow-warm);
+  }
+
+  .fig .edge.dim {
+    stroke: hsl(var(--brand-comment));
+    stroke-dasharray: 6 8;
+    marker-end: url(#fig-arrow-dim);
+  }
+
+  .fig .edge.bad {
+    stroke: hsl(var(--brand-red));
+    stroke-dasharray: 8 7;
+    marker-end: url(#fig-arrow-bad);
+  }
+
+  .fig .edge.both {
+    marker-start: url(#fig-arrow-rev);
+  }
+
+  .fig .chip rect {
+    fill: hsl(var(--muted));
+    stroke: hsl(var(--border));
+    stroke-width: 1.5;
+  }
+
+  .fig .chip text {
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .fig .layer rect {
+    fill: hsl(var(--muted) / 0.55);
+    stroke: hsl(var(--border));
+    stroke-width: 1.5;
+    stroke-dasharray: 5 5;
+  }
+
+  .fig .layer text {
+    fill: hsl(var(--muted-foreground));
+    font-size: 18px;
+    font-weight: 400;
+  }
+
+  /* Arrowheads cannot inherit a themed stroke, so they are filled from CSS. */
+  .fig-defs .head-accent {
+    fill: hsl(var(--accent));
+  }
+
+  .fig-defs .head-warm {
+    fill: hsl(var(--brand-yellow));
+  }
+
+  .fig-defs .head-dim {
+    fill: hsl(var(--brand-comment));
+  }
+
+  .fig-defs .head-bad {
+    fill: hsl(var(--brand-red));
+  }
+
+  /* Figures that cannot hold a horizontal flow at narrow widths ship a second
+     drawing; both are rendered and the container query picks one. */
+  .fig-wrap svg.on-stack {
+    display: none;
+    max-width: 380px;
+    margin-inline: auto;
+  }
+
+  @container (max-width: 30rem) {
+    .fig-wrap svg.on-wide {
+      display: none;
+    }
+
+    .fig-wrap svg.on-stack {
+      display: block;
+    }
+  }
+
+  /* A figure's slot in a seamed grid split: padded like a slab zone, the
+     drawing centred against whatever sits in the other slot. */
+  .marketing-figure-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    padding: clamp(1.5rem, 2.5vw, 2.5rem);
+  }
+
+  .marketing-figure-cell .fig-wrap {
+    max-width: 52rem;
+  }
+}

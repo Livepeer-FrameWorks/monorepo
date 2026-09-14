@@ -876,7 +876,10 @@ function NetworkMapInner({ data }) {
 export function NetworkMap() {
   const { data, loading } = useNetworkStatus();
   const prefersReducedMotion = usePrefersReducedMotion();
-  if (loading || !data) return null;
+  /* Hold the map's height while status loads so the page does not jump, then
+     give the space back if the gateway has nothing to draw. */
+  if (loading) return <div className="network-viz-pending" aria-hidden="true" />;
+  if (!data) return null;
   const status = overallStatus(data.clusters);
   const color = NETWORK_STATUS_COLORS[status] || NETWORK_STATUS_COLORS.unknown;
   return (
