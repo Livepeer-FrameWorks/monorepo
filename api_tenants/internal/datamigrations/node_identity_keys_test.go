@@ -45,10 +45,20 @@ func TestVerifyNodeIdentityKeysBlocksKeylessActiveNodes(t *testing.T) {
 }
 
 func TestNodeIdentityKeyGateNeverMutatesFingerprints(t *testing.T) {
-	lower := strings.ToLower(activeKeylessNodeCountSQL + activeKeylessNodeIDsSQL)
+	lower := strings.ToLower(managedActiveKeylessNodeCountSQL + managedActiveKeylessNodeIDsSQL)
 	for _, mutation := range []string{"update ", "insert ", "delete "} {
 		if strings.Contains(lower, mutation) {
 			t.Fatalf("identity-key census must be read-only; found %q", mutation)
 		}
+	}
+}
+
+func TestNodeIdentityKeyGateOnlyBlocksOperatorManagedNodes(t *testing.T) {
+	lower := strings.ToLower(managedActiveKeylessNodeCountSQL + managedActiveKeylessNodeIDsSQL)
+	if !strings.Contains(lower, "node.enrollment_origin in ('gitops_seed', 'adopted_local')") {
+		t.Fatalf("identity-key release gate must follow operator remediation ownership: %s", lower)
+	}
+	if strings.Contains(lower, "'runtime_enrolled'") {
+		t.Fatalf("runtime-enrolled self-hosted nodes must not block the platform release gate: %s", lower)
 	}
 }

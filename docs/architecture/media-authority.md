@@ -111,14 +111,14 @@ replace another node's tenant/key/fingerprint binding. Foghorn bounds concurrent
 pre-authentication Quartermaster work; saturation is an unavailable-authority
 condition for already admitted nodes, while new enrollment retries safely.
 
-The v0.3 upgrade is additive for existing fingerprint rows. A legacy row with
-no node key is not local outage authority. On its first post-upgrade online
-machine-ID or MAC resolution, Foghorn sends the public key whose registration
-proof it already verified and Quartermaster atomically fills the binding only
-when it is still null. A different existing key is an authoritative rejection,
-and peer-IP fallback never seeds the key. Foghorn persists local admission only
-after the response returns the same key, so the node needs that one successful
-control-plane resolution before it can reconnect during an outage.
+The v0.3 upgrade preserves existing fingerprint rows, but a legacy row without
+a node key is not local outage authority and cannot adopt a request-supplied
+key through fingerprint lookup. Recover it with a fresh cluster-bound enrollment
+token and an explicit identity-rotation request. Quartermaster validates the
+stable machine or MAC binding before replacing the missing key, and peer-IP
+fallback never seeds one. Foghorn persists local admission only after
+Quartermaster accepts the signed registration, so the node needs that one
+successful control-plane enrollment before it can reconnect during an outage.
 
 Helmsman's identity record is node-bound and lives under
 `HELMSMAN_STATE_DIR/node-identity`, never on the reclaimable media volume. A

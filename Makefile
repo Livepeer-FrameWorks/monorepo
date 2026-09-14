@@ -867,7 +867,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-migration -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG' -count=1 -timeout 600s ./internal/datamigrations/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-query-catalog -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/foghorndb/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-control -tags schema_verify -run '$(FOGHORN_CONTROL_REALPG_TESTS)' -count=1 -timeout 600s ./internal/control/
@@ -944,7 +944,7 @@ verify-quartermaster-db:
 	@echo "Verifying Quartermaster's converted repositories on PostgreSQL (Docker)..."
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-migration -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG' -count=1 -timeout 600s ./internal/datamigrations/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
 verify-quartermaster-yugabyte-db:

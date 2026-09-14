@@ -77,7 +77,11 @@ malformed stored key always returns `FailedPrecondition` with
 request-supplied key as authority.
 
 The `quartermaster_node_identity_keys_v0_3_0` data migration is a read-only
-census and release gate. Before the strict binary is installed, operators run
+census and release gate for active `gitops_seed` and `adopted_local` nodes,
+which are the nodes the platform operator can remediate. A `runtime_enrolled`
+self-hosted node does not block the platform release; the strict runtime
+identity check still applies when that node connects, so it must re-enroll
+before it can rejoin. Before the strict binary is installed, operators run
 the equivalent `SELECT` from the self-hosted edge rollout runbook directly
 against the existing Postgres service; that pre-deploy census does not depend
 on the replacement Quartermaster binary or an adoption marker. Inventory
