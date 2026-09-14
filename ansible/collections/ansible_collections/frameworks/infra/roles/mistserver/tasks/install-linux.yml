@@ -25,9 +25,17 @@
 
 - name: Install MistServer runtime packages
   ansible.builtin.package:
-    name: "{{ mistserver_runtime_packages }}"
+    name: >-
+      {{ mistserver_runtime_packages
+         if (mistserver_runtime_package_manager | trim | length == 0
+             or mistserver_runtime_package_manager == ansible_facts.pkg_mgr)
+         else mistserver_portable_runtime_packages }}
     state: present
-  when: mistserver_runtime_packages | length > 0
+  when: >-
+    (mistserver_runtime_packages
+     if (mistserver_runtime_package_manager | trim | length == 0
+         or mistserver_runtime_package_manager == ansible_facts.pkg_mgr)
+     else mistserver_portable_runtime_packages) | length > 0
 
 - name: Set install identity
   ansible.builtin.set_fact:

@@ -71,6 +71,9 @@ edge_mistserver_onnx_profile: cpu
 edge_mistserver_onnx_dri_device: false
 edge_mistserver_runtime_packages:
   - ffmpeg
+edge_mistserver_runtime_package_manager: ""
+edge_mistserver_portable_runtime_packages:
+  - ffmpeg
 edge_mistserver_debug_artifact_url: ""
 edge_mistserver_debug_artifact_checksum: ""
 edge_mistserver_install_debug_symbols: false

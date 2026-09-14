@@ -78,6 +78,8 @@
     mistserver_version: "{{ edge_mistserver_version }}"
     mistserver_onnx_profile: "{{ edge_mistserver_onnx_profile }}"
     mistserver_runtime_packages: "{{ edge_mistserver_runtime_packages }}"
+    mistserver_runtime_package_manager: "{{ edge_mistserver_runtime_package_manager }}"
+    mistserver_portable_runtime_packages: "{{ edge_mistserver_portable_runtime_packages }}"
     mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
     mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
     mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"

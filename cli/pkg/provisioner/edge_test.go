@@ -590,7 +590,7 @@ func TestEdgeVariantResolversUseExactProfilePins(t *testing.T) {
 					"cuda": {
 						Platforms: map[string]gitops.ExternalPlatform{
 							"linux/amd64": {
-								Host:     gitops.ExternalHost{SystemPackages: []string{"ffmpeg", "libcjson1"}},
+								Host:     gitops.ExternalHost{PackageManager: "apt", SystemPackages: []string{"ffmpeg", "libcjson1"}},
 								Artifact: &gitops.ExternalBinary{Name: "mist-cuda.tar.gz", URL: "https://example.test/mist-cuda.tar.gz", Checksum: "sha256:mistcuda"},
 							},
 						},
@@ -607,15 +607,18 @@ func TestEdgeVariantResolversUseExactProfilePins(t *testing.T) {
 	if image != "ghcr.io/example/edge:v1-onnx-cuda@sha256:edgecuda" {
 		t.Fatalf("image = %q", image)
 	}
-	url, checksum, packages, err := edgeExternalVariantBinary(manifest, "mistserver", "linux-amd64", "cuda")
+	url, checksum, host, err := edgeExternalVariantBinary(manifest, "mistserver", "linux-amd64", "cuda")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if url != "https://example.test/mist-cuda.tar.gz" || checksum != "sha256:mistcuda" {
 		t.Fatalf("artifact = %q %q", url, checksum)
 	}
-	if len(packages) != 2 || packages[1] != "libcjson1" {
-		t.Fatalf("packages = %#v", packages)
+	if len(host.SystemPackages) != 2 || host.SystemPackages[1] != "libcjson1" {
+		t.Fatalf("packages = %#v", host.SystemPackages)
+	}
+	if host.PackageManager != "apt" {
+		t.Fatalf("package manager = %q, want apt", host.PackageManager)
 	}
 }
 

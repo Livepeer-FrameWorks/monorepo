@@ -252,15 +252,16 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 
 	arch := remoteOS + "-" + remoteArch
 
-	mistURL, mistSum, runtimePackages, err := edgeExternalVariantBinary(manifest, "mistserver", arch, profile)
+	mistURL, mistSum, runtimeHost, err := edgeExternalVariantBinary(manifest, "mistserver", arch, profile)
 	if err != nil {
 		return nil, err
 	}
 	vars["edge_mistserver_artifact_url"] = mistURL
 	vars["edge_mistserver_artifact_checksum"] = mistSum
-	if len(runtimePackages) > 0 {
-		vars["edge_mistserver_runtime_packages"] = runtimePackages
+	if len(runtimeHost.SystemPackages) > 0 {
+		vars["edge_mistserver_runtime_packages"] = runtimeHost.SystemPackages
 	}
+	vars["edge_mistserver_runtime_package_manager"] = strings.TrimSpace(runtimeHost.PackageManager)
 	if profile == "cpu" {
 		mistDebugURL, mistDebugSum, debugErr := edgeExternalDebugBinary(manifest, "mistserver", arch)
 		if debugErr != nil {
@@ -447,34 +448,34 @@ func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, s
 	return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
 }
 
-func edgeExternalVariantBinary(manifest *gitops.Manifest, name, platform, profile string) (string, string, []string, error) {
+func edgeExternalVariantBinary(manifest *gitops.Manifest, name, platform, profile string) (string, string, gitops.ExternalHost, error) {
 	dep := manifest.GetExternalDependency(name)
 	if dep == nil {
-		return "", "", nil, fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
+		return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
 	}
 	profile = strings.ToLower(strings.TrimSpace(profile))
 	if dep.ReleaseIndex != nil {
 		if dep.ReleaseIndex.Schema != "mistserver.release/v1" {
-			return "", "", nil, fmt.Errorf("edge: release manifest %s has unsupported release index schema %q", name, dep.ReleaseIndex.Schema)
+			return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest %s has unsupported release index schema %q", name, dep.ReleaseIndex.Schema)
 		}
 		if dep.ReleaseTag != "" && dep.ReleaseIndex.ReleaseTag != dep.ReleaseTag {
-			return "", "", nil, fmt.Errorf("edge: release manifest %s index tag %q does not match dependency tag %q", name, dep.ReleaseIndex.ReleaseTag, dep.ReleaseTag)
+			return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest %s index tag %q does not match dependency tag %q", name, dep.ReleaseIndex.ReleaseTag, dep.ReleaseTag)
 		}
 	}
 	if variant := dep.RuntimeVariantForPlatform(profile, strings.Replace(platform, "-", "/", 1)); variant != nil {
 		if variant.Artifact == nil || strings.TrimSpace(variant.Artifact.URL) == "" {
-			return "", "", nil, fmt.Errorf("edge: release manifest %s %s variant has no artifact URL for %q", name, profile, platform)
+			return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest %s %s variant has no artifact URL for %q", name, profile, platform)
 		}
 		if strings.TrimSpace(variant.Artifact.Checksum) == "" {
-			return "", "", nil, fmt.Errorf("edge: release manifest %s %s artifact for %q carries no checksum", name, profile, platform)
+			return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest %s %s artifact for %q carries no checksum", name, profile, platform)
 		}
-		return variant.Artifact.URL, variant.Artifact.Checksum, variant.Host.SystemPackages, nil
+		return variant.Artifact.URL, variant.Artifact.Checksum, variant.Host, nil
 	}
 	if dep.ReleaseIndex != nil || profile != "cpu" {
-		return "", "", nil, fmt.Errorf("edge: release manifest %s has no %s variant for %q", name, profile, platform)
+		return "", "", gitops.ExternalHost{}, fmt.Errorf("edge: release manifest %s has no %s variant for %q", name, profile, platform)
 	}
 	url, checksum, err := edgeExternalBinary(manifest, name, platform)
-	return url, checksum, nil, err
+	return url, checksum, gitops.ExternalHost{}, err
 }
 
 func edgeExternalDebugBinary(manifest *gitops.Manifest, name, arch string) (string, string, error) {
