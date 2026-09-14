@@ -78,6 +78,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newUpdateCmd())
 	rootCmd.AddCommand(newLivepeerCmd())
 	rootCmd.AddCommand(newReleaseMetadataCmd())
+	rootCmd.AddCommand(newValidateReleaseManifestCmd())
 	rootCmd.AddCommand(newCryptoCmd())
 	return rootCmd
 }

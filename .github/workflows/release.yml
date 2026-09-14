@@ -2432,7 +2432,7 @@ jobs:
               )
             )
           ' dist/mistserver-release-index.json)
-          printf '      release_index: %s\n' "$mist_index" >> dist/manifest.yaml
+          printf '    release_index: %s\n' "$mist_index" >> dist/manifest.yaml
 
           cat >> dist/manifest.yaml <<YAML
             - name: go-livepeer
@@ -2451,6 +2451,7 @@ jobs:
           # Infrastructure Requirements (from config/infrastructure.yaml)
           echo "" >> dist/manifest.yaml
           cat config/infrastructure.yaml >> dist/manifest.yaml
+          (cd cli && go run . validate-release-manifest ../dist/manifest.yaml)
       - name: Upload manifest artifact
         uses: actions/upload-artifact@v7
         with:

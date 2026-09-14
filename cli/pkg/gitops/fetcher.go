@@ -332,6 +332,12 @@ func parseManifest(data []byte) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// ParseManifest validates and decodes one release manifest using the same
+// strict schema used by local, cached, and remote manifest fetches.
+func ParseManifest(data []byte) (*Manifest, error) {
+	return parseManifest(data)
+}
+
 // validateManifestCompat fails closed on corrupt compatibility metadata: a min_cli_version that is present but not a
 // valid version (so the floor can never be compared), an empty required-transition id, or a rollback-disabled name that
 // is empty OR is not a canonical service — a valid-looking typo such as `chandlr` would silently never match
