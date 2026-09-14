@@ -1,8 +1,8 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
-		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
+		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook test-logbook-image-health build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-schema-yugabyte-schema verify-schema-yugabyte-schema-contracts verify-yugabyte-services verify-yugabyte-services-isolated verify-yugabyte-service verify-yugabyte-database verify-yugabyte-shared-fixture verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-skipper-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-schema-yugabyte-schema verify-schema-yugabyte-schema-isolated verify-schema-yugabyte-selection-contracts verify-schema-yugabyte-schema-contracts verify-yugabyte-services verify-yugabyte-services-isolated verify-yugabyte-service verify-yugabyte-database verify-yugabyte-shared-fixture verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-skipper-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -285,6 +285,9 @@ build-image-logbook:
 	docker build -t frameworks-logbook:$(VERSION) \
 		--build-arg BUILD_ENV=production \
 		-f website_docs/Dockerfile .
+
+test-logbook-image-health: build-image-logbook
+	./scripts/test-logbook-image-health.sh frameworks-logbook:$(VERSION)
 
 build-image-navigator:
 	docker build -t frameworks-navigator:$(VERSION) \
@@ -744,10 +747,13 @@ validate-migrations: verify-release-state
 # gate for concurrency/constraint properties sqlmock can't prove. Needs a running Docker daemon; gated
 # behind the schema_verify build tag so a plain `make test` never needs Docker.
 SCHEMA_VERIFY_FROM_TAG ?= $(shell git tag --merged HEAD --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
-SCHEMA_VERIFY_COMMON_TESTS := TestComposeUsesSchemaHarnessImages|TestSchemaVerifyFromTagIsRequiredInCI
+SCHEMA_VERIFY_COMMON_TESTS := TestComposeUsesSchemaHarnessImages|TestSchemaContractEnginePin|TestSchemaVerifyFromTagIsRequiredInCI
 SCHEMA_VERIFY_POSTGRES_TESTS := TestPurserViewsUseExplicitProjectionLists|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresServiceCapabilitiesExecute|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandCASMutualExclusion
 SCHEMA_VERIFY_CLICKHOUSE_TESTS := TestClickHouseServiceCapabilitiesExecute|TestClickHouseDeliveryRollupContractSeedsAndRetainsDiscoveryThroughScheduledRefreshes|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries|TestArtifactEventsDedupedPreservesLegacyRows
-SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
+YUGABYTE_SCHEMA_DATABASES := commodore foghorn navigator periscope purser quartermaster skipper
+SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|TestYugabyteDatabaseSelection
+SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
+SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)
 SCHEMA_VERIFY_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)|$(SCHEMA_VERIFY_CLICKHOUSE_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)
 # CI sets CONTRACT_COVERAGE_DIR so these same test executions emit engine-specific profiles.
 # Leaving it unset preserves the ordinary local targets without coverage artifacts.
@@ -1005,12 +1011,26 @@ verify-schema-postgres: verify-foghorn-test-selection
 
 verify-schema-yugabyte: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-yugabyte requires a running Docker daemon"; exit 1; }
-	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+	@$(MAKE) --no-print-directory verify-schema-yugabyte-schema-isolated
 	@$(MAKE) --no-print-directory verify-yugabyte-services-isolated
 
 verify-schema-yugabyte-schema: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-yugabyte-schema requires a running Docker daemon"; exit 1; }
-	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+	@$(MAKE) --no-print-directory verify-schema-yugabyte-schema-isolated
+
+verify-schema-yugabyte-schema-isolated:
+	@$(MAKE) --no-print-directory verify-schema-yugabyte-selection-contracts
+	@failed=0; \
+	for database in $(YUGABYTE_SCHEMA_DATABASES); do \
+		echo "Verifying $$database Yugabyte schema in a fresh engine..."; \
+		FRAMEWORKS_YUGABYTE_DATABASES="$$database" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh \
+			$(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts YUGABYTE_SCHEMA_COVERAGE_NAME="schema-$$database" || failed=1; \
+	done; \
+	exit $$failed
+
+verify-schema-yugabyte-selection-contracts:
+	@echo "Verifying Yugabyte schema harness and database selection..."
+	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/schema-selection -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
 
 verify-yugabyte-services: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-services requires a running Docker daemon"; exit 1; }
@@ -1028,8 +1048,9 @@ verify-yugabyte-services-isolated:
 
 verify-schema-yugabyte-schema-contracts:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the contracts share one isolated engine"; exit 1; }
-	@echo "Verifying supported Yugabyte baselines and runtime SQL capabilities (Docker)..."
-	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+	@case "$$FRAMEWORKS_YUGABYTE_DATABASES" in commodore|foghorn|navigator|periscope|purser|quartermaster|skipper) ;; *) echo "ERROR: Yugabyte schema contracts require exactly one supported FRAMEWORKS_YUGABYTE_DATABASES value"; exit 2;; esac
+	@echo "Verifying $$FRAMEWORKS_YUGABYTE_DATABASES Yugabyte baseline and runtime SQL capabilities (Docker)..."
+	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/$${YUGABYTE_SCHEMA_COVERAGE_NAME:-schema-$$FRAMEWORKS_YUGABYTE_DATABASES} -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
 
 verify-yugabyte-shared-fixture:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: invoke Yugabyte contracts through their public Make target"; exit 1; }
@@ -1111,13 +1132,13 @@ endif
 verify-yugabyte-database: verify-foghorn-test-selection
 	@case "$(DATABASE)" in commodore|foghorn|navigator|periscope|purser|quartermaster|skipper) ;; *) echo "ERROR: DATABASE must be commodore, foghorn, navigator, periscope, purser, quartermaster, or skipper"; exit 2;; esac
 ifeq ($(DATABASE),foghorn)
-	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-foghorn-contracts-a
+	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-foghorn-contracts-a YUGABYTE_SCHEMA_COVERAGE_NAME=schema-foghorn
 	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
 else ifeq ($(DATABASE),commodore)
-	@FRAMEWORKS_YUGABYTE_DATABASES=commodore $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+	@FRAMEWORKS_YUGABYTE_DATABASES=commodore $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts YUGABYTE_SCHEMA_COVERAGE_NAME=schema-commodore
 	@$(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
 else
-	@service="$(DATABASE)"; if [ "$$service" = periscope ]; then service=periscope-metering; fi; FRAMEWORKS_YUGABYTE_DATABASES="$(DATABASE)" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-$$service-contracts
+	@service="$(DATABASE)"; if [ "$$service" = periscope ]; then service=periscope-metering; fi; FRAMEWORKS_YUGABYTE_DATABASES="$(DATABASE)" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-$$service-contracts YUGABYTE_SCHEMA_COVERAGE_NAME=schema-$(DATABASE)
 endif
 
 verify-yugabyte-ha: verify-foghorn-test-selection

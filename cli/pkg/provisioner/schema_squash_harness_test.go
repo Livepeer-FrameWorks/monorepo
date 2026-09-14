@@ -20,8 +20,12 @@ import (
 
 // docker runs a docker subcommand, optionally feeding stdin, and returns stdout.
 func docker(t *testing.T, stdin string, args ...string) (string, error) {
+	return dockerWithTimeout(t, 3*time.Minute, stdin, args...)
+}
+
+func dockerWithTimeout(t *testing.T, timeout time.Duration, stdin string, args ...string) (string, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	if stdin != "" {

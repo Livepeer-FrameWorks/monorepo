@@ -13,11 +13,15 @@ import (
 )
 
 type harnessInfrastructure struct {
-	Name           string `yaml:"name"`
-	Image          string `yaml:"image"`
-	Digest         string `yaml:"digest"`
-	ContractImage  string `yaml:"contract_image"`
-	ContractDigest string `yaml:"contract_digest"`
+	Name   string `yaml:"name"`
+	Image  string `yaml:"image"`
+	Digest string `yaml:"digest"`
+}
+
+type schemaContractEngine struct {
+	Name   string `yaml:"name"`
+	Image  string `yaml:"image"`
+	Digest string `yaml:"digest"`
 }
 
 func infrastructureHarnessImage(t *testing.T, name string) string {
@@ -55,29 +59,37 @@ func infrastructureContractImage(t *testing.T, name string) string {
 	t.Helper()
 	manifestPath := findInfrastructureYaml(t)
 	if manifestPath == "" {
-		t.Fatal("config/infrastructure.yaml not found; compatibility tests require the engine authority")
+		t.Fatal("config/infrastructure.yaml not found; cannot locate the schema contract-engine authority")
 	}
-	b, err := os.ReadFile(manifestPath)
+	contractPath := filepath.Join(filepath.Dir(manifestPath), "schema-contract-engines.yaml")
+	b, err := os.ReadFile(contractPath)
 	if err != nil {
-		t.Fatalf("read %s: %v", manifestPath, err)
+		t.Fatalf("read %s: %v", contractPath, err)
 	}
 	var doc struct {
-		Infrastructure []harnessInfrastructure `yaml:"infrastructure"`
+		ContractEngines []schemaContractEngine `yaml:"contract_engines"`
 	}
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		t.Fatalf("unmarshal %s: %v", manifestPath, err)
+		t.Fatalf("unmarshal %s: %v", contractPath, err)
 	}
-	for _, infra := range doc.Infrastructure {
-		if infra.Name != name {
+	for _, engine := range doc.ContractEngines {
+		if engine.Name != name {
 			continue
 		}
-		if infra.ContractImage == "" || infra.ContractDigest == "" {
-			t.Fatalf("infrastructure/%s must pin contract_image and contract_digest", name)
+		if engine.Image == "" || engine.Digest == "" {
+			t.Fatalf("contract engine %s must pin image and digest", name)
 		}
-		return infra.ContractImage + "@" + infra.ContractDigest
+		return engine.Image + "@" + engine.Digest
 	}
-	t.Fatalf("infrastructure/%s is absent from %s", name, manifestPath)
+	t.Fatalf("contract engine %s is absent from %s", name, contractPath)
 	return ""
+}
+
+func TestSchemaContractEnginePin(t *testing.T) {
+	image := infrastructureContractImage(t, "yugabyte")
+	if !strings.Contains(image, "@sha256:") {
+		t.Fatalf("Yugabyte contract engine is not content-addressed: %q", image)
+	}
 }
 
 func TestComposeUsesSchemaHarnessImages(t *testing.T) {

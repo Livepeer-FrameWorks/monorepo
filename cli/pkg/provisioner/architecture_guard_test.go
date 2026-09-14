@@ -183,10 +183,11 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 		role         string
 		prefix       string
 		readLedger   string
+		reconcile    string
 		ensureLedger string
 	}{
-		{"postgres", "postgres", "postgres", "Read applied migrations per database", "Ensure _migrations tracking table per database"},
-		{"yugabyte", "yugabyte", "yugabyte", "Read applied migrations per database (Yugabyte)", "Ensure _migrations tracking table per database (Yugabyte)"},
+		{"postgres", "postgres", "postgres", "Read applied migrations per database", "Reconcile application schema ownership before migrations", "Ensure _migrations tracking table per database"},
+		{"yugabyte", "yugabyte", "yugabyte", "Read applied migrations per database (Yugabyte)", "Reconcile application schema ownership before migrations (Yugabyte)", "Ensure _migrations tracking table per database (Yugabyte)"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -194,15 +195,20 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 			t.Parallel()
 			schemaBody := readRoleTask(t, ansibleRoots[0], tc.role, "schema.yml")
 			existingSchemaGuard := "- not (" + tc.prefix + "_schema_has_tables_by_db[item.db] | default(false))"
-			if !strings.Contains(schemaBody, existingSchemaGuard) {
-				t.Fatalf("%s schema ownership task must be gated by %q", tc.name, existingSchemaGuard)
+			ownershipBlock := namedAnsibleTaskBlock(t, schemaBody, "Grant baseline schema ownership to application role")
+			if strings.Contains(ownershipBlock, existingSchemaGuard) {
+				t.Fatalf("%s must reconcile ownership for populated schemas", tc.name)
+			}
+			if !strings.Contains(ownershipBlock, "- not ansible_check_mode") {
+				t.Fatalf("%s schema ownership must not execute in check mode", tc.name)
 			}
 
 			migrateBody := readRoleTask(t, ansibleRoots[0], tc.role, "migrate.yml")
 			readIdx := strings.Index(migrateBody, "- name: "+tc.readLedger)
+			reconcileIdx := strings.Index(migrateBody, "- name: "+tc.reconcile)
 			ensureIdx := strings.Index(migrateBody, "- name: "+tc.ensureLedger)
-			if readIdx < 0 || ensureIdx < 0 || readIdx > ensureIdx {
-				t.Fatalf("%s migrate task must read the ledger before creating or repairing it", tc.name)
+			if readIdx < 0 || reconcileIdx < 0 || ensureIdx < 0 || readIdx > reconcileIdx || reconcileIdx > ensureIdx {
+				t.Fatalf("%s migrate task order must be ledger read -> ownership reconciliation -> ledger repair", tc.name)
 			}
 
 			pendingLoop := `loop: "{{ ` + tc.prefix + `_pending_migrate_items | default([]) | map(attribute='db') | unique | list }}"`
@@ -216,7 +222,84 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 			if !strings.Contains(migrateBody, "pg_advisory_lock(hashtext('frameworks_migrations')") {
 				t.Fatalf("%s migrate task must serialize schema changes with an advisory lock", tc.name)
 			}
+			if !strings.Contains(migrateBody, "Report pending migrations") {
+				t.Fatalf("%s migrate task must report pending work in check mode", tc.name)
+			}
 		})
+	}
+}
+
+func namedAnsibleTaskBlock(t *testing.T, body, name string) string {
+	t.Helper()
+	start := strings.Index(body, "- name: "+name)
+	if start < 0 {
+		t.Fatalf("Ansible task %q not found", name)
+	}
+	rest := body[start+1:]
+	if end := strings.Index(rest, "\n- name: "); end >= 0 {
+		return body[start : start+1+end]
+	}
+	return body[start:]
+}
+
+func TestArchitectureGuard_databaseWritesDoNotRunInCheckMode(t *testing.T) {
+	t.Parallel()
+	_, ansibleRoots := repoSourceRoots(t)
+	if len(ansibleRoots) == 0 {
+		t.Skip("ansible tree not available")
+	}
+
+	readOnlyQueries := map[string]bool{
+		"Confirm SELECT version() via peer auth":          true,
+		"Probe baseline schema state":                     true,
+		"Read applied migrations per database":            true,
+		"Read applied migrations per database (Yugabyte)": true,
+		"Probe baseline schema state (Yugabyte)":          true,
+	}
+	mutatingModules := []string{
+		"community.postgresql.postgresql_db:",
+		"community.postgresql.postgresql_ext:",
+		"community.postgresql.postgresql_owner:",
+		"community.postgresql.postgresql_query:",
+		"community.postgresql.postgresql_script:",
+		"community.postgresql.postgresql_user:",
+	}
+
+	for _, role := range []string{"postgres", "yugabyte"} {
+		taskDir := filepath.Join(ansibleRoots[0], "collections", "ansible_collections", "frameworks", "infra", "roles", role, "tasks")
+		entries, err := os.ReadDir(taskDir)
+		if err != nil {
+			t.Fatalf("read %s: %v", taskDir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
+				continue
+			}
+			bodyBytes, err := os.ReadFile(filepath.Join(taskDir, entry.Name()))
+			if err != nil {
+				t.Fatalf("read %s/%s: %v", taskDir, entry.Name(), err)
+			}
+			for _, rawBlock := range strings.Split(string(bodyBytes), "\n- name: ") {
+				block := rawBlock
+				if !strings.HasPrefix(block, "- name: ") {
+					block = "- name: " + block
+				}
+				nameLine := strings.SplitN(strings.TrimPrefix(block, "- name: "), "\n", 2)[0]
+				usesDatabaseModule := false
+				for _, module := range mutatingModules {
+					if strings.Contains(block, module) {
+						usesDatabaseModule = true
+						break
+					}
+				}
+				if !usesDatabaseModule || readOnlyQueries[nameLine] {
+					continue
+				}
+				if !strings.Contains(block, "not ansible_check_mode") {
+					t.Errorf("%s/%s task %q may execute a database write in check mode", role, entry.Name(), nameLine)
+				}
+			}
+		}
 	}
 }
 

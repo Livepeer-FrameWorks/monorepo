@@ -16,4 +16,6 @@
   loop_control:
     label: "{{ item.db }}"
   no_log: true
-  when: postgres_seed_items | default([]) | length > 0
+  when:
+    - not ansible_check_mode
+    - postgres_seed_items | default([]) | length > 0

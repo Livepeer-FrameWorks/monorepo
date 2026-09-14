@@ -76,6 +76,19 @@ index. The validator requires the exact index name and validity predicates in
 the same postdeploy statement because an interrupted concurrent
 build can leave an invalid relation that a later `IF NOT EXISTS` silently skips.
 
+## Dry-run safety
+
+Migration dry-runs inspect the live `_migrations` ledgers and report pending files,
+but never submit migration, ledger, ownership, baseline, role, or seed SQL. This is
+enforced in the PostgreSQL and YugabyteDB Ansible roles with explicit
+`not ansible_check_mode` guards and a repository test that treats database-module
+tasks as mutating unless their task name is explicitly audited as read-only.
+
+Rollback is not a dry-run mechanism. In particular, YugabyteDB configurations that
+do not provide transactional DDL can retain schema changes after a client rolls back
+while also rolling back the corresponding `_migrations` insert. Check mode therefore
+must remain read-only regardless of engine capabilities or server flags.
+
 Expand constraints must use `ADD CONSTRAINT … NOT VALID` and pair by exact name
 with a same-release postdeploy `VALIDATE CONSTRAINT`; the validator enforces the
 pair in both directions and ignores comments and SQL string literals. The only

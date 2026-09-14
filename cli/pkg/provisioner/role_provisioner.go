@@ -257,10 +257,8 @@ func (r *RolePlaybookProvisioner) ApplySchemas(ctx context.Context, host invento
 	return r.runWithTags(ctx, host, config, []string{"schema"})
 }
 
-// ApplyMigrations runs the role with the migrate tag. When dryRun is true
-// the ansible-playbook subprocess is invoked with --check --diff so the
-// role's community.postgresql modules report the queries they would run
-// instead of executing them.
+// ApplyMigrations runs the role with the migrate tag. When dryRun is true, the role reads the migration ledger and
+// reports pending files under --check --diff without sending migration SQL to the database.
 func (r *RolePlaybookProvisioner) ApplyMigrations(ctx context.Context, host inventory.Host, config ServiceConfig, dryRun bool) error {
 	return r.runWithOptions(ctx, host, config, roleRunOptions{
 		Tags:  []string{"migrate"},

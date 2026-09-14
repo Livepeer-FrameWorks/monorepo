@@ -67,12 +67,12 @@ infrastructure:
 	}
 }
 
-func TestInfrastructureContractImageRequiresPinnedPair(t *testing.T) {
-	image, digest, err := infrastructureContractImage(`
-infrastructure:
+func TestContractEngineImageRequiresPinnedPair(t *testing.T) {
+	image, digest, err := contractEngineImage(`
+contract_engines:
   - name: yugabyte
-    contract_image: yugabytedb/yugabyte:2025
-    contract_digest: sha256:abc123
+    image: yugabytedb/yugabyte:2025
+    digest: sha256:abc123
 `, "yugabyte")
 	if err != nil {
 		t.Fatal(err)

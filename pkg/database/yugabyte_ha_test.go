@@ -7,9 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -415,51 +413,11 @@ func yugabyteHAPublishedPort(t *testing.T, name string) string {
 
 func yugabyteHAImage(t *testing.T) string {
 	t.Helper()
-	if override := strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_IMAGE")); override != "" {
-		return override
-	}
-	directory, err := os.Getwd()
+	image, err := dockerpg.YugabyteImage()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for depth := 0; depth < 10; depth++ {
-		path := filepath.Join(directory, "config", "infrastructure.yaml")
-		contents, readErr := os.ReadFile(path)
-		if readErr == nil {
-			active := false
-			image, digest := "", ""
-			for line := range strings.SplitSeq(string(contents), "\n") {
-				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "- name:") {
-					if active {
-						break
-					}
-					active = strings.TrimSpace(strings.TrimPrefix(trimmed, "- name:")) == "yugabyte"
-					continue
-				}
-				if !active {
-					continue
-				}
-				switch {
-				case strings.HasPrefix(trimmed, "contract_image:"):
-					image = strings.TrimSpace(strings.TrimPrefix(trimmed, "contract_image:"))
-				case strings.HasPrefix(trimmed, "contract_digest:"):
-					digest = strings.TrimSpace(strings.TrimPrefix(trimmed, "contract_digest:"))
-				}
-			}
-			if image == "" || digest == "" {
-				t.Fatalf("%s must declare Yugabyte contract_image and contract_digest", path)
-			}
-			return image + "@" + digest
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			break
-		}
-		directory = parent
-	}
-	t.Fatal("config/infrastructure.yaml not found")
-	return ""
+	return image
 }
 
 func dockerYugabyteHA(t *testing.T, timeout time.Duration, args ...string) string {

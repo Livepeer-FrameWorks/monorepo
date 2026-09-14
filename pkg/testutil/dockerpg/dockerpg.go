@@ -63,7 +63,7 @@ func PostgresImage() (string, error) {
 	return "", errors.New("config/infrastructure.yaml not found from test working directory")
 }
 
-// YugabyteImage resolves the release-pinned Yugabyte compatibility image.
+// YugabyteImage resolves the test-only Yugabyte compatibility image.
 func YugabyteImage() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_IMAGE")); override != "" {
 		return override, nil
@@ -73,9 +73,9 @@ func YugabyteImage() (string, error) {
 		return "", err
 	}
 	for dir, depth := wd, 0; depth < 10; depth++ {
-		path := filepath.Join(dir, "config", "infrastructure.yaml")
+		path := filepath.Join(dir, "config", "schema-contract-engines.yaml")
 		if b, readErr := os.ReadFile(path); readErr == nil {
-			image, digest, parseErr := infrastructureContractImage(string(b), "yugabyte")
+			image, digest, parseErr := contractEngineImage(string(b), "yugabyte")
 			if parseErr != nil {
 				return "", fmt.Errorf("parse %s: %w", path, parseErr)
 			}
@@ -87,7 +87,7 @@ func YugabyteImage() (string, error) {
 		}
 		dir = parent
 	}
-	return "", errors.New("config/infrastructure.yaml not found from test working directory")
+	return "", errors.New("config/schema-contract-engines.yaml not found from test working directory")
 }
 
 // OpenSharedYugabyteDatabase creates an isolated database in the suite-owned
@@ -172,14 +172,14 @@ func sharedYugabyteDatabaseName(prefix string, pid int, sequence uint64) string 
 }
 
 func infrastructureImage(yaml, name string) (string, string, error) {
-	return infrastructureImageFields(yaml, name, "image:", "digest:")
+	return pinnedImageFields(yaml, name, "infrastructure")
 }
 
-func infrastructureContractImage(yaml, name string) (string, string, error) {
-	return infrastructureImageFields(yaml, name, "contract_image:", "contract_digest:")
+func contractEngineImage(yaml, name string) (string, string, error) {
+	return pinnedImageFields(yaml, name, "contract engine")
 }
 
-func infrastructureImageFields(yaml, name, imageKey, digestKey string) (string, string, error) {
+func pinnedImageFields(yaml, name, kind string) (string, string, error) {
 	active := false
 	image, digest := "", ""
 	for line := range strings.SplitSeq(yaml, "\n") {
@@ -195,14 +195,14 @@ func infrastructureImageFields(yaml, name, imageKey, digestKey string) (string, 
 			continue
 		}
 		switch {
-		case strings.HasPrefix(trimmed, imageKey):
-			image = strings.TrimSpace(strings.TrimPrefix(trimmed, imageKey))
-		case strings.HasPrefix(trimmed, digestKey):
-			digest = strings.TrimSpace(strings.TrimPrefix(trimmed, digestKey))
+		case strings.HasPrefix(trimmed, "image:"):
+			image = strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		case strings.HasPrefix(trimmed, "digest:"):
+			digest = strings.TrimSpace(strings.TrimPrefix(trimmed, "digest:"))
 		}
 	}
 	if image == "" || digest == "" {
-		return "", "", fmt.Errorf("infrastructure/%s must declare %s and %s", name, strings.TrimSuffix(imageKey, ":"), strings.TrimSuffix(digestKey, ":"))
+		return "", "", fmt.Errorf("%s %s must declare image and digest", kind, name)
 	}
 	return image, digest, nil
 }

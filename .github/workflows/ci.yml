@@ -97,6 +97,7 @@ jobs:
               - 'cli/pkg/inventory/**'
               - 'cli/pkg/provisioner/**'
               - 'config/infrastructure.yaml'
+              - 'config/schema-contract-engines.yaml'
               - 'docker-compose.yml'
               - 'infrastructure/postgres/**'
               - 'pkg/database/**'
@@ -115,6 +116,7 @@ jobs:
               - 'cli/internal/releases/catalog.yaml'
               - 'cli/pkg/provisioner/**'
               - 'config/infrastructure.yaml'
+              - 'config/schema-contract-engines.yaml'
               - 'infrastructure/postgres/**'
               - 'pkg/database/*.go'
               - 'pkg/database/sql/schema/commodore.sql'
@@ -528,7 +530,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema-selection.out,coverage/contracts/yugabyte/schema-commodore.out,coverage/contracts/yugabyte/schema-foghorn.out,coverage/contracts/yugabyte/schema-navigator.out,coverage/contracts/yugabyte/schema-periscope.out,coverage/contracts/yugabyte/schema-purser.out,coverage/contracts/yugabyte/schema-quartermaster.out,coverage/contracts/yugabyte/schema-skipper.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/commodore-placement-a.out,coverage/contracts/yugabyte/commodore-placement-b.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/quartermaster-consent-management.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false

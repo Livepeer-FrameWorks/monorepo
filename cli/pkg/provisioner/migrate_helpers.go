@@ -97,9 +97,17 @@ func migrationItem(target SchemaDatabase, m Migration) map[string]any {
 	if owner == "" {
 		owner = target.Name
 	}
+	schema := target.Schema
+	if schema == "" {
+		schema = target.SourceName
+	}
+	if schema == "" {
+		schema = target.Name
+	}
 	return map[string]any{
 		"db":            target.Name,
 		"owner":         owner,
+		"schema":        schema,
 		"version":       m.Version,
 		"phase":         m.Phase,
 		"sequence":      m.Sequence,

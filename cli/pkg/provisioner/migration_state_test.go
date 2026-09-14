@@ -144,6 +144,9 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 		if got := item["owner"]; got != "foghorn_eu_owner" {
 			t.Fatalf("migration owner = %v, want foghorn_eu_owner", got)
 		}
+		if got := item["schema"]; got != "foghorn" {
+			t.Fatalf("migration schema = %v, want foghorn", got)
+		}
 		if sql, _ := item["sql"].(string); !strings.Contains(sql, "foghorn.") {
 			t.Fatalf("expected logical foghorn migration SQL, got %q", sql)
 		}
@@ -163,6 +166,9 @@ func TestMigrationItemSplitsNonTransactionalStatementsForAutocommit(t *testing.T
 	}
 	if item["sql"] != migration.content {
 		t.Fatalf("migration checksum body changed while splitting statements")
+	}
+	if item["schema"] != "purser" {
+		t.Fatalf("migration schema = %v, want purser", item["schema"])
 	}
 }
 

@@ -27,7 +27,9 @@
   loop_control:
     label: "{{ item.owner | default(item.name, true) }}"
   no_log: true
-  when: postgres_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - postgres_databases | length > 0
 
 - name: Create databases
   become: true
@@ -44,7 +46,9 @@
   loop: "{{ postgres_databases }}"
   loop_control:
     label: "{{ item.name }}"
-  when: postgres_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - postgres_databases | length > 0
 
 - name: Create least-privilege application runtime roles
   become: true
@@ -59,7 +63,9 @@
   loop_control:
     label: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
   no_log: true
-  when: postgres_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - postgres_databases | length > 0
 
 - name: Create database extensions
   become: true
@@ -72,4 +78,6 @@
   loop: "{{ postgres_databases | subelements('extensions', skip_missing=true) }}"
   loop_control:
     label: "{{ item.0.name }}:{{ item.1 }}"
-  when: postgres_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - postgres_databases | length > 0

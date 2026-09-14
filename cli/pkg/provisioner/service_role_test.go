@@ -106,9 +106,10 @@ func TestChandlerComposeRolloutGateProbesReadiness(t *testing.T) {
 
 	// Reproduce the registry's generic-service wiring: cfg.HealthPath = ReadinessPath().
 	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
-		ServiceName: "chandler",
-		DefaultPort: def.DefaultPort,
-		HealthPath:  def.ReadinessPath(),
+		ServiceName:  "chandler",
+		DefaultPort:  def.DefaultPort,
+		DefaultImage: "ghcr.io/livepeer-frameworks/chandler:test",
+		HealthPath:   def.ReadinessPath(),
 	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
 		Mode:     "docker",
 		Metadata: map[string]any{},

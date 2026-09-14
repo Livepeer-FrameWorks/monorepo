@@ -44,7 +44,9 @@
   loop_control:
     label: "{{ item.owner | default(item.name, true) }}"
   no_log: true
-  when: yugabyte_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - yugabyte_databases | length > 0
 
 - name: Create databases
   community.postgresql.postgresql_db:
@@ -59,7 +61,9 @@
   loop_control:
     label: "{{ item.name }}"
   no_log: true
-  when: yugabyte_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - yugabyte_databases | length > 0
 
 - name: Create least-privilege application runtime roles
   community.postgresql.postgresql_user:
@@ -76,7 +80,9 @@
   loop_control:
     label: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
   no_log: true
-  when: yugabyte_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - yugabyte_databases | length > 0
 
 - name: Grant database ownership to owner role
   community.postgresql.postgresql_owner:
@@ -91,4 +97,6 @@
   loop_control:
     label: "{{ item.name }}"
   no_log: true
-  when: yugabyte_databases | length > 0
+  when:
+    - not ansible_check_mode
+    - yugabyte_databases | length > 0
