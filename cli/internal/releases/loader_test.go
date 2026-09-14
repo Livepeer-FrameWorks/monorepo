@@ -13,6 +13,9 @@ func TestShippedCatalogHasDatabaseOwnershipAndReleaseFloor(t *testing.T) {
 	if got := MinCLIVersionFor("v0.3.0-rc2"); got != "v0.3.0-rc1" {
 		t.Errorf("MinCLIVersionFor(v0.3.0-rc2) must resolve via base version, got %q", got)
 	}
+	if got := MinCLIVersionFor("v0.3.1"); got != "v0.3.1" {
+		t.Errorf("MinCLIVersionFor(v0.3.1) = %q, want v0.3.1", got)
+	}
 	if got := SchemaMigrationFloor(); got != "v0.3.0" {
 		t.Errorf("SchemaMigrationFloor() = %q, want v0.3.0", got)
 	}
@@ -130,13 +133,16 @@ func TestParseCatalog_ShippedCatalogPassesStrictValidation(t *testing.T) {
 }
 
 func TestReleasesBelow_ShippedCatalog(t *testing.T) {
-	// The shipped catalog declares only v0.3.0; nothing is below it, and the target's own base is excluded.
+	// Nothing precedes the schema floor, and the target's own base is excluded.
 	if got := ReleasesBelow("v0.3.0"); len(got) != 0 {
-		t.Fatalf("nothing is below the only shipped release; got %+v", got)
+		t.Fatalf("nothing is below the release floor; got %+v", got)
 	}
 	// An RC target excludes the declared final by BASE version too.
 	if got := ReleasesBelow("v0.3.0-rc1"); len(got) != 0 {
 		t.Fatalf("an RC target must exclude its declared final by base; got %+v", got)
+	}
+	if got := ReleasesBelow("v0.3.1"); len(got) != 1 || got[0].Version != "v0.3.0" {
+		t.Fatalf("v0.3.1 must include v0.3.0 as its prior release; got %+v", got)
 	}
 }
 
