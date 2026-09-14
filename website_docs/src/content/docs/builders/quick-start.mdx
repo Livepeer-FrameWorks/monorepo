@@ -1,13 +1,21 @@
 ---
 title: "Quick Start"
-description: "Go from zero to streaming in 5 minutes."
+description: "Create a stream, connect OBS over RTMP, and verify playback."
 sidebar:
   order: 1
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-Go from account creation to a live broadcast in a few minutes.
+Create a stream, send it video from OBS, and open the playback URL.
+
+```mermaid
+flowchart LR
+    A[Create a stream] --> B[Copy its secret stream key]
+    B --> C[Send RTMP from OBS]
+    C --> D[FrameWorks edge]
+    D --> E[Open the playback URL]
+```
 
 <Aside type="tip" title="Self-hosting?">
   This guide uses the managed FrameWorks service. Want full control? See [Infrastructure
@@ -17,7 +25,7 @@ Go from account creation to a live broadcast in a few minutes.
 
 ## 1. Create an Account
 
-Head to [%APP_URL%](%APP_URL%) and sign up with your email.
+Head to [%APP_URL%](%APP_URL%) and sign up with email and password or an EVM wallet.
 
 ## 2. Create a Stream
 
@@ -55,13 +63,13 @@ Once configured, hit **Start Streaming** in OBS.
 
 ## 5. Watch Your Stream
 
-Back in the dashboard, your stream status should flip to **Live** within a few seconds.
+After FrameWorks accepts the ingest, the dashboard changes the stream status to **Live**.
 
 The **Playback Info** card shows your Playback ID. For protocol URLs and embed code, open the **Playback** tab.
 
 ## What's Next
 
-- [Streams](/builders/streams) - Understand stream keys, playback IDs, and push vs pull ingest
-- [Encoder Setup](/builders/encoder-setup) - Optimize your OBS settings
-- [Playback & Embedding](/builders/playback) - Share your stream
-- [Troubleshooting](/builders/troubleshooting) - When things don't work
+- [Streams](/builders/streams) — Understand stream keys, playback IDs, and push versus pull ingest.
+- [Encoder Setup](/builders/encoder-setup) — Configure OBS for a reliable stream.
+- [Playback & Embedding](/builders/playback) — Put the stream on your site.
+- [Troubleshooting](/builders/troubleshooting) — Diagnose ingest and playback failures.

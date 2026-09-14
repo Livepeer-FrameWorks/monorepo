@@ -3,7 +3,7 @@ title: Platform capabilities
 description: What FrameWorks exposes across APIs, agents, dashboard workflows, and docs.
 ---
 
-FrameWorks is built as a platform, not only a dashboard. The matrix shows which capabilities are available today and where you can use them: GraphQL API, MCP tools for agents, dashboard workflows, and developer/operator docs.
+FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.
 
 ## Why teams pick FrameWorks
 
@@ -26,7 +26,7 @@ Rows marked *(foundation)* are platform building blocks whose value shows up thr
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
@@ -39,7 +39,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
 | ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
@@ -51,7 +51,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#media-library).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
 | ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
@@ -66,7 +66,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#media-library)
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
@@ -78,7 +78,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--observability).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
 | **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
@@ -87,7 +87,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--obs
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure--byoc).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
 | **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
@@ -118,7 +118,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--billing).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
@@ -130,7 +130,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#developer-platform--agents).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Developer API** | Expanding | API, Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
 | ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
@@ -144,7 +144,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#developer-plat
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--interactivity).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
 | **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
@@ -154,7 +154,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--in
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
 | ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |

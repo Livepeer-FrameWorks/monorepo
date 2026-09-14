@@ -326,7 +326,7 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("title: Platform capabilities\n")
 	b.WriteString("description: What FrameWorks exposes across APIs, agents, dashboard workflows, and docs.\n")
 	b.WriteString("---\n\n")
-	b.WriteString("FrameWorks is built as a platform, not only a dashboard. The matrix shows which capabilities are available today and where you can use them: GraphQL API, MCP tools for agents, dashboard workflows, and developer/operator docs.\n\n")
+	b.WriteString("FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.\n\n")
 	b.WriteString("## Why teams pick FrameWorks\n\n")
 	b.WriteString("- **Sovereign deployment options** — run FrameWorks as SaaS, add your own edge clusters, or self-host the video and control-plane stack without changing platforms.\n")
 	b.WriteString("- **Complete live-video workflow** — ingest, playback, multistreaming, playback access control, 24/7 DVR, chapters, clips, VOD, thumbnails, and analytics in one control plane.\n")
@@ -366,7 +366,7 @@ func renderMatrixMDX(reg Registry) string {
 		if pillarHasRoadmapRows(areas[area]) {
 			fmt.Fprintf(&b, "Planned items in this area are detailed on the [Roadmap](/roadmap#%s).\n\n", anchorSlug(publicAreaLabel(area)))
 		}
-		b.WriteString("| Capability | Availability | Surfaces | What it unlocks |\n")
+		b.WriteString("| Capability | Availability | Surfaces | What it does |\n")
 		b.WriteString("| --- | --- | --- | --- |\n")
 		row := func(f Feature, child bool) {
 			description := strings.TrimSpace(f.Description)
@@ -414,9 +414,9 @@ func renderCapabilitiesMDX(reg Registry) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("title: Platform capability inventory\n")
-	b.WriteString("description: The complete FrameWorks capability inventory — product features and platform internals alike.\n")
+	b.WriteString("description: FrameWorks product features and the platform capabilities that support them.\n")
 	b.WriteString("---\n\n")
-	b.WriteString("This page lists the **complete** capability inventory: everything in the [product capability matrix](/platform/feature-matrix) plus platform-audience capabilities — the infrastructure, trust, and orchestration machinery that products are built on. Rows marked *(platform)* are operated capabilities, not customer-facing features.\n\n")
+	b.WriteString("This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features.\n\n")
 
 	surfaceLabel := map[string]string{"graphql": "API", "mcp": "Agents (MCP)", "cli": "CLI", "webapp": "Dashboard", "docs": "Docs"}
 	surfaceKeys := []string{"graphql", "mcp", "cli", "webapp", "docs"}

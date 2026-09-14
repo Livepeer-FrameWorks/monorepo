@@ -31,7 +31,7 @@ Enhanced RTMP options for newer codecs, keep the same server URL and stream key.
 
 ### Recommended Output Settings
 
-For optimal performance and quality on FrameWorks, we recommend the following output settings. These are general guidelines; feel free to adjust based on your system's capabilities and internet connection.
+Use these values as a starting point, then reduce bitrate or resolution if the encoder cannot maintain them or the uplink lacks headroom.
 
 Go to **Settings → Output** and select **Advanced** mode.
 
@@ -46,7 +46,7 @@ Go to **Settings → Output** and select **Advanced** mode.
 | Profile | high |
 
 **Video tab:**
-These video settings are crucial for determining the final resolution and frame rate of your stream.
+Set the output resolution and frame rate here:
 | Setting | Value |
 |---------|-------|
 | Base Resolution | Your monitor resolution |
@@ -56,7 +56,7 @@ These video settings are crucial for determining the final resolution and frame 
 
 ### Audio Settings
 
-To ensure high-quality audio, adjust these settings:
+Use these audio settings for broad playback compatibility:
 
 **Settings → Audio:**
 
@@ -69,7 +69,7 @@ To ensure high-quality audio, adjust these settings:
 
 ## FFmpeg
 
-FFmpeg is a powerful, open-source command-line tool ideal for automated or headless streaming setups. Here are common RTMP commands for streaming with FrameWorks:
+FFmpeg works well for scripted or headless publishing. These commands send RTMP to FrameWorks:
 
 ```bash
 ffmpeg -re -i input.mp4 \
@@ -145,7 +145,7 @@ name above or the `rtmpUrl` / `srtUrl` from that JSON response.
 
 ## Choosing the Right Bitrate
 
-Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these ranges as a starting point:
+Higher bitrates can preserve more detail, but only when the encoder and uplink can sustain them. Use these ranges as a starting point:
 
 | Resolution | FPS | Bitrate Range     |
 | ---------- | --- | ----------------- |
@@ -164,7 +164,7 @@ Run a speed test to [speedtest.net](https://speedtest.net) and check your upload
 
 ## Selecting an Encoder
 
-Hardware encoders reduce the load on your CPU, leaving more resources for your game or application. We recommend utilizing them whenever possible.
+Hardware encoders reduce CPU use and are usually the best first choice when one is available.
 
 - **NVIDIA NVENC:** Offers the best quality-to-performance ratio. Highly recommended if you have an NVIDIA GPU.
 - **AMD AMF:** A solid choice for users with AMD graphics cards.
@@ -210,7 +210,7 @@ processing overrides when `processing_customizable` is enabled.
 
 ## Avoid Common Pitfalls
 
-**Ensure Your Bitrate Matches Your Upload Speed**
+**Leave upload headroom**
 If you experience dropped frames or instability, your bitrate might be too high for your internet connection. Try lowering it to stabilize the stream.
 
 **Stick to a 2-Second Keyframe Interval**

@@ -20,7 +20,17 @@ one DVR archive, one analytics surface, and multiple distribution endpoints.
   their own buffering and latency.
 </Aside>
 
-## How It Works
+```mermaid
+flowchart LR
+    ENC[One encoder] --> ORIGIN[FrameWorks origin edge]
+    ORIGIN --> VIEWERS[FrameWorks playback]
+    ORIGIN --> TW[Twitch]
+    ORIGIN --> YT[YouTube]
+    ORIGIN --> OTHER[Other RTMP · RTMPS · SRT target]
+    CONTROL[Push-target settings] -. start, stop, and status .-> ORIGIN
+```
+
+## Lifecycle
 
 1. **Configure targets** — Add push targets to your stream via the dashboard or API
 2. **Go live** — Start broadcasting as usual (OBS, StreamCrafter, SRT, etc.)
@@ -32,16 +42,20 @@ Each push target has a live status indicator: **pending**, **pushing**, **retryi
 The control plane stores a bounded machine reason separately from the sanitized
 operator-facing error detail.
 
-## Supported Platforms
+## Supported platforms
 
-| Platform    | Protocol       | Ingest URL                                                                         |
-| ----------- | -------------- | ---------------------------------------------------------------------------------- |
-| Twitch      | RTMP           | `rtmp://live.twitch.tv/app/{stream_key}`                                           |
-| YouTube     | RTMP           | `rtmp://a.rtmp.youtube.com/live2/{stream_key}`                                     |
-| Facebook    | RTMPS          | `rtmps://live-api-s.facebook.com:443/rtmp/{stream_key}`                            |
-| Kick        | RTMPS          | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/{stream_key}`           |
-| X (Twitter) | RTMPS          | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/{stream_key}` |
-| Custom      | RTMP/RTMPS/SRT | Any valid `rtmp://`, `rtmps://`, or `srt://` URI                                   |
+| Platform    | Configuration source                                       |
+| ----------- | ---------------------------------------------------------- |
+| Twitch      | Copy the current server URL and key from Creator Dashboard |
+| YouTube     | Copy them from Live Control Room                           |
+| Facebook    | Copy them from Live Producer                               |
+| Kick        | Copy them from Creator Dashboard                           |
+| X (Twitter) | Copy them from Media Studio or Producer                    |
+| Custom      | Supply a complete `rtmp://`, `rtmps://`, or `srt://` URI   |
+
+Destination endpoints can change, so copy the current URL and stream key from the destination's
+own dashboard. FrameWorks stores the complete target URI; the platform preset only labels the
+destination.
 
 <Aside type="caution">
   Your stream key for each platform is stored securely and masked in API responses. Never share your
@@ -167,10 +181,10 @@ Keep this in mind when:
 - Check that your stream is actually live on the origin node
 - Review the event log on the stream detail page for errors
 
-**High latency to external platforms**
+**External playback is behind the FrameWorks stream**
 
-- This is normal — external platforms add their own buffering (typically 5-15 seconds)
-- The push from FrameWorks is real-time; additional delay is on the destination platform's side
+- Destination platforms apply their own ingest processing and playback buffers.
+- Compare the origin stream and the destination's ingest-health view before treating the delay as a FrameWorks incident.
 
 <CardGrid>
   <LinkCard

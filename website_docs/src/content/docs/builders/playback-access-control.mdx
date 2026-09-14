@@ -21,6 +21,22 @@ FrameWorks ships two policy types in v1:
 - **Webhook** — FrameWorks POSTs to a URL you specify on every viewer
   connect. Your endpoint returns 200 to allow or anything else to deny.
 
+```mermaid
+sequenceDiagram
+    participant Viewer
+    participant Gateway
+    participant Policy as JWT key or webhook
+    participant Edge as MistServer edge
+    Viewer->>Gateway: Resolve playback ID + viewer credential
+    Gateway->>Policy: Check access before returning an endpoint
+    Policy-->>Gateway: Allow or deny
+    Gateway-->>Viewer: Authorized playback URL
+    Viewer->>Edge: Request media + viewer credential
+    Edge->>Policy: Recheck on viewer connection
+    Policy-->>Edge: Allow or deny
+    Edge-->>Viewer: Media
+```
+
 <Aside type="note">
   If you're translating an existing integration, use the [dedicated migration
   guide](/migrate/livepeer-studio) for the API mapping.

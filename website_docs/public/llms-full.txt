@@ -192,98 +192,98 @@ email, and operator settlement.
 
 Actions the agent can perform.
 
-| Tool                             | Description                                       | Requires                               |
-| -------------------------------- | ------------------------------------------------- | -------------------------------------- |
-| `get_media_placement_policy` | Read saved/effective policy and rollout | Auth + placement:read |
-| `get_media_placement_options` | Page through authorized placement selectors | Auth + placement:read |
-| `preview_media_placement` | Preview saved or draft routing; not a reservation | Auth + placement:read |
-| `review_media_placement_change` | Review exact policy updates without applying | Owner/Admin + placement:write |
-| `apply_media_placement_change` | Apply a reviewed, idempotent policy change | Owner/Admin + placement:write; API tokens also need mcp:high-risk |
-| `get_media_placement_change` | Recover a change with its original idempotency key | Auth + placement:read |
-| `get_media_placement_legacy_pins` | Read stream pin migration restrictions | Auth + placement:read |
-| `get_cluster_media_consent` | Read cluster-owner media consent | Auth + placement:read + cluster ownership |
-| `review_cluster_media_consent_change` | Review owner consent without applying | Owner/Admin + placement:write + cluster ownership |
-| `apply_cluster_media_consent_change` | Apply reviewed, idempotent owner consent | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
-| `get_cluster_media_consent_change` | Recover an owner-consent change | Auth + placement:read + cluster ownership |
-| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None                                   |
-| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth                                   |
-| `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth                                   |
-| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth                                   |
-| `link_email`                     | Add email/password and send verification          | Auth                                   |
-| `activate_free_tier`             | Activate Free after email verification            | Auth                                   |
-| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth                                   |
-| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Owner/Admin                            |
-| `update_billing_details`         | Set billing address                               | Auth                                   |
-| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth                                   |
-| `submit_payment`                 | Submit an x402 top-up payment                     | Auth                                   |
-| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth                                   |
-| `check_topup`                    | Check crypto payment status                       | Auth                                   |
-| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing                         |
-| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing                         |
-| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing                         |
-| `create_stream`                  | Create a push or pull stream                      | Auth                                   |
-| `update_stream`                  | Update stream settings or pull-source config      | Auth                                   |
-| `delete_stream`                  | Delete a stream                                   | Auth + Confirm                         |
-| `list_stream_keys`               | List stream ingest keys                           | Auth                                   |
-| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm                         |
-| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm                         |
-| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm                         |
-| `validate_stream_key`            | Validate an ingest key                            | Auth                                   |
-| `list_push_targets`              | List masked multistream destinations              | Auth                                   |
-| `create_push_target`             | Add a multistream destination                     | Auth                                   |
-| `update_push_target`             | Update or enable a multistream destination        | Auth                                   |
-| `delete_push_target`             | Delete a multistream destination                  | Auth                                   |
-| `create_clip`                    | Create clip from stream                           | Auth + Balance                         |
-| `delete_clip`                    | Delete a clip                                     | Auth                                   |
-| `start_dvr`                      | Start DVR recording                               | Auth + Balance                         |
-| `stop_dvr`                       | Stop DVR recording                                | Auth                                   |
-| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm                         |
-| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth                                   |
-| `set_retention_policy`           | Set tenant media-retention defaults               | Owner/Admin + Billing                  |
-| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Owner/Admin + Billing                  |
-| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Owner/Admin + Billing                  |
-| `reset_asset_retention`          | Reset asset retention to the cascade default      | Owner/Admin + Billing + Confirm        |
-| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance                         |
-| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth                                   |
-| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance                         |
-| `abort_vod_upload`               | Cancel an upload                                  | Auth                                   |
-| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm                         |
-| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None                                   |
-| `list_signing_keys`              | List playback signing keys                        | Auth                                   |
-| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm                         |
-| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm                         |
-| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm                         |
-| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm                         |
-| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth                                   |
-| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth                                   |
-| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth                                   |
-| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth                                   |
-| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth                                   |
-| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth                                   |
-| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth                                   |
-| `list_support_conversations`     | List recent support conversations                 | Auth                                   |
-| `search_support_history`         | Search support conversations                      | Auth                                   |
-| `introspect_schema`              | Explore the GraphQL schema                        | Auth                                   |
-| `generate_query`                 | Generate a GraphQL query from templates           | Auth                                   |
-| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance                         |
-| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance                         |
-| `browse_marketplace`             | Browse available infrastructure clusters          | None                                   |
-| `subscribe_to_cluster`           | Subscribe to a cluster                            | Owner/Admin + Infrastructure           |
-| `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Owner/Admin + Infrastructure + Confirm |
-| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Owner/Admin + Infrastructure           |
-| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Owner/Admin + Infrastructure           |
-| `accept_cluster_invite`          | Redeem a cluster invite                           | Owner/Admin + Infrastructure           |
-| `request_cluster_subscription`   | Request access to a cluster                       | Owner/Admin + Infrastructure           |
-| `approve_subscription_request`   | Approve a pending cluster subscription            | Owner/Admin + Infrastructure           |
-| `reject_subscription_request`    | Reject a pending cluster subscription             | Owner/Admin + Infrastructure           |
-| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Owner/Admin + Settings                 |
-| `update_cluster_marketplace`     | Update cluster visibility, approval, or pricing   | Owner/Admin + Infrastructure + Confirm |
-| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Owner/Admin + Infrastructure           |
-| `get_node_info`                  | Fetch node details                                | Owner/Admin + Infrastructure           |
-| `manage_node`                    | Activate/deactivate/drain/restart a node          | Owner/Admin + Infrastructure           |
-| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Owner/Admin + Infrastructure           |
-| `get_node_health`                | Node health and metrics summary                   | Owner/Admin + Infrastructure           |
-| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Owner/Admin + Infrastructure           |
+| Tool                                  | Description                                        | Requires                                                                              |
+| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `get_media_placement_policy`          | Read saved/effective policy and rollout            | Auth + placement:read                                                                 |
+| `get_media_placement_options`         | Page through authorized placement selectors        | Auth + placement:read                                                                 |
+| `preview_media_placement`             | Preview saved or draft routing; not a reservation  | Auth + placement:read                                                                 |
+| `review_media_placement_change`       | Review exact policy updates without applying       | Owner/Admin + placement:write                                                         |
+| `apply_media_placement_change`        | Apply a reviewed, idempotent policy change         | Owner/Admin + placement:write; API tokens also need mcp:high-risk                     |
+| `get_media_placement_change`          | Recover a change with its original idempotency key | Auth + placement:read                                                                 |
+| `get_media_placement_legacy_pins`     | Read stream pin migration restrictions             | Auth + placement:read                                                                 |
+| `get_cluster_media_consent`           | Read cluster-owner media consent                   | Auth + placement:read + cluster ownership                                             |
+| `review_cluster_media_consent_change` | Review owner consent without applying              | Owner/Admin + placement:write + cluster ownership                                     |
+| `apply_cluster_media_consent_change`  | Apply reviewed, idempotent owner consent           | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
+| `get_cluster_media_consent_change`    | Recover an owner-consent change                    | Auth + placement:read + cluster ownership                                             |
+| `request_wallet_challenge`            | Request a single-use EIP-191 login/link challenge  | None                                                                                  |
+| `list_linked_wallets`                 | List wallets linked to the authenticated user      | Auth                                                                                  |
+| `link_wallet`                         | Link a wallet using a fresh signed challenge       | Auth                                                                                  |
+| `unlink_wallet`                       | Unlink a wallet while retaining a sign-in method   | Auth                                                                                  |
+| `link_email`                          | Add email/password and send verification           | Auth                                                                                  |
+| `activate_free_tier`                  | Activate Free after email verification             | Auth                                                                                  |
+| `get_tenant_settings`                 | Read tenant identity and routing settings          | Auth                                                                                  |
+| `update_tenant_settings`              | Update tenant name, primary cluster, or model      | Owner/Admin                                                                           |
+| `update_billing_details`              | Set billing address                                | Auth                                                                                  |
+| `get_payment_options`                 | Get tenant-bound x402 payment options              | Auth                                                                                  |
+| `submit_payment`                      | Submit an x402 top-up payment                      | Auth                                                                                  |
+| `topup_balance`                       | Request ETH or USDC deposit address (locked rate)  | Auth                                                                                  |
+| `check_topup`                         | Check crypto payment status                        | Auth                                                                                  |
+| `pay_invoice`                         | Create or resume an invoice payment                | Auth + Billing                                                                        |
+| `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup       | Auth + Billing                                                                        |
+| `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid        | Auth + Billing                                                                        |
+| `create_stream`                       | Create a push or pull stream                       | Auth                                                                                  |
+| `update_stream`                       | Update stream settings or pull-source config       | Auth                                                                                  |
+| `delete_stream`                       | Delete a stream                                    | Auth + Confirm                                                                        |
+| `list_stream_keys`                    | List stream ingest keys                            | Auth                                                                                  |
+| `create_stream_key`                   | Create an additional ingest key                    | Auth + Confirm                                                                        |
+| `delete_stream_key`                   | Deactivate an ingest key                           | Auth + Confirm                                                                        |
+| `refresh_stream_key`                  | Rotate the primary stream key                      | Auth + Confirm                                                                        |
+| `validate_stream_key`                 | Validate an ingest key                             | Auth                                                                                  |
+| `list_push_targets`                   | List masked multistream destinations               | Auth                                                                                  |
+| `create_push_target`                  | Add a multistream destination                      | Auth                                                                                  |
+| `update_push_target`                  | Update or enable a multistream destination         | Auth                                                                                  |
+| `delete_push_target`                  | Delete a multistream destination                   | Auth                                                                                  |
+| `create_clip`                         | Create clip from stream                            | Auth + Balance                                                                        |
+| `delete_clip`                         | Delete a clip                                      | Auth                                                                                  |
+| `start_dvr`                           | Start DVR recording                                | Auth + Balance                                                                        |
+| `stop_dvr`                            | Stop DVR recording                                 | Auth                                                                                  |
+| `delete_dvr`                          | Delete a DVR recording and stored media            | Auth + Confirm                                                                        |
+| `get_retention_policy`                | Read tenant media-retention defaults and bounds    | Auth                                                                                  |
+| `set_retention_policy`                | Set tenant media-retention defaults                | Owner/Admin + Billing                                                                 |
+| `set_stream_retention_overrides`      | Set DVR/clip retention overrides for a stream      | Owner/Admin + Billing                                                                 |
+| `update_asset_retention`              | Override retention for DVR, clip, or VOD           | Owner/Admin + Billing                                                                 |
+| `reset_asset_retention`               | Reset asset retention to the cascade default       | Owner/Admin + Billing + Confirm                                                       |
+| `create_vod_upload`                   | Start a VOD upload                                 | Auth + Balance                                                                        |
+| `get_vod_upload_status`               | Inspect uploaded and missing VOD parts             | Auth                                                                                  |
+| `complete_vod_upload`                 | Finalize a VOD upload                              | Auth + Balance                                                                        |
+| `abort_vod_upload`                    | Cancel an upload                                   | Auth                                                                                  |
+| `delete_vod_asset`                    | Delete a VOD asset                                 | Auth + Confirm                                                                        |
+| `resolve_playback_endpoint`           | Get viewer playback URLs                           | None                                                                                  |
+| `list_signing_keys`                   | List playback signing keys                         | Auth                                                                                  |
+| `create_signing_key`                  | Create a one-shot ES256 private key                | Auth + Confirm                                                                        |
+| `revoke_signing_key`                  | Revoke a playback signing key                      | Auth + Confirm                                                                        |
+| `set_playback_policy`                 | Set JWT or webhook playback policy                 | Auth + Confirm                                                                        |
+| `clear_playback_policy`               | Clear playback policy                              | Auth + Confirm                                                                        |
+| `test_playback_access`                | Test JWT/webhook playback policy behavior          | Auth                                                                                  |
+| `diagnose_rebuffering`                | Analyze rebuffering events                         | Auth                                                                                  |
+| `diagnose_buffer_health`              | Analyze buffer health and dry events               | Auth                                                                                  |
+| `diagnose_packet_loss`                | Analyze packet loss (protocol-aware)               | Auth                                                                                  |
+| `diagnose_routing`                    | Analyze CDN routing decisions                      | Auth                                                                                  |
+| `get_stream_health_summary`           | Aggregated stream health metrics                   | Auth                                                                                  |
+| `get_anomaly_report`                  | Detect anomalies vs baseline                       | Auth                                                                                  |
+| `list_support_conversations`          | List recent support conversations                  | Auth                                                                                  |
+| `search_support_history`              | Search support conversations                       | Auth                                                                                  |
+| `introspect_schema`                   | Explore the GraphQL schema                         | Auth                                                                                  |
+| `generate_query`                      | Generate a GraphQL query from templates            | Auth                                                                                  |
+| `execute_query`                       | Execute a GraphQL query                            | Auth + Balance                                                                        |
+| `ask_consultant`                      | Full Skipper pipeline with confidence tagging      | Auth + Balance                                                                        |
+| `browse_marketplace`                  | Browse available infrastructure clusters           | None                                                                                  |
+| `subscribe_to_cluster`                | Subscribe to a cluster                             | Owner/Admin + Infrastructure                                                          |
+| `unsubscribe_from_cluster`            | Remove a cluster subscription                      | Owner/Admin + Infrastructure + Confirm                                                |
+| `create_cluster_invite`               | Invite a tenant to subscribe to an owned cluster   | Owner/Admin + Infrastructure                                                          |
+| `revoke_cluster_invite`               | Revoke an outstanding cluster invite               | Owner/Admin + Infrastructure                                                          |
+| `accept_cluster_invite`               | Redeem a cluster invite                            | Owner/Admin + Infrastructure                                                          |
+| `request_cluster_subscription`        | Request access to a cluster                        | Owner/Admin + Infrastructure                                                          |
+| `approve_subscription_request`        | Approve a pending cluster subscription             | Owner/Admin + Infrastructure                                                          |
+| `reject_subscription_request`         | Reject a pending cluster subscription              | Owner/Admin + Infrastructure                                                          |
+| `set_preferred_cluster`               | Set preferred cluster for DNS steering             | Owner/Admin + Settings                                                                |
+| `update_cluster_marketplace`          | Update cluster visibility, approval, or pricing    | Owner/Admin + Infrastructure + Confirm                                                |
+| `create_enrollment_token`             | Create an enrollment token for edge bootstrap      | Owner/Admin + Infrastructure                                                          |
+| `get_node_info`                       | Fetch node details                                 | Owner/Admin + Infrastructure                                                          |
+| `manage_node`                         | Activate/deactivate/drain/restart a node           | Owner/Admin + Infrastructure                                                          |
+| `set_node_mode`                       | Set node mode (normal/draining/maintenance)        | Owner/Admin + Infrastructure                                                          |
+| `get_node_health`                     | Node health and metrics summary                    | Owner/Admin + Infrastructure                                                          |
+| `create_edge_cluster`                 | Create edge cluster (returns token and Foghorn)    | Owner/Admin + Infrastructure                                                          |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`
@@ -2260,7 +2260,8 @@ https://logbook.frameworks.network/builders/billing
 Paid plans are rated from metered usage. Prepaid balances are deducted as usage is reported; postpaid invoices are drafted for the active billing period. API request rate limits still apply for abuse protection.
 
 <Aside type="note">
-  Pricing may adjust as we scale, but you keep the allowances you signed up for.
+  The billing dashboard and your active subscription are the authoritative sources for your rates
+  and allowances. Public beta pricing can change for new subscriptions.
 </Aside>
 
 ## What You Pay For
@@ -2292,7 +2293,7 @@ Access to the shared Free service with the included allowances below. API reques
 
 - 10,000 delivered minutes/month (zero-priced overage)
 - 10 GB of stored content (durable writes rejected at cap)
-- 7-day recording retention
+- 30-day maximum recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
@@ -2307,7 +2308,7 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 - **At redline (≥ 95%).** All new free-tier ingest is rejected to preserve capacity for paying tenants. Existing live sessions are never killed mid-stream.
 - **Viewer-side gate.** Below 80% load, all viewers admitted. 80–95%, new viewers of over-allowance free streams are rejected. At redline, all new free-stream viewers are rejected. Paying broadcasters' viewers are always admitted.
 - **Fair-use caps.** Free tenants are capped at 3 concurrent live streams and 200 concurrent viewers.
-- **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts age out via the 7-day retention sweeper.
+- **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts remain available until their effective retention deadline; the Free tier caps retention at 30 days.
 - Load is computed per media cluster as `max(avg(CPU%), uplink utilization %)` across healthy edge nodes.
 
 **Seeded limitations:**
@@ -2326,20 +2327,25 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 | Delivered Minutes | €0.00055/min |
 | Cold storage      | €0.035/GB-h  |
 
-Standard transcoding and multiview compositing are bundled into delivered minutes. Advanced
-processing (AI workloads such as live transcription, V2V transformations, automated highlights)
-is in pilot — see [Advanced processing](#advanced-processing) below.
+Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
+composition does not create a server-processing charge. Advanced processing (AI workloads such as
+live transcription, V2V transformations, and automated highlights) is in pilot — see
+[Advanced processing](#advanced-processing) below.
 
 ## Metered Tiers
 
 Paid tiers include monthly allocations with overage billing:
 
-| Tier       | Base   | Delivered Minutes | Retention |
-| ---------- | ------ | ----------------- | --------- |
-| Supporter  | €79    | 120K              | 90 days   |
-| Developer  | €249   | 500K              | 180 days  |
-| Production | €999   | 2M                | 365 days  |
-| Enterprise | Custom | Custom            | Custom    |
+| Tier       | Base   | Delivered Minutes | Tier retention cap |
+| ---------- | ------ | ----------------- | ------------------ |
+| Supporter  | €79    | 120K              | None               |
+| Developer  | €249   | 500K              | None               |
+| Production | €999   | 2M                | None               |
+| Enterprise | Custom | Custom            | Contract-defined   |
+
+Paid self-serve tiers do not impose a plan-level retention cap. Content still follows its configured
+artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
+clips.
 
 **Overages (metered tiers):**
 
@@ -2357,8 +2363,8 @@ V2V transformations, and multi-stream compositing) is in **pilot**. These jobs u
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To request pilot access, [contact us](https://frameworks.network/contact). Standard transcoding
-and multi-stream compositing remain bundled into delivered minutes.
+To request pilot access, [contact us](https://frameworks.network/contact). Standard live
+transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
 
@@ -2498,7 +2504,7 @@ FrameWorks supports multiple deployment models with different billing characteri
 
 | Tier                   | Description                                                                                                | Billing                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.        | Zero-priced metering with fair-use.                                                                  |
+| **Shared (Community)** | Free access to a shared cluster, capped at 3 concurrent live streams and 200 concurrent viewers.           | Zero-priced metering with fair-use.                                                                  |
 | **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                    | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
 | **Dedicated**          | Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is out of scope. | Custom pricing via `cluster_pricing`.                                                                |
 | **Hybrid**             | Self-hosted MistServer/Helmsman edges connect to provider Foghorn and can fall back to managed capacity.   | Per-cluster usage attribution.                                                                       |
@@ -2511,7 +2517,7 @@ Usage is attributed per cluster: the analytics pipeline tags every event with `c
 - All API requests
 - Stream creation and configuration
 - Analytics queries
-- Webhook deliveries
+- Playback-policy webhook checks
 - Player embed generation
 - Ingest (streaming in)—you pay for viewer delivery only
 
@@ -2802,7 +2808,7 @@ Enhanced RTMP options for newer codecs, keep the same server URL and stream key.
 
 ### Recommended Output Settings
 
-For optimal performance and quality on FrameWorks, we recommend the following output settings. These are general guidelines; feel free to adjust based on your system's capabilities and internet connection.
+Use these values as a starting point, then reduce bitrate or resolution if the encoder cannot maintain them or the uplink lacks headroom.
 
 Go to **Settings → Output** and select **Advanced** mode.
 
@@ -2817,7 +2823,7 @@ Go to **Settings → Output** and select **Advanced** mode.
 | Profile | high |
 
 **Video tab:**
-These video settings are crucial for determining the final resolution and frame rate of your stream.
+Set the output resolution and frame rate here:
 | Setting | Value |
 |---------|-------|
 | Base Resolution | Your monitor resolution |
@@ -2827,7 +2833,7 @@ These video settings are crucial for determining the final resolution and frame 
 
 ### Audio Settings
 
-To ensure high-quality audio, adjust these settings:
+Use these audio settings for broad playback compatibility:
 
 **Settings → Audio:**
 
@@ -2840,7 +2846,7 @@ To ensure high-quality audio, adjust these settings:
 
 ## FFmpeg
 
-FFmpeg is a powerful, open-source command-line tool ideal for automated or headless streaming setups. Here are common RTMP commands for streaming with FrameWorks:
+FFmpeg works well for scripted or headless publishing. These commands send RTMP to FrameWorks:
 
 ```bash
 ffmpeg -re -i input.mp4 \
@@ -2916,7 +2922,7 @@ name above or the `rtmpUrl` / `srtUrl` from that JSON response.
 
 ## Choosing the Right Bitrate
 
-Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these ranges as a starting point:
+Higher bitrates can preserve more detail, but only when the encoder and uplink can sustain them. Use these ranges as a starting point:
 
 | Resolution | FPS | Bitrate Range     |
 | ---------- | --- | ----------------- |
@@ -2935,7 +2941,7 @@ Run a speed test to [speedtest.net](https://speedtest.net) and check your upload
 
 ## Selecting an Encoder
 
-Hardware encoders reduce the load on your CPU, leaving more resources for your game or application. We recommend utilizing them whenever possible.
+Hardware encoders reduce CPU use and are usually the best first choice when one is available.
 
 - **NVIDIA NVENC:** Offers the best quality-to-performance ratio. Highly recommended if you have an NVIDIA GPU.
 - **AMD AMF:** A solid choice for users with AMD graphics cards.
@@ -2981,7 +2987,7 @@ processing overrides when `processing_customizable` is enabled.
 
 ## Avoid Common Pitfalls
 
-**Ensure Your Bitrate Matches Your Upload Speed**
+**Leave upload headroom**
 If you experience dropped frames or instability, your bitrate might be too high for your internet connection. Try lowering it to stabilize the stream.
 
 **Stick to a 2-Second Keyframe Interval**
@@ -4554,7 +4560,7 @@ Both the **Player** (playback) and **StreamCrafter** (ingest) offer four integra
 If you are still deciding what to create first, start with [Streams](/builders/streams) for the
 basic object model: stream keys, playback IDs, push ingest, and pull-input streams.
 
-## Decision Tree
+## Choose a package
 
 ### What framework are you using?
 
@@ -4675,18 +4681,17 @@ Best for: Custom renderers, audio-only, data extraction, automated testing.
 | **Key features** | ABR, multi-engine, protocol negotiation     | Multi-source mixing, compositor, reconnection |
 | **Use case**     | Watching streams                            | Broadcasting streams                          |
 
-## Package Architecture
+## Package architecture
 
-```
-@livepeer-frameworks/player-core     ← Headless player engine
-@livepeer-frameworks/player-react    ← React bindings (depends on core)
-@livepeer-frameworks/player-svelte   ← Svelte bindings (depends on core)
-@livepeer-frameworks/player-wc       ← Web Components (depends on core)
+```mermaid
+flowchart TB
+    PC[player-core<br/>headless playback] --> PR[player-react]
+    PC --> PS[player-svelte]
+    PC --> PW[player-wc]
 
-@livepeer-frameworks/streamcrafter-core    ← Headless ingest engine
-@livepeer-frameworks/streamcrafter-react   ← React bindings (depends on core)
-@livepeer-frameworks/streamcrafter-svelte  ← Svelte bindings (depends on core)
-@livepeer-frameworks/streamcrafter-wc      ← Web Components (depends on core)
+    SC[streamcrafter-core<br/>headless ingest] --> SR[streamcrafter-react]
+    SC --> SS[streamcrafter-svelte]
+    SC --> SW[streamcrafter-wc]
 ```
 
 Framework packages re-export core types. You only need to install one package per product.
@@ -4762,9 +4767,11 @@ https://logbook.frameworks.network/builders/media-placement
 
 ## Availability
 
-The placement feature is under development for 0.3.0. Read-only capacity preview and source-aware
-preview for owned push streams are implemented; end-to-end live enforcement is not yet complete.
-Saving placement intent must not be treated as proof that every media path enforces it.
+Placement ships in 0.3.0, and live routing and final admission resolve through it. Read-only
+capacity preview and source-aware preview for owned push streams are implemented; a managed pull
+or Mist-native input previews capacity only, though routing places it like any other stream.
+Saving placement intent must not be treated as proof that every media path enforces it: rules
+take effect once every cell holding the content acknowledges them.
 
 Placement separates ingest from serving viewers. A viewer's distance is measured from the
 viewer location, not from the coordinator receiving the request. An account rule can prefer
@@ -5043,7 +5050,17 @@ one DVR archive, one analytics surface, and multiple distribution endpoints.
   their own buffering and latency.
 </Aside>
 
-## How It Works
+```mermaid
+flowchart LR
+    ENC[One encoder] --> ORIGIN[FrameWorks origin edge]
+    ORIGIN --> VIEWERS[FrameWorks playback]
+    ORIGIN --> TW[Twitch]
+    ORIGIN --> YT[YouTube]
+    ORIGIN --> OTHER[Other RTMP · RTMPS · SRT target]
+    CONTROL[Push-target settings] -. start, stop, and status .-> ORIGIN
+```
+
+## Lifecycle
 
 1. **Configure targets** — Add push targets to your stream via the dashboard or API
 2. **Go live** — Start broadcasting as usual (OBS, StreamCrafter, SRT, etc.)
@@ -5055,16 +5072,20 @@ Each push target has a live status indicator: **pending**, **pushing**, **retryi
 The control plane stores a bounded machine reason separately from the sanitized
 operator-facing error detail.
 
-## Supported Platforms
+## Supported platforms
 
-| Platform    | Protocol       | Ingest URL                                                                         |
-| ----------- | -------------- | ---------------------------------------------------------------------------------- |
-| Twitch      | RTMP           | `rtmp://live.twitch.tv/app/{stream_key}`                                           |
-| YouTube     | RTMP           | `rtmp://a.rtmp.youtube.com/live2/{stream_key}`                                     |
-| Facebook    | RTMPS          | `rtmps://live-api-s.facebook.com:443/rtmp/{stream_key}`                            |
-| Kick        | RTMPS          | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/{stream_key}`           |
-| X (Twitter) | RTMPS          | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/{stream_key}` |
-| Custom      | RTMP/RTMPS/SRT | Any valid `rtmp://`, `rtmps://`, or `srt://` URI                                   |
+| Platform    | Configuration source                                       |
+| ----------- | ---------------------------------------------------------- |
+| Twitch      | Copy the current server URL and key from Creator Dashboard |
+| YouTube     | Copy them from Live Control Room                           |
+| Facebook    | Copy them from Live Producer                               |
+| Kick        | Copy them from Creator Dashboard                           |
+| X (Twitter) | Copy them from Media Studio or Producer                    |
+| Custom      | Supply a complete `rtmp://`, `rtmps://`, or `srt://` URI   |
+
+Destination endpoints can change, so copy the current URL and stream key from the destination's
+own dashboard. FrameWorks stores the complete target URI; the platform preset only labels the
+destination.
 
 <Aside type="caution">
   Your stream key for each platform is stored securely and masked in API responses. Never share your
@@ -5190,10 +5211,10 @@ Keep this in mind when:
 - Check that your stream is actually live on the origin node
 - Review the event log on the stream detail page for errors
 
-**High latency to external platforms**
+**External playback is behind the FrameWorks stream**
 
-- This is normal — external platforms add their own buffering (typically 5-15 seconds)
-- The push from FrameWorks is real-time; additional delay is on the destination platform's side
+- Destination platforms apply their own ingest processing and playback buffers.
+- Compare the origin stream and the destination's ingest-health view before treating the delay as a FrameWorks incident.
 
 <CardGrid>
   <LinkCard
@@ -5226,6 +5247,22 @@ FrameWorks ships two policy types in v1:
   matching public key.
 - **Webhook** — FrameWorks POSTs to a URL you specify on every viewer
   connect. Your endpoint returns 200 to allow or anything else to deny.
+
+```mermaid
+sequenceDiagram
+    participant Viewer
+    participant Gateway
+    participant Policy as JWT key or webhook
+    participant Edge as MistServer edge
+    Viewer->>Gateway: Resolve playback ID + viewer credential
+    Gateway->>Policy: Check access before returning an endpoint
+    Policy-->>Gateway: Allow or deny
+    Gateway-->>Viewer: Authorized playback URL
+    Viewer->>Edge: Request media + viewer credential
+    Edge->>Policy: Recheck on viewer connection
+    Policy-->>Edge: Allow or deny
+    Edge-->>Viewer: Media
+```
 
 <Aside type="note">
   If you're translating an existing integration, use the [dedicated migration
@@ -7900,7 +7937,15 @@ For a lower-level service map, see the architecture note in
 # Quick Start
 https://logbook.frameworks.network/builders/quick-start
 
-Go from account creation to a live broadcast in a few minutes.
+Create a stream, send it video from OBS, and open the playback URL.
+
+```mermaid
+flowchart LR
+    A[Create a stream] --> B[Copy its secret stream key]
+    B --> C[Send RTMP from OBS]
+    C --> D[FrameWorks edge]
+    D --> E[Open the playback URL]
+```
 
 <Aside type="tip" title="Self-hosting?">
   This guide uses the managed FrameWorks service. Want full control? See [Infrastructure
@@ -7910,7 +7955,7 @@ Go from account creation to a live broadcast in a few minutes.
 
 ## 1. Create an Account
 
-Head to [%APP_URL%](%APP_URL%) and sign up with your email.
+Head to [%APP_URL%](%APP_URL%) and sign up with email and password or an EVM wallet.
 
 ## 2. Create a Stream
 
@@ -7948,16 +7993,16 @@ Once configured, hit **Start Streaming** in OBS.
 
 ## 5. Watch Your Stream
 
-Back in the dashboard, your stream status should flip to **Live** within a few seconds.
+After FrameWorks accepts the ingest, the dashboard changes the stream status to **Live**.
 
 The **Playback Info** card shows your Playback ID. For protocol URLs and embed code, open the **Playback** tab.
 
 ## What's Next
 
-- [Streams](/builders/streams) - Understand stream keys, playback IDs, and push vs pull ingest
-- [Encoder Setup](/builders/encoder-setup) - Optimize your OBS settings
-- [Playback & Embedding](/builders/playback) - Share your stream
-- [Troubleshooting](/builders/troubleshooting) - When things don't work
+- [Streams](/builders/streams) — Understand stream keys, playback IDs, and push versus pull ingest.
+- [Encoder Setup](/builders/encoder-setup) — Configure OBS for a reliable stream.
+- [Playback & Embedding](/builders/playback) — Put the stream on your site.
+- [Troubleshooting](/builders/troubleshooting) — Diagnose ingest and playback failures.
 
 
 ---
@@ -7965,6 +8010,17 @@ The **Playback Info** card shows your Playback ID. For protocol URLs and embed c
 https://logbook.frameworks.network/builders/recordings
 
 Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. FrameWorks keeps a single DVR session running per channel for as long as the stream is live, and segments that session into chapter artifacts you can replay by window, civil-time range, or explicit range. This page covers DVR replay, clips from the buffer, and direct VOD uploads.
+
+```mermaid
+flowchart LR
+    LIVE[Live stream] --> DVR[Rolling DVR window]
+    DVR --> CH[Finalized archive chapters]
+    DVR --> CLIP[Clip export]
+    UPLOAD[Direct upload] --> VOD[VOD asset]
+    CH --> PLAY[Playback ID]
+    CLIP --> PLAY
+    VOD --> PLAY
+```
 
 <Aside type="caution" title="Storage and retention costs">
   Recordings, clips, and VOD assets consume storage until they expire or are deleted. Longer
@@ -7977,7 +8033,7 @@ Always-on venues, sports, conferences, classrooms, public meetings, monitoring f
 
 DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter artifacts for replay.
 
-The value prop is the split between capture, live UX, and replay UX:
+The recording model separates capture, live seeking, and archive replay:
 
 - **24/7 capture** — one stream session can keep recording continuously instead of rolling into arbitrary fixed-length assets.
 - **Fast live playlists** — the live DVR window stays bounded so viewers get seekback without enormous manifests.
@@ -8567,6 +8623,15 @@ This page explains the underlying model so you can make informed retention decis
 | VOD asset  | `createVodUpload` → `completeVodUpload`             | Multipart upload completes   |
 
 DVR is the largest contributor for most accounts because a single 24/7 ingest can produce many hours of media per day.
+
+### Resuming a VOD upload
+
+Keep the opaque session ID returned by `createVodUpload` and pass it unchanged
+to upload status, completion and abort operations. The session stays with its
+original storage-owning cluster even if your cluster preference changes while
+the upload is running. Do not construct a session ID from an S3 multipart ID or
+a playback ID. If the owner is unavailable, retry with the same session when it
+recovers; the upload is not silently moved to another cluster.
 
 ## Live DVR window vs retention
 
@@ -10570,9 +10635,9 @@ https://logbook.frameworks.network/
 <section class="skipper-showcase tokyo-night">
   <div class="skipper-showcase__copy">
     <div class="skipper-showcase__eyebrow">Video Consultant</div>
-    <div class="skipper-showcase__title">Documentation That Talks Back</div>
+    <div class="skipper-showcase__title">Ask Skipper about the docs</div>
     <div class="skipper-showcase__desc">
-      Skipper is an AI video engineer that searches curated docs, runs live diagnostics on your
+      Skipper is an AI video consultant that searches curated docs, runs live diagnostics on your
       streams, and tags every answer with a confidence level.
     </div>
     <div class="skipper-showcase__pills">
@@ -10647,7 +10712,7 @@ https://logbook.frameworks.network/
       <div class="slab-title">I want to build with live video</div>
     </div>
     <div class="slab-body">
-      Integrate live video into your app — APIs, SDKs, and a hosted player. Or use Streamcrafter to
+      Integrate live video into your app — APIs, SDKs, and a hosted player. Or use StreamCrafter to
       go live yourself.
     </div>
     <div class="slab-actions">
@@ -10693,10 +10758,10 @@ https://logbook.frameworks.network/
         </svg>
         <span>Agents</span>
       </div>
-      <div class="slab-title">I prefer 'prompt-driven' workflows</div>
+      <div class="slab-title">I want to build with an agent</div>
     </div>
     <div class="slab-body">
-      Wallet auth, x402 payments, and MCP tools. No email signup, no API-key rotation.
+      Authenticate with a wallet, pay rated calls through x402, and manage video through MCP.
     </div>
     <div class="slab-actions">
       <span>Agent access</span>
@@ -11137,7 +11202,7 @@ If you're running on [Bunny Stream](https://bunny.net/stream/) today and conside
 
 Bunny.net is, first and foremost, an excellent global CDN, storage, and DNS company — Bunny Stream is the VOD product that sits on top of that stack. If you chose Bunny, it was probably for a practical reason: strong edge delivery, simple VOD hosting, integrated security options, automated media tooling, useful video analytics, and a broader platform account that also covers non-video workloads.
 
-FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently expose a first-class live-ingest product; the official Bunny support article still documents [RTMP as not supported](https://support.bunny.net/hc/en-us/articles/360012176700-Do-you-support-RTMP-streaming). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
+FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently expose a first-class live-ingest product; Bunny's current [FAQ says RTMP streams are not supported](https://bunny.net/faq/). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
 
 ## TL;DR
 
@@ -11911,7 +11976,7 @@ OBS / FFmpeg / hardware encoder → swap the URL, keep the rest.
 
 ### 3. Swap the player
 
-If you were using `@livepeer/react`:
+If your existing integration uses the older `@livepeer/react` package:
 
 ```diff
 - import { Player } from "@livepeer/react";
@@ -12761,7 +12826,7 @@ over once you trust the numbers.
 
 ## What you gain on FrameWorks
 
-- **LL-HLS, DASH, and WebRTC/WHEP delivery** alongside HLS — Mux's live product is HLS-only.
+- **LL-HLS, DASH, and WebRTC/WHEP delivery** alongside HLS — Mux documents HLS as its standard live playback path.
   WHEP gives you ~sub-second one-to-many playback (this is playback, not multi-publisher
   conferencing).
 - **WHIP ingest** for sub-second contribution from browsers and OBS WebRTC out.
@@ -13000,10 +13065,11 @@ https://logbook.frameworks.network/operators/architecture
 
 ## Overview
 
-FrameWorks runs the same service topology in every environment — local, staging, production, self-hosted — and varies only the deployment substrate:
+FrameWorks uses the same logical planes across environments, but the physical placement varies by deployment:
 
 - **Local development:** Docker Compose brings up the full stack on one host.
-- **Production and self-hosted:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Provider-operated deployments:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Customer-operated edge capacity:** The supported hybrid path runs MistServer and Helmsman on customer infrastructure while FrameWorks operates the control plane. A customer-operated control plane is a separate distribution model, not a deeper hybrid tier.
 - **Coordination:** Quartermaster remains the system of record for tenants, clusters, and service discovery. Management paths query it directly; Commodore compiles the media-serving subset with Purser and catalog policy into signed, versioned Foghorn-local authority so an established media cell does not require a live control-plane query for every request.
 
 ## Multi-Plane Architecture
@@ -13021,7 +13087,44 @@ tiers describe placement.
 - **Interfaces**: Web apps, marketing sites, documentation, CLI, SDKs, and player/studio packages.
 - **Observability & Operations**: Metrics, dashboards, alerting, BI, and incident workflows.
 
-![Microservices Architecture](../../../assets/diagrams/Microservices_Architecture.png)
+```mermaid
+flowchart TB
+    I[Dashboard · SDKs · CLI · MCP] --> B[Bridge<br/>GraphQL and MCP]
+
+    subgraph C[Control and API plane]
+        COM[Commodore<br/>streams and auth]
+        QM[Quartermaster<br/>tenants and topology]
+        PUR[Purser<br/>billing]
+        NAV[Navigator<br/>DNS and trust]
+    end
+
+    subgraph R[Regional media and event plane]
+        F[Foghorn<br/>routing and orchestration]
+        D[Decklog → regional Kafka]
+        P[Periscope<br/>analytics]
+        S[Signalman<br/>realtime events]
+    end
+
+    subgraph E[Edge capacity]
+        H[Helmsman]
+        M[MistServer]
+        LG[Livepeer Gateway]
+    end
+
+    B --> COM
+    B --> QM
+    B --> PUR
+    B --> P
+    COM --> F
+    QM --> F
+    NAV --> E
+    F <--> H
+    H --> M
+    M --> LG
+    F --> D
+    D --> P
+    D --> S
+```
 
 ---
 
@@ -13058,21 +13161,21 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                        | Plane                         | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing, ingest, and edge delivery                 | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration     | Media                         | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer (planned)                    | Future ticket-batch signer; not wired to transcode gateways | Control / API                 | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate    | Infrastructure                | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database                              | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                                    | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Foghorn Redis                                | Foghorn HA state sync                                       | Media                         | 6379                                              | Regional                                   |
-| Nginx                                        | Reverse proxy and local development routing                 | Network & Trust               | 18090                                             | Central                                    |
-| Caddy                                        | Edge TLS termination and reverse proxy                      | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
-| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                  | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                                       | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Metabase                                     | BI analytics                                                | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter and mailing list manager                         | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                                                                              | Plane                         | Port(s)                                           | Deploy Location                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | --------------------------------------- |
+| MistServer                                   | Media processing, ingest, and edge delivery                                                       | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                    |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                              | Edge (co-located with MistServer)       |
+| Livepeer Signer                              | Keystore-backed ETH transaction signer; keyless ticket-batch signing is not yet wired to gateways | Control / API                 | 18016                                             | Central (not included in local Compose) |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate                                          | Infrastructure                | Operator-defined                                  | Central                                 |
+| ClickHouse                                   | Time-series analytics database                                                                    | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                 |
+| Kafka                                        | Regional event backbone; canonical topics replicate to the aggregator region with MirrorMaker 2   | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | One KRaft cluster per region            |
+| Foghorn Redis                                | Foghorn HA state sync                                                                             | Media                         | 6379                                              | Regional                                |
+| Nginx                                        | Reverse proxy and local development routing                                                       | Network & Trust               | 18090                                             | Central                                 |
+| Caddy                                        | Edge TLS termination and reverse proxy                                                            | Network & Trust               | 80, 443, 18090                                    | Edge                                    |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                                                        | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host   |
+| Grafana                                      | Metrics visualization                                                                             | Observability & Operations    | Operator-defined                                  | Central                                 |
+| Metabase                                     | BI analytics                                                                                      | Observability & Operations    | Operator-defined                                  | Central                                 |
+| Listmonk                                     | Newsletter and mailing list manager                                                               | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                 |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
@@ -13312,8 +13415,8 @@ The placement editor's authorized cluster, operator and region options are a man
 not a live routing result. “Connected” does not guarantee available capacity or permission for both
 ingest and delivery, and selecting marketplace capacity never subscribes to it. A changed catalogue
 requires a fresh search; the editor retains draft selections. Saving requested rules and observing
-them enforced at media destinations remain separate steps. The placement engine is not yet
-activated end to end.
+them enforced at media destinations remain separate steps: a rule becomes effective once every
+cell holding the content acknowledges it.
 
 ### Viewer Routing
 
@@ -13338,12 +13441,15 @@ graph LR
 
 **Foghorn HTTP Endpoints:**
 
-| Endpoint                             | Response                | Use Case                 |
-| ------------------------------------ | ----------------------- | ------------------------ |
-| `GET /play/{viewkey}`                | JSON with all endpoints | Direct integration       |
-| `GET /play/{viewkey}/hls/index.m3u8` | 307 redirect to edge    | Direct HLS playback      |
-| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Direct WebRTC (WHEP)     |
-| `GET /{viewkey}`                     | Best node host or 307   | MistServer compatibility |
+| Endpoint                             | Response                | Use Case             |
+| ------------------------------------ | ----------------------- | -------------------- |
+| `GET /play/{viewkey}`                | JSON with all endpoints | Direct integration   |
+| `GET /play/{viewkey}/hls/index.m3u8` | 307 redirect to edge    | Direct HLS playback  |
+| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Direct WebRTC (WHEP) |
+
+There is no hostname-only viewer route. The MistServer compatibility surface is a node-bound
+source lookup on a signed per-node path, which answers a media node asking where to pull a
+stream from; it never returns a viewer's playback destination. Any other path is a 404.
 
 For URI patterns and player integration, see [Playback & Embedding](/builders/playback).
 
@@ -17897,7 +18003,8 @@ https://logbook.frameworks.network/operators/deployment
   secrets, monitoring, and upgrade runbooks before carrying production traffic.
 </Aside>
 
-Deploying FrameWorks gives you full ownership of your video infrastructure.
+This guide covers a full operator-owned deployment. If you only want to add customer-operated media
+capacity to the managed FrameWorks control plane, use the [hybrid edge guide](/hybrid/overview).
 
 ## Media authority and control-plane outages
 
@@ -17993,6 +18100,16 @@ normal connected operation. New management mutations and new x402 settlement rem
 ## Quick Start
 
 **Production Deployment (Recommended):**
+
+```mermaid
+flowchart LR
+    M[Cluster manifest] --> P[frameworks cluster provision]
+    S[SOPS-encrypted secrets] --> P
+    P --> I[Infrastructure]
+    I --> A[Application services]
+    A --> X[Ingress and interfaces]
+    X --> D[frameworks cluster doctor]
+```
 
 ```bash
 # 1. Install CLI
@@ -18105,7 +18222,7 @@ The FrameWorks CLI automates the complex orchestration of multi-tier infrastruct
 - GitOps version management
 - Automated health validation
 - Backup/restore operations
-- Comprehensive diagnostics
+- Health and configuration diagnostics
 
 <CardGrid>
   <LinkCard
@@ -19421,10 +19538,12 @@ https://logbook.frameworks.network/operators/media-placement
 
 ## Availability
 
-Media placement is under development for 0.3.0. Account/stream policy management, cluster-owner
-capacity permissions, and read-only previews are implemented. End-to-end live routing and final
-admission enforcement are not yet complete. Do not enable a production restriction on the
-assumption that saving it proves every connection path enforces it.
+Media placement ships in 0.3.0. Account/stream policy management, cluster-owner capacity
+permissions, and read-only previews are implemented. Live routing and final admission run
+through the placement path on every Foghorn replica that installs enforcement, and a tenant
+receives policy-bearing rules only once every cell holding its content attests that it enforces
+them. Saving a restriction records requested intent: read the reported rollout state rather than
+assuming a save proves every connection path enforces it.
 
 There are two independent sides to a placement decision:
 
@@ -19489,24 +19608,39 @@ without replacing an edited draft or an uncertain save.
 Use [media placement preview](/builders/media-placement/) to inspect authorized capacity and
 source observations without reserving a node or starting media. Missing observations are not
 proof that a preferred cluster is full. A successful source-aware preview does not prove first-frame
-delivery. Managed non-push source preview is currently unsupported.
+delivery. Source-aware preview reads a registered push publisher, so a managed pull or Mist-native
+input previews capacity only. That is a limit of the preview surface, not of routing: those streams
+are placed through the same policy as an encoder push.
 
 DNS helps clients reach an entry point; it must not define which destination is considered local
-to a publisher or viewer. The new coordinator-independent live path remains an integration gate;
-the management and preview interfaces do not switch it on. HTTP and gRPC adapters share exact-node
-preparation for live push streams, but executable activation is not installed yet. They return only
-the prepared destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
+to a publisher or viewer. Placement's coordinator-independent path resolves live media, and the
+management and preview interfaces report on it rather than switching it on. Foghorn installs the
+ingest and viewer placement adapters on both the HTTP and gRPC front doors before it accepts
+traffic, so every live resolution is an exact-node preparation. They return only the prepared
+destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
 requests cannot silently switch formats. This contract and its unit tests are not two-cell playback
 proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
 Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
+
+An active recording keeps its own playback identity and serving policy; it is not
+redirected to its parent live stream. The resolver checks lifecycle with the
+recording's owner even when the viewer enters another cell. Once finalized,
+playback uses the recording's chapter playback IDs. `/play/{recordingId}/hls`
+selects HLS before preparing the edge, just as a live playback request does.
+
+Starting a recording follows the stream's active ingest owner, even if the tenant's
+primary cluster is elsewhere. Without a fresh ingest owner the request is refused;
+an unrelated cluster is not used as a recording fallback. For cross-cluster clip
+and VOD reads, the owner supplies its published media index alongside the media
+object, so the destination does not have to reconstruct an already-published index.
 
 Signing in must not move playback resolution to the viewer's own tenant cluster. Commodore uses
 the content owner's routing identity for anonymous and authenticated viewers alike; the resolving
 Foghorn then chooses the media destination. On the prepared HTTP path, WHEP remains WHEP and a
 CMAF `index.mpd` request selects DASH. Conflicting manifest formats fail rather than returning HLS.
-The older hostname-returning Mist balancer route is removed. The remaining Mist compatibility
-surface is an authorized, node-bound source lookup and read-only diagnostics; it never returns a
-viewer playback destination.
+The older hostname-returning Mist balancer route is gone. What remains of that surface is the
+node-bound source lookup and read-only diagnostics, reachable only by an authorized internal
+caller; neither answers a viewer with a playback destination.
 
 Federation discovery distinguishes a virtual media cluster from the Foghorn control cell that
 manages it. Quartermaster advertises the control-cell identity with its endpoint, and shared peer
@@ -19524,13 +19658,15 @@ context is not permission and is cleared with the pull. Missing context or faile
 renew a source. Startup installs this check for placement-marked pulls using the destination's
 shared receipt store. The marker is durable before a new or adopted pull URL is returned; missing
 receipts or an unavailable adapter return an explicit offline source. Unmarked legacy pulls are
-not globally switched by this wiring. Fleet capability checks, complete public/final admission
-activation and actual-media reconnect verification remain requirements, not completed rollout
-guarantees. Do not treat the registry marker as permission or as evidence that an older replica
+not globally switched by this wiring. The same startup installs public routing and final admission,
+and each replica publishes its own enforcement state to the heartbeat ledger the cell's attestation
+is derived from. Verification against actual media, including reconnect behavior, is still
+outstanding. Do not treat the registry marker as permission or as evidence that an older replica
 can enforce placement.
 
-Storage and processing placement are separate planned engines. These media controls do not select
-durable-copy locations or processing workers.
+Stored artifacts are served under the same policy: it removes destinations the tenant's rules
+refuse, while storage affinity decides the order of what is left. Choosing which durable backend
+holds the bytes, and where processing runs, stays outside placement.
 
 ## Keep credentials out of diagnostics
 
@@ -20196,8 +20332,7 @@ Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. The peer m
 
 1. **PeerChannel**: Bidirectional gRPC streams between Foghorn peers exchange edge telemetry, stream advertisements, cluster summaries, heartbeats, and replication/artifact events on their own intervals
 2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
-3. **Origin-Pull**: If a local edge has capacity, Foghorn arranges a DTSC pull from the remote origin. Subsequent viewers are served locally
-4. **Redirect**: If no local capacity, the viewer is redirected (307) to the remote cluster's edge
+3. **Origin-Pull**: Foghorn arranges a DTSC pull from the remote origin into a local edge, and the viewer is served from there. Subsequent viewers are served locally. Viewers are never redirected to another cluster
 
 ### Leader-Only Peering
 
@@ -20389,8 +20524,8 @@ Monitor peer connectivity and replication state:
 - **PeerChannel status**: Each Foghorn logs peer connections and heartbeat latency
 - **Stream advertisements**: Exchanged every 5 seconds via PeerChannel; stale advertisements indicate peer issues
 - **Active replications**: In-flight cross-cluster DTSC pulls tracked in Redis (5-min TTL)
-- **Federation events**: All cross-cluster operations (peering, replication, artifact access, redirects) emit geo-enriched events to ClickHouse (`federation_events` table). View them on the **Federation** dashboard page (`/infrastructure/federation`)
-- **PeerHeartbeat geo exchange**: Foghorn peers exchange their geographic coordinates (resolved from `infrastructure_nodes.external_ip` at bootstrap). This enables topology map visualization with real geographic positions
+- **Federation events**: All cross-cluster operations (peering, replication, artifact access) emit geo-enriched events to ClickHouse (`federation_events` table). View them on the **Federation** dashboard page (`/infrastructure/federation`)
+- **Self-geo**: each Foghorn resolves its own coordinates from `infrastructure_nodes.external_ip` at bootstrap and stamps them on the events it emits. Peers do not exchange coordinates over the PeerChannel, so a remote position is left unset rather than guessed; the topology map sources remote coordinates from infrastructure records instead
 
 ### Per-Cluster Metrics
 
@@ -22606,7 +22741,7 @@ The first observation for each signal type saves a baseline instead of posting �
 # Platform capabilities
 https://logbook.frameworks.network/platform/feature-matrix
 
-FrameWorks is built as a platform, not only a dashboard. The matrix shows which capabilities are available today and where you can use them: GraphQL API, MCP tools for agents, dashboard workflows, and developer/operator docs.
+FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.
 
 ## Why teams pick FrameWorks
 
@@ -22629,7 +22764,7 @@ Rows marked *(foundation)* are platform building blocks whose value shows up thr
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push and pull live streams with stream keys and ingest configuration. Push ingest over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
@@ -22642,7 +22777,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
 | ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
@@ -22654,7 +22789,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#media-library).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
 | ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
@@ -22669,7 +22804,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#media-library)
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
@@ -22681,7 +22816,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--observability).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
 | **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
@@ -22690,7 +22825,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--obs
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure--byoc).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
 | **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
@@ -22714,14 +22849,14 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
-| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | In-development ingest and viewer policy controls with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery. End-to-end live enforcement is not yet complete. |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
 | **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--billing).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Billing & prepaid balance** | Available | API, Agents (MCP), Dashboard, Docs | Card / Mollie / crypto top-ups, billing details, invoices, prepaid balance. |
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
@@ -22733,7 +22868,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#developer-platform--agents).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Developer API** | Expanding | API, Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
 | ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
@@ -22747,7 +22882,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#developer-plat
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--interactivity).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Conferencing and remote contribution** | Planned | — | Multi-party WebRTC rooms and remote-guest contribution — commentators and callers mixed into a managed stream. |
 | **Rooms, chat, and interactivity (Parlor)** | Planned | — | Viewer chat and engagement primitives — channel points, hype trains, leaderboards, flair, and moderation views — synced to the stream. |
@@ -22757,7 +22892,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#engagement--in
 
 Planned items in this area are detailed on the [Roadmap](/roadmap#account--apps).
 
-| Capability | Availability | Surfaces | What it unlocks |
+| Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Tenant settings** | Expanding | API, Agents (MCP), Dashboard, Docs | Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle. |
 | ↳ Teams & RBAC | Planned | — | Multi-user tenants with role-based access control. |
@@ -22772,7 +22907,7 @@ The [Roadmap](/roadmap) carries sequencing and detail for planned work; this mat
 # Platform capability inventory
 https://logbook.frameworks.network/platform/platform-capabilities
 
-This page lists the **complete** capability inventory: everything in the [product capability matrix](/platform/feature-matrix) plus platform-audience capabilities — the infrastructure, trust, and orchestration machinery that products are built on. Rows marked *(platform)* are operated capabilities, not customer-facing features.
+This broader inventory includes the [product capability matrix](/platform/feature-matrix) and the infrastructure, trust, and orchestration capabilities behind it. Rows marked *(platform)* are operated capabilities, not customer-facing features.
 
 ### Streaming
 
@@ -22851,7 +22986,7 @@ This page lists the **complete** capability inventory: everything in the [produc
 | **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
-| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | In-development ingest and viewer policy controls with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery. End-to-end live enforcement is not yet complete. |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
 | **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 | **Drain-integrated OS updates** *(foundation)* *(platform)* | Planned | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
 | **Dynamic mesh routing** *(foundation)* *(platform)* | Planned | — | Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration. |
@@ -22924,9 +23059,11 @@ The [Platform capabilities](/platform/feature-matrix) page is the source of trut
 
 </Aside>
 
-## Current Focus
+## Current focus
 
-The active engineering batch is internal hardening (security, performance) and deployment flexibility — making it easier to plug your own long-term storage, cloud compute, or on-premise capacity into the platform. Next comes a playback-telemetry pass: reducing time-to-first-frame and measuring and reducing cross-region stream-replication time. After that, conferencing and chat open as the next major feature theme. In parallel, DRM (FairPlay, Widevine, PlayReady) and the media-engine ONNX runtime for live AI are in active development.
+Current work centers on security and performance hardening, deployment flexibility, player QoE,
+and cross-region replication measurements. DRM and the media-engine ONNX runtime remain in active
+development. The badges show relative order, not release dates.
 
 ## Streaming
 
@@ -22936,7 +23073,8 @@ What ships today in this area: [Platform capabilities → Streaming](/platform/f
 
 Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics.
 
-**Outcome:** bring RTSP cameras, SRT/RIST feeds, HLS origins, MPEG-TS sources, and Mist/DTSC sources into FrameWorks with clearer failure states.
+The remaining diagnostics should make failures from RTSP cameras, SRT/RIST feeds, HLS origins,
+MPEG-TS sources, and Mist/DTSC sources easier to identify.
 
 ### Device Discovery and Contribution Inputs <Badge text="Next" variant="tip" />
 
@@ -22946,9 +23084,8 @@ runtime, exposing it through the API and dashboard, and making it usable from th
 It composes with the rest of the edge story: a discovered camera becomes a managed stream, and the
 same node can run live AI on that feed.
 
-**Builds on:** edge clusters and the Tray/CLI companion runtime.
-
-**Outcome:** let an on-prem FrameWorks Edge discover cameras, PTZ devices, NDI sources, USB capture,
+This depends on edge clusters and the Tray/CLI companion runtime. An on-prem FrameWorks Edge will
+discover cameras, PTZ devices, NDI sources, USB capture,
 and HDMI contribution paths, then ingest them into managed FrameWorks streams or self-hosted
 clusters without hand-built local glue.
 
@@ -22960,9 +23097,8 @@ What ships today in this area: [Platform capabilities → Playback](/platform/fe
 
 FairPlay, Widevine, and PlayReady support is in development. Until DRM lands, premium playback workflows that require it should stay on their existing provider.
 
-**Builds on:** playback access control and the player SDKs.
-
-**Outcome:** protect premium playback workflows without moving video delivery out of the FrameWorks control plane.
+Built on playback access control and the player SDKs, DRM will protect premium playback without
+moving delivery out of the FrameWorks control plane.
 
 ## Media Library
 
@@ -22972,7 +23108,8 @@ What ships today in this area: [Platform capabilities → Media Library](/platfo
 
 Two scheduling layers are planned on the recording and VOD foundations. Scheduled recordings are calendar-driven DVR captures for places of worship, periodic events, classes, and any workflow where a stream goes live on a known schedule: recording starts and stops automatically against a stream that may already be live 24/7, and the operator does not need to be at the desk when the window opens. Scheduled VOD streams are linear live channels assembled from existing VOD assets: the scheduler selects finalized artifacts, verifies or pre-hydrates frozen assets before their playout window, and materializes a rolling live stream without bypassing artifact ownership, retention, or billing semantics.
 
-**Outcome:** a weekly service or lecture records itself on its own schedule, and a VOD catalog becomes a programmed live channel — with the resulting assets staying in the normal library lifecycle.
+A weekly service or lecture will be able to record on its own schedule, while a VOD catalog can
+become a programmed live channel. Resulting assets stay in the normal library lifecycle.
 
 ## Processing & AI
 
@@ -22982,29 +23119,27 @@ What ships today in this area: [Platform capabilities → Processing & AI](/plat
 
 Livepeer Gateway integration is active. We are expanding native controls, plan-aware defaults, and dashboard/API workflows for adaptive renditions.
 
-**Outcome:** enable ABR when source bitrate or viewer networks make a single rendition impractical.
+This makes ABR available when the source bitrate or viewer networks make one rendition impractical.
 
 ### Live AI Processing <Badge text="Next" variant="tip" />
 
 An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work. Pilot access is available via contact.
 
-**Builds on:** processing orchestration and edge clusters.
-
-**Outcome:** run real-time AI where the stream already is — on the edge node — and burst heavy models to dedicated compute without leaving the control plane.
+The work builds on processing orchestration and edge clusters: small models run where the stream
+already is, while heavier models can move to dedicated compute under the same control plane.
 
 ### Workload Cost Model <Badge text="Next" variant="tip" />
 
 Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. GPU and VRAM become first-class, measured resources.
 
-**Builds on:** processing orchestration and viewer routing's capacity scoring.
-
-**Outcome:** place transcode and AI jobs where they actually fit — before they run — instead of discovering overload after the fact.
+This extends processing orchestration and the capacity score used by viewer routing so transcode and
+AI jobs can be placed before they overload a node.
 
 ### Composition and SSAI <Badge text="Later" variant="note" />
 
 Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
 
-**Outcome:** move more production work into the same control plane that already handles ingest, delivery, assets, and analytics.
+These tools would put more production work under the same controls as ingest, delivery, assets, and analytics.
 
 ## Analytics & Observability
 
@@ -23014,13 +23149,15 @@ What ships today in this area: [Platform capabilities → Analytics & Observabil
 
 Stream and routing analytics already exist, and first-party view-level QoE now ships for the FrameWorks player — rebuffering, frame drops, startup time-to-first-frame, and per-asset VOD retention/watch-density. The active telemetry pass is reducing time-to-first-frame and measuring and reducing cross-region stream-replication time. What's still ahead is the breadth: QoE capture from third-party / non-FrameWorks players and deeper per-view tracing.
 
-**Outcome:** answer which viewers buffered, why they buffered, and which route or rendition they used — across any player, not just the FrameWorks one.
+The broader coverage should explain which viewers buffered, why, and which route or rendition they
+used, including viewers outside the FrameWorks player.
 
 ### Incidents and Alerts <Badge text="Next" variant="tip" />
 
 A tenant-scoped incident feed is planned: node-health, certificate, DNS, capacity, and cluster alerts aggregated with acknowledge/resolve workflows, realtime delivery, and agent tooling for triage. Self-hosted operators get visibility into their own clusters — certificate expiry, port reachability, DNS resolution, resource thresholds — without standing up a separate monitoring stack.
 
-**Outcome:** see what needs attention across streams, nodes, and clusters, and let humans or agents acknowledge and resolve it from the same platform.
+Operators and agents will be able to see, acknowledge, and resolve problems across streams, nodes,
+and clusters from one incident feed.
 
 ## Infrastructure & BYOC
 
@@ -23030,71 +23167,71 @@ What ships today in this area: [Platform capabilities → Infrastructure & BYOC]
 
 The supported BYOC level is edge-only: bring your own MistServer and Helmsman nodes while FrameWorks operates Foghorn, federation, DNS/TLS, Livepeer, Chandler, durable storage, analytics, billing, and access control. Virtual private clusters are logical tenant-private slices of that provider-operated routing plane. Teams can mix their edge capacity with managed FrameWorks regions or list spare edge capacity without operating a federation peer.
 
-**Outcome:** stand up a production-grade MistServer cluster without gluing together ten separate services for DNS, certificates, routing, observability, billing, and access control.
+The result is a production MistServer edge without a separate integration project for DNS,
+certificates, routing, observability, billing, and access control.
 
 ### Dedicated Provider Capacity <Badge text="Next" variant="tip" />
 
 FrameWorks-provisioned dedicated capacity remains future work: isolated provider-operated nodes for one tenant, with reserved-capacity pricing and an operator console. Customer-operated Foghorn is not part of this roadmap because it also implies self-hosting federation identity, Livepeer, Chandler, object storage, DNS, analytics, and the control plane.
 
-**Builds on:** edge clusters, virtual private routing slices, and the Edge ISO/cloud images below.
-
-**Outcome:** keep more of the stack on infrastructure you choose, or reserve dedicated FrameWorks-operated capacity, without dropping to a fully hand-built deployment.
+This builds on edge clusters, virtual private routing slices, and the planned Edge images. It gives
+tenants reserved provider capacity without requiring a hand-built control plane.
 
 ### Edge ISO and Cloud Images <Badge text="Next" variant="tip" />
 
 Edge enrollment and bootstrap exist today; the packaging is next: a bootable FrameWorks Edge ISO for bare metal and prebuilt images with cloud-marketplace listings (AWS, GCP, DigitalOcean, Hetzner, Linode, Vultr) so a media cluster can scale on demand. The same images serve FrameWorks' own capacity and BYOC deployments, and they are groundwork for hosted-private-cluster provisioning automation.
 
-**Outcome:** boot a FrameWorks Edge from an ISO or a marketplace image and add media capacity on demand — on our infrastructure or yours.
+The packaging will let operators boot an edge from an ISO or marketplace image and add media
+capacity without assembling the host by hand.
 
 ### Public Cluster Marketplace <Badge text="Next" variant="tip" />
 
 Marketplace primitives — listing, invites, subscription requests, approvals, preferred-cluster routing, pricing models, and metered/custom rating — ship today. The remaining work is the public operating model: operator vetting, published commercial terms, support boundaries, and a production onboarding workflow for third-party capacity.
 
-**Outcome:** turn the existing marketplace plumbing into a vetted public program so tenants can buy capacity from third-party operators with a known support and trust contract.
+The public program will add a defined support and trust contract to the marketplace plumbing that
+already ships.
 
 ### Placement Policy and Storage Tiering <Badge text="Next" variant="tip" />
 
 Where content lives becomes policy-driven from two sides: cluster owners declare what workload they accept, content owners declare where their material may go — data residency, minimum durable copies — and both compile into signed enforcement bundles evaluated at every decision point (serve, ingest, process, store, replicate, peer). Underneath sits a storage tier ladder from cold archive to hot in-memory, with a ledger of which copies exist where.
 
-**Builds on:** BYOC ownership levels and the cluster marketplace.
-
-**Outcome:** run one policy model across FrameWorks-operated SaaS, customer edge capacity, and provider-authorized federation peers so residency requirements are enforced by the platform.
+Built on BYOC ownership levels and the cluster marketplace, one policy model will cover managed
+SaaS, customer edge capacity, and authorized federation peers.
 
 ### Stream Replication Orchestration <Badge text="Next" variant="tip" />
 
 Replication today is on-demand: a viewer shows up, the edge pulls the stream. Orchestration adds the proactive half — pre-emptively spreading a stream to a cell or region ahead of expected demand, explicit hop topology between origin and edge, and per-stream replication policy (replica caps, allowed regions).
 
-**Builds on:** the federation network and viewer routing.
-
-**Outcome:** position streams where the audience will be before the audience arrives, under explicit per-stream policy.
+This extends federation and viewer routing so streams can be positioned ahead of expected demand
+under an explicit per-stream policy.
 
 ### Federation State Synchronization <Badge text="Next" variant="tip" />
 
 Federation-wide configuration and state distribution today flows through one central management point. This work makes it decentral: clusters and servers of independent parties join, leave, or drop offline at will; concurrent changes from multiple parties resolve automatically without a central coordinator; and parts of the network that diverge during a partition reconverge when connectivity returns.
 
-**Builds on:** the federation network.
-
-**Outcome:** a federation where no single party's outage or authority blocks the rest of the network from changing and converging.
+The goal is a federation that can continue changing and later converge when one participant is
+offline or partitioned.
 
 ### NAT-Aware Routing and Traversal <Badge text="Next" variant="tip" />
 
 Self-hosted nodes often sit behind NAT, where reachability depends on NAT type and connection direction. The control plane gains NAT-type classification as a routing and placement signal, coordination of traversal attempts between the right node pairs, and platform-managed probe/relay infrastructure that also measures inter-server network performance (latency, throughput) as an input to routing and capacity decisions — so a node in an office network participates fully in the federated network.
 
-**Builds on:** edge clusters and the federation network.
-
-**Outcome:** stop treating NAT'd nodes as second-class — route and place around reachability instead of failing on it.
+This builds on edge clusters and federation. Routing and placement will account for reachability
+instead of assuming every node accepts an inbound connection.
 
 ### Platform Trust and Operations Hardening <Badge text="Next" variant="tip" />
 
 Two operational deepenings of the platform itself: live rotation of trust material (intermediate CA rotation with overlapping validity, asymmetric token signing where keys never leave the issuing service, cluster-bound service identity) and drain-integrated OS updates, where each server role defines what a safe restart means — media sessions run out, database replicas gate on recovery, brokers hand over leadership — while cluster capacity floors hold during the update wave.
 
-**Outcome:** long-lived clusters that refresh their own trust and patch their own hosts without maintenance windows or service interruption.
+Together, these changes let long-lived clusters rotate trust and patch hosts while preserving
+capacity during the update wave.
 
 ### Managed DNS, Proxying, and Storage Services <Badge text="Later" variant="note" />
 
 Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, Ceph-backed storage resources, self-hosted/Anycast DNS paths, policies, billing, and support boundaries.
 
-**Outcome:** cover more of the infrastructure teams already wire around their video workloads without pretending internal operator plumbing is a self-serve product.
+Each service needs an explicit customer API, policy, billing model, and support boundary before it
+can move beyond internal operator infrastructure.
 
 ### Product Boundary: Customer-Operated Control Plane
 
@@ -23108,15 +23245,14 @@ What ships today in this area: [Platform capabilities → Commerce & Billing](/p
 
 In a federated network, one viewer session can cross clusters run by different operators. Settlement attributes every served byte to the operator who actually carried it — manipulation-resistant, so no participant can claim traffic they didn't serve — and closes the loop: credit accrual, operator-visible reporting, and payout execution. The accrual ledger exists internally today; the attribution hardening, reporting surface, and payouts are the roadmap work.
 
-**Builds on:** the cluster marketplace and federation network.
-
-**Outcome:** third-party operators get paid for the traffic they serve, with numbers both sides can verify.
+Built on the marketplace and federation network, the finished workflow will let operators verify
+the traffic attributed to them before payout.
 
 ### Stream-Level Balances <Badge text="Later" variant="note" />
 
 Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
 
-**Outcome:** let a stream pay for itself, funded by its audience or its sponsor, without touching the tenant's main balance.
+This would let audience or sponsor funding pay for a stream before drawing from the tenant balance.
 
 ## Developer Platform & Agents
 
@@ -23126,19 +23262,19 @@ What ships today in this area: [Platform capabilities → Developer Platform & A
 
 We are expanding agent-facing workflows around operational diagnostics, billing preflight, and safe platform changes through MCP and GraphQL.
 
-**Outcome:** let agents operate FrameWorks with the same controls humans use, while preserving confirmation gates for sensitive or billable actions.
+Agents use the same underlying controls as humans, with confirmation gates retained for sensitive or billable actions.
 
 ### Event Webhooks <Badge text="Next" variant="tip" />
 
 Outbound webhooks are planned for platform events such as stream lifecycle changes, asset readiness, billing events, and operational alerts.
 
-**Outcome:** connect FrameWorks events to your own systems without polling.
+This will let external systems react to FrameWorks events without polling.
 
 ### Backend SDKs <Badge text="Later" variant="note" />
 
 Server-side SDKs are planned for Node, Python, PHP, Ruby, Elixir, Java, and C#, wrapping the GraphQL API, webhook verification, uploads, and access-token/JWT workflows. Delivery is phased, starting with Node and Python. Frontend packages for the player and StreamCrafter ship today.
 
-**Outcome:** integrate FrameWorks from your backend in your language of choice without hand-writing GraphQL plumbing.
+The SDKs will wrap common GraphQL, upload, webhook-verification, and token flows.
 
 ## Engagement & Interactivity
 
@@ -23148,21 +23284,20 @@ What ships today in this area: [Platform capabilities → Engagement & Interacti
 
 The next major feature theme after the current telemetry pass. Conferencing brings multi-party WebRTC rooms and remote contribution — a commentator or guest joins a room and their audio (video later) is mixed into the managed stream. Viewer chat ships alongside it as the first surface of the rooms service.
 
-**Outcome:** bring guests and commentators into the stream itself and give every stream a live chat, without third-party tooling.
+The planned workflow brings guests and commentators into the managed stream and adds first-party viewer chat.
 
 ### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 
 Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history. Events bind to the stream timeline per viewer — everyone sees a reaction at the moment it belongs to, regardless of how far behind the live edge they watch.
 
-**Outcome:** give streamers first-class engagement and monetization mechanics on their own infrastructure instead of bolting on overlay services.
+These primitives will keep engagement state aligned with each viewer's position in the stream timeline.
 
 ### Live Commerce (Shopping and Auctions) <Badge text="Next" variant="tip" />
 
 Shopping and auctions attached to live streams: product showcases, carts and orders, and server-authoritative auction mechanics. The hard problem is latency fairness — viewers watch at different distances behind the live edge, so interactive events must bind to the stream timeline, and competitive interactions like auction closes need one authoritative truth that treats differently-delayed bidders fairly.
 
-**Builds on:** rooms and interactivity, and stream-level balances for funding flows.
-
-**Outcome:** sell and auction inside the stream itself, with mechanics that stay fair at live-streaming latencies.
+This depends on rooms, timeline-aware interactivity, and stream-level balances. Auction state remains
+server-authoritative so viewers at different playback delays receive a consistent result.
 
 ## Account & Apps
 
@@ -23172,10 +23307,10 @@ What ships today in this area: [Platform capabilities → Account & Apps](/platf
 
 Multi-user accounts, role-based permissions, and audit visibility are planned for tenants that need shared operations.
 
-**Outcome:** separate owners, operators, developers, and finance workflows without sharing a single account credential.
+Roles will separate owner, operator, developer, and finance access without a shared credential.
 
 ### Mobile Apps and Help Center <Badge text="Later" variant="note" />
 
 Native mobile apps and an integrated help center are planned, but they come after the core platform surfaces are complete.
 
-**Outcome:** make FrameWorks easier to operate from more places without splitting the product experience.
+The mobile and help surfaces will reuse the same account and platform controls.

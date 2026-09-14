@@ -1,6 +1,6 @@
 ---
 title: "Deployment Overview"
-description: "Comprehensive guide to deploying FrameWorks on bare metal, including architecture, CLI usage, and operations."
+description: "Deploy FrameWorks with the CLI, choose a topology, and understand the security boundary."
 sidebar:
   order: 5
 ---
@@ -13,7 +13,8 @@ import { Card, CardGrid, LinkCard, Aside } from "@astrojs/starlight/components";
   secrets, monitoring, and upgrade runbooks before carrying production traffic.
 </Aside>
 
-Deploying FrameWorks gives you full ownership of your video infrastructure.
+This guide covers a full operator-owned deployment. If you only want to add customer-operated media
+capacity to the managed FrameWorks control plane, use the [hybrid edge guide](/hybrid/overview).
 
 ## Media authority and control-plane outages
 
@@ -109,6 +110,16 @@ normal connected operation. New management mutations and new x402 settlement rem
 ## Quick Start
 
 **Production Deployment (Recommended):**
+
+```mermaid
+flowchart LR
+    M[Cluster manifest] --> P[frameworks cluster provision]
+    S[SOPS-encrypted secrets] --> P
+    P --> I[Infrastructure]
+    I --> A[Application services]
+    A --> X[Ingress and interfaces]
+    X --> D[frameworks cluster doctor]
+```
 
 ```bash
 # 1. Install CLI
@@ -221,7 +232,7 @@ The FrameWorks CLI automates the complex orchestration of multi-tier infrastruct
 - GitOps version management
 - Automated health validation
 - Backup/restore operations
-- Comprehensive diagnostics
+- Health and configuration diagnostics
 
 <CardGrid>
   <LinkCard

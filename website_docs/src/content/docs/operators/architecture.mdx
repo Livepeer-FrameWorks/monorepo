@@ -8,10 +8,11 @@ sidebar:
 
 ## Overview
 
-FrameWorks runs the same service topology in every environment — local, staging, production, self-hosted — and varies only the deployment substrate:
+FrameWorks uses the same logical planes across environments, but the physical placement varies by deployment:
 
 - **Local development:** Docker Compose brings up the full stack on one host.
-- **Production and self-hosted:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Provider-operated deployments:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Customer-operated edge capacity:** The supported hybrid path runs MistServer and Helmsman on customer infrastructure while FrameWorks operates the control plane. A customer-operated control plane is a separate distribution model, not a deeper hybrid tier.
 - **Coordination:** Quartermaster remains the system of record for tenants, clusters, and service discovery. Management paths query it directly; Commodore compiles the media-serving subset with Purser and catalog policy into signed, versioned Foghorn-local authority so an established media cell does not require a live control-plane query for every request.
 
 ## Multi-Plane Architecture
@@ -29,7 +30,44 @@ tiers describe placement.
 - **Interfaces**: Web apps, marketing sites, documentation, CLI, SDKs, and player/studio packages.
 - **Observability & Operations**: Metrics, dashboards, alerting, BI, and incident workflows.
 
-![Microservices Architecture](../../../assets/diagrams/Microservices_Architecture.png)
+```mermaid
+flowchart TB
+    I[Dashboard · SDKs · CLI · MCP] --> B[Bridge<br/>GraphQL and MCP]
+
+    subgraph C[Control and API plane]
+        COM[Commodore<br/>streams and auth]
+        QM[Quartermaster<br/>tenants and topology]
+        PUR[Purser<br/>billing]
+        NAV[Navigator<br/>DNS and trust]
+    end
+
+    subgraph R[Regional media and event plane]
+        F[Foghorn<br/>routing and orchestration]
+        D[Decklog → regional Kafka]
+        P[Periscope<br/>analytics]
+        S[Signalman<br/>realtime events]
+    end
+
+    subgraph E[Edge capacity]
+        H[Helmsman]
+        M[MistServer]
+        LG[Livepeer Gateway]
+    end
+
+    B --> COM
+    B --> QM
+    B --> PUR
+    B --> P
+    COM --> F
+    QM --> F
+    NAV --> E
+    F <--> H
+    H --> M
+    M --> LG
+    F --> D
+    D --> P
+    D --> S
+```
 
 ---
 
@@ -66,21 +104,21 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                        | Plane                         | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing, ingest, and edge delivery                 | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration     | Media                         | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer (planned)                    | Future ticket-batch signer; not wired to transcode gateways | Control / API                 | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate    | Infrastructure                | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database                              | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                                    | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Foghorn Redis                                | Foghorn HA state sync                                       | Media                         | 6379                                              | Regional                                   |
-| Nginx                                        | Reverse proxy and local development routing                 | Network & Trust               | 18090                                             | Central                                    |
-| Caddy                                        | Edge TLS termination and reverse proxy                      | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
-| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                  | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                                       | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Metabase                                     | BI analytics                                                | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter and mailing list manager                         | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                                                                              | Plane                         | Port(s)                                           | Deploy Location                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | --------------------------------------- |
+| MistServer                                   | Media processing, ingest, and edge delivery                                                       | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                    |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                              | Edge (co-located with MistServer)       |
+| Livepeer Signer                              | Keystore-backed ETH transaction signer; keyless ticket-batch signing is not yet wired to gateways | Control / API                 | 18016                                             | Central (not included in local Compose) |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate                                          | Infrastructure                | Operator-defined                                  | Central                                 |
+| ClickHouse                                   | Time-series analytics database                                                                    | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                 |
+| Kafka                                        | Regional event backbone; canonical topics replicate to the aggregator region with MirrorMaker 2   | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | One KRaft cluster per region            |
+| Foghorn Redis                                | Foghorn HA state sync                                                                             | Media                         | 6379                                              | Regional                                |
+| Nginx                                        | Reverse proxy and local development routing                                                       | Network & Trust               | 18090                                             | Central                                 |
+| Caddy                                        | Edge TLS termination and reverse proxy                                                            | Network & Trust               | 80, 443, 18090                                    | Edge                                    |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                                                        | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host   |
+| Grafana                                      | Metrics visualization                                                                             | Observability & Operations    | Operator-defined                                  | Central                                 |
+| Metabase                                     | BI analytics                                                                                      | Observability & Operations    | Operator-defined                                  | Central                                 |
+| Listmonk                                     | Newsletter and mailing list manager                                                               | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                 |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 

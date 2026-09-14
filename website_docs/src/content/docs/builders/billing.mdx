@@ -1,6 +1,6 @@
 ---
 title: Billing & Pricing
-description: Understanding FrameWorks billing - tiers, usage, and payments.
+description: Current FrameWorks plans, usage meters, allowances, and payment flows.
 sidebar:
   order: 7
 ---
@@ -10,7 +10,8 @@ import { Aside } from "@astrojs/starlight/components";
 Paid plans are rated from metered usage. Prepaid balances are deducted as usage is reported; postpaid invoices are drafted for the active billing period. API request rate limits still apply for abuse protection.
 
 <Aside type="note">
-  Pricing may adjust as we scale, but you keep the allowances you signed up for.
+  The billing dashboard and your active subscription are the authoritative sources for your rates
+  and allowances. Public beta pricing can change for new subscriptions.
 </Aside>
 
 ## What You Pay For
@@ -42,7 +43,7 @@ Access to the shared Free service with the included allowances below. API reques
 
 - 10,000 delivered minutes/month (zero-priced overage)
 - 10 GB of stored content (durable writes rejected at cap)
-- 7-day recording retention
+- 30-day maximum recording retention
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
@@ -57,7 +58,7 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 - **At redline (≥ 95%).** All new free-tier ingest is rejected to preserve capacity for paying tenants. Existing live sessions are never killed mid-stream.
 - **Viewer-side gate.** Below 80% load, all viewers admitted. 80–95%, new viewers of over-allowance free streams are rejected. At redline, all new free-stream viewers are rejected. Paying broadcasters' viewers are always admitted.
 - **Fair-use caps.** Free tenants are capped at 3 concurrent live streams and 200 concurrent viewers.
-- **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts age out via the 7-day retention sweeper.
+- **Storage cap.** At the 10 GB durable limit, new recordings, VOD uploads, and clip exports are rejected. Existing artifacts remain available until their effective retention deadline; the Free tier caps retention at 30 days.
 - Load is computed per media cluster as `max(avg(CPU%), uplink utilization %)` across healthy edge nodes.
 
 **Seeded limitations:**
@@ -76,20 +77,25 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 | Delivered Minutes | €0.00055/min |
 | Cold storage      | €0.035/GB-h  |
 
-Standard transcoding and multiview compositing are bundled into delivered minutes. Advanced
-processing (AI workloads such as live transcription, V2V transformations, automated highlights)
-is in pilot — see [Advanced processing](#advanced-processing) below.
+Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
+composition does not create a server-processing charge. Advanced processing (AI workloads such as
+live transcription, V2V transformations, and automated highlights) is in pilot — see
+[Advanced processing](#advanced-processing) below.
 
 ## Metered Tiers
 
 Paid tiers include monthly allocations with overage billing:
 
-| Tier       | Base   | Delivered Minutes | Retention |
-| ---------- | ------ | ----------------- | --------- |
-| Supporter  | €79    | 120K              | 90 days   |
-| Developer  | €249   | 500K              | 180 days  |
-| Production | €999   | 2M                | 365 days  |
-| Enterprise | Custom | Custom            | Custom    |
+| Tier       | Base   | Delivered Minutes | Tier retention cap |
+| ---------- | ------ | ----------------- | ------------------ |
+| Supporter  | €79    | 120K              | None               |
+| Developer  | €249   | 500K              | None               |
+| Production | €999   | 2M                | None               |
+| Enterprise | Custom | Custom            | Contract-defined   |
+
+Paid self-serve tiers do not impose a plan-level retention cap. Content still follows its configured
+artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
+clips.
 
 **Overages (metered tiers):**
 
@@ -107,8 +113,8 @@ V2V transformations, and multi-stream compositing) is in **pilot**. These jobs u
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To request pilot access, [contact us](https://frameworks.network/contact). Standard transcoding
-and multi-stream compositing remain bundled into delivered minutes.
+To request pilot access, [contact us](https://frameworks.network/contact). Standard live
+transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
 
@@ -248,7 +254,7 @@ FrameWorks supports multiple deployment models with different billing characteri
 
 | Tier                   | Description                                                                                                | Billing                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.        | Zero-priced metering with fair-use.                                                                  |
+| **Shared (Community)** | Free access to a shared cluster, capped at 3 concurrent live streams and 200 concurrent viewers.           | Zero-priced metering with fair-use.                                                                  |
 | **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                    | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
 | **Dedicated**          | Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is out of scope. | Custom pricing via `cluster_pricing`.                                                                |
 | **Hybrid**             | Self-hosted MistServer/Helmsman edges connect to provider Foghorn and can fall back to managed capacity.   | Per-cluster usage attribution.                                                                       |
@@ -261,6 +267,6 @@ Usage is attributed per cluster: the analytics pipeline tags every event with `c
 - All API requests
 - Stream creation and configuration
 - Analytics queries
-- Webhook deliveries
+- Playback-policy webhook checks
 - Player embed generation
 - Ingest (streaming in)—you pay for viewer delivery only
