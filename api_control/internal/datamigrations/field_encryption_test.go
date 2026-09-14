@@ -90,6 +90,7 @@ func TestRunFieldEncryptionRewritesLegacyRowsWithActiveKey(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(1, "enc:v3:primary:", spec.table, spec.column, "", int64(0)).
 			WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}))
 	}
+	expectFieldEncryptionOrphanPrune(mock)
 
 	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 3, Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes")})
 	if err != nil {
@@ -232,9 +233,6 @@ func TestVerifyFieldEncryptionRejectsUnacknowledgedQuarantine(t *testing.T) {
 		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s AS source WHERE source.%s IS NOT NULL AND LEFT(source.%s, char_length($1)) <> $1 AND NOT EXISTS (SELECT 1 FROM %s AS quarantine WHERE quarantine.table_name = $2 AND quarantine.column_name = $3 AND quarantine.row_id = source.%s::text AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, spec.table, spec.column, spec.column, fieldEncryptionQuarantineTable, spec.id, spec.column)
 		mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs("enc:v3:primary:", spec.table, spec.column).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-		pruneQuery := fmt.Sprintf(`DELETE FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND NOT EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
-		mock.ExpectExec(regexp.QuoteMeta(pruneQuery)).WithArgs(spec.table, spec.column).
-			WillReturnResult(sqlmock.NewResult(0, 0))
 		activeQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
 		count := 0
 		if index == 0 {
@@ -378,6 +376,7 @@ func TestFieldEncryptionQuarantineRequeueAcceptsANewToken(t *testing.T) {
 			WithArgs(1, "enc:v3:primary:", spec.table, spec.column, "", sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}))
 	}
+	expectFieldEncryptionOrphanPrune(mock)
 	checkpoint, err := json.Marshal(fieldEncryptionCheckpoint{
 		Column: 3, AfterID: "stale-position",
 		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint("legacy-jwt-key-material-32-bytes"),
@@ -406,5 +405,13 @@ func expectEmptyLegacyFieldProbe(mock sqlmock.Sqlmock) {
 	for _, spec := range encryptedColumns {
 		query := fmt.Sprintf(`SELECT %s FROM %s WHERE %s IS NOT NULL AND (LEFT(%s, 7) = 'enc:v1:' OR LEFT(%s, 7) = 'enc:v2:') ORDER BY %s LIMIT $1`, spec.column, spec.table, spec.column, spec.column, spec.column, spec.id)
 		mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(fieldEncryptionLegacyProbeRows).WillReturnRows(sqlmock.NewRows([]string{spec.column}))
+	}
+}
+
+func expectFieldEncryptionOrphanPrune(mock sqlmock.Sqlmock) {
+	for _, spec := range encryptedColumns {
+		query := fmt.Sprintf(`DELETE FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND NOT EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
+		mock.ExpectExec(regexp.QuoteMeta(query)).WithArgs(spec.table, spec.column).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 }

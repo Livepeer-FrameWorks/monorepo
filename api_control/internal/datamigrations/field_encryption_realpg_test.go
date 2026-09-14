@@ -58,6 +58,14 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	spec := encryptedColumns[0]
+	const orphanRowID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	if _, err := db.Exec(`INSERT INTO commodore.field_encryption_quarantine
+		(table_name, column_name, row_id, ciphertext_fingerprint, purpose)
+		VALUES ($1, $2, $3, $4, $5)`, spec.table, spec.column,
+		orphanRowID, "orphaned-ciphertext", spec.purpose); err != nil {
+		t.Fatal(err)
+	}
 	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2, Checkpoint: armed.Checkpoint})
 	if err != nil {
 		t.Fatal(err)
@@ -65,23 +73,21 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 	if !progress.Done || progress.Scanned != 0 {
 		t.Fatalf("empty native-keyset sweep did not complete: %+v", progress)
 	}
-	if err := verifyFieldEncryption(context.Background(), db); err != nil {
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFieldEncryption(context.Background(), tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Run("deleted source row does not strand quarantine verification", func(t *testing.T) {
-		spec := encryptedColumns[0]
-		if _, err := db.Exec(`INSERT INTO commodore.field_encryption_quarantine
-			(table_name, column_name, row_id, ciphertext_fingerprint, purpose)
-			VALUES ($1, $2, $3, $4, $5)`, spec.table, spec.column,
-			"ffffffff-ffff-4fff-8fff-ffffffffffff", "orphaned-ciphertext", spec.purpose); err != nil {
-			t.Fatal(err)
-		}
-		if err := verifyFieldEncryption(context.Background(), db); err != nil {
-			t.Fatalf("orphan quarantine row blocked verification: %v", err)
-		}
+	t.Run("writable sweep prunes deleted source quarantine", func(t *testing.T) {
 		var remaining int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM commodore.field_encryption_quarantine WHERE row_id = $1`, "ffffffff-ffff-4fff-8fff-ffffffffffff").Scan(&remaining); err != nil {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM commodore.field_encryption_quarantine WHERE row_id = $1`, orphanRowID).Scan(&remaining); err != nil {
 			t.Fatal(err)
 		}
 		if remaining != 0 {

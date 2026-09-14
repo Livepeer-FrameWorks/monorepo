@@ -293,6 +293,11 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 	if err != nil {
 		return progress, fmt.Errorf("encode field-encryption checkpoint: %w", err)
 	}
+	if done && !opts.DryRun {
+		if err := pruneOrphanFieldEncryptionQuarantine(ctx, db); err != nil {
+			return progress, err
+		}
+	}
 	progress.Checkpoint = encoded
 	progress.Done = done
 	return progress, nil
@@ -412,6 +417,16 @@ func clearFieldEncryptionQuarantine(ctx context.Context, db datamigrate.DB, spec
 	return err
 }
 
+func pruneOrphanFieldEncryptionQuarantine(ctx context.Context, db datamigrate.DB) error {
+	for _, spec := range encryptedColumns {
+		query := fmt.Sprintf(`DELETE FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND NOT EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
+		if _, err := db.ExecContext(ctx, query, spec.table, spec.column); err != nil {
+			return fmt.Errorf("prune %s.%s orphan quarantine: %w", spec.table, spec.column, err)
+		}
+	}
+	return nil
+}
+
 func verifyFieldEncryption(ctx context.Context, db datamigrate.DB) error {
 	var quarantined int64
 	for _, spec := range encryptedColumns {
@@ -426,10 +441,6 @@ func verifyFieldEncryption(ctx context.Context, db datamigrate.DB) error {
 		}
 		if remaining != 0 {
 			return fmt.Errorf("%s.%s has %d legacy rows", spec.table, spec.column, remaining)
-		}
-		pruneQuarantineQuery := fmt.Sprintf(`DELETE FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND NOT EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
-		if _, err := db.ExecContext(ctx, pruneQuarantineQuery, spec.table, spec.column); err != nil {
-			return fmt.Errorf("prune %s.%s orphan quarantine: %w", spec.table, spec.column, err)
 		}
 		activeQuarantineQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s AS quarantine WHERE quarantine.table_name = $1 AND quarantine.column_name = $2 AND EXISTS (SELECT 1 FROM %s AS source WHERE source.%s::text = quarantine.row_id AND source.%s IS NOT NULL AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, fieldEncryptionQuarantineTable, spec.table, spec.id, spec.column, spec.column)
 		var activeForColumn int64
