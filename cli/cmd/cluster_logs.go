@@ -678,6 +678,47 @@ for unit in $units; do
   journal_unit "$unit" || true
 done
 echo
+echo "== yugabyte master consensus diagnostics =="
+if systemctl list-unit-files yb-master.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units yb-master.service --all --no-legend --no-pager >/dev/null 2>&1; then
+  for unit in yb-master.service yb-tserver.service; do
+    echo "-- ${unit} status --"
+    systemctl show "$unit" -p Id -p LoadState -p ActiveState -p SubState -p ExecMainStatus -p MainPID -p NRestarts --no-page 2>/dev/null || true
+    echo "-- ${unit} journal --"
+    journal_unit "$unit" || true
+  done
+  master_conf=/opt/yugabyte/conf/master.conf
+  if [ -f "$master_conf" ]; then
+    echo "-- master configuration --"
+    grep -E '^--(master_addresses|rpc_bind_addresses|server_broadcast_addresses|webserver_interface|webserver_port|replication_factor|placement_)' "$master_conf" 2>/dev/null || true
+    master_addresses="$(sed -n 's/^--master_addresses=//p' "$master_conf" | head -n 1)"
+    web_host="$(sed -n 's/^--webserver_interface=//p' "$master_conf" | head -n 1)"
+    web_port="$(sed -n 's/^--webserver_port=//p' "$master_conf" | head -n 1)"
+    if [ -n "$master_addresses" ] && [ -x /opt/yugabyte/bin/yb-admin ]; then
+      echo "-- live masters --"
+      /opt/yugabyte/bin/yb-admin --master_addresses "$master_addresses" list_all_masters 2>&1 || true
+      echo "-- committed master raft configs --"
+      /opt/yugabyte/bin/yb-admin --master_addresses "$master_addresses" dump_masters_state CONSOLE 2>/dev/null | grep '^Current raft config:' | sort -u || true
+    fi
+    if [ -n "$web_host" ] && [ -n "$web_port" ] && command -v curl >/dev/null 2>&1; then
+      echo "-- master health --"
+      curl -fsS --max-time 5 "http://${web_host}:${web_port}/api/v1/health-check" 2>&1 || true
+      echo
+    fi
+  fi
+  echo "-- recent master warnings --"
+  for file in $(ls -1t /var/lib/yugabyte/data/yb-data/master/logs/yb-master*.WARNING* 2>/dev/null | head -n 2); do
+    echo "### $file"
+    tail -n "$TAIL" "$file" 2>/dev/null || true
+  done
+  echo "-- recent tserver warnings --"
+  for file in $(ls -1t /var/lib/yugabyte/data/yb-data/tserver/logs/yb-tserver*.WARNING* 2>/dev/null | head -n 2); do
+    echo "### $file"
+    tail -n "$TAIL" "$file" 2>/dev/null || true
+  done
+else
+  echo "(yb-master.service not installed)"
+fi
+echo
 echo "== durable trigger WAL diagnostics =="
 if systemctl list-unit-files frameworks-helmsman.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units frameworks-helmsman.service --all --no-legend --no-pager >/dev/null 2>&1; then
   systemctl show frameworks-helmsman.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true

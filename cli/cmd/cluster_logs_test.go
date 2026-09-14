@@ -30,6 +30,12 @@ func TestLogsSnapshotScriptIncludesPrivateerAndRedisDiagnostics(t *testing.T) {
 		"validity=\"expiring_within_36h\"",
 		"-checkend 129600",
 		"not_after=",
+		"== yugabyte master consensus diagnostics ==",
+		"yb-master.service",
+		"list_all_masters",
+		"dump_masters_state CONSOLE",
+		"^Current raft config:",
+		"/api/v1/health-check",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("snapshot script missing %q", want)

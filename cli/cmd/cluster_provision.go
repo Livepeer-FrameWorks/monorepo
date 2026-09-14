@@ -1430,6 +1430,12 @@ done
 		return fmt.Errorf("%d node(s) failed Yugabyte verification:\n  %s", len(failures), strings.Join(failures, "\n  "))
 	}
 
+	consensus, err := auditYugabyteMasterConsensus(ctx, manifest, pool)
+	if err != nil {
+		return fmt.Errorf("master consensus verification failed: %w", err)
+	}
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte master consensus verified: %d live voters match term %d, opid %d", len(consensus.Peers), consensus.Term, consensus.OpID))
+
 	ux.Success(cmd.OutOrStdout(), "Yugabyte cluster verified")
 	return nil
 }

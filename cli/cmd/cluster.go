@@ -886,6 +886,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			// Any tserver serves YSQL; probe every node and report the first
 			// healthy one rather than pinning the (possibly dead) first node.
 			runInfraCheck("Postgres/Yugabyte", checkYugabyteCluster(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
+			runInfraCheck("Yugabyte master consensus", doctorYugabyteMasterConsensus(cmd.Context(), manifest, doctorSSHPool))
 		} else {
 			pgHostName := manifest.Infrastructure.Postgres.Host
 			host, ok := manifest.GetHost(pgHostName)
