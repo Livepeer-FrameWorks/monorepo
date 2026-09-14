@@ -13,14 +13,14 @@ import (
 const claimDueManagedStreamPlacements = `-- name: ClaimDueManagedStreamPlacements :many
 WITH candidates AS (
     SELECT id
-    FROM foghorn.managed_stream_placement_outbox
+    FROM foghorn.managed_stream_active_cluster_outbox
     WHERE next_attempt_at <= NOW()
       AND (lease_until IS NULL OR lease_until <= NOW())
     ORDER BY next_attempt_at, id
     LIMIT $2
     FOR UPDATE SKIP LOCKED
 )
-UPDATE foghorn.managed_stream_placement_outbox AS outbox
+UPDATE foghorn.managed_stream_active_cluster_outbox AS outbox
 SET lease_owner = $1,
     lease_until = NOW() + INTERVAL '30 seconds',
     last_attempt_at = NOW(),
@@ -79,7 +79,7 @@ func (q *Queries) ClaimDueManagedStreamPlacements(ctx context.Context, arg Claim
 }
 
 const deleteDeliveredManagedStreamPlacement = `-- name: DeleteDeliveredManagedStreamPlacement :execrows
-DELETE FROM foghorn.managed_stream_placement_outbox
+DELETE FROM foghorn.managed_stream_active_cluster_outbox
 WHERE id = $1 AND revision = $2
   AND lease_owner = $3
 `
@@ -99,26 +99,26 @@ func (q *Queries) DeleteDeliveredManagedStreamPlacement(ctx context.Context, arg
 }
 
 const enqueueManagedStreamPlacement = `-- name: EnqueueManagedStreamPlacement :exec
-INSERT INTO foghorn.managed_stream_placement_outbox (
+INSERT INTO foghorn.managed_stream_active_cluster_outbox (
     stream_id, tenant_id, cluster_id, desired_active, revision, attempts,
     next_attempt_at, last_attempt_at, created_at, updated_at
 ) VALUES (
     $1::uuid, $2::uuid,
-    $3::uuid, $4,
+    $3, $4,
     1, 0, NOW(), NULL, NOW(), NOW()
 )
 ON CONFLICT (stream_id) DO UPDATE
 SET tenant_id = EXCLUDED.tenant_id,
     cluster_id = EXCLUDED.cluster_id,
     desired_active = EXCLUDED.desired_active,
-    revision = foghorn.managed_stream_placement_outbox.revision + 1,
+    revision = foghorn.managed_stream_active_cluster_outbox.revision + 1,
     attempts = 0,
     next_attempt_at = NOW(),
     last_attempt_at = NULL,
     updated_at = NOW()
-WHERE foghorn.managed_stream_placement_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
-   OR foghorn.managed_stream_placement_outbox.cluster_id IS DISTINCT FROM EXCLUDED.cluster_id
-   OR foghorn.managed_stream_placement_outbox.desired_active IS DISTINCT FROM EXCLUDED.desired_active
+WHERE foghorn.managed_stream_active_cluster_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
+   OR foghorn.managed_stream_active_cluster_outbox.cluster_id IS DISTINCT FROM EXCLUDED.cluster_id
+   OR foghorn.managed_stream_active_cluster_outbox.desired_active IS DISTINCT FROM EXCLUDED.desired_active
 `
 
 type EnqueueManagedStreamPlacementParams struct {
@@ -139,7 +139,7 @@ func (q *Queries) EnqueueManagedStreamPlacement(ctx context.Context, arg Enqueue
 }
 
 const releaseManagedStreamPlacementLease = `-- name: ReleaseManagedStreamPlacementLease :execrows
-UPDATE foghorn.managed_stream_placement_outbox
+UPDATE foghorn.managed_stream_active_cluster_outbox
 SET lease_owner = NULL, lease_until = NULL, next_attempt_at = NOW(), updated_at = NOW()
 WHERE id = $1 AND lease_owner = $2
 `
@@ -158,7 +158,7 @@ func (q *Queries) ReleaseManagedStreamPlacementLease(ctx context.Context, arg Re
 }
 
 const retryManagedStreamPlacement = `-- name: RetryManagedStreamPlacement :execrows
-UPDATE foghorn.managed_stream_placement_outbox
+UPDATE foghorn.managed_stream_active_cluster_outbox
 SET attempts = attempts + 1,
     last_attempt_at = NOW(),
     next_attempt_at = NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * (1 << LEAST(attempts, 8))),

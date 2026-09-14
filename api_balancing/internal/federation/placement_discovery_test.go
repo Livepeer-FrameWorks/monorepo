@@ -95,7 +95,7 @@ func newDiscoveryFixture(t *testing.T) *discoveryFixture {
 	f.discovery.Authority = placementAuthorityReaderFunc(func(ctx context.Context, tenant, object, internal string) (localauthority.PlacementPair, error) {
 		f.calls = append(f.calls, "authority")
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > time.Second || tenant != "tenant" || object != f.pair.Object.AuthorityID || internal != "internal" {
+		if !ok || time.Until(deadline) > placementDiscoveryMaxTimeout || tenant != "tenant" || object != f.pair.Object.AuthorityID || internal != "internal" {
 			t.Fatal("authority read lost identity or deadline")
 		}
 		return f.pair, nil

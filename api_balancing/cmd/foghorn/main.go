@@ -1724,6 +1724,12 @@ func main() {
 			if placementErr := federation.ConfigureLivePlacementDestination(placementDestination, deps); placementErr != nil {
 				logger.WithError(placementErr).Fatal("Invalid live placement destination configuration")
 			}
+			placementReadyCtx, cancelPlacementReady := context.WithTimeout(context.Background(), 10*time.Second)
+			placementReadyErr := placementDestination.Receipts.AwaitReady(placementReadyCtx)
+			cancelPlacementReady()
+			if placementReadyErr != nil {
+				logger.WithError(placementReadyErr).Fatal("Placement receipt coordination is not ready")
+			}
 			if placementErr := triggerProcessor.ConfigureLivePreparedSourceAdmission(placementDestination); placementErr != nil {
 				logger.WithError(placementErr).Fatal("Invalid prepared source admission configuration")
 			}

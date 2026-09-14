@@ -38,10 +38,10 @@ func TestWriterRejectsIncompleteAndPersistsDesiredState(t *testing.T) {
 	if err := writer.Enqueue(context.Background(), "", "tenant", "cluster", true); err == nil {
 		t.Fatal("incomplete placement accepted")
 	}
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.managed_stream_placement_outbox")).
-		WithArgs("10000000-0000-0000-0000-000000000001", "20000000-0000-0000-0000-000000000001", "30000000-0000-0000-0000-000000000001", true).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.managed_stream_active_cluster_outbox")).
+		WithArgs("10000000-0000-0000-0000-000000000001", "20000000-0000-0000-0000-000000000001", "media-eu-1", true).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := writer.Enqueue(context.Background(), "10000000-0000-0000-0000-000000000001", "20000000-0000-0000-0000-000000000001", "30000000-0000-0000-0000-000000000001", true); err != nil {
+	if err := writer.Enqueue(context.Background(), "10000000-0000-0000-0000-000000000001", "20000000-0000-0000-0000-000000000001", "media-eu-1", true); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -60,7 +60,7 @@ func TestWorkerRetriesFailureAndRevisionGuardsSettlement(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "stream_id", "tenant_id", "cluster_id", "desired_active", "revision", "attempts"}).
 		AddRow(int64(9), "stream-1", "tenant-1", "cluster-1", true, int64(4), int32(2))
 	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(32)).WillReturnRows(rows)
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.managed_stream_placement_outbox")).WithArgs(int64(9), int64(4), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.managed_stream_active_cluster_outbox")).WithArgs(int64(9), int64(4), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
 	worker.drain(context.Background())
 	if len(client.recorded) != 1 || len(client.cleared) != 0 {
 		t.Fatalf("delivery calls = record %v clear %v", client.recorded, client.cleared)
@@ -81,7 +81,7 @@ func TestWorkerDeliversClearThenDeletesExactRevision(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "stream_id", "tenant_id", "cluster_id", "desired_active", "revision", "attempts"}).
 		AddRow(int64(8), "stream-1", "tenant-1", "cluster-1", false, int64(7), int32(0))
 	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(32)).WillReturnRows(rows)
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM foghorn.managed_stream_placement_outbox")).WithArgs(int64(8), int64(7), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM foghorn.managed_stream_active_cluster_outbox")).WithArgs(int64(8), int64(7), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
 	worker.drain(context.Background())
 	if len(client.cleared) != 1 || len(client.recorded) != 0 {
 		t.Fatalf("delivery calls = record %v clear %v", client.recorded, client.cleared)

@@ -76,6 +76,30 @@ func primePlacementReceiptEpoch(t testing.TB, store *PlacementReceiptStore) {
 	}
 }
 
+func TestPlacementReceiptEpochCanBePreparedBeforeAdmission(t *testing.T) {
+	now := time.Unix(1800000000, 123000000).UTC()
+	server := miniredis.RunT(t)
+	placementReceiptEngineInfo(server, "a", "b", "0", "master")
+	server.SetTime(now)
+	client := goredis.NewClient(&goredis.Options{Addr: server.Addr(), MaxRetries: -1})
+	t.Cleanup(func() { _ = client.Close() })
+	store := &PlacementReceiptStore{Client: client, CellID: "us-cell", Now: func() time.Time { return now }}
+
+	delay, err := store.epochReadyDelay(context.Background())
+	if err != nil || delay != 2*placement.PreparationClockSkew+time.Millisecond {
+		t.Fatalf("initial epoch delay = %s, %v", delay, err)
+	}
+	now = now.Add(delay)
+	server.SetTime(now)
+	delay, err = store.epochReadyDelay(context.Background())
+	if err != nil || delay != 0 {
+		t.Fatalf("prepared epoch delay = %s, %v", delay, err)
+	}
+	if receipt, beginErr := store.Begin(context.Background(), placementReceiptRequest(t, now)); beginErr != nil || !receipt.Fresh {
+		t.Fatalf("prepared epoch rejected first placement: %+v, %v", receipt, beginErr)
+	}
+}
+
 func placementReceiptPull() *PlacementPullBinding {
 	return &PlacementPullBinding{AttemptID: "10000000-0000-4000-8000-000000000001", SourceCellID: "eu-cell",
 		DestinationFence: 9007199254740993,

@@ -126,6 +126,25 @@ func TestPlacementObservationWaiterCancellationDoesNotCancelSharedRead(t *testin
 	}
 }
 
+func TestPlacementObservationCachePreservesCallerDeadline(t *testing.T) {
+	cache := NewPlacementObservationCache(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	value, err := cache.observe(ctx, placementObservationKey{}, func(loadCtx context.Context) (balancer.PlacementCellObservation, error) {
+		select {
+		case <-time.After(1100 * time.Millisecond):
+			now := time.Now()
+			return balancer.PlacementCellObservation{Complete: true, ObservedAt: now, ExpiresAt: now.Add(time.Second)}, nil
+		case <-loadCtx.Done():
+			return balancer.PlacementCellObservation{}, loadCtx.Err()
+		}
+	})
+	if err != nil || !value.Complete || time.Since(started) < time.Second {
+		t.Fatalf("shared observation truncated the caller deadline: %+v %v", value, err)
+	}
+}
+
 func TestPlacementObservationCacheBoundsRetainedEntriesAndCandidates(t *testing.T) {
 	now := time.Now()
 	for _, count := range []int{0, 4096} {

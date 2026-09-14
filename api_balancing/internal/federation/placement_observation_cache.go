@@ -13,6 +13,7 @@ import (
 
 const (
 	placementObservationReuse      = time.Second
+	placementObservationLoadMax    = 5 * time.Second
 	placementObservationEntries    = 128
 	placementObservationCandidates = 16384
 )
@@ -79,8 +80,16 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 		flight = &placementObservationFlight{done: make(chan struct{})}
 		cache.flights[key] = flight
 		// A canceled viewer must not cancel the shared read for other viewers.
-		// The detached read has its own fixed peer deadline and a bounded slot.
-		sharedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		// Preserve the routing deadline when detaching cancellation so the cache
+		// cannot silently truncate the caller's observation budget.
+		sharedBase := context.WithoutCancel(ctx)
+		var sharedCtx context.Context
+		var cancel context.CancelFunc
+		if deadline, ok := ctx.Deadline(); ok {
+			sharedCtx, cancel = context.WithDeadline(sharedBase, deadline)
+		} else {
+			sharedCtx, cancel = context.WithTimeout(sharedBase, placementObservationLoadMax)
+		}
 		go func() {
 			defer cancel()
 			value, err := load(sharedCtx)

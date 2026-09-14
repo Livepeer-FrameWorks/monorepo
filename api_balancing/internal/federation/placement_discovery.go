@@ -51,6 +51,8 @@ type PlacementDiscovery struct {
 	Now       func() time.Time
 }
 
+const placementDiscoveryMaxTimeout = 5 * time.Second
+
 func (discovery *PlacementDiscovery) QueryPlacementCandidates(ctx context.Context, req *placementpb.CandidateQuery) (*placementpb.CandidateObservation, error) {
 	if err := placement.ValidateCandidateQuery(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid placement query")
@@ -58,7 +60,10 @@ func (discovery *PlacementDiscovery) QueryPlacementCandidates(ctx context.Contex
 	if discovery == nil || discovery.CellID == "" || discovery.Authority == nil || discovery.Inventory == nil || discovery.Paths == nil || discovery.Snapshot == nil {
 		return nil, status.Error(codes.Unavailable, "placement discovery is not ready")
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	// Public and routing callers already carry a tighter end-to-end deadline.
+	// Keep a ceiling for direct/internal callers, but do not replace the caller's
+	// observation budget with a shorter dependency-local timer.
+	ctx, cancel := context.WithTimeout(ctx, placementDiscoveryMaxTimeout)
 	defer cancel()
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, status.FromContextError(contextErr).Err()

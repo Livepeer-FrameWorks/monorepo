@@ -1060,11 +1060,11 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_push_target_status_outbox_due
 -- Latest desired central placement projection for a managed/native stream.
 -- The media decision is local; this outbox makes Commodore's routing column a
 -- recoverable projection rather than a request-path dependency.
-CREATE TABLE IF NOT EXISTS foghorn.managed_stream_placement_outbox (
+CREATE TABLE IF NOT EXISTS foghorn.managed_stream_active_cluster_outbox (
     id BIGSERIAL PRIMARY KEY,
     stream_id UUID NOT NULL UNIQUE,
     tenant_id UUID NOT NULL,
-    cluster_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL,
     desired_active BOOLEAN NOT NULL,
     revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
@@ -1076,8 +1076,8 @@ CREATE TABLE IF NOT EXISTS foghorn.managed_stream_placement_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_managed_stream_placement_outbox_due
-    ON foghorn.managed_stream_placement_outbox(next_attempt_at, id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_managed_stream_active_cluster_outbox_due
+    ON foghorn.managed_stream_active_cluster_outbox(next_attempt_at, id);
 
 -- Latest ConfigSeed apply result accepted from each Helmsman node. Foghorn is
 -- the media-local durability boundary; Navigator delivery may lag control-plane

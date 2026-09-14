@@ -15,7 +15,6 @@ import (
 const (
 	placementRouteTimeout       = 5 * time.Second
 	placementDiscoveryTimeout   = 2 * time.Second
-	placementPeerTimeout        = time.Second
 	placementFanout             = 4
 	placementMaxCells           = 64
 	placementMaxPrepareAttempts = 8
@@ -257,13 +256,11 @@ func (router PlacementRouter) observePlacement(ctx context.Context, req Placemen
 	for range min(placementFanout, len(req.Cells)) {
 		group.Go(func() {
 			for index := range work {
-				peerCtx, peerCancel := context.WithTimeout(discoveryCtx, placementPeerTimeout)
-				if peerCtx.Err() != nil {
-					errs[index] = peerCtx.Err()
+				if discoveryCtx.Err() != nil {
+					errs[index] = discoveryCtx.Err()
 				} else {
-					observations[index], errs[index] = router.Observe(peerCtx, req.Cells[index], req)
+					observations[index], errs[index] = router.Observe(discoveryCtx, req.Cells[index], req)
 				}
-				peerCancel()
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -132,6 +133,82 @@ if operation == 'finish' then
 end
 return {'invalid'}
 `)
+
+var placementReceiptEpochScript = goredis.NewScript(`
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local skew = tonumber(ARGV[1])
+local server = redis.call('INFO', 'server')
+local replication = redis.call('INFO', 'replication')
+local stats = redis.call('INFO', 'stats')
+local runID = string.match(server, '\r?\nrun_id:(%x+)\r?\n')
+local replID = string.match(replication, '\r?\nmaster_replid:(%x+)\r?\n')
+local role = string.match(replication, '\r?\nrole:(%a+)\r?\n')
+local evicted = string.match(stats, '\r?\nevicted_keys:(%d+)\r?\n')
+if not runID or #runID ~= 40 or not replID or #replID ~= 40 or role ~= 'master' or not evicted then
+  return {'unavailable'}
+end
+local incarnation = runID .. ':' .. replID .. ':' .. evicted
+local recorded = redis.call('HGET', KEYS[1], 'incarnation')
+local watermark = redis.call('HGET', KEYS[1], 'not_before')
+if recorded ~= incarnation or not watermark or not string.match(watermark, '^%d+$') then
+  local notBefore = now + 2 * skew + 1
+  redis.call('HSET', KEYS[1], 'incarnation', incarnation, 'not_before', notBefore)
+  return {'wait', tostring(notBefore - now)}
+end
+local notBefore = tonumber(watermark)
+if not notBefore then return {'unavailable'} end
+if notBefore <= now then return {'ready'} end
+return {'wait', tostring(notBefore - now)}
+`)
+
+// AwaitReady establishes and observes the Redis incarnation fence before this
+// replica advertises placement enforcement. The fence still resets on a later
+// Redis primary change, so requests issued before that change remain rejected.
+func (store *PlacementReceiptStore) AwaitReady(ctx context.Context) error {
+	for {
+		delay, err := store.epochReadyDelay(ctx)
+		if err != nil {
+			return err
+		}
+		if delay == 0 {
+			return nil
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (store *PlacementReceiptStore) epochReadyDelay(ctx context.Context) (time.Duration, error) {
+	if store == nil || store.Client == nil || store.CellID == "" || strings.ContainsAny(store.CellID, "{}") {
+		return 0, ErrPlacementReceiptUnavailable
+	}
+	epochKey := fmt.Sprintf("{%s}:placement_attempt_epoch", store.CellID)
+	values, err := placementReceiptEpochScript.Run(ctx, store.Client, []string{epochKey}, placement.PreparationClockSkew.Milliseconds()).StringSlice()
+	if err != nil || len(values) == 0 {
+		return 0, ErrPlacementReceiptUnavailable
+	}
+	switch values[0] {
+	case "ready":
+		return 0, nil
+	case "wait":
+		if len(values) != 2 {
+			return 0, ErrPlacementReceiptUnavailable
+		}
+		millis, parseErr := strconv.ParseInt(values[1], 10, 64)
+		if parseErr != nil || millis <= 0 || millis > 2*placement.PreparationClockSkew.Milliseconds()+1 {
+			return 0, ErrPlacementReceiptUnavailable
+		}
+		return time.Duration(millis) * time.Millisecond, nil
+	default:
+		return 0, ErrPlacementReceiptUnavailable
+	}
+}
 
 // Begin records immutable intent before preparation effects. A non-fresh pending
 // receipt requires reconciliation, not an unconditional second start.

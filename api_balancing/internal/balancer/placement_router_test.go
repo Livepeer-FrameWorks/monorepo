@@ -348,3 +348,19 @@ func TestPlacementRouterDiscoveryLeavesBudgetForHealthyDestination(t *testing.T)
 		t.Fatalf("healthy same-priority destination lost after peer timeout: %+v %v", result, err)
 	}
 }
+
+func TestPlacementRouterUsesTheFullDiscoveryBudgetForEveryCell(t *testing.T) {
+	req, router, observations := placementRouteFixture()
+	router.Observe = func(ctx context.Context, cell PlacementCell, _ PlacementRouteRequest) (PlacementCellObservation, error) {
+		select {
+		case <-time.After(1100 * time.Millisecond):
+			return observations[cell.ID], nil
+		case <-ctx.Done():
+			return PlacementCellObservation{}, ctx.Err()
+		}
+	}
+	result, err := router.Route(context.Background(), req)
+	if err != nil || result.Preparation.ClusterID != "us" || !result.Decision.Complete {
+		t.Fatalf("healthy cells were cut off before the discovery deadline: %+v %v", result, err)
+	}
+}
