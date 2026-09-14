@@ -74,12 +74,18 @@ FOR UPDATE;
 -- name: RefreshPrimaryStreamKey :execrows
 UPDATE commodore.streams
 SET stream_key = $1, updated_at = NOW()
-WHERE id = $2 AND user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL;
+WHERE id = $2 AND user_id = $3 AND tenant_id = $4
+  AND ingest_mode = 'push' AND deleted_at IS NULL;
 
 -- name: GetStreamPlaybackID :one
 SELECT playback_id
 FROM commodore.streams
 WHERE id = $1 AND user_id = $2 AND tenant_id = $3;
+
+-- name: GetStreamIngestModeForUser :one
+SELECT ingest_mode
+FROM commodore.streams
+WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL;
 
 -- name: StreamExistsForUser :one
 SELECT EXISTS (

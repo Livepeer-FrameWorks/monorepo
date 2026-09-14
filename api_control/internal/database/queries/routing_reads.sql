@@ -27,7 +27,7 @@ WHERE internal_name = $1 AND deleted_at IS NULL;
 SELECT tenant_id, active_ingest_cluster_id,
        COALESCE(active_ingest_cluster_updated_at > NOW() - ($2::bigint * INTERVAL '1 second'), false)::boolean AS lease_fresh
 FROM commodore.streams
-WHERE stream_key = $1 AND deleted_at IS NULL;
+WHERE stream_key = $1 AND ingest_mode = 'push' AND deleted_at IS NULL;
 
 -- name: GetArtifactRouteByContent :one
 SELECT tenant_id, COALESCE(cluster_id::text, '')::text AS cluster_id

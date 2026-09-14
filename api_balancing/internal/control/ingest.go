@@ -151,9 +151,9 @@ func (d *IngestDenial) Error() string { return d.Code + ": " + d.Message }
 // alone, because admission facts arrive in three shapes: a nil response, the
 // ingest mode, and the enum.
 //
-// Order matters. Pull-mode is checked before the admitted short-circuit: a
-// pull stream is legitimately admitted (Commodore admits it for playback and
-// materialization) yet must never accept a push. Returns nil when admitted.
+// Order matters. Source mode is checked before the admitted short-circuit:
+// non-push streams may be admitted for playback or materialization but must
+// never accept publisher ingest. Returns nil when admitted.
 func EvaluateIngestAdmission(resp *commodorepb.ResolveStreamContextResponse) *IngestDenial {
 	if resp == nil {
 		return &IngestDenial{
@@ -164,12 +164,13 @@ func EvaluateIngestAdmission(resp *commodorepb.ResolveStreamContextResponse) *In
 		}
 	}
 
-	if strings.EqualFold(strings.TrimSpace(resp.GetIngestMode()), "pull") {
+	mode := strings.ToLower(strings.TrimSpace(resp.GetIngestMode()))
+	if mode != "" && mode != "push" {
 		return &IngestDenial{
 			HTTPStatus: 409,
-			Code:       "PULL_MODE_STREAM",
+			Code:       "NON_PUSH_MODE_STREAM",
 			GRPCCode:   codes.FailedPrecondition,
-			Message:    "pull streams do not accept push ingest",
+			Message:    "this source mode does not accept push ingest",
 		}
 	}
 
@@ -190,8 +191,8 @@ func EvaluateIngestAdmission(resp *commodorepb.ResolveStreamContextResponse) *In
 		return denial(404, "INVALID_STREAM_KEY", codes.NotFound, "invalid stream key")
 	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE:
 		return denial(403, "ACCOUNT_INACTIVE", codes.PermissionDenied, "account is inactive")
-	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE:
-		return denial(409, "PULL_MODE_STREAM", codes.FailedPrecondition, "pull streams do not accept push ingest")
+	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE:
+		return denial(409, "NON_PUSH_MODE_STREAM", codes.FailedPrecondition, "this source mode does not accept push ingest")
 	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED:
 		return denial(403, "ACCOUNT_SUSPENDED", codes.PermissionDenied, "account suspended")
 	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE:

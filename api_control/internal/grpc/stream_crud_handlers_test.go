@@ -6,33 +6,64 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 )
 
+func TestStreamFromConfigRowManagedSource(t *testing.T) {
+	s := &CommodoreServer{}
+	stream, err := s.streamFromConfigRow(commodoredb.StreamConfigRow{
+		ID: "s1", InternalName: "loop", StreamKey: "unused-secret", PlaybackID: "pb1",
+		Title: "Platform loop", IngestMode: "mist_native",
+		CreatedAt:                sql.NullTime{Time: fixedTS, Valid: true},
+		UpdatedAt:                sql.NullTime{Time: fixedTS, Valid: true},
+		ManagedSourceKind:        sql.NullString{String: "playlist", Valid: true},
+		ManagedAlwaysOn:          true,
+		ManagedPlacementCount:    sql.NullInt32{Int32: 1, Valid: true},
+		ManagedAllowedClusterIDs: []string{"media-eu"},
+	})
+	if err != nil {
+		t.Fatalf("streamFromConfigRow: %v", err)
+	}
+	if stream.GetIngestMode() != "mist_native" || stream.GetPullSource() != nil {
+		t.Fatalf("unexpected source mode mapping: %+v", stream)
+	}
+	managed := stream.GetManagedSource()
+	if managed == nil || managed.GetSourceKind() != "playlist" || !managed.GetAlwaysOn() {
+		t.Fatalf("managed source = %+v", managed)
+	}
+	if managed.GetPlacementCount() != 1 || len(managed.GetAllowedClusterIds()) != 1 || managed.GetAllowedClusterIds()[0] != "media-eu" {
+		t.Fatalf("managed placement summary = %+v", managed)
+	}
+}
+
 var fixedTS = time.Unix(1700000000, 0).UTC()
 
-// streamListCols mirrors the 17-column projection scanStream reads in
+// streamListCols mirrors the stream projection used by list and point reads.
 // ListStreams (push stream → pull-source columns NULL).
 func pushListRow() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "internal_name", "stream_key", "playback_id", "title", "description",
 		"is_recording_enabled", "created_at", "updated_at", "ingest_mode",
-		"source_uri_enc", "enabled", "allowed_cluster_ids", "active_ingest_cluster_id",
+		"source_uri_enc", "enabled", "pull_allowed_cluster_ids",
+		"managed_source_kind", "managed_always_on", "managed_placement_count",
+		"managed_allowed_cluster_ids", "active_ingest_cluster_id",
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
 		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
 }
 
-// pushFullRow mirrors the 19-column projection queryStream reads after an
-// UpdateStream commit.
+// pushFullRow mirrors the projection queryStream reads after an UpdateStream commit.
 func pushFullRow() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "internal_name", "stream_key", "playback_id", "title", "description",
 		"is_recording_enabled", "created_at", "updated_at", "ingest_mode",
-		"source_uri_enc", "enabled", "allowed_cluster_ids", "active_ingest_cluster_id",
+		"source_uri_enc", "enabled", "pull_allowed_cluster_ids",
+		"managed_source_kind", "managed_always_on", "managed_placement_count",
+		"managed_allowed_cluster_ids", "active_ingest_cluster_id",
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
 		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
@@ -179,7 +210,7 @@ func TestUpdateStream(t *testing.T) {
 			WillReturnRows(pushFullRow().AddRow(
 				"s1", "live+abc", "key-1", "pb-1", "New Title", nil,
 				false, fixedTS, fixedTS, "push",
-				nil, nil, "{}", nil,
+				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, nil))
 
 		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
@@ -210,7 +241,7 @@ func TestUpdateStream(t *testing.T) {
 			WillReturnRows(pushFullRow().AddRow(
 				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
 				false, fixedTS, fixedTS, "push",
-				nil, nil, "{}", nil,
+				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, nil))
 
 		if _, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{StreamId: "s1"}); err != nil {
@@ -243,7 +274,7 @@ func TestUpdateStream(t *testing.T) {
 			WillReturnRows(pushFullRow().AddRow(
 				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
 				false, fixedTS, fixedTS, "push",
-				nil, nil, "{}", nil,
+				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, false))
 
 		monitoring := commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
@@ -339,8 +370,8 @@ func TestListStreams(t *testing.T) {
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
 			WithArgs("u1", "t1", false, "", int32(51)).
 			WillReturnRows(pushListRow().
-				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil, nil, nil).
-				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil, nil, nil))
+				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil).
+				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.ListStreams(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamsRequest{})
 		if err != nil {

@@ -179,8 +179,31 @@ func TestValidateStreamKey(t *testing.T) {
 				if resp.Valid {
 					t.Fatalf("expected invalid response")
 				}
-				if resp.Error != "Pull streams do not accept push ingest" {
+				if resp.Error != "This source mode does not accept push ingest" {
 					t.Fatalf("unexpected error message: %q", resp.Error)
+				}
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE {
+					t.Fatalf("unexpected rejection reason: %s", resp.RejectionReason)
+				}
+			},
+		},
+		{
+			name: "managed_stream_rejects_push_ingest",
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "managed-key"},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "mist_native")
+				mock.ExpectQuery("FROM commodore.streams").WithArgs("managed-key").WillReturnRows(rows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp.Valid {
+					t.Fatal("expected managed stream key to be rejected")
+				}
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE {
+					t.Fatalf("unexpected rejection reason: %s", resp.RejectionReason)
 				}
 			},
 		},

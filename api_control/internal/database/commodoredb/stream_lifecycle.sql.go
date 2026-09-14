@@ -145,6 +145,25 @@ func (q *Queries) GetStreamForDeletion(ctx context.Context, arg GetStreamForDele
 	return i, err
 }
 
+const getStreamIngestModeForUser = `-- name: GetStreamIngestModeForUser :one
+SELECT ingest_mode
+FROM commodore.streams
+WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL
+`
+
+type GetStreamIngestModeForUserParams struct {
+	ID       string `db:"id" json:"id"`
+	UserID   string `db:"user_id" json:"user_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) GetStreamIngestModeForUser(ctx context.Context, arg GetStreamIngestModeForUserParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getStreamIngestModeForUser, arg.ID, arg.UserID, arg.TenantID)
+	var ingest_mode string
+	err := row.Scan(&ingest_mode)
+	return ingest_mode, err
+}
+
 const getStreamPlaybackID = `-- name: GetStreamPlaybackID :one
 SELECT playback_id
 FROM commodore.streams
@@ -490,7 +509,8 @@ func (q *Queries) MarkCreatedStreamPull(ctx context.Context, arg MarkCreatedStre
 const refreshPrimaryStreamKey = `-- name: RefreshPrimaryStreamKey :execrows
 UPDATE commodore.streams
 SET stream_key = $1, updated_at = NOW()
-WHERE id = $2 AND user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL
+WHERE id = $2 AND user_id = $3 AND tenant_id = $4
+  AND ingest_mode = 'push' AND deleted_at IS NULL
 `
 
 type RefreshPrimaryStreamKeyParams struct {

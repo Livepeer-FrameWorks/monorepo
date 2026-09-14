@@ -1825,11 +1825,11 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
 		}, nil
 	}
-	if admission.IngestMode == "pull" {
+	if normalizeIngestMode(admission.IngestMode) != "push" {
 		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
-			Error:           "Pull streams do not accept push ingest",
-			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
+			Error:           "This source mode does not accept push ingest",
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE,
 		}, nil
 	}
 
@@ -2177,6 +2177,12 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		resp.Admitted = false
 		resp.AdmissionReason = "User account is inactive"
 		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
+		return resp, nil
+	}
+	if identifierIsPublishIntent && normalizeIngestMode(resolved.IngestMode) != "push" {
+		resp.Admitted = false
+		resp.AdmissionReason = "This source mode does not accept push ingest"
+		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE
 		return resp, nil
 	}
 
@@ -7154,6 +7160,10 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	if streamID == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
+	queries := commodoredb.New(s.db)
+	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
+		return nil, validationErr
+	}
 
 	// Generate new stream key
 	newStreamKey, err := generateStreamKey()
@@ -7162,7 +7172,6 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	}
 
 	// Update the stream (a deletion-pending stream is not actionable — do not rotate its key).
-	queries := commodoredb.New(s.db)
 	rows, err := queries.RefreshPrimaryStreamKey(ctx, commodoredb.RefreshPrimaryStreamKeyParams{
 		StreamKey: newStreamKey, ID: streamID, UserID: userID, TenantID: tenantID,
 	})
@@ -7196,6 +7205,22 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 // STREAM KEY SERVICE (Gateway → Commodore for multi-key management)
 // ============================================================================
 
+func requirePushStream(ctx context.Context, queries *commodoredb.Queries, streamID, userID, tenantID string) error {
+	mode, err := queries.GetStreamIngestModeForUser(ctx, commodoredb.GetStreamIngestModeForUserParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.NotFound, "stream not found")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if normalizeIngestMode(mode) != "push" {
+		return status.Error(codes.FailedPrecondition, "stream keys are only available for push streams")
+	}
+	return nil
+}
+
 // CreateStreamKey creates a new stream key for a stream
 func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.CreateStreamKeyRequest) (*commodorepb.StreamKeyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
@@ -7209,14 +7234,8 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 	}
 
 	queries := commodoredb.New(s.db)
-	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
-		ID: streamID, UserID: userID, TenantID: tenantID,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !exists {
-		return nil, status.Error(codes.NotFound, "stream not found")
+	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
+		return nil, validationErr
 	}
 	// Generate new key
 	keyID := uuid.New().String()
@@ -7269,14 +7288,8 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.L
 	}
 
 	queries := commodoredb.New(s.db)
-	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
-		ID: streamID, UserID: userID, TenantID: tenantID,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !exists {
-		return nil, status.Error(codes.NotFound, "stream not found")
+	if validationErr := requirePushStream(ctx, queries, streamID, userID, tenantID); validationErr != nil {
+		return nil, validationErr
 	}
 
 	// Parse bidirectional pagination
@@ -7392,14 +7405,8 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 	}
 
 	queries := commodoredb.New(s.db)
-	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
-		ID: req.GetStreamId(), UserID: userID, TenantID: tenantID,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !exists {
-		return nil, status.Error(codes.NotFound, "stream not found")
+	if validationErr := requirePushStream(ctx, queries, req.GetStreamId(), userID, tenantID); validationErr != nil {
+		return nil, validationErr
 	}
 
 	rows, err := queries.DeactivateStreamKey(ctx, commodoredb.DeactivateStreamKeyParams{
@@ -8479,7 +8486,15 @@ func (s *CommodoreServer) streamFromConfigRow(row commodoredb.StreamConfigRow) (
 		if classErr != nil {
 			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
 		}
-		stream.PullSource = buildPullSourceView(sourceURI, row.PullEnabled.Bool, class, row.AllowedClusterIDs)
+		stream.PullSource = buildPullSourceView(sourceURI, row.PullEnabled.Bool, class, row.PullAllowedClusterIDs)
+	}
+	if stream.IngestMode == "mist_native" && row.ManagedSourceKind.Valid {
+		stream.ManagedSource = &commodorepb.ManagedSourceView{
+			SourceKind:        row.ManagedSourceKind.String,
+			AlwaysOn:          row.ManagedAlwaysOn,
+			PlacementCount:    row.ManagedPlacementCount.Int32,
+			AllowedClusterIds: row.ManagedAllowedClusterIDs,
+		}
 	}
 
 	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(row.ActiveIngestClusterID, stream.StreamId)

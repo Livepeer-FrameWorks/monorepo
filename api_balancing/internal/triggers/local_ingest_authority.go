@@ -81,9 +81,9 @@ func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential stri
 	if payload != nil && live != nil && payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && live.GetIngestMode() != "push" {
 		p.observeMediaAuthorityLocalRead("publishing_credential", "denied")
 		return &commodorepb.ValidateStreamKeyResponse{
-			Valid: false, Error: "Stream is configured for pull ingest", TenantId: payload.GetTenantId(), UserId: payload.GetUserId(),
+			Valid: false, Error: "This source mode does not accept push ingest", TenantId: payload.GetTenantId(), UserId: payload.GetUserId(),
 			StreamId: live.GetStreamId(), PlaybackId: payload.GetPlaybackId(), InternalName: payload.GetInternalName(),
-			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE,
 		}, result, true, nil
 	}
 	if payload == nil || live == nil || payload.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||

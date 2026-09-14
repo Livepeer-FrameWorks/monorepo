@@ -375,7 +375,7 @@ enum StreamKeyRejectionReason {
   STREAM_KEY_REJECTION_UNSPECIFIED = 0;
   STREAM_KEY_REJECTION_INVALID_KEY = 1;
   STREAM_KEY_REJECTION_USER_INACTIVE = 2;
-  STREAM_KEY_REJECTION_PULL_MODE = 3;
+  STREAM_KEY_REJECTION_NON_PUSH_MODE = 3;
   STREAM_KEY_REJECTION_TENANT_SUSPENDED = 4;
   STREAM_KEY_REJECTION_BALANCE_NEGATIVE = 5;
   STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED = 6;
@@ -1742,7 +1742,7 @@ message Stream {
   int32 peak_viewers = 17;              // json:"peak_viewers" - enriched from Periscope
   string stream_id = 18;                // public UUID
   reserved 19; // was thumbnail_url — thumbnails now resolved via deterministic Chandler URL
-  string ingest_mode = 20;              // "push" (default) or "pull"
+  string ingest_mode = 20;              // "push" (default), "pull", or "mist_native"
   PullSourceView pull_source = 21;      // redacted pull-source config for pull streams
   // active_ingest_cluster_id is the cluster currently sinking ingest for the
   // stream (set by ValidateStreamKey, cleared when the session ends). When
@@ -1768,6 +1768,7 @@ message Stream {
   // Per-stream Skipper monitoring override. Always set on reads; INHERIT when
   // the column is NULL. See MonitoringToggle.
   MonitoringToggle monitoring = 29;
+  ManagedSourceView managed_source = 30; // set only for mist_native streams
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -1794,6 +1795,16 @@ message PullSourceView {
   // Effective per-source placement pin. Surfaced so operators and admin UIs
   // can inspect placement without having to read SQL.
   repeated string allowed_cluster_ids = 4;
+}
+
+// Safe operator-facing summary for a Mist-managed source. The literal source
+// specification is intentionally excluded because it may contain filesystem
+// paths, command arguments, or credentials.
+message ManagedSourceView {
+  string source_kind = 1;                  // "file" | "playlist" | "exec"
+  bool always_on = 2;
+  int32 placement_count = 3;
+  repeated string allowed_cluster_ids = 4; // source-materialization clusters
 }
 
 message ListStreamsRequest {

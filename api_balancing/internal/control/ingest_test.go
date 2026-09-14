@@ -371,10 +371,10 @@ func TestEvaluateIngestAdmission_ReasonMapping(t *testing.T) {
 			wantDenied: true,
 		},
 		{
-			name:       "pull mode reason",
-			resp:       denied(commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE),
+			name:       "non-push mode reason",
+			resp:       denied(commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE),
 			wantHTTP:   409,
-			wantCode:   "PULL_MODE_STREAM",
+			wantCode:   "NON_PUSH_MODE_STREAM",
 			wantGRPC:   codes.FailedPrecondition,
 			wantDenied: true,
 		},
@@ -469,19 +469,22 @@ func TestEvaluateIngestAdmission_ReasonMapping(t *testing.T) {
 	}
 }
 
-// Precedence guard: Commodore admits pull streams (they are valid for playback
-// and materialization), so an admitted-plus-pull response must still be refused
-// for publishing. Checking `admitted` first would silently accept it.
-func TestEvaluateIngestAdmission_AdmittedPullStreamStillDenied(t *testing.T) {
-	resp := admittedCtx("t1")
-	resp.IngestMode = "pull"
+// Precedence guard: non-push streams can be valid for playback and
+// materialization, so admission for those purposes must not authorize publishing.
+func TestEvaluateIngestAdmission_AdmittedNonPushStreamStillDenied(t *testing.T) {
+	for _, mode := range []string{"pull", "mist_native"} {
+		t.Run(mode, func(t *testing.T) {
+			resp := admittedCtx("t1")
+			resp.IngestMode = mode
 
-	denial := EvaluateIngestAdmission(resp)
-	if denial == nil {
-		t.Fatal("admitted pull stream must not accept push ingest")
-	}
-	if denial.Code != "PULL_MODE_STREAM" {
-		t.Fatalf("got %q want PULL_MODE_STREAM", denial.Code)
+			denial := EvaluateIngestAdmission(resp)
+			if denial == nil {
+				t.Fatalf("admitted %s stream must not accept push ingest", mode)
+			}
+			if denial.Code != "NON_PUSH_MODE_STREAM" {
+				t.Fatalf("got %q want NON_PUSH_MODE_STREAM", denial.Code)
+			}
+		})
 	}
 }
 

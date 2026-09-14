@@ -22,7 +22,7 @@ func TestIngestErrorCodeForStreamKeyRejection(t *testing.T) {
 		{"unspecified", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED, ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"invalid key", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY, ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY},
 		{"inactive user", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE, ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED},
-		{"pull mode", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE, ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY},
+		{"non-push mode", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE, ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY},
 		{"tenant suspended", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED, ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED},
 		{"negative balance", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE, ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED},
 		{"cluster not entitled", commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED, ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY},

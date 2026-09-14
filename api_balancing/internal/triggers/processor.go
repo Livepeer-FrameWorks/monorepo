@@ -1564,7 +1564,7 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 func ingestErrorCodeForStreamKeyRejection(reason commodorepb.StreamKeyRejectionReason) ipcpb.IngestErrorCode {
 	switch reason {
 	case commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
-		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
+		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE,
 		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
 		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH,
 		commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED:

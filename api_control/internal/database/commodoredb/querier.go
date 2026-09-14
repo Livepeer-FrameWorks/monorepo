@@ -136,6 +136,7 @@ type Querier interface {
 	GetStreamFinalizationUser(ctx context.Context, arg GetStreamFinalizationUserParams) (string, error)
 	GetStreamForDeletion(ctx context.Context, arg GetStreamForDeletionParams) (GetStreamForDeletionRow, error)
 	GetStreamIDForDVRRegistration(ctx context.Context, arg GetStreamIDForDVRRegistrationParams) (string, error)
+	GetStreamIngestModeForUser(ctx context.Context, arg GetStreamIngestModeForUserParams) (string, error)
 	GetStreamPlaybackID(ctx context.Context, arg GetStreamPlaybackIDParams) (string, error)
 	GetStreamPolicyForBundle(ctx context.Context, streamID string) (GetStreamPolicyForBundleRow, error)
 	GetStreamPolicyScopeName(ctx context.Context, arg GetStreamPolicyScopeNameParams) (string, error)

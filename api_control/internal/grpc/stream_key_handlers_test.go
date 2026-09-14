@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -12,6 +13,18 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func expectPushStream(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("SELECT ingest_mode").
+		WithArgs("s1", "u1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"ingest_mode"}).AddRow("push"))
+}
+
+func expectMissingStream(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("SELECT ingest_mode").
+		WithArgs("s1", "u1", "t1").
+		WillReturnError(sql.ErrNoRows)
+}
 
 // newMockServer builds a CommodoreServer wired only to a sqlmock DB.
 // The nilable cross-service clients (purser/foghorn/quartermaster/...) stay nil
@@ -59,6 +72,7 @@ func TestRefreshStreamKey(t *testing.T) {
 	t.Run("not_found_when_no_rows_updated", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		expectPushStream(mock)
 		mock.ExpectExec("UPDATE commodore.streams").
 			WithArgs(sqlmock.AnyArg(), "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -72,6 +86,7 @@ func TestRefreshStreamKey(t *testing.T) {
 	t.Run("happy_path_rotates_key_and_emits", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		expectPushStream(mock)
 		mock.ExpectExec("UPDATE commodore.streams").
 			WithArgs(sqlmock.AnyArg(), "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
@@ -119,9 +134,7 @@ func TestCreateStreamKey(t *testing.T) {
 	t.Run("not_found_when_not_owner", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		expectMissingStream(mock)
 		_, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -132,9 +145,7 @@ func TestCreateStreamKey(t *testing.T) {
 	t.Run("happy_path_inserts_active_key", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		expectPushStream(mock)
 		mock.ExpectExec("INSERT INTO commodore.stream_keys").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectOutboxInsert(mock)
@@ -160,6 +171,16 @@ func TestCreateStreamKey(t *testing.T) {
 			t.Fatalf("expectations: %v", err)
 		}
 	})
+
+	t.Run("managed_stream_rejects_publisher_key", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery("SELECT ingest_mode").
+			WithArgs("s1", "u1", "t1").
+			WillReturnRows(sqlmock.NewRows([]string{"ingest_mode"}).AddRow("mist_native"))
+		_, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
+		wantCode(t, err, codes.FailedPrecondition)
+	})
 }
 
 func TestListStreamKeys(t *testing.T) {
@@ -180,9 +201,7 @@ func TestListStreamKeys(t *testing.T) {
 	t.Run("not_found_when_not_owner", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		expectMissingStream(mock)
 		_, err := s.ListStreamKeys(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamKeysRequest{StreamId: "s1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -194,9 +213,7 @@ func TestListStreamKeys(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		expectPushStream(mock)
 		mock.ExpectQuery("SELECT COUNT").
 			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
@@ -240,9 +257,7 @@ func TestDeactivateStreamKey(t *testing.T) {
 	t.Run("not_found_when_not_owner", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		expectMissingStream(mock)
 		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -253,9 +268,7 @@ func TestDeactivateStreamKey(t *testing.T) {
 	t.Run("not_found_when_key_missing", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		expectPushStream(mock)
 		mock.ExpectExec("UPDATE commodore.stream_keys").
 			WithArgs("k1", "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 0))
@@ -269,9 +282,7 @@ func TestDeactivateStreamKey(t *testing.T) {
 	t.Run("happy_path_deactivates_and_emits", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
-			WithArgs("s1", "u1", "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		expectPushStream(mock)
 		mock.ExpectExec("UPDATE commodore.stream_keys").
 			WithArgs("k1", "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
@@ -289,7 +300,7 @@ func TestDeactivateStreamKey(t *testing.T) {
 	t.Run("ownership_db_error_is_internal", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT EXISTS").
+		mock.ExpectQuery("SELECT ingest_mode").
 			WithArgs("s1", "u1", "t1").
 			WillReturnError(errors.New("connection reset"))
 		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})

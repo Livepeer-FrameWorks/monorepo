@@ -446,7 +446,7 @@ func TestReadyLocalIngestUsesPullModeRejectionContract(t *testing.T) {
 	if err != nil || !found || response == nil || response.GetValid() {
 		t.Fatalf("pull-mode local response=%+v found=%v err=%v", response, found, err)
 	}
-	if response.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE {
+	if response.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE {
 		t.Fatalf("rejection reason = %v, want pull mode", response.GetRejectionReason())
 	}
 }

@@ -90,11 +90,16 @@ func (q *Queries) GetPlacementPreviewStream(ctx context.Context, arg GetPlacemen
 const getStreamConfig = `-- name: GetStreamConfig :one
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3 AND s.deleted_at IS NULL
 `
 
@@ -117,7 +122,11 @@ type GetStreamConfigRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -142,7 +151,11 @@ func (q *Queries) GetStreamConfig(ctx context.Context, arg GetStreamConfigParams
 		&i.IngestMode,
 		&i.SourceUriEnc,
 		&i.Enabled,
-		pq.Array(&i.AllowedClusterIds),
+		pq.Array(&i.PullAllowedClusterIds),
+		&i.ManagedSourceKind,
+		&i.ManagedAlwaysOn,
+		&i.ManagedPlacementCount,
+		pq.Array(&i.ManagedAllowedClusterIds),
 		&i.ActiveIngestClusterID,
 		&i.DvrChapterMode,
 		&i.DvrChapterIntervalSeconds,
@@ -156,11 +169,16 @@ func (q *Queries) GetStreamConfig(ctx context.Context, arg GetStreamConfigParams
 const getStreamsConfigBatch = `-- name: GetStreamsConfigBatch :many
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.id = ANY($1::uuid[]) AND s.user_id = $2 AND s.tenant_id = $3 AND s.deleted_at IS NULL
 `
 
@@ -183,7 +201,11 @@ type GetStreamsConfigBatchRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -214,7 +236,11 @@ func (q *Queries) GetStreamsConfigBatch(ctx context.Context, arg GetStreamsConfi
 			&i.IngestMode,
 			&i.SourceUriEnc,
 			&i.Enabled,
-			pq.Array(&i.AllowedClusterIds),
+			pq.Array(&i.PullAllowedClusterIds),
+			&i.ManagedSourceKind,
+			&i.ManagedAlwaysOn,
+			&i.ManagedPlacementCount,
+			pq.Array(&i.ManagedAllowedClusterIds),
 			&i.ActiveIngestClusterID,
 			&i.DvrChapterMode,
 			&i.DvrChapterIntervalSeconds,
@@ -238,11 +264,16 @@ func (q *Queries) GetStreamsConfigBatch(ctx context.Context, arg GetStreamsConfi
 const listStreamsBackward = `-- name: ListStreamsBackward :many
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL
   AND (NOT $3::boolean
        OR LOWER(s.title) LIKE $4
@@ -272,7 +303,11 @@ type ListStreamsBackwardRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -309,7 +344,11 @@ func (q *Queries) ListStreamsBackward(ctx context.Context, arg ListStreamsBackwa
 			&i.IngestMode,
 			&i.SourceUriEnc,
 			&i.Enabled,
-			pq.Array(&i.AllowedClusterIds),
+			pq.Array(&i.PullAllowedClusterIds),
+			&i.ManagedSourceKind,
+			&i.ManagedAlwaysOn,
+			&i.ManagedPlacementCount,
+			pq.Array(&i.ManagedAllowedClusterIds),
 			&i.ActiveIngestClusterID,
 			&i.DvrChapterMode,
 			&i.DvrChapterIntervalSeconds,
@@ -333,11 +372,16 @@ func (q *Queries) ListStreamsBackward(ctx context.Context, arg ListStreamsBackwa
 const listStreamsBackwardBefore = `-- name: ListStreamsBackwardBefore :many
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL
   AND (NOT $3::boolean
        OR LOWER(s.title) LIKE $4
@@ -370,7 +414,11 @@ type ListStreamsBackwardBeforeRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -409,7 +457,11 @@ func (q *Queries) ListStreamsBackwardBefore(ctx context.Context, arg ListStreams
 			&i.IngestMode,
 			&i.SourceUriEnc,
 			&i.Enabled,
-			pq.Array(&i.AllowedClusterIds),
+			pq.Array(&i.PullAllowedClusterIds),
+			&i.ManagedSourceKind,
+			&i.ManagedAlwaysOn,
+			&i.ManagedPlacementCount,
+			pq.Array(&i.ManagedAllowedClusterIds),
 			&i.ActiveIngestClusterID,
 			&i.DvrChapterMode,
 			&i.DvrChapterIntervalSeconds,
@@ -433,11 +485,16 @@ func (q *Queries) ListStreamsBackwardBefore(ctx context.Context, arg ListStreams
 const listStreamsForward = `-- name: ListStreamsForward :many
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL
   AND (NOT $3::boolean
        OR LOWER(s.title) LIKE $4
@@ -467,7 +524,11 @@ type ListStreamsForwardRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -504,7 +565,11 @@ func (q *Queries) ListStreamsForward(ctx context.Context, arg ListStreamsForward
 			&i.IngestMode,
 			&i.SourceUriEnc,
 			&i.Enabled,
-			pq.Array(&i.AllowedClusterIds),
+			pq.Array(&i.PullAllowedClusterIds),
+			&i.ManagedSourceKind,
+			&i.ManagedAlwaysOn,
+			&i.ManagedPlacementCount,
+			pq.Array(&i.ManagedAllowedClusterIds),
 			&i.ActiveIngestClusterID,
 			&i.DvrChapterMode,
 			&i.DvrChapterIntervalSeconds,
@@ -528,11 +593,16 @@ func (q *Queries) ListStreamsForward(ctx context.Context, arg ListStreamsForward
 const listStreamsForwardAfter = `-- name: ListStreamsForwardAfter :many
 SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
        s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}') AS allowed_cluster_ids,
+       p.source_uri_enc, p.enabled,
+       COALESCE(p.allowed_cluster_ids, '{}') AS pull_allowed_cluster_ids,
+       mn.source_kind AS managed_source_kind, s.always_on AS managed_always_on,
+       mn.placement_count AS managed_placement_count,
+       COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
        s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL
   AND (NOT $3::boolean
        OR LOWER(s.title) LIKE $4
@@ -565,7 +635,11 @@ type ListStreamsForwardAfterRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	SourceUriEnc              sql.NullString `db:"source_uri_enc" json:"source_uri_enc"`
 	Enabled                   sql.NullBool   `db:"enabled" json:"enabled"`
-	AllowedClusterIds         []string       `db:"allowed_cluster_ids" json:"allowed_cluster_ids"`
+	PullAllowedClusterIds     []string       `db:"pull_allowed_cluster_ids" json:"pull_allowed_cluster_ids"`
+	ManagedSourceKind         sql.NullString `db:"managed_source_kind" json:"managed_source_kind"`
+	ManagedAlwaysOn           bool           `db:"managed_always_on" json:"managed_always_on"`
+	ManagedPlacementCount     sql.NullInt32  `db:"managed_placement_count" json:"managed_placement_count"`
+	ManagedAllowedClusterIds  []string       `db:"managed_allowed_cluster_ids" json:"managed_allowed_cluster_ids"`
 	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
@@ -604,7 +678,11 @@ func (q *Queries) ListStreamsForwardAfter(ctx context.Context, arg ListStreamsFo
 			&i.IngestMode,
 			&i.SourceUriEnc,
 			&i.Enabled,
-			pq.Array(&i.AllowedClusterIds),
+			pq.Array(&i.PullAllowedClusterIds),
+			&i.ManagedSourceKind,
+			&i.ManagedAlwaysOn,
+			&i.ManagedPlacementCount,
+			pq.Array(&i.ManagedAllowedClusterIds),
 			&i.ActiveIngestClusterID,
 			&i.DvrChapterMode,
 			&i.DvrChapterIntervalSeconds,
