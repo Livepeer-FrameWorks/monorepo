@@ -9,7 +9,8 @@ subscribe to capacity, prepare media or reserve nodes. It is separate from gatew
 and database seed data.
 
 Use it to check desktop/360px wrapping, long selector names, expanded restrictions, fallback
-fields, keyboard reordering, preset replacement, disabled controls and minimum 44px targets.
+fields, keyboard reordering, preset replacement, disabled controls, minimum 44px targets, and the
+redacted pull/managed source workflow.
 Run `pnpm --dir website_application test:components` for complete editor interactions with
 mocked API boundaries, and `pnpm --dir website_application test` for controller/contract tests.
 Neither fixtures nor component tests substitute for backend integration and first-media tests.

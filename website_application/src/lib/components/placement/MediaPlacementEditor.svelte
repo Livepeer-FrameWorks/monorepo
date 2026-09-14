@@ -17,12 +17,19 @@
   import PlacementRulesEditor from "./PlacementRulesEditor.svelte";
   import PlacementRollout from "./PlacementRollout.svelte";
 
-  let { scope, initialVerb = "SERVE" }: { scope: Scope; initialVerb?: Verb } = $props();
+  type SourceMode = "PUSH" | "PULL" | "MANAGED";
+
+  let {
+    scope,
+    initialVerb = "SERVE",
+    sourceMode = "PUSH",
+  }: { scope: Scope; initialVerb?: Verb; sourceMode?: SourceMode } = $props();
   const session: PlacementSession = new PlacementSession(placementAPI, (value) => (view = value));
   let view: EditorState = $state.raw(session.state);
   let verb = $state<Verb>("SERVE");
-  let latitude = $state("");
-  let longitude = $state("");
+  let previewCoordinates = $state<{ latitude: number; longitude: number } | null>(null);
+  let locating = $state(false);
+  let locationError = $state("");
   let protocol = $state("");
   let previewStreamId = $state("");
   let previewError = $state("");
@@ -39,6 +46,7 @@
   );
   const identity = $derived(account ? `${account}:${$auth.user?.role ?? ""}` : "");
   const scopeKey = $derived(`${identity}:${scope.kind}:${scope.streamId ?? ""}`);
+  const publishingAvailable = $derived(scope.kind === "TENANT" || sourceMode === "PUSH");
   const dirty = $derived(!!view.policy && updatesFor(view.policy, view.drafts).length > 0);
   const locked = $derived(!!view.pending || view.phase === "loading" || view.readOnly);
   const verbPolicy = $derived(view.policy?.verbs.find((item) => item.verb === verb));
@@ -59,11 +67,12 @@
     const currentIdentity = identity;
     const currentAccount = account;
     const currentScope = { ...scope };
-    const startingVerb = initialVerb;
+    const startingVerb = initialVerb === "INGEST" && !publishingAvailable ? "SERVE" : initialVerb;
     untrack(() => {
       verb = startingVerb;
-      latitude = "";
-      longitude = "";
+      previewCoordinates = null;
+      locating = false;
+      locationError = "";
       protocol = "";
       previewStreamId = "";
       discardPending = false;
@@ -129,24 +138,32 @@
     changePreviewInput();
   }
 
-  async function preview() {
-    previewError = "";
-    const hasLocation = latitude.trim() !== "" || longitude.trim() !== "";
-    const lat = Number(latitude),
-      lon = Number(longitude);
-    if (
-      hasLocation &&
-      (!latitude.trim() ||
-        !longitude.trim() ||
-        !Number.isFinite(lat) ||
-        !Number.isFinite(lon) ||
-        Math.abs(lat) > 90 ||
-        Math.abs(lon) > 180)
-    ) {
-      previewError =
-        "Enter both coordinates: latitude −90 to 90, longitude −180 to 180, or leave both blank for unknown location.";
+  function useDeviceLocation() {
+    locationError = "";
+    if (!navigator.geolocation) {
+      locationError = "Location is not available in this browser.";
       return;
     }
+    locating = true;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        previewCoordinates = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+        locating = false;
+        changePreviewInput();
+      },
+      () => {
+        locating = false;
+        locationError = "Location was not shared. You can still preview without distance.";
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+    );
+  }
+
+  async function preview() {
+    previewError = "";
     const enteredStreamId = previewStreamId.trim();
     const streamId =
       scope.kind === "STREAM"
@@ -163,7 +180,7 @@
       verb,
       protocol: protocol || null,
       streamId,
-      coordinates: hasLocation ? { latitude: lat, longitude: lon } : null,
+      coordinates: previewCoordinates,
     });
   }
 </script>
@@ -172,12 +189,13 @@
   class="slab [&_button]:min-h-11 [&_button]:min-w-11 [&_button]:whitespace-normal [&_select]:min-h-11 [&_input:not([type=checkbox])]:min-h-11 [&_summary]:min-h-11 [&_summary]:py-2 [&_label]:min-h-11"
 >
   <div class="slab-header">
-    <h2>{scope.kind === "STREAM" ? "Stream" : "Account"} media placement</h2>
+    <h2>{scope.kind === "STREAM" ? "Stream routing policy" : "Account routing policy"}</h2>
   </div>
   <div class="slab-body--padded space-y-4">
     <p class="text-sm text-muted-foreground">
-      Choose where media enters and reaches viewers. These rules do not change storage or processing
-      placement.
+      {scope.kind === "STREAM" && sourceMode !== "PUSH"
+        ? "Choose which connected clusters should serve viewers. The source location is controlled separately for this stream type; viewer requests still go to the closest healthy node that satisfies this policy."
+        : "Choose which connected clusters should receive publishers and viewers. Live requests still go to the closest healthy node that satisfies this policy."}
     </p>
     {#if !identity}<p role="status">Sign in to a tenant account to manage placement.</p>
     {:else if !view.policy && view.phase === "loading"}<p role="status">Loading placement rules…</p>
@@ -190,13 +208,26 @@
       </p>
     {/if}
     {#if view.policy}
-      <PlacementRollout
-        rollout={view.policy.rollout}
-        revision={view.policy.revision}
-        activeRevision={view.policy.activeRevision}
-        parentRevision={scope.kind === "STREAM" ? view.policy.parentRevision : undefined}
-        activeParentRevision={view.policy.activeParentRevision}
-      />
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div class="min-w-0 flex-1">
+          <PlacementRollout
+            rollout={view.policy.rollout}
+            revision={view.policy.revision}
+            activeRevision={view.policy.activeRevision}
+            parentRevision={scope.kind === "STREAM" ? view.policy.parentRevision : undefined}
+            activeParentRevision={view.policy.activeParentRevision}
+          />
+        </div>
+        {#if !view.conflict && !view.pending}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Refresh enforcement status${dirty ? " and keep draft" : ""}`}
+            disabled={view.phase !== "idle"}
+            onclick={() => session.load(dirty)}>Refresh</Button
+          >
+        {/if}
+      </div>
       {#if view.readOnly}<p class="text-sm">
           You can inspect these rules, but your current permissions do not allow changes.
         </p>{/if}
@@ -214,13 +245,6 @@
         variant="outline"
         disabled={!!view.pending || view.phase === "loading"}
         onclick={() => session.load(true)}>Load current revision, retain draft</Button
-      >
-    {:else if !view.pending}
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={view.phase !== "idle"}
-        onclick={() => session.load(dirty)}>Refresh status{dirty ? " (keep draft)" : ""}</Button
       >
     {/if}
     {#if view.pending}
@@ -261,17 +285,19 @@
         class="flex-1 rounded-none"
         variant={verb === "SERVE" ? "secondary" : "ghost"}
         aria-pressed={verb === "SERVE"}
-        onclick={() => switchVerb("SERVE")}>Viewer delivery</Button
+        onclick={() => switchVerb("SERVE")}>Viewers</Button
       >
-      <Button
-        class="flex-1 rounded-none"
-        variant={verb === "INGEST" ? "secondary" : "ghost"}
-        aria-pressed={verb === "INGEST"}
-        onclick={() => switchVerb("INGEST")}>Ingest</Button
-      >
+      {#if publishingAvailable}
+        <Button
+          class="flex-1 rounded-none"
+          variant={verb === "INGEST" ? "secondary" : "ghost"}
+          aria-pressed={verb === "INGEST"}
+          onclick={() => switchVerb("INGEST")}>Publishing</Button
+        >
+      {/if}
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2">
-      <div class="p-4 md:p-6 min-w-0 space-y-4 lg:border-r border-border">
+    <div class="divide-y divide-border">
+      <div class="p-4 md:p-6 min-w-0 space-y-4">
         {#if scope.kind === "STREAM" && verbPolicy?.inheritedRules}
           <details class="text-sm border border-border p-3">
             <summary class="cursor-pointer"
@@ -307,9 +333,9 @@
             onchange={(rules) => session.edit(verb, rules)}
           />
         {/key}
-        {#if !view.drafts[verb]}
+        {#if !view.drafts[verb] && (verbPolicy?.requestedEffective.groups.length ?? 0) > 0}
           <details class="text-sm">
-            <summary class="cursor-pointer">Requested effective preference order</summary>
+            <summary class="cursor-pointer">Resolved policy details</summary>
             <ol class="list-decimal pl-5 mt-2 space-y-1">
               {#each verbPolicy?.requestedEffective.groups ?? [] as group (group.id)}<li>
                   {selectorLabel(group.match)}
@@ -322,7 +348,7 @@
         {/if}
       </div>
 
-      <div class="p-4 md:p-6 space-y-5 border-t lg:border-t-0 border-border min-w-0">
+      <div class="p-4 md:p-6 space-y-5 min-w-0">
         {#if view.review}
           <section class="space-y-4" aria-label="Review placement changes">
             <h3 class="font-semibold">Review changes · both work tabs</h3>
@@ -367,122 +393,160 @@
             <Button disabled={!canApply} onclick={() => session.apply()}>Apply rules</Button>
           </section>
         {/if}
-        <section class="space-y-3" aria-label="Placement preview">
-          <h3 class="font-semibold">Preview {verb === "SERVE" ? "viewer delivery" : "ingest"}</h3>
-          <p class="text-sm text-muted-foreground">
-            A read-only, hypothetical decision. It never reserves capacity, creates a source pull or
-            moves an active publisher.
-          </p>
-          {#if scope.kind === "TENANT"}<label class="block text-sm"
-              >Owned stream ID (optional)<Input
-                bind:value={previewStreamId}
-                oninput={changePreviewInput}
-                placeholder="Omit for capacity-only preview"
-              /></label
-            >{/if}
-          <label class="block text-sm"
-            >Protocol
-            <select
-              class="block w-full mt-1 p-2 bg-background border border-border"
-              bind:value={protocol}
-              onchange={changePreviewInput}
-            >
-              <option value="">Default</option>
-              {#each verb === "SERVE" ? ["hls", "dash", "webrtc"] : ["rtmp", "srt", "whip"] as item (item)}<option
-                  value={item}>{item.toUpperCase()}</option
-                >{/each}
-            </select>
-          </label>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label class="text-sm"
-              >Latitude<Input
-                inputmode="decimal"
-                bind:value={latitude}
-                oninput={changePreviewInput}
-                placeholder="Unknown"
-              /></label
-            >
-            <label class="text-sm"
-              >Longitude<Input
-                inputmode="decimal"
-                bind:value={longitude}
-                oninput={changePreviewInput}
-                placeholder="Unknown"
-              /></label
-            >
+        {#if scope.kind === "STREAM" && sourceMode !== "PUSH"}
+          <div class="border border-border p-4 text-sm">
+            <p class="font-medium">Viewer preview is not available for this source yet</p>
+            <p class="mt-1 text-muted-foreground">
+              Current routing supports {sourceMode === "PULL" ? "pull" : "managed"} sources, but a truthful
+              preview must also observe whether the source can originate or relay. Saving viewer rules
+              still affects live routing; this screen will not present a capacity-only result as a playable-route
+              prediction.
+            </p>
           </div>
-          {#if previewError}<p role="alert" class="text-sm text-destructive">{previewError}</p>{/if}
-          <Button
-            variant="outline"
-            disabled={!view.policy.actions.canPreview || view.previewing || !!view.pending}
-            onclick={preview}>{view.previewing ? "Previewing…" : "Preview this draft"}</Button
-          >
-          {#if view.preview}
-            <div class="space-y-3 text-sm border-t border-border pt-3" aria-live="polite">
-              {#if view.previewStale || previewExpired}<p class="text-warning">
-                  {view.previewStale
-                    ? "Inputs changed. This preview is stale."
-                    : "This observation has expired. Preview again."}
-                </p>{/if}
-              <p class="font-medium">
-                {view.preview.selected
-                  ? `Selected: ${view.preview.selected.clusterName}`
-                  : view.preview.complete
-                    ? "No eligible destination"
-                    : "Cannot determine a destination"}
+        {:else}
+          <details class="border border-border">
+            <summary class="cursor-pointer px-4 py-3 text-sm font-medium">
+              Preview a {verb === "SERVE" ? "viewer" : "publisher"} destination (optional)
+            </summary>
+            <section class="space-y-3 border-t border-border p-4" aria-label="Placement preview">
+              <p class="text-sm text-muted-foreground">
+                Test this draft against current capacity. A preview never reserves capacity or moves
+                a live session.
               </p>
-              <p>{view.preview.reason}</p>
-              {#if !view.preview.complete}<p class="text-warning">
-                  Partial observations. Missing cells are not proven empty or full.
-                </p>{/if}
-              {#if !view.preview.sourceEvaluated}<p>
-                  Source path was not evaluated. This is not a playable-route prediction.
-                </p>{:else}<p>
-                  Source path observed. This preview did not reserve capacity or start media.
-                </p>{/if}
-              {#if view.preview.activeIngestClusterId}<p>
-                  Active publisher is pinned to cluster {view.preview.activeIngestClusterId}.
-                </p>{/if}
-              {#if view.preview.selected?.requiresSourcePull}<p>
-                  The selected destination needs a source pull. Preview did not start one.
-                </p>{/if}
-              {#each view.preview.transitions as transition, index (index)}<p>
-                  From {transition.fromGroup}: {transition.reason}
-                </p>{/each}
-              <details>
-                <summary class="cursor-pointer"
-                  >Candidate reasons ({view.preview.candidates.length})</summary
+              {#if scope.kind === "TENANT"}<label class="block text-sm"
+                  >Owned stream ID (optional)<Input
+                    bind:value={previewStreamId}
+                    oninput={changePreviewInput}
+                    placeholder="Omit for capacity-only preview"
+                  /></label
+                >{/if}
+              <label class="block text-sm"
+                >Protocol
+                <select
+                  class="block w-full mt-1 p-2 bg-background border border-border"
+                  bind:value={protocol}
+                  onchange={changePreviewInput}
                 >
-                <ul class="space-y-3 mt-3">
-                  {#each view.preview.candidates as candidate, index (index)}
-                    <li class="border-t border-border pt-2">
-                      <p>
-                        {candidate.clusterName}
-                        {candidate.region ? `· ${candidate.region}` : ""}{candidate.distanceKm !==
-                        null
-                          ? ` · ${Math.round(candidate.distanceKm)} km`
-                          : " · distance unknown"}
-                      </p>
-                      <p class="text-muted-foreground">{candidate.reason}</p>
-                      {#if candidate.nodeId}<p class="text-xs">Node: {candidate.nodeId}</p>{/if}
-                      {#if candidate.price}<p class="text-xs">
-                          {candidate.price.amountMicros} micro-{candidate.price.currency} / {candidate
-                            .price.unit} · pricing revision {candidate.price.revision} · expires {candidate
-                            .price.expiresAt}
-                        </p>{/if}
-                    </li>
-                  {/each}
-                </ul>
-              </details>
-              <p class="text-xs text-muted-foreground">
-                Observed {view.preview.observedAt}; expires {view.preview.expiresAt}.
-              </p>
-              <p class="text-xs text-muted-foreground break-all">
-                Draft digest: {view.preview.digest}
-              </p>
-            </div>
-          {/if}
-        </section>
+                  <option value="">Default</option>
+                  {#each verb === "SERVE" ? ["hls", "dash", "webrtc"] : ["rtmp", "srt", "whip"] as item (item)}<option
+                      value={item}>{item.toUpperCase()}</option
+                    >{/each}
+                </select>
+              </label>
+              <div
+                class="flex flex-wrap items-center justify-between border border-border p-3 gap-3"
+              >
+                <div>
+                  <p class="text-sm font-medium">Location</p>
+                  <p class="text-xs text-muted-foreground">
+                    {previewCoordinates
+                      ? "Using this device for the distance estimate."
+                      : "Not set. The preview can still evaluate policy and capacity."}
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={locating}
+                    onclick={useDeviceLocation}
+                    >{locating ? "Finding location…" : "Use this device"}</Button
+                  >
+                  {#if previewCoordinates}<Button
+                      variant="ghost"
+                      size="sm"
+                      onclick={() => {
+                        previewCoordinates = null;
+                        changePreviewInput();
+                      }}>Clear</Button
+                    >{/if}
+                </div>
+              </div>
+              {#if locationError}<p role="status" class="text-sm text-muted-foreground">
+                  {locationError}
+                </p>{/if}
+              {#if previewError}<p role="alert" class="text-sm text-destructive">
+                  {previewError}
+                </p>{/if}
+              <Button
+                variant="outline"
+                disabled={!view.policy.actions.canPreview || view.previewing || !!view.pending}
+                onclick={preview}>{view.previewing ? "Previewing…" : "Preview this draft"}</Button
+              >
+              {#if view.preview}
+                <div class="space-y-3 text-sm border-t border-border pt-3" aria-live="polite">
+                  {#if view.previewStale || previewExpired}<p class="text-warning">
+                      {view.previewStale
+                        ? "Inputs changed. This preview is stale."
+                        : "This observation has expired. Preview again."}
+                    </p>{/if}
+                  <p class="font-medium">
+                    {view.preview.selected
+                      ? `Selected: ${view.preview.selected.clusterName}`
+                      : view.preview.complete
+                        ? "No eligible destination"
+                        : "Cannot determine a destination"}
+                  </p>
+                  <p>{view.preview.reason}</p>
+                  {#if !view.preview.complete}<p class="text-warning">
+                      Partial observations. Missing cells are not proven empty or full.
+                    </p>{/if}
+                  {#if !view.preview.sourceEvaluated}<p>
+                      Source path was not evaluated. This is not a playable-route prediction.
+                    </p>{:else}<p>
+                      Source path observed. This preview did not reserve capacity or start media.
+                    </p>{/if}
+                  {#if view.preview.activeIngestClusterId}<p>
+                      Active publisher is pinned to cluster {view.preview.activeIngestClusterId}.
+                    </p>{/if}
+                  {#if view.preview.selected?.requiresSourcePull}<p>
+                      The selected destination needs a source pull. Preview did not start one.
+                    </p>{/if}
+                  {#each view.preview.transitions as transition, index (index)}<p>
+                      From {transition.fromGroup}: {transition.reason}
+                    </p>{/each}
+                  <details>
+                    <summary class="cursor-pointer"
+                      >Candidate reasons ({view.preview.candidates.length})</summary
+                    >
+                    <ul class="space-y-3 mt-3">
+                      {#each view.preview.candidates as candidate, index (index)}
+                        <li class="border-t border-border pt-2">
+                          <p>
+                            {candidate.clusterName}
+                            {candidate.region
+                              ? `· ${candidate.region}`
+                              : ""}{candidate.distanceKm !== null
+                              ? ` · ${Math.round(candidate.distanceKm)} km`
+                              : " · distance unknown"}
+                          </p>
+                          <p class="text-muted-foreground">{candidate.reason}</p>
+                          {#if candidate.nodeId}<p class="text-xs">Node: {candidate.nodeId}</p>{/if}
+                          {#if candidate.price}<p class="text-xs">
+                              {candidate.price.amountMicros} micro-{candidate.price.currency} / {candidate
+                                .price.unit} · pricing revision {candidate.price.revision} · expires {candidate
+                                .price.expiresAt}
+                            </p>{/if}
+                        </li>
+                      {/each}
+                    </ul>
+                  </details>
+                  <details>
+                    <summary class="cursor-pointer text-xs text-muted-foreground"
+                      >Technical details</summary
+                    >
+                    <p class="mt-2 text-xs text-muted-foreground">
+                      Observed {view.preview.observedAt}; expires {view.preview.expiresAt}.
+                    </p>
+                    <p class="text-xs text-muted-foreground break-all">
+                      Draft digest: {view.preview.digest}
+                    </p>
+                  </details>
+                </div>
+              {/if}
+            </section>
+          </details>
+        {/if}
       </div>
     </div>
     <p role="status" class="slab-body--padded text-sm">

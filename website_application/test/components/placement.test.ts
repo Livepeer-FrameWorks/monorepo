@@ -115,13 +115,19 @@ beforeEach(() => {
     user: { id: "actor-a", tenant_id: "tenant-a", role: "owner" },
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  Object.defineProperty(navigator, "geolocation", { configurable: true, value: undefined });
+});
 
 async function choosePreset(label = "no_official") {
-  await fireEvent.change(screen.getByLabelText("Start from a preset"), {
-    target: { value: label },
-  });
-  await fireEvent.click(screen.getByRole("button", { name: "Use preset" }));
+  const names: Record<string, string> = {
+    closest_available: "Closest available",
+    my_clusters_first: "My clusters first",
+    my_clusters_only: "My clusters only",
+    no_official: "No official capacity",
+  };
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${names[label]}`) }));
 }
 
 describe("placement editor interactions", () => {
@@ -153,11 +159,11 @@ describe("placement editor interactions", () => {
 
   it("preserves both work tabs and gates one atomic apply on required acknowledgements", async () => {
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
-    await screen.findByRole("button", { name: "Use preset" });
+    await screen.findByRole("button", { name: /^No official capacity/ });
     await choosePreset();
-    await fireEvent.click(screen.getByRole("button", { name: "Ingest" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Publishing" }));
     await choosePreset("my_clusters_only");
-    await fireEvent.click(screen.getByRole("button", { name: "Viewer delivery" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Viewers" }));
     expect(screen.getByText(/Deny 1: official clusters/)).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
     await screen.findByText("Viewer restrictions");
@@ -197,27 +203,46 @@ describe("placement editor interactions", () => {
     });
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
     await screen.findByRole("button", { name: "Preview this draft" });
-    await fireEvent.input(screen.getByLabelText("Latitude"), { target: { value: "0" } });
-    expect(placementAPI.preview).not.toHaveBeenCalled();
-    await fireEvent.click(screen.getByRole("button", { name: "Preview this draft" }));
-    expect(screen.getByText(/Enter both coordinates/)).toBeTruthy();
-    await fireEvent.input(screen.getByLabelText("Longitude"), { target: { value: "0" } });
     await fireEvent.click(screen.getByRole("button", { name: "Preview this draft" }));
     await screen.findByText("Cannot determine a destination");
     expect(screen.getByText(/Partial observations/)).toBeTruthy();
     expect(screen.getByText(/Source path was not evaluated/)).toBeTruthy();
-    expect(vi.mocked(placementAPI.preview).mock.calls[0][0].coordinates).toEqual({
-      latitude: 0,
-      longitude: 0,
-    });
-    await fireEvent.input(screen.getByLabelText("Longitude"), { target: { value: "1" } });
+    expect(vi.mocked(placementAPI.preview).mock.calls[0][0].coordinates).toBeNull();
+    expect(screen.queryByLabelText("Latitude")).toBeNull();
+    expect(screen.queryByLabelText("Longitude")).toBeNull();
+    await fireEvent.change(screen.getByLabelText("Protocol"), { target: { value: "hls" } });
     expect(screen.getByText("Inputs changed. This preview is stale.")).toBeTruthy();
     expect(placementAPI.preview).toHaveBeenCalledTimes(1);
   });
 
+  it("uses browser location for optional distance without exposing coordinate fields", async () => {
+    const getCurrentPosition = vi.fn((success: PositionCallback) =>
+      success({ coords: { latitude: 52.37, longitude: 4.89 } } as GeolocationPosition)
+    );
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: { getCurrentPosition },
+    });
+    render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
+    await screen.findByRole("button", { name: "Use this device" });
+    await fireEvent.click(screen.getByRole("button", { name: "Use this device" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Preview this draft" }));
+    expect(getCurrentPosition).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), {
+      enableHighAccuracy: false,
+      timeout: 10000,
+      maximumAge: 300000,
+    });
+    expect(vi.mocked(placementAPI.preview).mock.calls[0][0].coordinates).toEqual({
+      latitude: 52.37,
+      longitude: 4.89,
+    });
+    expect(screen.queryByLabelText("Latitude")).toBeNull();
+    expect(screen.queryByLabelText("Longitude")).toBeNull();
+  });
+
   it("asks before discarding a dirty draft on navigation", async () => {
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
-    await screen.findByRole("button", { name: "Use preset" });
+    await screen.findByRole("button", { name: /^No official capacity/ });
     await choosePreset();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const cancel = vi.fn();
@@ -268,7 +293,7 @@ describe("placement editor interactions", () => {
 
   it("does not render prior tenant rules after logout", async () => {
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
-    await screen.findByRole("button", { name: "Use preset" });
+    await screen.findByRole("button", { name: /^No official capacity/ });
     await choosePreset();
     (auth as unknown as { set: (value: unknown) => void }).set({
       isAuthenticated: false,
@@ -286,8 +311,8 @@ describe("placement editor interactions", () => {
     });
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
     await screen.findByText(/current permissions do not allow changes/);
-    const customize = screen.getByRole("button", { name: "Customize account rules" });
-    expect(customize.closest("fieldset")?.disabled).toBe(true);
+    const platformDefault = screen.getByRole("button", { name: /^Platform default/ });
+    expect(platformDefault.closest("fieldset")?.disabled).toBe(true);
     expect(
       (screen.getByRole("button", { name: "Review changes" }) as HTMLButtonElement).disabled
     ).toBe(true);
@@ -295,12 +320,15 @@ describe("placement editor interactions", () => {
 
   it("requires explicit preset replacement and offers keyboard-operable move buttons", async () => {
     const onchange = vi.fn();
+    const customRules = presetRules("my_clusters_first");
+    customRules.preferences!.groups[0].maxDistanceKm = 123;
     render(PlacementRulesEditor, {
-      rules: presetRules("my_clusters_first"),
+      rules: customRules,
       scope: { kind: "TENANT" },
       features: policy().features,
       onchange,
     });
+    await fireEvent.click(screen.getByText("Advanced rules · Custom"));
     const move = screen.getByRole("button", { name: "Move group 1 down" });
     move.focus();
     expect(document.activeElement).toBe(move);
@@ -311,13 +339,52 @@ describe("placement editor interactions", () => {
     expect(screen.getByText(/Group moved to position 2/)).toBeTruthy();
     await choosePreset("closest_available");
     expect(onchange).toHaveBeenCalledTimes(1);
-    await fireEvent.click(screen.getByRole("button", { name: "Replace this tab’s draft" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Replace advanced draft" }));
     expect(onchange).toHaveBeenCalledTimes(2);
   });
 
-  it("does not present zero-recipient pending rollout as active", () => {
+  it("keeps policy machinery behind advanced rules", () => {
+    render(PlacementRulesEditor, {
+      rules: presetRules("my_clusters_first"),
+      scope: { kind: "TENANT" },
+      features: policy().features,
+      onchange: vi.fn(),
+    });
+    expect(
+      screen.getByRole("button", { name: /^My clusters first/ }).getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(screen.getByText("Advanced rules").closest("details")?.open).toBe(false);
+    expect(screen.queryByLabelText("Latitude")).toBeNull();
+    expect(screen.queryByLabelText("Longitude")).toBeNull();
+  });
+
+  it.each(["PULL", "MANAGED"] as const)(
+    "keeps %s streams on viewer policy and hides false publisher/preview paths",
+    async (sourceMode) => {
+      const base = policy();
+      vi.mocked(placementAPI.policy).mockResolvedValue({
+        ...base,
+        scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+      });
+      render(MediaPlacementEditor, {
+        scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+        sourceMode,
+        initialVerb: "INGEST",
+      });
+      await screen.findByText("Viewer preview is not available for this source yet");
+      expect(screen.getByRole("button", { name: "Viewers" }).getAttribute("aria-pressed")).toBe(
+        "true"
+      );
+      expect(screen.queryByRole("button", { name: "Publishing" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Preview this draft" })).toBeNull();
+      expect(screen.getByText(/Saving viewer rules still affects live routing/)).toBeTruthy();
+    }
+  );
+
+  it("does not present zero-recipient pending rollout as active", async () => {
     render(PlacementRollout, { rollout: policy().rollout, revision: "7" });
     expect(screen.getByText("Saved · waiting for enforcement")).toBeTruthy();
+    await fireEvent.click(screen.getByText("Deployment details"));
     expect(screen.getByText("Enforcement coverage has not been confirmed.")).toBeTruthy();
     expect(screen.queryByText("Effective for new decisions")).toBeNull();
   });
@@ -330,10 +397,8 @@ describe("placement editor interactions", () => {
       activeParentRevision: "9007199254740992",
     });
     expect(screen.getByText("No custom rules at this scope")).toBeTruthy();
-    expect(screen.getByText(/This stream inherits the requested account policy/)).toBeTruthy();
-    expect(
-      screen.getByText(/Enforcement of that account revision on this stream has not been confirmed/)
-    ).toBeTruthy();
+    expect(screen.getByText(/This stream follows your account policy/)).toBeTruthy();
+    expect(screen.getByText(/The newest account change is still rolling out/)).toBeTruthy();
     expect(screen.queryByText("Using default placement")).toBeNull();
     expect(screen.queryByText("Effective for new decisions")).toBeNull();
   });
@@ -346,15 +411,7 @@ describe("placement editor interactions", () => {
       parentRevision: "3",
       activeParentRevision: "3",
     });
-    expect(
-      screen.getByText(
-        /This stream inherits the requested account policy; it has no stream override/
-      )
-    ).toBeTruthy();
-    expect(
-      screen.queryByText(
-        /Enforcement of that account revision on this stream has not been confirmed/
-      )
-    ).toBeNull();
+    expect(screen.getByText(/This stream follows your account policy/)).toBeTruthy();
+    expect(screen.queryByText(/The newest account change is still rolling out/)).toBeNull();
   });
 });

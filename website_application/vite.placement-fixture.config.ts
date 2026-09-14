@@ -12,7 +12,9 @@ export default defineConfig({
         import.meta.dirname,
         "test/browser/placement/consent.ts"
       ),
+      "$lib/placement/api": resolve(import.meta.dirname, "test/browser/placement/api.ts"),
       "$lib/stores/auth": resolve(import.meta.dirname, "test/browser/placement/auth.ts"),
+      "$app/environment": resolve(import.meta.dirname, "test/components/environment.ts"),
       "$app/navigation": resolve(import.meta.dirname, "test/browser/placement/navigation.ts"),
       $lib: resolve(import.meta.dirname, "src/lib"),
       $houdini: resolve(import.meta.dirname, "test/browser/placement/options.ts"),

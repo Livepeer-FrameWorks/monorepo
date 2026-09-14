@@ -111,6 +111,14 @@ export const presetLabels: Record<string, string> = {
   no_official: "No official capacity",
 };
 
+export const presetDescriptions: Record<string, string> = {
+  closest_available: "Use any eligible capacity and choose the closest healthy destination.",
+  my_clusters_first:
+    "Prefer clusters you operate, then use other connected capacity only when yours is full.",
+  my_clusters_only: "Never place this work outside clusters you operate.",
+  no_official: "Use eligible self-hosted or marketplace capacity, but never official clusters.",
+};
+
 export function presetRules(preset: string): Rules {
   const own = newGroup("my-clusters", { classes: ["TENANT_PRIVATE"] });
   const rules: Rules = { schemaVersion: 1, constraints: { deny: [] }, preferences: null };
@@ -134,6 +142,17 @@ export function presetRules(preset: string): Rules {
       throw new Error("This preset is not supported by the editor.");
   }
   return copyRules(rules)!;
+}
+
+export function matchingPreset(rules: Rules | null, supported: string[]): string | null {
+  if (!rules) return null;
+  const serialized = JSON.stringify(copyRules(rules));
+  return (
+    supported.find(
+      (preset) =>
+        preset in presetLabels && serialized === JSON.stringify(copyRules(presetRules(preset)))
+    ) ?? null
+  );
 }
 
 export function selectorLabel(selector: Selector): string {

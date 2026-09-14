@@ -28,3 +28,15 @@ export class GetMediaPlacementOptionsStore {
     };
   }
 }
+
+export class GetStreamingConfigStore {
+  async fetch() {
+    return { data: { streamingConfig: null } };
+  }
+}
+
+export class ResolveIngestDestinationStore {
+  async fetch() {
+    throw new Error("Publisher ingest resolution is not part of the source-mode fixture.");
+  }
+}
