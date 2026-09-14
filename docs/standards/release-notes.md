@@ -10,12 +10,13 @@ How we write release notes for FrameWorks. Established with v0.2.32.
 - **Flag pre-upgrade gotchas in the Upgrade section, not in Fixes.** Fail-closed migrations, NOT VALID/VALIDATE CHECK constraints on existing rows, mandatory re-declarations, etc. all go above the command block so operators see them before they run.
 - **Name every manual operator input.** If a release adds or changes a GitOps value, SOPS secret, manifest field, provider credential, or generated key, say exactly what the operator must set, where it belongs, how to create or update it, and how to verify it before deployment. If there are no manual input changes, say so.
 - **Keep release notes operationally complete but short.** Release notes provide the release-specific inputs, deviations, and command sequence. Detailed SQL, repair procedures, and per-environment transcripts belong in the linked operator runbook.
+- **One canonical body.** The published GitHub Release body is the release note. Do not maintain a second release-specific copy in the repository. This file defines the authoring process, not individual releases.
 - **No em dashes.** Use commas, parens, or periods.
 - **Backtick literal identifiers** (`dvr+{chapter_id}`, `lost_local`, env var names, etc.) so they render as code instead of being mangled by markdown.
 
 ## Structure
 
-The release file is `docs/releases/vX.Y.Z.md` (or wherever your release pipeline draws from). Sections in order:
+The GitHub Release body uses these sections in order:
 
 1. `# Release vX.Y.Z`
 2. Optional preamble for first-of-a-format or unusual releases.
@@ -128,7 +129,7 @@ Run these before writing a single bullet.
 
         gh release view <prev-tag>
 
-    or read the previous file under `docs/releases/`. If there's no previous release, skip to step 1 but flag that this is the first formatted release in the preamble.
+    If there's no previous release, skip to step 1 but flag that this is the first formatted release in the preamble.
 
 1.  **Get the commit list.**
 
@@ -174,6 +175,12 @@ Run these before writing a single bullet.
 9.  **Trace the CLI path.** Confirm the release catalog, minimum CLI, required transitions, data-migration gates, rollback restrictions, edge protocol floor, and contract behavior from code and generated release metadata. Do not reconstruct deployment ordering from an older release note.
 
 10. **Map every commit to a category.** If a commit doesn't fit `New / Hardened / Fixes / Build / Docs`, push back on whether it belongs in the release notes at all.
+
+11. **Replace the generated GitHub body.** Write the reviewed Markdown to a temporary file and replace the release body instead of appending to GitHub's generated notes:
+
+        gh release edit <tag> --notes-file <temporary-notes-file>
+
+    Verify the published body with `gh release view <tag>`. It must contain one comparison link and no generated-note duplication.
 
 ## Anti-patterns
 
