@@ -29,9 +29,18 @@ type Message struct {
 // Handler is a function that processes a Kafka message
 type Handler func(ctx context.Context, msg Message) error
 
+const defaultMaxPollRecords = 500
+
+type consumerPoller interface {
+	PollRecords(ctx context.Context, maxPollRecords int) kgo.Fetches
+	CommitRecords(ctx context.Context, records ...*kgo.Record) error
+	AllowRebalance()
+}
+
 // Consumer implements a generic Kafka consumer that routes messages to handlers
 type Consumer struct {
 	client    *kgo.Client
+	poller    consumerPoller
 	logger    *logrus.Logger
 	clusterID string
 	groupID   string
@@ -111,6 +120,7 @@ func NewConsumer(brokers []string, groupID string, clusterID string, clientID st
 
 	return &Consumer{
 		client:     client,
+		poller:     client,
 		logger:     logger,
 		clusterID:  clusterID,
 		groupID:    groupID,
@@ -130,7 +140,7 @@ func (c *Consumer) AddHandler(topic string, handler Handler) {
 
 // Close closes the underlying client
 func (c *Consumer) Close() error {
-	c.client.Close()
+	c.client.CloseAllowingRebalance()
 	return nil
 }
 
@@ -232,6 +242,13 @@ func (c *Consumer) runLagTracker(ctx context.Context) {
 
 // Start starts polling for messages
 func (c *Consumer) Start(ctx context.Context) error {
+	poller := c.poller
+	if poller == nil {
+		if c.client == nil {
+			return fmt.Errorf("kafka consumer client is nil")
+		}
+		poller = c.client
+	}
 	if c.lagTracker != nil && c.lagTracker.Gauge != nil {
 		go c.runLagTracker(ctx)
 	}
@@ -240,14 +257,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			fetches := c.client.PollFetches(ctx)
+			fetches := poller.PollRecords(ctx, defaultMaxPollRecords)
 			if errs := fetches.Errors(); len(errs) > 0 {
-				// Don't log context cancelled errors as errors
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
 				c.logger.Errorf("errors while polling: %v", errs)
-				continue
 			}
 
 			iter := fetches.RecordIter()
@@ -257,13 +272,24 @@ func (c *Consumer) Start(ctx context.Context) error {
 			}
 
 			commitRecords := c.processRecords(ctx, records)
+			var commitErr error
 			if len(commitRecords) > 0 {
-				if err := c.client.CommitRecords(ctx, commitRecords...); err != nil {
-					if isRecoverableGroupCommitError(err) {
-						return fmt.Errorf("kafka consumer group membership lost during commit: %w", err)
-					}
-					c.logger.WithError(err).Error("failed to commit records")
+				commitErr = poller.CommitRecords(ctx, commitRecords...)
+			}
+
+			// BlockRebalanceOnPoll keeps partition ownership stable while handlers
+			// run. Release it after every non-empty batch, including failed commit
+			// attempts, so the group can complete pending rebalances.
+			if len(records) > 0 {
+				poller.AllowRebalance()
+			}
+
+			if commitErr != nil {
+				if isRecoverableGroupCommitError(commitErr) {
+					c.logger.WithError(commitErr).Warn("Kafka group changed while committing records; uncommitted offsets may be replayed")
+					continue
 				}
+				c.logger.WithError(commitErr).Error("failed to commit records")
 			}
 		}
 	}

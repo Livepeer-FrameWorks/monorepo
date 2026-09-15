@@ -101,6 +101,71 @@ func TestIsRecoverableGroupCommitError(t *testing.T) {
 	}
 }
 
+type fakeConsumerPoller struct {
+	batch      kgo.Fetches
+	commitErr  error
+	cancel     context.CancelFunc
+	polls      int
+	maxRecords int
+	committed  []*kgo.Record
+	rebalances int
+}
+
+func (f *fakeConsumerPoller) PollRecords(ctx context.Context, maxRecords int) kgo.Fetches {
+	f.polls++
+	f.maxRecords = maxRecords
+	if f.polls == 1 {
+		return f.batch
+	}
+	f.cancel()
+	<-ctx.Done()
+	return nil
+}
+
+func (f *fakeConsumerPoller) CommitRecords(_ context.Context, records ...*kgo.Record) error {
+	f.committed = append(f.committed, records...)
+	return f.commitErr
+}
+
+func (f *fakeConsumerPoller) AllowRebalance() {
+	f.rebalances++
+}
+
+func TestConsumerStartAllowsRebalanceAndRecoversMembershipCommitError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	record := &kgo.Record{Topic: "events", Partition: 0, Offset: 12}
+	poller := &fakeConsumerPoller{
+		batch: kgo.Fetches{{Topics: []kgo.FetchTopic{{
+			Topic: "events",
+			Partitions: []kgo.FetchPartition{{
+				Partition: 0,
+				Records:   []*kgo.Record{record},
+			}},
+		}}}},
+		commitErr: kerr.UnknownMemberID,
+		cancel:    cancel,
+	}
+	consumer := &Consumer{
+		poller:   poller,
+		logger:   logrus.New(),
+		handlers: map[string]Handler{"events": func(context.Context, Message) error { return nil }},
+	}
+
+	err := consumer.Start(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error = %v, want context cancellation after recovering commit error", err)
+	}
+	if poller.maxRecords != defaultMaxPollRecords {
+		t.Fatalf("PollRecords max = %d, want %d", poller.maxRecords, defaultMaxPollRecords)
+	}
+	if poller.rebalances != 1 {
+		t.Fatalf("AllowRebalance calls = %d, want 1", poller.rebalances)
+	}
+	if len(poller.committed) != 1 || poller.committed[0] != record {
+		t.Fatalf("committed records = %v, want original record", poller.committed)
+	}
+}
+
 func formatRecordKey(topic string, partition int32, offset int64) string {
 	return topic + ":" + formatInt32(partition) + ":" + formatInt64(offset)
 }
