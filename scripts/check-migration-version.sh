@@ -193,13 +193,20 @@ check_name_status_stream() {
   done
 }
 
+latest_tag_commit=$(git rev-parse "$latest_tag^{commit}")
+
 if [ -n "$diff_base" ]; then
   if ! git cat-file -e "$diff_base^{commit}" 2>/dev/null; then
-    echo "WARNING: release-state diff base is not available: $diff_base; comparing against latest shipped tag $latest_tag" >&2
-    diff_base=$latest_tag
+    echo "WARNING: release-state diff base is not available: $diff_base; shipped migrations are compared against $latest_tag" >&2
   fi
-  check_name_status_stream < <(git diff --name-status -z "$diff_base"...HEAD -- "${path_args[@]}")
+
+  # The event base can predate a release commit even when its tag is already
+  # visible to this job. The shipped tag tree is the immutable baseline: it
+  # excludes migrations contained in that release and includes every later
+  # committed change, even when a subsequent event base would hide it.
+  check_name_status_stream < <(git diff --name-status -z "$latest_tag_commit"...HEAD -- "${path_args[@]}")
 elif [ "$worktree" = true ]; then
+  check_name_status_stream < <(git diff --name-status -z "$latest_tag_commit"...HEAD -- "${path_args[@]}")
   check_name_status_stream < <(git diff --name-status -z HEAD -- "${path_args[@]}")
   while IFS= read -r -d '' file; do
     check_added_or_modified "$file"

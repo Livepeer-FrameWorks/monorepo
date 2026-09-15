@@ -60,7 +60,7 @@ git commit -qm 'prepare v0.2.96'
 pending_commit=$(git rev-parse HEAD)
 expect_pass 'committed pending release matches its catalog' --diff-base v0.2.95
 expect_pass 'a missing diff base falls back to the latest shipped tag' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-if ! grep -q 'comparing against latest shipped tag v0.2.95' "$test_root/output"; then
+if ! grep -q 'shipped migrations are compared against v0.2.95' "$test_root/output"; then
   echo 'FAIL: missing diff base should report its shipped-tag fallback' >&2
   exit 1
 fi
@@ -83,6 +83,7 @@ expect_fail 'a shipped migration is immutable' --worktree
 git show HEAD:pkg/database/sql/migrations/commodore/v0.2.95/expand/001_released.sql > pkg/database/sql/migrations/commodore/v0.2.95/expand/001_released.sql
 
 git tag v0.2.96 "$pending_commit"
+expect_pass 'a release tag appearing before CI runs does not reclassify its migrations as mutations' --diff-base v0.2.95
 printf '%s\n' 'code-only work' > README.md
 expect_pass 'code-only work after a tag needs no future release declaration' --worktree
 
@@ -93,6 +94,12 @@ git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git commit -qm 'badly mutate shipped migration'
 expect_fail 'diff-base mode catches a committed shipped-migration edit' --diff-base v0.2.96
 expect_fail 'missing-base fallback catches a committed shipped-migration edit' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+
+bad_mutation_commit=$(git rev-parse HEAD)
+printf '%s\n' 'later code-only work' >> README.md
+git add README.md
+git commit -qm 'code only after bad migration mutation'
+expect_fail 'a later event base cannot hide an earlier shipped-migration edit' --diff-base "$bad_mutation_commit"
 
 git show v0.2.96:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
