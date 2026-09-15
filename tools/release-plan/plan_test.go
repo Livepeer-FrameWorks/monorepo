@@ -588,7 +588,7 @@ func TestPlanProtoTransitiveImportFansOut(t *testing.T) {
 // deterministic and that the planner copies the interface BOM forward.
 func TestPlanWebappCarryForwardWhenSourceHashMatches(t *testing.T) {
 	monorepo := writeFakeMonorepo(t, map[string]string{
-		".github/release-components.json":    `{"services":[],"webapps":[{"name":"toyapp","context":"webapp","env_prefix":"VITE","build_dir":"build"}]}`,
+		".github/release-components.json":    `{"services":[],"webapps":[{"name":"toyapp","context":"webapp","env_prefix":"VITE","build_dir":"build","extra_hash_paths":["packages/player"]}]}`,
 		".go-version":                        "1.26.2",
 		".github/workflows/release.yml":      "name: release\n",
 		"tools/release-plan/release-plan.go": "package main\n",
@@ -599,6 +599,8 @@ func TestPlanWebappCarryForwardWhenSourceHashMatches(t *testing.T) {
 		"webapp/Dockerfile":                  "FROM node:24-alpine\n",
 		"webapp/src/main.ts":                 "console.log('hi')\n",
 		"webapp/vite.config.ts":              "export default {}\n",
+		"packages/player/package.json":       `{"name":"player"}`,
+		"packages/player/src/index.ts":       "export const player = 1\n",
 	})
 
 	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
@@ -645,6 +647,17 @@ interfaces:
 	}
 	if d.CarriedInterface.Name != "toyapp" {
 		t.Fatalf("CarriedInterface.Name = %q, want toyapp", d.CarriedInterface.Name)
+	}
+
+	if writeErr := os.WriteFile(filepath.Join(monorepo, "packages", "player", "src", "index.ts"), []byte("export const player = 2\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	plan3, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := plan3.Decisions["toyapp"]; d.Action != ActionBuild {
+		t.Fatalf("toyapp action = %s, want build after workspace dependency change", d.Action)
 	}
 }
 

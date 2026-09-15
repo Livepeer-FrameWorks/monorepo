@@ -31,10 +31,11 @@ type ReleaseComponent struct {
 // .github/release-components.json. Webapps don't carry a Cmd or CGO flag;
 // their Dockerfile lives at <context>/Dockerfile by convention.
 type ReleaseWebapp struct {
-	Name      string `json:"name"`
-	Context   string `json:"context"`
-	EnvPrefix string `json:"env_prefix,omitempty"`
-	BuildDir  string `json:"build_dir,omitempty"`
+	Name           string   `json:"name"`
+	Context        string   `json:"context"`
+	EnvPrefix      string   `json:"env_prefix,omitempty"`
+	BuildDir       string   `json:"build_dir,omitempty"`
+	ExtraHashPaths []string `json:"extra_hash_paths,omitempty"`
 }
 
 // ReleaseComponents is the wire shape of .github/release-components.json.

@@ -146,14 +146,49 @@
       "name": "chartroom",
       "context": "website_application",
       "env_prefix": "VITE",
-      "build_dir": "build"
+      "build_dir": "build",
+      "extra_hash_paths": [
+        "patches",
+        "npm_player",
+        "npm_studio",
+        "packages/site-config",
+        "packages/map-core",
+        "website_marketing/package.json",
+        "website_docs/package.json",
+        "docs/skills",
+        "scripts/copy-agent-files.sh",
+        "scripts/render-public-runtime-config.mjs"
+      ]
     },
     {
       "name": "foredeck",
       "context": "website_marketing",
       "env_prefix": "VITE",
-      "build_dir": "build/client"
+      "build_dir": "build/client",
+      "extra_hash_paths": [
+        "patches",
+        "npm_player",
+        "npm_studio",
+        "packages/site-config",
+        "packages/map-core",
+        "website_application/package.json",
+        "website_docs/package.json",
+        "docs/skills",
+        "scripts/copy-agent-files.sh",
+        "scripts/render-public-runtime-config.mjs"
+      ]
     },
-    { "name": "logbook", "context": "website_docs", "env_prefix": "VITE", "build_dir": "dist" }
+    {
+      "name": "logbook",
+      "context": "website_docs",
+      "env_prefix": "VITE",
+      "build_dir": "dist",
+      "extra_hash_paths": [
+        "patches",
+        "packages/site-config",
+        "docs/skills",
+        "scripts/copy-agent-files.sh"
+      ]
+    }
   ]
 }

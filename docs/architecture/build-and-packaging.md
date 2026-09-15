@@ -170,6 +170,12 @@ Test files (`*_test.go`) are excluded; they don't affect the binary. The import 
 
 The proto-source closure resolves each generated `pkg/proto/<x>/*.pb.go` in the Go closure back to its `.proto` via the protoc `// source:` header, then follows that proto's `import` statements transitively. Because generated code is committed and CI keeps it in lockstep with source (`make proto` + `git diff --quiet pkg/proto/`), the binary's identity is exactly "what it compiles"; a change to an unrelated proto carries the service forward. Keeping that closure small is the job of the proto layering rules in [`docs/standards/proto-layering.md`](../standards/proto-layering.md), enforced by `TestProtoLayering` in `tools/release-plan`.
 
+### Source-hash recipe (per web interface)
+
+Web interface hashes include the interface context, root pnpm manifests and lockfile, Node toolchain, release workflow salt, GraphQL generation inputs when applicable, and every repository-root build input declared by `extra_hash_paths` in `.github/release-components.json`. The extra paths are required for workspace dependencies such as `npm_player`, `npm_studio`, and shared packages because the interface Dockerfiles compile their source even though it lives outside the interface context. Generated dependency and output directories such as `node_modules`, `build`, `dist`, `.svelte-kit`, and `$houdini` are excluded.
+
+Every external `COPY` input in an interface Dockerfile must be covered by the root inputs, automatic GraphQL inputs, or that interface's `extra_hash_paths`. This prevents a changed SDK from being carried forward inside an older Chartroom or Foredeck bundle.
+
 ### Baseline resolution (track-aware)
 
 Releases live on two tracks: `stable` (e.g. `v0.2.39`) and `rc` (e.g. `v0.2.40-rc1`). The baseline lookup respects the new tag's track:
