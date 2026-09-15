@@ -290,7 +290,7 @@ log "1/9 bring up both cells (MIST_IMAGE=$MIST_IMAGE)"
 # Only the services this proof needs (compose starts their dependencies); the
 # website/tray images are irrelevant here and take minutes to build.
 compose up -d --build --remove-orphans postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init \
-  foghorn foghorn-2 foghorn-b helmsman helmsman-b mistserver mistserver-b nginx
+  foghorn foghorn-2 foghorn-b helmsman helmsman-b mistserver mistserver-b edge-proxy-a edge-proxy-b nginx
 wait_for 120 "postgres" compose exec -T postgres pg_isready -q
 if ! compose exec -T postgres psql -U "$(grep '^POSTGRES_USER=' .env | cut -d'"' -f2)" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1; then
   fail "database foghorn_b is missing: the two-cell profile needs a fresh dev volume (docker compose down -v, then rerun)"
@@ -370,7 +370,7 @@ wait_for 180 "media segments for the configured pull input" media_flows "$pull_v
 
 log "7/9 private-only policy with the private cell down refuses instead of silently spilling"
 apply_serve_policy "$PRIVATE_ONLY"
-compose stop helmsman-b mistserver-b >/dev/null
+compose stop edge-proxy-b mistserver-b helmsman-b >/dev/null
 wait_for 180 "cell B to be refused" resolve_refused "$FOGHORN_B"
 resolve_refused "$FOGHORN_A" || fail "cell A did not refuse a private-only viewer with a placement refusal: $(resolve_status "$FOGHORN_A") $(resolve_body "$FOGHORN_A")"
 # Stored media obeys the same policy. The seeded VOD's bytes are warm on cell A's
@@ -393,7 +393,7 @@ wait_for 120 "stored media to be permitted again" bash -c "[ \"\$(curl -s -m 10 
 stored_media_location="$(stored_location "$FOGHORN_A")"
 [[ "$stored_media_location" == *"$EDGE_A_HOST"* ]] || fail "stored media left the edge holding its bytes: $stored_media_location"
 wait_for 60 "media segments for stored media" media_flows "$stored_media_location"
-compose start helmsman-b mistserver-b >/dev/null
+compose start helmsman-b mistserver-b edge-proxy-b >/dev/null
 apply_serve_policy "$PREFER_B_FALLBACK_A"
 wait_for 180 "cell B back in service with the private edge preferred again" edge_location_is "$FOGHORN_B" "$EDGE_B_HOST"
 
