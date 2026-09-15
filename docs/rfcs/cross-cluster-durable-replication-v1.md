@@ -66,7 +66,13 @@ the remote destination.
    `subscription_status='active'` + `expires_at`. `GetClusterRouting.cluster_peers` carries the operations.
 2. **Provider consent.** `infrastructure_clusters` advertises a writable durable-storage capability
    (backend kind + endpoint + free capacity/health). Consent is per (provider cluster, tenant, scope)
-   approval — a global `accepts_tenant_storage` flag alone is insufficient.
+   approval — a global `accepts_tenant_storage` flag alone is insufficient. The extension point is the
+   shipped per-cluster consent primitive: `quartermaster.infrastructure_clusters.media_allow_ingest` /
+   `media_allow_serve` / `media_allow_external_source`, versioned by `media_consent_revision`
+   (`pkg/database/sql/schema/quartermaster.sql` ~169-173, ~1094-1097) and exposed as the GraphQL
+   `clusterMediaConsent` query and `applyClusterMediaConsentChange` mutation. That is a cluster-wide
+   owner permission today; this RFC narrows the same primitive to per (provider cluster, tenant, scope)
+   and adds a `store`/`replicate` verb alongside ingest and serve.
 3. **Destination selection.** explicitly-subscribed durable cluster (store/replicate + consent + writable +
    healthy) → tenant official cluster (today's path) → fail closed.
 4. **Assignment.** Server-minted record: assignment id, customer tenant, artifact id/kind, source
