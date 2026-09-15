@@ -148,12 +148,14 @@ interface:
   service-boundary rule is now load-bearing for federation, not just hygiene.
 - **Enumerate authority surfaces.** For each of Commodore, Quartermaster, and Periscope, document
   the interface through which its authority is consumed: identity/entitlement resolution and
-  policy-bundle distribution (Commodore); cluster registry, peer discovery, access grants, mesh
+  media-authority distribution (Commodore); cluster registry, peer discovery, access grants, mesh
   state (Quartermaster); event ingest contracts and attribution/usage read models (Periscope).
   These enumerations become the contract seam that later phases relocate — the module map work
   (`PLAN_PLATFORM_MODULE_MAP.md`) supplies the inventory.
-- **Prefer verifiable artifacts over live lookups** where the pattern already exists: the signed
-  policy bundle (compiled centrally, verified locally) is the template. Interfaces that hand a
+- **Prefer verifiable artifacts over live lookups** where the pattern already exists: the Ed25519
+  media-authority envelope (compiled centrally by Commodore, verified locally in
+  `api_balancing/internal/mediaauthority/`) is the template, not the retired signed policy bundle.
+  Interfaces that hand a
   peer a signed, versioned artifact rather than requiring a synchronous call to central state are
   directly reusable when the compiling authority moves.
 
@@ -241,7 +243,8 @@ state-synchronization research track studies how to do without.
 
 **Commodore** (api_control) holds tenant/stream identity and compiles entitlement. It remains
 central authority the longest; its pluggability contribution is compiling authority into
-verifiable artifacts (policy bundles) so enforcement decentralizes even while identity does not.
+verifiable artifacts (the Ed25519 media-authority envelope, `commodore.media_authority_versions`)
+so enforcement decentralizes even while identity does not.
 
 **Periscope** (api_analytics_ingest / api_analytics_query, with Decklog as the ingest edge) owns
 the data-plane split: operator-local ingest and retention for locally served traffic, plus the
@@ -361,8 +364,9 @@ expand/contract migration discipline.
   inventory across Commodore/Quartermaster/Periscope; finding that plane pluggability appears in no
   existing doc or RFC; the cross-schema-read findings, whose fix has since shipped — the two reads
   now go through `GetTenantEntitlement` (Commodore) and `ListServiceClusterAssignments` (Foghorn).
-- [Reference] `docs/rfcs/placement-policy-engine.md` — signed policy bundle + local verification at
-  decision-point hook-ins; the distribution pattern Phase 2 entitlement enforcement extends.
+- [Reference] `docs/rfcs/placement-policy-engine.md` — Ed25519 media-authority envelope + local
+  verification at decision-point hook-ins; the distribution pattern Phase 2 entitlement
+  enforcement extends.
 - [Reference] `docs/rfcs/federated-settlement-attribution.md` — settlement/attribution side of the
   data-plane split (authored in parallel with this RFC).
 - [Reference] `docs/architecture/cross-cluster-billing.md`, `docs/architecture/routing-events-attribution.md` —

@@ -2,7 +2,7 @@
 
 ## Status
 
-Partially implemented. Node-level `normal` / `draining` / `maintenance` operational modes exist through Foghorn HTTP/gRPC, Commodore/Gateway node-management surfaces, Helmsman control messages, and the CLI/API management flows. Per-role drain flags and DNS pool removal remain future work.
+Partially implemented. Node-level `normal` / `draining` / `maintenance` operational modes exist through Foghorn HTTP/gRPC, Commodore/Gateway node-management surfaces, Helmsman control messages, and the CLI/API management flows. The feature registry marks `node-mode` as shipped on that basis. What remains here is optional: per-role drain flags, mode TTL/expiry, and DNS pool removal for drained nodes.
 
 ## TL;DR
 

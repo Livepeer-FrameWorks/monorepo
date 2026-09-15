@@ -19,13 +19,13 @@ Upstream MistServer's C++ Foghorn (`lib/foghorn.cpp`, `src/utils/util_foghorn.cp
 
 Those MistServer source files are upstream/external context, not files currently present in this monorepo. The repository currently carries MistServer deployment roles, not the C++ source tree.
 
-Nautophone (`mistserver/nautophone/`) provides a web UI and Node.js translator service for monitoring endpoint states.
+Nautophone provides a web UI and Node.js translator service for monitoring endpoint states. It lives in upstream MistServer's tree under `nautophone/`, alongside the C++ sources above; like them, it is not present in this monorepo.
 
 Go Foghorn (`api_balancing/`) replaced C++ MistUtilLoad-style load-balancing responsibilities in the platform, but it has NOT absorbed C++ Foghorn's NAT traversal capabilities. The two Foghorns serve different purposes today.
 
 Inter-server network performance is not measured anywhere in the platform today: no component measures latency or throughput between platform servers. Node telemetry (CPU, RAM, bandwidth counters) is per-node, and the geo distance used in balancer scoring is a static proxy, not a measurement of the path.
 
-SDKs partially support ICE server configuration: `npm_studio` WhipClient accepts optional `iceServers` in its config (`types.ts`). `npm_player` NativePlayer and MistWebRTCPlayer cast `iceServers` from the source via `as any`; it is NOT in the public `StreamSource` interface.
+SDKs partially support ICE server configuration: `npm_studio` WhipClient accepts optional `iceServers` in its config (`npm_studio/packages/core/src/types.ts`, two declarations). In `npm_player` the field is read off the source through an untyped cast rather than declared: `npm_player/packages/core/src/players/NativePlayer.ts` (~line 336) casts `s.iceServers as RTCIceServer[]`, and `npm_player/packages/core/src/players/MistWebRTCPlayer/index.ts` (~line 606) reads `sourceAny?.iceServers`. It is NOT in the public `StreamSource` interface, so a caller supplying it is relying on undeclared behavior.
 
 There is no platform-managed TURN/STUN infrastructure and no repo-managed `MistUtilFoghorn` deployment path. Operators would need to manage that external binary/process themselves today.
 
@@ -37,7 +37,8 @@ Evidence:
 - Upstream MistServer `src/utils/util_foghorn.cpp`
 - Upstream MistServer `nautophone/`
 - `ansible/collections/ansible_collections/frameworks/infra/roles/mistserver/`
-- `npm_player/packages/core/src/core/PlayerInterface.ts`
+- `npm_player/packages/core/src/players/NativePlayer.ts`
+- `npm_player/packages/core/src/players/MistWebRTCPlayer/index.ts`
 - `npm_studio/packages/core/src/types.ts`
 - `api_balancing/internal/balancer/balancer.go`
 
@@ -150,10 +151,10 @@ Foghorn injects `iceServers` into balancer responses with short-lived TURN crede
 - [External evidence] Upstream MistServer `lib/foghorn.h`
 - [External evidence] Upstream MistServer `lib/stun.cpp` (STUN protocol implementation)
 - [External evidence] Upstream MistServer `src/utils/util_foghorn.cpp` (coordination server)
-- [External evidence] Upstream MistServer `nautophone/` (monitoring UI)
+- [External evidence] Upstream MistServer `nautophone/` (monitoring UI; upstream tree, not in this repo)
 - [Evidence] `ansible/collections/ansible_collections/frameworks/infra/roles/mistserver/` (MistServer role only; no MistUtilFoghorn role found)
 - [Evidence] `api_balancing/internal/balancer/balancer.go` (current scoring model)
-- [Evidence] `npm_player/packages/core/src/core/PlayerInterface.ts` (iceServers via as any)
+- [Evidence] `npm_player/packages/core/src/players/NativePlayer.ts` and `npm_player/packages/core/src/players/MistWebRTCPlayer/index.ts` (iceServers read via untyped cast)
 - [Evidence] `npm_studio/packages/core/src/types.ts` (optional iceServers config)
 - [Reference] `docs/rfcs/workload-cost-model.md` (consumer of the inter-server network-performance signal)
 - [Reference] RFC 8489 (STUN)

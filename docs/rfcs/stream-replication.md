@@ -156,7 +156,8 @@ Ownership follows the service-boundary split already established for placement p
 This is deliberately a consumer of the placement policy engine
 (`docs/rfcs/placement-policy-engine.md`): the fields above are `replicate`-verb rule inputs
 (selectors on stream/tenant, effects `require`/`allow`/`deny`/`prefer` over regions and counts),
-distributed through the same signed policy bundle, enforced at the replication hook-in. This RFC
+distributed through the same Ed25519 media-authority envelope that engine reuses, enforced at the
+replication hook-in. This RFC
 does not introduce a second policy model; it defines what the `replicate` domain needs to express
 for live streams and the orchestrator that acts on the resolved result.
 
@@ -167,8 +168,11 @@ for live streams and the orchestrator that acts on the resolved result.
   enforcement at enact time; `control.StreamRegistry` remains the live replication truth and
   gains the topology/role records.
 - **Commodore (`api_control`)** — per-stream replication policy and spread intent (stream-owner
-  side), evolving from `stream_cluster_pins`; policy compiled into the signed bundle it already
-  mints (`policy_bundle_versions`).
+  side), evolving from `stream_cluster_pins`; policy compiled into the Ed25519 media-authority
+  envelope it already mints (`commodore.media_authority_versions`), not into
+  `policy_bundle_versions` (that producer is retired: `GetSignedPolicyBundle` in
+  `api_control/internal/grpc/policy_bundle.go` returns `Unimplemented`, and the table now carries
+  only the playback-policy bundle).
 - **Quartermaster (`api_tenants`)** — region metadata for clusters/nodes and replication
   entitlement (capacity-owner side of the two-sided policy).
 - **Helmsman/MistServer (`api_sidecar`)** — unchanged transport: DTSC pulls configured exactly as
@@ -225,7 +229,7 @@ Additive and phased; each phase useful on its own and behind its own flag. No da
 
 1. **Region metadata + policy fields, no behavior change.** Quartermaster region metadata
    authoritative; Commodore schema for per-stream policy (defaults = unlimited, all regions);
-   fields visible in policy bundles but unenforced.
+   fields visible in the media-authority envelope but unenforced.
 2. **Operator-triggered spread.** Explicit spread-to-cell API enacted by the Foghorn
    orchestrator; observability for intent vs actual.
 3. **Policy enforcement.** Caps and region constraints enforced at arrangement time;
@@ -266,7 +270,8 @@ Additive and phased; each phase useful on its own and behind its own flag. No da
   federation telemetry; `RemoteReplicationEntry` peer-availability records feeding loop
   prevention.
 - [Evidence] `pkg/database/sql/schema/commodore.sql` — `commodore.stream_cluster_pins` (the
-  per-stream placement-constraint seed) and `commodore.policy_bundle_versions` (signed bundle
-  channel).
+  per-stream placement-constraint seed) and `commodore.media_authority_versions` (the Ed25519
+  signed-distribution channel; `commodore.policy_bundle_versions` is now the playback-policy
+  bundle only).
 - [Evidence] `pkg/proto/foghorn_federation.proto` — QueryStream / NotifyOriginPull /
   StreamAdvertisement contracts.
