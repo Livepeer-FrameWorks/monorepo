@@ -867,6 +867,27 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			remediationSteps = append(remediationSteps, step)
 		}
 	}
+	checkServiceReplicas := func(name string, svc inventory.ServiceConfig) {
+		hostNames := doctorServiceHostNames(name, svc, manifest)
+		if len(hostNames) == 0 {
+			recordMiss(name, "no effective hosts found in manifest")
+			return
+		}
+		port, err := resolvePort(name, svc)
+		if err != nil {
+			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
+			return
+		}
+		for _, hostName := range hostNames {
+			label := doctorServiceLabel(name, hostName, len(hostNames))
+			host, ok := manifest.GetHost(hostName)
+			if !ok {
+				recordMiss(label, fmt.Sprintf("host %q not found in manifest", hostName))
+				continue
+			}
+			runInfraCheck(label, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
+		}
+	}
 
 	if deep {
 		result := &health.CheckResult{Name: "shared_platform_secrets", CheckedAt: time.Now(), Metadata: map[string]string{"check_kind": "config"}}
@@ -942,50 +963,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !svc.Enabled {
 			continue
 		}
-		if name == "privateer" {
-			port, err := resolvePort(name, svc)
-			if err != nil {
-				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
-				continue
-			}
-			hostNames := orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
-			if len(hostNames) == 0 {
-				recordMiss(name, "no effective hosts found in manifest")
-				continue
-			}
-			for _, hostName := range hostNames {
-				host, ok := manifest.GetHost(hostName)
-				label := fmt.Sprintf("privateer@%s", hostName)
-				if !ok {
-					recordMiss(label, fmt.Sprintf("host %q not found in manifest", hostName))
-					continue
-				}
-				runInfraCheck(label, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
-			}
-			continue
-		}
-
-		hostName := svc.Host
-		if hostName == "" && len(svc.Hosts) > 0 {
-			hostName = svc.Hosts[0]
-		}
-
-		if hostName == "" {
-			continue
-		}
-
-		host, ok := manifest.GetHost(hostName)
-		if !ok {
-			recordMiss(name, fmt.Sprintf("host %q not found in manifest", hostName))
-			continue
-		}
-
-		port, err := resolvePort(name, svc)
-		if err != nil {
-			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
-			continue
-		}
-		runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
+		checkServiceReplicas(name, svc)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -996,19 +974,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !svc.Enabled {
 			continue
 		}
-		host, ok := firstServiceHost(manifest, svc)
-		if !ok {
-			recordMiss(name, "host not found in manifest")
-			continue
-		}
-
-		port, err := resolvePort(name, svc)
-		if err != nil {
-			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
-			continue
-		}
-
-		runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
+		checkServiceReplicas(name, svc)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -1020,17 +986,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			if !svc.Enabled {
 				continue
 			}
-			host, ok := firstServiceHost(manifest, svc)
-			if !ok {
-				recordMiss(name, "host not found in manifest")
-				continue
-			}
-			port, err := resolvePort(name, svc)
-			if err != nil {
-				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
-				continue
-			}
-			runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
+			checkServiceReplicas(name, svc)
 		}
 		fmt.Fprintln(out, "")
 	}
@@ -1140,6 +1096,20 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	ux.PrintNextSteps(out, steps)
 
 	return nil
+}
+
+func doctorServiceHostNames(name string, svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
+	if name == "privateer" {
+		return orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
+	}
+	return serviceHosts(svc)
+}
+
+func doctorServiceLabel(name, hostName string, replicas int) string {
+	if replicas > 1 || name == "privateer" {
+		return fmt.Sprintf("%s@%s", name, hostName)
+	}
+	return name
 }
 
 func clickHouseDoctorChecker(ch *inventory.ClickHouseConfig, sharedEnv map[string]string) *health.ClickHouseChecker {
@@ -1546,7 +1516,8 @@ func doctorControlPlaneDetail(r readiness.Report, deep bool) string {
 // Known infrastructure names get curated commands; everything else falls
 // through to `cluster logs <name>`.
 func doctorServiceRemediation(serviceName string) ux.NextStep {
-	n := strings.ToLower(serviceName)
+	baseName, _, _ := strings.Cut(serviceName, "@")
+	n := strings.ToLower(baseName)
 	switch {
 	case strings.HasPrefix(n, "postgres"), strings.HasPrefix(n, "yugabyte"):
 		return ux.NextStep{
@@ -1570,7 +1541,7 @@ func doctorServiceRemediation(serviceName string) ux.NextStep {
 		}
 	}
 	return ux.NextStep{
-		Cmd: fmt.Sprintf("frameworks cluster logs %s", serviceName),
+		Cmd: fmt.Sprintf("frameworks cluster logs %s", baseName),
 		Why: "Review service logs for startup or dependency errors.",
 	}
 }

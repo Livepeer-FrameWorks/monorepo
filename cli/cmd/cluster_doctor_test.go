@@ -43,6 +43,38 @@ func TestDoctorServiceRemediation_appServiceFallsBackToGenericLogs(t *testing.T)
 	}
 }
 
+func TestDoctorServiceRemediationReplicaUsesLogicalServiceName(t *testing.T) {
+	t.Parallel()
+	step := doctorServiceRemediation("periscope-ingest@regional-eu-2")
+	if step.Cmd != "frameworks cluster logs periscope-ingest" {
+		t.Fatalf("replica remediation Cmd = %q, want logical service logs command", step.Cmd)
+	}
+}
+
+func TestDoctorServiceHostNamesIncludesEveryReplica(t *testing.T) {
+	t.Parallel()
+	svc := inventory.ServiceConfig{Hosts: []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"}}
+	got := doctorServiceHostNames("periscope-ingest", svc, &inventory.Manifest{})
+	if len(got) != 3 {
+		t.Fatalf("host count = %d, want 3: %v", len(got), got)
+	}
+	for i, want := range svc.Hosts {
+		if got[i] != want {
+			t.Fatalf("host[%d] = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+func TestDoctorServiceLabelIdentifiesReplicas(t *testing.T) {
+	t.Parallel()
+	if got := doctorServiceLabel("bridge", "regional-eu-1", 6); got != "bridge@regional-eu-1" {
+		t.Fatalf("multi-replica label = %q", got)
+	}
+	if got := doctorServiceLabel("quartermaster", "central-eu-1", 1); got != "quartermaster" {
+		t.Fatalf("single-replica label = %q", got)
+	}
+}
+
 func TestDoctorControlPlaneDetail_distinguishesAllStates(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
