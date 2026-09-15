@@ -271,18 +271,138 @@ and has no `AFTER` clause, so a tagged upgrade cannot preserve a current
 baseline that groups a later-added column mid-table. Composite-type attribute
 order remains significant because it is part of that type's value contract.
 
-Moving SQL into a separate file is not itself a test strategy. Keep small queries near
-their repository/service when that is clearer. Put a statement in
-`pkg/database/queries` when runtime code and a real-engine contract test must share its
-exact text, especially for metering and financial writes. Use mock tests for branching
-and failure handling, but never treat `sqlmock.AnyArg()` as proof that driver values,
-defaults, casts, unique constraints, or `NOT NULL` contracts work on the real engine.
+## Executable query contracts
 
-Static PostgreSQL queries should migrate to the owning service's sqlc query tree.
-Generated code is committed and CI regenerates it with the pinned tool version.
-Use the generated `DBTX` boundary so transaction ownership stays with the caller;
-never split a lock/fencing transaction merely to fit generated methods. ClickHouse
-uses explicit typed batch writers and live append contracts rather than sqlc.
+The same rule that governs schema artifacts governs queries: a statement counts as a
+contract only when the runtime and a test execute it against a real engine. Moving SQL
+into a separate file, or behind a generated method, is not itself a test strategy. Keep
+small queries near their repository or service when that is clearer. Use mock tests for
+branching and failure handling, but never treat `sqlmock.AnyArg()` as proof that driver
+values, defaults, casts, unique constraints, or `NOT NULL` contracts work on the real
+engine.
+
+### PostgreSQL: generated, engine-checked repositories
+
+Each PostgreSQL-backed service owns a sqlc configuration and a service-local query tree:
+
+| Service               | Config                          | Queries                                          | Generated package                                  |
+| --------------------- | ------------------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| `api_billing`         | `api_billing/sqlc.yaml`         | `api_billing/internal/database/queries/`         | `api_billing/internal/database/purserdb`           |
+| `api_control`         | `api_control/sqlc.yaml`         | `api_control/internal/database/queries/`         | `api_control/internal/database/commodoredb`        |
+| `api_tenants`         | `api_tenants/sqlc.yaml`         | `api_tenants/internal/database/queries/`         | `api_tenants/internal/database/quartermasterdb`    |
+| `api_dns`             | `api_dns/sqlc.yaml`             | `api_dns/internal/database/queries/`             | `api_dns/internal/database/navigatordb`            |
+| `api_consultant`      | `api_consultant/sqlc.yaml`      | `api_consultant/internal/database/queries/`      | `api_consultant/internal/database/skipperdb`       |
+| `api_analytics_query` | `api_analytics_query/sqlc.yaml` | `api_analytics_query/internal/database/queries/` | `api_analytics_query/internal/database/meteringdb` |
+| `api_balancing`       | `api_balancing/sqlc.yaml`       | `api_balancing/internal/database/queries/`       | `api_balancing/internal/database/foghorndb`        |
+
+Each config points `schema:` at that database's baseline file under
+`pkg/database/sql/schema/`, so generation itself fails when a query no longer matches
+desired state. Query files are grouped by repository or transaction boundary, not
+mechanically by table, and every query stays owned by the service that owns its
+database; cross-service data still goes through `pkg/clients/`.
+
+Generated code is committed so a normal build downloads no generator. `make sqlc`
+regenerates with the pinned `SQLC_VERSION` (`v1.31.1` in the `Makefile`) and
+`make sqlc-check` re-runs generation, then fails on any diff **or untracked file** in
+the generated packages. CI runs it in the Go build lane and again in the schema lane
+(`.github/workflows/ci.yml`).
+
+Boundary types are declared in each `sqlc.yaml` rather than left to driver defaults:
+`uuid` maps to `github.com/google/uuid`, `jsonb` (nullable and not) to
+`encoding/json.RawMessage`, `text[]` to `github.com/lib/pq.StringArray`. Required JSONB
+values must be normalized before the driver so a Go `nil` never becomes the contract.
+
+Use the generated `DBTX` boundary so the same query runs through `*sql.DB` and
+`*sql.Tx` and transaction ownership stays with the caller; never split a lock or
+fencing transaction merely to fit generated methods. Converting a handwritten query
+must preserve its transaction, lock, fencing, and error semantics.
+
+Dynamic reporting and filter SQL may stay handwritten where generation is impractical.
+Its repository then owns its result types and must execute representative statements
+against the real supported engine in CI; the exemption is from generation, not from a
+contract.
+
+### ClickHouse: typed batch writers
+
+ClickHouse's native batch API is positional, so sqlc's static analysis would not catch
+the failures that actually occur. Each canonical table instead gets, in
+`api_analytics_ingest/internal/database/periscopeingestdb/*_writers.go`:
+
+- one explicit `INSERT INTO <table> (columns...)` constant;
+- one typed row struct;
+- a `Prepare<Table>` function returning the generic `Writer[Row]` from `writer.go`,
+  whose `values(Row) []interface{}` function owns positional `Append` order.
+
+Production code does not call variadic `PrepareBatch`/`Append` outside those writers.
+`TestEveryTypedWriterAppendsToCurrentClickHouse` in
+`writer_realclickhouse_test.go` (build tag `schema_verify`) applies the current
+`Replicated*` baseline to a real pinned ClickHouse container and appends through every
+registered writer. It also parses the package's `*_writers.go` files and fails on
+registry drift, so a new `Prepare*` function cannot ship without a live append.
+`pkg/database/observability.go` records each writer's prepare, append, and send failure
+into `frameworks_database_failures_total{service,engine,failure}` with a bounded label
+set, and deliberately classifies timeouts and dropped connections as operational rather
+than as schema mismatches.
+
+### CI routing
+
+Database contracts are path-gated. The `changes` job in `.github/workflows/ci.yml`
+defines `release`, `database`, `yugabyte_core`, and per-service `yugabyte_*` filters
+covering Ansible database roles, service database packages, baselines, migrations,
+seeds, engine configuration, Compose topology, and the contract harnesses. The schema
+lane runs when `release` or `database` matched; the Yugabyte lane runs the exhaustive
+gates on `yugabyte_core` and only the touched service's contracts otherwise. The
+nightly `schedule` trigger and `workflow_dispatch` force the full lane regardless of
+path detection, so a filter gap is bounded by one day rather than shipped.
+
+### What these contracts are deliberately not
+
+Each of the following was considered and rejected; reopening one means overturning a
+property above, not filling a gap.
+
+- **An ORM (GORM, ent).** It inverts the SQL-first model: the baseline stops being
+  desired state and generated DDL becomes a second authority.
+- **`golang-migrate`.** It would create a transition authority parallel to the release
+  catalog and the phased expand/postdeploy/contract runner.
+- **Down migrations.** Rollback safety is declared per release transition in the
+  catalog; recovery is usually forward repair, not destructive schema reversal.
+- **sqlc for ClickHouse.** It does not validate the positional batch append contract
+  that produces the real failures.
+- **One repository-wide query package.** It erases service ownership and invites
+  cross-service database reads. `pkg/database/queries/periscope_metering.go` is the
+  narrow exception: statements whose exact text the runtime and a real-engine contract
+  test must demonstrably share, which in practice means metering and financial writes.
+- **Immediate blanket row-level security.** RLS adds connection state and
+  background-worker failure modes. Service-owned roles and repository conversion land
+  first; any tenant policy must be proven on supported YugabyteDB and must account for
+  global workers through a separate privileged role.
+
+## Seeds and local engines
+
+Seeds are service-owned deterministic fixtures, executed explicitly, never a database
+first-boot side effect. PostgreSQL demo fixtures live at
+`pkg/database/sql/seeds/demo/postgres/<database>.sql` and ClickHouse's at
+`pkg/database/sql/seeds/demo/clickhouse_demo_data.sql`. A seed uses explicit insert
+column lists, keeps identity and join keys deterministic, and is proven against only
+its owning baseline (the harness applies it twice, so a non-idempotent upsert or a
+borrowed cross-service assumption fails the gate). Derived state should be produced by
+the real projection or rebuild path rather than seeded alongside contradictory raw
+facts.
+
+`make seed-demo` (`seed-demo-postgres` plus `seed-demo-clickhouse`) is the canonical
+workflow. First boot of the local stack only creates structure:
+`infrastructure/postgres/init-service-databases.sh` mirrors production's logical service
+databases by creating each `<service>` owner and `<service>_runtime` login, the database,
+connect grants, and extensions, then applies the baseline as the owner and grants the
+runtime role the same DML-only privilege set described under
+[PostgreSQL runtime roles](#postgresql-runtime-roles). Extensions are installed by the
+bootstrap superuser precisely so a service owner never needs superuser to satisfy an
+idempotent `CREATE EXTENSION` in its baseline.
+
+Engine versions are single-sourced. `docker-compose.yml` and the contract harnesses
+resolve the same image plus digest from `config/infrastructure.yaml`; YugabyteDB carries
+a separate contract pin in `config/schema-contract-engines.yaml` matching its supported
+native release build.
 
 ## Executable runtime capabilities
 
