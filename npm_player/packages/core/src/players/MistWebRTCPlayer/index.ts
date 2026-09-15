@@ -617,6 +617,12 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.peerConnection = pc;
     this.incomingMediaStream = null;
 
+    // Keep primary media ahead of the metadata data channel in the SDP offer.
+    // MistServer uses the first enabled BUNDLE member as the shared transport,
+    // so a video-only stream must not nominate an empty metadata m-line.
+    pc.addTransceiver("audio", { direction: "recvonly" });
+    pc.addTransceiver("video", { direction: "recvonly" });
+
     // Create data channel for metadata
     this.dataChannel = pc.createDataChannel("*", { protocol: "JSON" });
     this.dataChannel.onmessage = (event) => {
@@ -838,10 +844,6 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
   private async createAndSendOffer(pc: RTCPeerConnection): Promise<void> {
     if (!this.signaling) return;
-
-    // Add transceivers for receiving
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,

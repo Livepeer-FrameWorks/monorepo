@@ -6,6 +6,7 @@ type Listener = (event?: Event) => void;
 
 let sentCommands: Array<Record<string, unknown>> = [];
 let createdTags: string[] = [];
+let peerConnectionSetup: string[] = [];
 
 class FakeWebSocket {
   static OPEN = 1;
@@ -50,10 +51,13 @@ class FakeRTCPeerConnection {
   onconnectionstatechange: (() => void) | null = null;
   oniceconnectionstatechange: (() => void) | null = null;
   ontrack: ((event: RTCTrackEvent) => void) | null = null;
-  createDataChannel = vi.fn(
-    () => ({ close: vi.fn(), onmessage: null }) as unknown as RTCDataChannel
-  );
-  addTransceiver = vi.fn();
+  createDataChannel = vi.fn(() => {
+    peerConnectionSetup.push("data");
+    return { close: vi.fn(), onmessage: null } as unknown as RTCDataChannel;
+  });
+  addTransceiver = vi.fn((kind: string) => {
+    peerConnectionSetup.push(kind);
+  });
   createOffer = vi.fn(async () => ({ type: "offer" as RTCSdpType, sdp: "v=0\r\n" }));
   setLocalDescription = vi.fn(async () => {});
   setRemoteDescription = vi.fn(async () => {});
@@ -94,6 +98,7 @@ describe("Mist WebRTC startup", () => {
   beforeEach(() => {
     sentCommands = [];
     createdTags = [];
+    peerConnectionSetup = [];
     const video = fakeVideo();
     vi.stubGlobal("window", { RTCPeerConnection: FakeRTCPeerConnection, WebSocket: FakeWebSocket });
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -134,6 +139,27 @@ describe("Mist WebRTC startup", () => {
 
     expect(sentCommands.map((command) => command.type)).toEqual(["offer_sdp", "play"]);
     expect(createdTags).toEqual(["video"]);
+  });
+
+  it("places primary media before metadata in the BUNDLE offer", async () => {
+    const player = new MistWebRTCPlayerImpl();
+    const container = {
+      classList: { add: vi.fn() },
+      appendChild: vi.fn(),
+    } as unknown as HTMLElement;
+
+    await player.initialize(
+      container,
+      { type: "mist/webrtc", url: "wss://mist.example.test/view/webrtc/live" },
+      { autoplay: true, muted: true, controls: false },
+      {
+        type: "live",
+        source: [],
+        meta: { tracks: [{ type: "video", codec: "H264" }] },
+      }
+    );
+
+    expect(peerConnectionSetup).toEqual(["audio", "video", "data"]);
   });
 
   it("does not hold a click-to-play session before media metadata can arrive", async () => {
