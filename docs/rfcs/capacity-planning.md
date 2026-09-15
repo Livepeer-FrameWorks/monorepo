@@ -1,118 +1,209 @@
-# RFC: Capacity Planning and Utilization Thresholds
+# RFC: Capacity Reserves, Fleet Reporting, and Alerts
 
 ## Status
 
-Partially implemented — a baseline Prometheus alert rules file exists; the exclusion thresholds, expanded alerts, and N×2 cluster reporting are unbuilt.
+Partially implemented. Live placement already enforces explicit capacity state and directional
+bandwidth headroom. Reserve policy below physical exhaustion, fleet failure-domain reporting, and
+the capacity/topology alert set remain proposals with no target release or delivery date.
 
 ## TL;DR
 
-- Add configurable utilization thresholds to the edge balancer so saturated nodes can be excluded from routing.
-- Expand baseline Prometheus alert rules for edge saturation, peer health, and operational signals.
-- Surface cluster-wide capacity reporting to support the N\*2 rule (never exceed 50% utilization).
+- Keep live capacity admission in the shared `pkg/placement` path. The legacy weighted balancer
+  no longer selects live viewers or publishers.
+- Add operator-defined reserve floors before a node reaches 100% CPU, RAM, or bandwidth, and
+  revalidate those floors during exact-destination preparation and final admission.
+- Report usable cluster capacity and failure-domain loss scenarios; treat N\*2 as an operator
+  policy, not a universal hard-coded routing rule.
+- Extend the existing Prometheus rules with capacity and topology alerts once their source metrics
+  and notification ownership are defined.
 
 ## Current State
 
-Foghorn's balancer (`api_balancing/internal/balancer/balancer.go`) uses linear gradient scoring for CPU, RAM, bandwidth, and geo distance. The only hard cutoff is `BWAvailable == 0` — a node at 95% CPU still receives traffic, just with a very low score.
+Live ingest and viewer routing use `pkg/placement`. Candidate observations carry an explicit
+capacity state, directional `BWAvailable`/`BWLimit`, CPU percentage, RAM usage, freshness, and
+expiry. The evaluator rejects stale, unknown, unavailable, invalid, and exhausted capacity. A
+candidate with zero directional bandwidth is exhausted, and unknown preferred capacity cannot be
+treated as proof of exhaustion that permits paid spillover.
 
-Prometheus is configured (`infrastructure/prometheus/prometheus.yml`) with scrape targets for all services and loads `rules/*.yml`. A baseline `infrastructure/prometheus/rules/frameworks.yml` exists, but `alertmanagers.targets` is still empty and the rule set is narrower than this RFC's proposed edge/federation/TLS/replication coverage.
+Within an eligible placement group, the evaluator orders equal-distance candidates by relative
+bandwidth headroom, CPU, and RAM headroom. Exact-destination preparation rechecks directional
+capacity before returning a destination, and final media admission remains a separate fence.
 
-There is no cluster-wide utilization reporting beyond per-edge telemetry within Foghorn's internal state.
+The observation adapter currently marks a node exhausted when directional bandwidth reaches zero,
+CPU reaches 100%, or RAM reaches its maximum. There is no declarative reserve floor that can keep,
+for example, 20% egress headroom or CPU capacity for an ingest/transcode failure. Ranking therefore
+reduces pressure before exhaustion but does not express an operator's redundancy budget.
+
+The weighted scorer in `api_balancing/internal/balancer` remains for stored-media candidate ranking,
+node-bound source lookup, and candidate answers returned to peers. Changing only that scorer would
+not protect live traffic.
+
+Prometheus loads the existing `infrastructure/prometheus/rules/frameworks.yml`, which now covers a
+broad set of host, service, authority, metering, and settlement failures. Capacity/topology gaps
+remain: there is no dedicated edge-bandwidth saturation rule, federation peer-loss rule, replication
+shortfall rule, TLS-expiry rule, or Foghorn leadership-churn rule. The default Prometheus
+configuration also has no Alertmanager target, so rule evaluation alone does not page an operator.
+
+No `frameworks_cluster_*_utilization_ratio` or failure-domain reserve gauges exist. Per-node facts
+and cluster-load summaries do not answer whether a cluster can lose its largest node, facility, or
+uplink while preserving admitted service.
 
 Evidence:
 
-- `api_balancing/internal/balancer/balancer.go`
-- `infrastructure/prometheus/prometheus.yml`
+- `pkg/placement/types.go`
+- `pkg/placement/evaluate.go`
+- `api_balancing/internal/balancer/placement_observation.go`
+- `api_balancing/internal/federation/placement_policy_gate.go`
+- `docs/architecture/media-placement-policy.md`
+- `docs/architecture/viewer-routing.md`
 - `infrastructure/prometheus/rules/frameworks.yml`
+- `infrastructure/prometheus/prometheus.yml`
 
 ## Problem / Motivation
 
-Gradient-only scoring means there is no floor — saturated nodes still receive traffic, just less of it. With few edges, even a low score can result in meaningful traffic to an overloaded node.
+Physical exhaustion is too late for a resilient media fleet. A node at 98% egress or a cluster that
+cannot survive one node loss may still be technically available, but admitting more sessions can
+turn a routine failure into viewer impact. Operators need to reserve capacity for burst, failover,
+measurement error, and non-viewer workloads before the hard limit is reached.
 
-No alerting infrastructure means operators cannot detect saturation before it impacts viewers. There is no cluster-wide utilization visibility, so capacity planning is guesswork.
+Capacity policy must preserve the placement engine's current safety semantics. Missing or stale
+telemetry is uncertainty, not spare capacity and not proof that a preferred pool is full. A reserve
+breach may permit fallback only when the active placement policy explicitly allows capacity
+spillover.
 
-The N\*2 capacity model (never exceed 50% utilization across the cluster) is a recommended operational practice, but Foghorn has no mechanism to enforce, report, or even measure compliance with it.
+Operational reporting has a related gap. Aggregate utilization alone can hide concentration: 40%
+fleet utilization may still be unsafe if one facility carries most of the usable egress. Reporting
+must show both aggregate headroom and the result of losing important failure domains.
 
 ## Goals
 
-- Configurable per-resource exclusion thresholds (CPU, RAM, bandwidth) that remove nodes from routing when exceeded.
-- Expanded Prometheus alert rules for the platform's edge/federation/TLS/replication signals.
-- Cluster-wide capacity reporting: aggregate utilization vs total capacity across all edges.
+- Configurable reserve policy for CPU, RAM, and directional bandwidth.
+- One capacity classification shared by preview, live evaluation, destination preparation, and
+  final admission.
+- Cluster-level usable-capacity, reserved-capacity, and utilization metrics.
+- Failure-domain views for at least node and cluster/facility loss where inventory can identify
+  those domains.
+- Alerts for sustained capacity pressure and material topology degradation.
+- Explainable placement reasons when reserve policy excludes a candidate or permits spillover.
 
 ## Non-Goals
 
-- Autoscaling. Operators manage their own infrastructure; the platform reports, it does not provision.
-- QoS tiers or SLA enforcement. Future marketplace feature, not in scope here.
-- Predictive capacity modeling. Predictive per-job cost estimation (codec/resolution/model-size →
-  CPU/GPU/VRAM/bandwidth) is scoped in `docs/rfcs/workload-cost-model.md`; this RFC stays reactive —
-  thresholds and reporting over observed utilization.
+- Autoscaling or infrastructure procurement.
+- Predictive processing-resource cost; that belongs to `docs/rfcs/workload-cost-model.md`.
+- Provider transit, CDN, or peering economics; that belongs to
+  `docs/rfcs/network-egress-peering.md`.
+- A universal 50% utilization requirement. N\*2 is one possible operator policy and may be
+  inappropriate for heterogeneous or multi-failure-domain fleets.
+- Restoring the legacy weighted scorer as the live routing authority.
 
 ## Proposal
 
-### Configurable utilization thresholds
+### 1. Define reserve policy at the capacity-owner boundary
 
-Add per-resource exclusion thresholds to the balancer configuration via environment variables or cluster manifest fields. Examples: `BALANCER_CPU_THRESHOLD=85`, `BALANCER_RAM_THRESHOLD=90`, `BALANCER_BW_THRESHOLD=80`. Nodes above the threshold return score 0 and are excluded from candidate selection.
+Represent reserves as capacity-owner policy associated with the cluster or node class. The exact
+management surface requires a separate reviewed design, but the compiled runtime inputs should be
+explicit and directional:
 
-Defaults: no exclusion (backwards compatible with current behavior). Operators opt in by setting thresholds.
+- minimum free egress bandwidth or maximum egress utilization;
+- minimum free ingress bandwidth or maximum ingress utilization;
+- maximum CPU utilization;
+- maximum RAM utilization;
+- optional emergency reserve that only specifically authorized traffic may consume.
 
-Fallback behavior: when all nodes exceed the threshold for a given resource, revert to gradient scoring and emit a warning metric. The system degrades gracefully rather than refusing all traffic.
+Environment overrides may remain useful for deployment emergencies, but they must not become a
+second policy language with different preview and runtime behavior.
 
-### Prometheus alert rules
+### 2. Classify reserve breaches before placement
 
-Ship as `infrastructure/prometheus/rules/frameworks.yml`. Baseline rules:
+The observation adapter should derive candidate capacity from physical availability minus active
+reservations and the applicable reserve. A reserve breach produces an explicit, explainable
+capacity outcome. It must not be represented as a low weighted score.
 
-- Edge CPU saturation warning (>80%) and critical (>95%).
-- Edge RAM saturation warning (>80%) and critical (>95%).
-- Edge bandwidth saturation warning (>80%) and critical (>95%).
-- Federation peer disconnection (peer not seen for >5 minutes).
-- Stream replication failure (requested replica count not met).
-- TLS certificate expiry (<30 days warning, <7 days critical).
-- Kafka consumer lag exceeding threshold.
-- Foghorn leader election churn (>3 elections in 10 minutes).
+The same policy revision and measurements must be rechecked during exact-destination preparation.
+Final admission must not widen a rejected decision if measurements changed between resolution and
+connection. Conversely, an unavailable dependency must remain unavailable rather than being
+reported as exhausted.
 
-### N\*2 capacity reporting
+When every candidate in a preferred group is verifiably exhausted by the same policy, the existing
+placement spillover mode decides whether a lower group may be used. There is no fallback that sends
+traffic back to a saturated node merely because all nodes crossed the threshold.
 
-Foghorn aggregates cluster-wide utilization: total CPU/RAM/BW used vs total CPU/RAM/BW available across all reporting edges. Exposed as Prometheus gauges (`frameworks_cluster_cpu_utilization_ratio`, etc.) and optionally via a Foghorn API endpoint.
+### 3. Report fleet capacity and failure tolerance
 
-Operators see aggregate numbers in their dashboards: "cluster is at 47% CPU, 32% RAM, 61% BW." A Prometheus alert fires when any resource exceeds 50% cluster-wide, aligning with the N\*2 recommendation.
+Export cluster metrics for each resource and direction:
 
-## Owning services / modules
+- physical capacity;
+- observed use;
+- active reservations;
+- policy reserve;
+- usable headroom after reserve;
+- stale, unknown, unavailable, and exhausted node counts.
 
-Foghorn (api_balancing) owns threshold exclusion and cluster-wide aggregation; alert rules live in `infrastructure/prometheus/`; dashboards surface in Chartroom/Foredeck.
+Also compute loss scenarios from known failure domains, beginning with the largest-node loss and
+expanding to facility/uplink loss only when inventory carries trustworthy ownership. Report the
+post-loss usable headroom rather than only a boolean N\*2 label.
 
-## Impact / Dependencies
+An operator may alert on 50% aggregate utilization to preserve N\*2 capacity, but FrameWorks should
+not assume that threshold proves resilience across unequal nodes or correlated sites.
 
-- `api_balancing/internal/balancer/` — threshold logic and cluster-wide aggregation.
-- `infrastructure/prometheus/` — new `rules/` directory and alert rules file.
-- `pkg/proto` — no changes needed; existing EdgeTelemetry already carries CPU/RAM/BW.
-- Operator documentation — document threshold configuration and alert tuning.
-- `docs/architecture/viewer-routing.md` — update to reflect threshold behavior.
+### 4. Add capacity and topology alerts
 
-## Alternatives Considered
+Add rules only after stable source metrics exist and an Alertmanager owner is configured:
 
-- **Keep gradient-only scoring (status quo).** Works but provides no safety net. A single edge at 99% CPU still gets traffic.
-- **Hard-code thresholds.** Inflexible for operators with different SLA requirements or cluster sizes.
-- **Rely on external monitoring (Datadog, Grafana Cloud, etc.) for alerting.** Adds vendor dependency. Operators on sovereign infrastructure may not have these services.
+- sustained directional bandwidth reserve breach;
+- cluster post-failure headroom below policy;
+- federation peer disconnection outside an expected maintenance window;
+- requested replication durability below policy;
+- internal and public TLS certificate expiry;
+- excessive Foghorn leadership churn.
 
-## Risks & Mitigations
+Alert thresholds and `for` durations belong to operator configuration. Warning and critical levels
+must avoid paging on a single stale sample or expected drain.
 
-- **Aggressive thresholds with few edges could reject all nodes.** Mitigation: fallback to gradient scoring when all nodes exceed threshold, with a warning metric for operator visibility.
-- **Alert fatigue from poorly tuned thresholds.** Mitigation: conservative defaults. Ship rules with sensible thresholds and document how to adjust them.
-- **Cluster-wide aggregation in Foghorn adds state.** Mitigation: computed from existing per-edge telemetry that Foghorn already tracks. No new data collection needed.
+### 5. Keep legacy consumers scoped
 
-## Migration / Rollout
+Stored-media and source-candidate paths that still use the weighted scorer may adopt equivalent
+hard reserve classification, but only through their current ownership boundary. The canonical docs
+must continue to distinguish those consumers from live placement until the legacy scorer is retired.
 
-1. **Prometheus alert rules.** Extend the existing `infrastructure/prometheus/rules/frameworks.yml` coverage. Operators can adopt immediately once metrics exist.
-2. **Configurable thresholds in balancer.** Small code change to scoring logic, with tests. Feature is opt-in via configuration; no behavior change at default settings.
-3. **Cluster-wide capacity reporting.** New Prometheus metrics from Foghorn. Dashboard integration in Foredeck/Chartroom.
+## Owning Services / Modules
+
+- Quartermaster: capacity-owner intent and failure-domain inventory.
+- Foghorn: observation, reservation, exact-destination revalidation, and fleet metrics.
+- `pkg/placement`: deterministic capacity eligibility and explainable spillover semantics.
+- Prometheus/Alertmanager: alert evaluation, routing, and paging policy.
+- Chartroom/Grafana: operator-visible capacity and failure-domain reporting.
+
+## Risks and Mitigations
+
+- **Over-conservative reserves reject healthy demand:** preview the effective policy, expose excluded
+  capacity, and require an explicit operator change rather than silent fallback.
+- **Different stages classify capacity differently:** compile one policy and bind its revision to
+  observation, preparation, and admission evidence.
+- **Stale telemetry looks like exhaustion:** preserve the current unknown/unavailable states and
+  allow capacity spillover only on complete, fresh evidence.
+- **Aggregate metrics hide correlated failure:** report node and known facility/uplink loss scenarios.
+- **Alert fatigue:** require sustained conditions, maintenance awareness, and an identified receiver.
+- **Tenant preference overrides owner safety:** capacity-owner reserve is a hard upper bound;
+  consumer placement policy may narrow capacity but cannot expand it.
 
 ## Open Questions
 
-- Should thresholds be per-cluster or global across federated clusters?
-- Should the N\*2 warning live in Prometheus alerts, in the operator dashboard, or both?
-- How do thresholds interact with cross-cluster federation? If local edges are all above threshold, should Foghorn route to a remote cluster's edges?
+- Which service owns the durable reserve-policy record and its reviewed management workflow?
+- Should emergency reserve be consumable by existing-session recovery only, or also by selected
+  tenant/service classes?
+- Which inventory fields are trustworthy enough to define facility and uplink failure domains?
+- How should established sessions be treated after a reserve changes: drain naturally, migrate
+  where protocol permits, or only block new admissions?
+- Which alerts are platform-operated versus delegated to a self-hosted capacity owner?
 
-## References, Sources & Evidence
+## References, Sources, and Evidence
 
-- [Evidence] `api_balancing/internal/balancer/balancer.go` (gradient scoring, BWAvailable == 0 cutoff)
-- [Evidence] `infrastructure/prometheus/prometheus.yml` (empty alertmanagers, no rules)
-- [Reference] `docs/architecture/viewer-routing.md`
+- [Evidence] `pkg/placement/types.go` (capacity state and directional bandwidth facts)
+- [Evidence] `pkg/placement/evaluate.go` (freshness, capacity, metrics, and spillover checks)
+- [Evidence] `api_balancing/internal/balancer/placement_observation.go` (current exhaustion boundary)
+- [Evidence] `docs/architecture/media-placement-policy.md` (live placement and preparation contract)
+- [Evidence] `docs/architecture/viewer-routing.md` (legacy scorer scope)
+- [Evidence] `infrastructure/prometheus/rules/frameworks.yml` (current alert rules)
+- [Reference] `docs/rfcs/workload-cost-model.md`
+- [Reference] `docs/rfcs/network-egress-peering.md`
