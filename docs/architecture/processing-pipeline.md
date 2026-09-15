@@ -135,6 +135,11 @@ DVR has a _live_ phase and a _finalization_ phase; only the second enters the pr
    `DVRStartRequest` to the storage Helmsman.
 2. Helmsman records the source as rolling TS segments (`api_sidecar/internal/control/dvr_manager.go`).
    `dvr+<internal_name>` is the live playback surface (`api_balancing/internal/triggers/processor.go`).
+   Its `STREAM_PROCESS` config is the `dvr_processes_json` snapshot stamped on the artifact row at
+   `StartDVR` and read back by `resolveRollingDVRProcessConfig`, so DVR-specific Thumbs tracks survive a
+   Foghorn restart and cache expiry. `safeRollingDVRProcessConfig` rejects any config on this lane that
+   carries a Livepeer process: a Livepeer transcode requires an assigned signed job, which the rolling
+   DVR lane does not have.
 3. Each `RECORDING_SEGMENT` webhook appends a row to the **segment ledger**
    `foghorn.dvr_segments` (`status='pending'` → `uploaded`)
    (`api_balancing/internal/control/dvr_segments_repo.go`).

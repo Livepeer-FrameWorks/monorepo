@@ -270,6 +270,21 @@ COLD PLAYBACK (no local copy, read-through from S3):
   4. Relay streams bytes block-by-block; nothing is bulk-copied to disk
 ```
 
+Inside Helmsman the relay (`api_sidecar/internal/relay/`) materializes those bytes three ways: from the
+canonical local file when the artifact is warm, from S3 into disk when it is cold and the node is healthy,
+and from S3 straight to socket when the node is under pressure and must not write. Cold reads that do land
+on disk go into a per-asset `<asset>.blocks/` read-through cache of fixed 32 MiB blocks
+(`api_sidecar/internal/relay/blockcache.go`), identified by the content-addressed artifact hash in
+`meta.json` so a reprocessed asset drops the whole directory. Those cache directories are evicted like any
+other warm file, ranked by heat rather than plain age: the relay touches `HeatTracker` with the `.blocks`
+dir as key on warm-block reads, and the cleanup monitor sorts on that access count and recency
+(`api_sidecar/internal/handlers/cleanup.go`), so a lease-free cache that is still being played is retained
+over one that filled and was never read. Resolution metadata from `RelayResolve` (presigned media URL,
+expected size, `.dtsh` sidecar URLs) is TTL-cached in memory and refreshed mid-session before the presigned
+URL expires, so a playback session longer than the presign lifetime does not break. `.dtsh` sidecars are
+served from disk when present, fetched from S3 when Foghorn has one, and 404'd otherwise so Mist generates
+and PUTs one (`api_sidecar/internal/relay/dtsh.go`).
+
 ## Service Events Audit (service_events)
 
 - **Commodore** emits `artifact_registered` ServiceEvents when clip/DVR/VOD registry records are created.

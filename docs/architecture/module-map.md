@@ -125,25 +125,25 @@ README's "Architecture at a glance" and ports table are the canonical service ro
 
 ## Media plane
 
-| Module                                                        | Owning service   | Plane | Status  | Doc home                                                     | Registry item                   |
-| ------------------------------------------------------------- | ---------------- | ----- | ------- | ------------------------------------------------------------ | ------------------------------- |
-| Cluster-scoped asset cache/serve (LRU+S3, poster/sprite only) | Chandler         | media | shipped | thumbnails.md                                                | thumbnails-and-previews         |
-| Cache invalidation endpoint + per-cluster S3 from QM          | Chandler         | media | shipped | thumbnails.md                                                | thumbnails-and-previews         |
-| Livepeer gateway deposit ops                                  | CLI              | media | shipped | operators/cli-reference.mdx (Livepeer Commands)              | NONE                            |
-| Single-image s6-overlay edge + edgeseed + procctl seam        | edge/ + Helmsman | media | shipped | edge-deployment.md                                           | edge-clusters, edge-auto-update |
-| Foghorn-driven in-place update (cordon, rolling_stage)        | edge/ + Foghorn  | media | shipped | edge-deployment.md                                           | edge-auto-update                |
-| Edge ISO / cloud marketplace images                           | edge/            | media | roadmap | NONE                                                         | edge-iso-cloud-images           |
-| MistServer trigger forwarding (webhook → proto → Foghorn)     | Helmsman         | media | shipped | stream-replication-topology.md                               | NONE                            |
-| Durable trigger WAL + replay (`/triggers/wal/replay`)         | Helmsman         | media | shipped | trigger-durability.md                                        | trigger-durability              |
-| Edge read API (status/streams/clients/metrics)                | Helmsman         | media | shipped | edge-deployment.md                                           | edge-clusters                   |
-| Component updater (procctl s6/systemd/launchd, atomic swap)   | Helmsman         | media | shipped | edge-deployment.md                                           | edge-auto-update                |
-| Edgeseed bootstrap (single-image init)                        | Helmsman         | media | shipped | edge-deployment.md                                           | edge-iso-cloud-images           |
-| Read-through relay + block cache (defrost, DTSH)              | Helmsman         | media | shipped | rfcs/vod-s3-optimization.md + stream-replication-topology.md | NONE                            |
-| Storage leases (global/heat/streamname/dvr/source)            | Helmsman         | media | shipped | edge-storage-leases.md                                       | NONE                            |
-| DVR manager (source overrides, startup reconcile)             | Helmsman         | media | shipped | dvr-continuous-archive.md                                    | dvr-recordings                  |
-| Processing stage handlers (clip/chapter/selector/stage)       | Helmsman         | media | partial | processing-pipeline.md                                       | processing                      |
-| Config/Caddyfile/hardware detection                           | Helmsman         | media | shipped | edge-deployment.md                                           | NONE                            |
-| Livepeer Signer (keystore-backed remote ETH signer)           | livepeer-signer  | media | shipped | NONE                                                         | livepeer-signer                 |
+| Module                                                        | Owning service   | Plane | Status  | Doc home                                        | Registry item                   |
+| ------------------------------------------------------------- | ---------------- | ----- | ------- | ----------------------------------------------- | ------------------------------- |
+| Cluster-scoped asset cache/serve (LRU+S3, poster/sprite only) | Chandler         | media | shipped | thumbnails.md                                   | thumbnails-and-previews         |
+| Cache invalidation endpoint + per-cluster S3 from QM          | Chandler         | media | shipped | thumbnails.md                                   | thumbnails-and-previews         |
+| Livepeer gateway deposit ops                                  | CLI              | media | shipped | operators/cli-reference.mdx (Livepeer Commands) | NONE                            |
+| Single-image s6-overlay edge + edgeseed + procctl seam        | edge/ + Helmsman | media | shipped | edge-deployment.md                              | edge-clusters, edge-auto-update |
+| Foghorn-driven in-place update (cordon, rolling_stage)        | edge/ + Foghorn  | media | shipped | edge-deployment.md                              | edge-auto-update                |
+| Edge ISO / cloud marketplace images                           | edge/            | media | roadmap | NONE                                            | edge-iso-cloud-images           |
+| MistServer trigger forwarding (webhook → proto → Foghorn)     | Helmsman         | media | shipped | stream-replication-topology.md                  | NONE                            |
+| Durable trigger WAL + replay (`/triggers/wal/replay`)         | Helmsman         | media | shipped | trigger-durability.md                           | trigger-durability              |
+| Edge read API (status/streams/clients/metrics)                | Helmsman         | media | shipped | edge-deployment.md                              | edge-clusters                   |
+| Component updater (procctl s6/systemd/launchd, atomic swap)   | Helmsman         | media | shipped | edge-deployment.md                              | edge-auto-update                |
+| Edgeseed bootstrap (single-image init)                        | Helmsman         | media | shipped | edge-deployment.md                              | edge-iso-cloud-images           |
+| Read-through relay + block cache (defrost, DTSH)              | Helmsman         | media | shipped | clips-dvr.md + stream-replication-topology.md   | NONE                            |
+| Storage leases (global/heat/streamname/dvr/source)            | Helmsman         | media | shipped | edge-storage-leases.md                          | NONE                            |
+| DVR manager (source overrides, startup reconcile)             | Helmsman         | media | shipped | dvr-continuous-archive.md                       | dvr-recordings                  |
+| Processing stage handlers (clip/chapter/selector/stage)       | Helmsman         | media | partial | processing-pipeline.md                          | processing                      |
+| Config/Caddyfile/hardware detection                           | Helmsman         | media | shipped | edge-deployment.md                              | NONE                            |
+| Livepeer Signer (keystore-backed remote ETH signer)           | livepeer-signer  | media | shipped | NONE                                            | livepeer-signer                 |
 
 MistServer/Livepeer internals are out of scope here — the media plane appears only at its interface with the control plane (triggers, balancer template, procctl). Internals live in the Mist fork repo.
 
