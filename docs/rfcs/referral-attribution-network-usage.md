@@ -2,12 +2,12 @@
 
 ## Status
 
-Partially implemented — the acquisition-attribution and network-usage plumbing exists end to end (proto → Quartermaster tables → ClickHouse events → Periscope Query RPCs); operator GraphQL/UI exposure, full signup-path coverage, and exports remain.
+Partially implemented — the acquisition-attribution and network-usage plumbing exists end to end (proto → Quartermaster tables → ClickHouse events → Periscope Query RPCs) and both interactive signup paths capture attribution; operator GraphQL/UI exposure, x402/API-created tenant coverage, and exports remain.
 
 ## TL;DR
 
 - Core acquisition-attribution and network-usage plumbing exists end to end (proto → Quartermaster tables → ClickHouse events → Periscope Query RPCs), but is not yet exposed through operator GraphQL/UI.
-- Remaining work is mainly coverage for all signup paths, operator-facing GraphQL/UI, exports, and operational validation.
+- Remaining work is operator-facing GraphQL/UI, exports, coverage for x402 and API-created tenants, and operational validation.
 - Scope boundary: this RFC is acquisition/marketing attribution — which channel/campaign/referral brought a tenant to the network. Attributing served traffic to serving operators for settlement is a separate concern, covered by `docs/rfcs/federated-settlement-attribution.md`.
 
 ## Owning services / modules
@@ -20,7 +20,8 @@ Implemented:
 
 - `SignupAttribution` exists in `pkg/proto/common.proto`.
 - Quartermaster has `tenant_attribution` and `referral_codes` tables.
-- Gateway captures UTM/referrer/landing/referral fields for wallet login paths.
+- Gateway captures UTM/referrer/landing/referral fields on both interactive signup paths: `WalletLogin` and the email/password `Register` handler both build a `SignupAttribution` through `attribution.Enrich` (`api_gateway/internal/handlers/auth.go` ~280 and ~334-398), and `Register` reads the UTM/referral fields from the JSON body with query-string fallback (including `?ref=`).
+- Commodore forwards `req.GetAttribution()` into both `CreateTenant` call sites, wallet and email/password (`api_control/internal/grpc/server.go` ~4290 and ~4576).
 - Quartermaster persists attribution on tenant creation and increments referral-code usage.
 - ClickHouse has `tenant_acquisition_events`.
 - Periscope Ingest writes `tenant_created` service events into `tenant_acquisition_events`.
@@ -28,8 +29,8 @@ Implemented:
 
 Still open:
 
-- Verify coverage for email/password, x402, and API-created tenants.
-- Add operator-only GraphQL and UI/export surfaces.
+- Coverage for x402 and API-created tenants. Commodore has only the two `CreateTenant` call sites above, so any tenant provisioned outside `Register` / `WalletLogin` carries no attribution.
+- Operator-only GraphQL and UI/export surfaces. `pkg/graphql/schema.graphql` has no `networkUsage` or `acquisitionFunnel` field, so the Periscope Query RPCs are unreachable from Bridge.
 - Document report date ranges and backfill limitations.
 
 ## Goals
@@ -87,10 +88,11 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 
 ### Gateway (API)
 
-- Capture UTM parameters, `Referer`, and landing page from HTTP requests. This exists for wallet login paths; remaining signup paths need verification.
+- Capture UTM parameters, `Referer`, and landing page from HTTP requests. This exists for both `Register` and `WalletLogin`.
 - Detect agent logins via user-agent.
-- Pass attribution into `Register` and `WalletLogin`. x402 is payment-only and
-  never creates an identity or session.
+- Attribution is passed into `Register` and `WalletLogin`. x402 is payment-only and
+  never creates an identity or session, so it reaches tenant creation through the wallet
+  path; confirm that holds for agent-provisioned and API-created tenants.
 
 ### Control plane (Commodore)
 
@@ -128,7 +130,7 @@ Note: network-wide usage is computed via query-time aggregation of existing dail
 ## Rollout plan (phased)
 
 1. **Schema + proto**: done for `SignupAttribution`, Quartermaster tables, and ClickHouse `tenant_acquisition_events`.
-2. **Capture**: partially done; verify and fill all signup paths.
+2. **Capture**: done for `Register` and `WalletLogin`; x402 and API-created tenants remain.
 3. **Ingest + rollups**: Periscope ingest/query support is present.
 4. **Query**: Periscope RPCs exist; operator GraphQL remains open.
 5. **UI** (optional): internal dashboard or public stats endpoint remains open.

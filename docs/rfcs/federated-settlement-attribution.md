@@ -28,9 +28,10 @@ triggers that anchor every settlement claim. **Periscope** (Ingest + Query) owns
 attribution facts: settlement-grade ClickHouse tables, the corroboration computation, and
 the per-cluster usage reports consumed by billing. **Purser** owns money: the operator
 credit ledger, statement generation, payout batching, rail execution, reconciliation, and
-clawbacks. Bridge exposes the operator-facing GraphQL surface but owns no settlement
-logic; Quartermaster supplies cluster identity and operator vetting state
-(`cluster_owners`) but is not a settlement participant.
+clawbacks, including the operator vetting state in `purser.cluster_owners`
+(`pkg/database/sql/schema/purser.sql`). Bridge exposes the operator-facing GraphQL
+surface but owns no settlement logic; Quartermaster supplies cluster identity but is
+not a settlement participant.
 
 ## Current State
 
@@ -65,8 +66,17 @@ gRPC RPCs; there is **no GraphQL surface**, no operator dashboard, and until the
 items `settlement-attribution` and `operator-credit-ledger` were added to
 `docs/platform-features.yaml` (2026-07-22), no registry presence at all.
 
-**No payout execution.** The `operator` package comment defers "payment-rail payout
-batching" to "settlement tooling outside this package"; that tooling does not exist.
+**No payout execution.** The scaffolding is in place and nothing drives it.
+`purser.operator_payouts` exists (`pkg/database/sql/schema/purser.sql` ~882) with a
+`pending` / `processing` / `paid` / `failed` / `cancelled` status check, and a read-only
+`GetOperatorPayouts` RPC serves it (`api_billing/internal/grpc/operator_revenue.go`
+~113, over `ListOperatorPayouts` in `purserdb`). The only SQL against the table is that
+`SELECT`: no code inserts a payout row or advances its status.
+`operator_credit_ledger.payout_batch_id` (~799) is likewise declared, indexed, and
+carried through the accrual view, but never written. The `operator` package comment
+defers "payment-rail payout batching" to "settlement tooling outside this package";
+that tooling does not exist. Phase 3 therefore fills in an existing table shape rather
+than designing one.
 
 **Signed edge attribution exists, but only for diagnostics.** `pkg/telemetrytoken` mints
 short-lived HMAC tokens at `resolveViewerEndpoint` time binding a content id to the
@@ -225,7 +235,8 @@ trust-based accruals is already valuable and can ship while Phase 1 runs in shad
 
 ### Phase 3: Payout execution
 
-- **Batching (Purser).** A `payout_batches` table plus a batch builder: select
+- **Batching (Purser).** A batch builder over the existing `operator_payouts` table
+  (extended if the batch model needs more than one row per owner/currency): select
   `eligible` ledger rows past a settlement lag (clawback exposure window aligned with the
   payment-reversal horizon), net clawbacks against accruals per owner, group by currency,
   apply a minimum payout threshold, and stamp `payout_batch_id` (the column already
@@ -260,8 +271,9 @@ trust-based accruals is already valuable and can ship while Phase 1 runs in shad
 - **Periscope** (`api_analytics_ingest`, `api_analytics_query`, ClickHouse schema):
   settlement-grade fact tables, corroboration pass, extended usage-report records toward
   Purser.
-- **Purser** (`api_billing`): corroboration-aware accrual gating, statements,
-  `payout_batches` schema + state machine, rail integrations, dispute/adjustment RPCs.
+- **Purser** (`api_billing`): corroboration-aware accrual gating, statements, a writer
+  and state machine over the existing `operator_payouts` table, rail integrations,
+  dispute/adjustment RPCs.
 - **Bridge / GraphQL / webapp**: operator earnings API and dashboard
   (`pkg/graphql/schema.graphql`, Chartroom).
 - **Quartermaster**: cluster settlement-key registration alongside existing cluster
@@ -356,9 +368,14 @@ trust-based accruals is already valuable and can ship while Phase 1 runs in shad
 - [Evidence] `api_billing/internal/operator/credit.go` — accrual idempotency, platform
   fee policy, held/accruing gating on `cluster_owners`; package comment deferring payout
   batching to nonexistent tooling.
-- [Evidence] `pkg/database/sql/schema/purser.sql` (`operator_credit_ledger`) and
+- [Evidence] `pkg/database/sql/schema/purser.sql` (`operator_credit_ledger` ~779,
+  `cluster_owners` ~847, `operator_payouts` ~882) and
   `pkg/database/sql/migrations/purser/v0.2.33/expand/015_operator_credit_clawback_reversal_links.sql`
-  — status vocabulary, `payout_batch_id`, clawback/reversal linkage.
+  — status vocabulary, unwritten `payout_batch_id`, operator vetting state,
+  clawback/reversal linkage.
+- [Evidence] `api_billing/internal/grpc/operator_revenue.go` (`GetOperatorPayouts` ~113)
+  and `api_billing/internal/database/queries/operator_revenue.sql` — the only statement
+  touching `operator_payouts` is a `SELECT`.
 - [Evidence] `pkg/telemetrytoken/token.go` — existing signed serving-endpoint claims.
 - [Reference] `docs/rfcs/federation-plane-pluggability.md` (parallel, in progress) —
   operator-local plane authority; source of the evidence-portability requirement.
