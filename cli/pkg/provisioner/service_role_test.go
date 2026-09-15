@@ -775,16 +775,18 @@ func TestGoServiceInstallSentinelPathMatchesArtifactIdentity(t *testing.T) {
 
 func TestRenderGoServiceEnvFileMatchesRoleOrderingAndQuoting(t *testing.T) {
 	got := renderGoServiceEnvFile(map[string]string{
-		"Z_LAST":   "plain",
-		"A_FIRST":  "hello world",
-		"M_QUOTE":  "can't",
-		"N_MULTI":  "line1\nline2",
-		"EMPTY":    "",
-		"COLON_OK": "host:1234/path",
+		"Z_LAST":    "plain",
+		"A_FIRST":   "hello world",
+		"lower_key": "mixed case ordering",
+		"M_QUOTE":   "can't",
+		"N_MULTI":   "line1\nline2",
+		"EMPTY":     "",
+		"COLON_OK":  "host:1234/path",
 	})
 	want := "A_FIRST='hello world'\n" +
 		"COLON_OK=host:1234/path\n" +
 		"EMPTY=''\n" +
+		"lower_key='mixed case ordering'\n" +
 		"M_QUOTE='can'\"'\"'t'\n" +
 		"N_MULTI='line1\\nline2'\n" +
 		"Z_LAST=plain\n"

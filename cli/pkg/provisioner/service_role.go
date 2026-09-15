@@ -769,7 +769,14 @@ func renderGoServiceEnvFile(env map[string]string) string {
 	for k := range env {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		left := strings.ToLower(keys[i])
+		right := strings.ToLower(keys[j])
+		if left == right {
+			return keys[i] < keys[j]
+		}
+		return left < right
+	})
 
 	var b strings.Builder
 	for _, key := range keys {
