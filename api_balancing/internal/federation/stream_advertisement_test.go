@@ -56,10 +56,10 @@ func TestPushStreamAdsUsesExactNodeBufferPublisherAndVirtualCluster(t *testing.T
 	if publisher.GetDtscUrl() != "dtsc://publisher.example:14200/live+stream" || publisher.GetDtscObservedAt() == 0 || publisher.GetSourceObservedAt() == 0 {
 		t.Fatalf("publisher lost independent listener/buffer evidence: %+v", publisher)
 	}
-	if publisher.GetBufferState() != "FULL" || !publisher.GetIsOrigin() || publisher.GetSourceGeneration() != "generation" || publisher.GetSourceRevision() != revision {
+	if publisher.GetBufferState() != "FULL" || !publisher.GetPlayable() || !publisher.GetIsOrigin() || publisher.GetSourceGeneration() != "generation" || publisher.GetSourceRevision() != revision {
 		t.Fatalf("publisher evidence lost: %+v", publisher)
 	}
-	if replica.GetBufferState() != "DRY" || replica.GetIsOrigin() || replica.GetSourceGeneration() != "" || replica.GetSourceRevision() != 0 {
+	if replica.GetBufferState() != "DRY" || !replica.GetPlayable() || replica.GetIsOrigin() || replica.GetSourceGeneration() != "" || replica.GetSourceRevision() != 0 {
 		t.Fatalf("replica borrowed publisher evidence: %+v", replica)
 	}
 	if inactive, err := registry.PublishSourceInactive("stream", "publisher", "generation", revision+1); err != nil || !inactive {

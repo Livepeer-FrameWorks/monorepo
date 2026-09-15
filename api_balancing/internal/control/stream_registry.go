@@ -98,6 +98,7 @@ type EdgeCandidate struct {
 	GeoLat      float64
 	GeoLon      float64
 	BufferState string
+	Playable    bool
 	// RAMUsed/RAMMax mirror the ad's ram fields. They fed the legacy remote-edge
 	// scorer and currently have no consumer: cross-cell routing asks the peer's
 	// placement service rather than scoring cached peer telemetry locally.

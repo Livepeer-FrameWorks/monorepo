@@ -121,7 +121,7 @@ func TestConfiguredSourcePrivateUpstreamRequiresClusterConsent(t *testing.T) {
 func TestConfiguredSourcePresenceComesFromTheNodesOwnLiveCopy(t *testing.T) {
 	f, reader, _ := configuredFixture(t, "mist_native", "playlist:///srv/loop.m3u", []string{"empty"})
 	f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{
-		"internal": {TenantID: "tenant", Status: "live", BufferState: "FULL", Inputs: 1, ObservedAt: f.now},
+		"internal": {TenantID: "tenant", Status: "live", BufferState: "DRY", Playable: true, Inputs: 1, ObservedAt: f.now},
 	}
 	authority := configuredAuthority(t, f)
 	f.query.SourceGeneration = generationFor(t, reader, authority)
@@ -325,7 +325,7 @@ func TestConfiguredSourceRelayRequiresExternalSourceConsent(t *testing.T) {
 	})
 	registry.entry = control.StreamEntry{TenantID: "tenant", InternalName: "internal", Locations: map[string]control.Location{
 		"eu-cell": {ClusterID: "eu-cell", IsLiveNow: true, AdTimestamp: f.now.Unix(), EdgeCandidates: []control.EdgeCandidate{{
-			NodeID: "eu-origin", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "FULL",
+			NodeID: "eu-origin", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "FULL", Playable: true,
 			DTSCURL: "dtsc://eu.example:14200/pull+internal", DTSCObservedAt: f.now.Unix(), SourceObservedAt: f.now.Unix(),
 		}}},
 	}}

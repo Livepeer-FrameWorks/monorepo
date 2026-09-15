@@ -354,14 +354,16 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 		instance := instances[n.NodeID]
 		var sourceGeneration string
 		var sourceRevision int64
-		if instance.TenantID == req.TenantId && instance.Status == "live" && !instance.Replicated && (instance.Inputs > 0 || instance.BufferState == "FULL") {
+		if instance.TenantID == req.TenantId && instance.Status == "live" && !instance.Replicated && (instance.Inputs > 0 || instance.Playable) {
 			sourceGeneration, sourceRevision = confirmedPublisherBinding(sourceEntry, n.NodeID, req.TenantId, s.clusterID)
 		}
 		dtscURL := control.BuildDTSCURI(n.NodeID, sourceStreamName, s.logger)
 
 		var bufferState string
+		var playable bool
 		if instance.TenantID == req.TenantId {
 			bufferState = instance.BufferState
+			playable = instance.Playable
 		}
 
 		var viewerCount uint32
@@ -380,6 +382,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 			GeoScore:         0, // geo is baked into the composite score
 			IsOrigin:         isOrigin,
 			BufferState:      bufferState,
+			Playable:         playable,
 			GeoLat:           n.GeoLatitude,
 			GeoLon:           n.GeoLongitude,
 			ViewerCount:      viewerCount,
@@ -546,7 +549,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 			}, nil
 		}
 		instance, exists := sm.GetStreamInstances(req.StreamName)[sourceNodeID]
-		if !exists || instance.TenantID != req.TenantId || instance.Status != "live" || (instance.Inputs == 0 && instance.BufferState != "FULL") {
+		if !exists || instance.TenantID != req.TenantId || instance.Status != "live" || (instance.Inputs == 0 && !instance.Playable) {
 			return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source node is not serving this stream"}, nil
 		}
 		// A relayed copy is never a relay source, whatever the notification

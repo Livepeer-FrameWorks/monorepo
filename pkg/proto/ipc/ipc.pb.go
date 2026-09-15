@@ -12695,13 +12695,16 @@ type StreamLifecycleUpdate struct {
 	VideoBufferMs *uint32 `protobuf:"varint,36,opt,name=video_buffer_ms,json=videoBufferMs,proto3,oneof" json:"video_buffer_ms,omitempty"`
 	VideoJitterMs *uint32 `protobuf:"varint,37,opt,name=video_jitter_ms,json=videoJitterMs,proto3,oneof" json:"video_jitter_ms,omitempty"`
 	StreamId      *string `protobuf:"bytes,38,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Enriched by Foghorn (UUID); REQUIRED for analytics joins
-	// When Helmsman sampled Mist's API for buffer_state. A periodic report is a
-	// level observation; STREAM_BUFFER triggers are edges. Foghorn keeps whichever
+	// When Helmsman sampled Mist's API for buffer_playable. A periodic report is
+	// a level observation; STREAM_BUFFER triggers are edges. Foghorn keeps whichever
 	// is newer, so a report cannot regress a fresher transition and a missed
 	// transition heals on the next report.
 	BufferSampledUnixMillis *int64 `protobuf:"varint,42,opt,name=buffer_sampled_unix_millis,json=bufferSampledUnixMillis,proto3,oneof" json:"buffer_sampled_unix_millis,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Current media-serving readiness, independent of Mist's process status and
+	// health diagnostics. A video-only DRY stream can still be playable.
+	BufferPlayable *bool `protobuf:"varint,43,opt,name=buffer_playable,json=bufferPlayable,proto3,oneof" json:"buffer_playable,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StreamLifecycleUpdate) Reset() {
@@ -13019,6 +13022,13 @@ func (x *StreamLifecycleUpdate) GetBufferSampledUnixMillis() int64 {
 		return *x.BufferSampledUnixMillis
 	}
 	return 0
+}
+
+func (x *StreamLifecycleUpdate) GetBufferPlayable() bool {
+	if x != nil && x.BufferPlayable != nil {
+		return *x.BufferPlayable
+	}
+	return false
 }
 
 // Exact local-runtime liveness result. This is a separate oneof payload so an
@@ -22217,7 +22227,7 @@ const file_ipc_proto_rawDesc = "" +
 	"time_ended\x18\x05 \x01(\x03R\ttimeEnded\x12 \n" +
 	"\tstream_id\x18\x06 \x01(\tH\x00R\bstreamId\x88\x01\x01B\f\n" +
 	"\n" +
-	"_stream_id\"\xa2\x13\n" +
+	"_stream_id\"\xe4\x13\n" +
 	"\x15StreamLifecycleUpdate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\ttenant_id\x18\x02 \x01(\tH\x00R\btenantId\x88\x01\x01\x12#\n" +
@@ -22268,7 +22278,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0fvideo_buffer_ms\x18$ \x01(\rH R\rvideoBufferMs\x88\x01\x01\x12+\n" +
 	"\x0fvideo_jitter_ms\x18% \x01(\rH!R\rvideoJitterMs\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18& \x01(\tH\"R\bstreamId\x88\x01\x01\x12@\n" +
-	"\x1abuffer_sampled_unix_millis\x18* \x01(\x03H#R\x17bufferSampledUnixMillis\x88\x01\x01B\f\n" +
+	"\x1abuffer_sampled_unix_millis\x18* \x01(\x03H#R\x17bufferSampledUnixMillis\x88\x01\x01\x12,\n" +
+	"\x0fbuffer_playable\x18+ \x01(\bH$R\x0ebufferPlayable\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\x0f\n" +
 	"\r_buffer_stateB\x11\n" +
@@ -22308,7 +22319,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10_video_jitter_msB\f\n" +
 	"\n" +
 	"_stream_idB\x1d\n" +
-	"\x1b_buffer_sampled_unix_millis\"\xba\x01\n" +
+	"\x1b_buffer_sampled_unix_millisB\x12\n" +
+	"\x10_buffer_playable\"\xba\x01\n" +
 	"\x13IngestRuntimeAbsent\x12D\n" +
 	"\tlifecycle\x18\x01 \x01(\v2&.helmsmancontrol.StreamLifecycleUpdateR\tlifecycle\x12+\n" +
 	"\x11ingest_generation\x18\x02 \x01(\tR\x10ingestGeneration\x120\n" +

@@ -1958,6 +1958,7 @@ func (pm *PeerManager) pushStreamAds() {
 				GeoLat:           snap.GeoLatitude,
 				GeoLon:           snap.GeoLongitude,
 				BufferState:      instance.BufferState,
+				Playable:         instance.Playable,
 				RamUsed:          uint64(ns.RAMCurrent),
 				RamMax:           uint64(ns.RAMMax),
 				SourceGeneration: generation,

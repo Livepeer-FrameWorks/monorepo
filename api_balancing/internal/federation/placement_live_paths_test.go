@@ -32,7 +32,7 @@ func livePathFixture(t *testing.T) (*discoveryFixture, *LivePushPlacementPaths, 
 	})
 	r := &livePathRegistry{entry: control.StreamEntry{TenantID: "tenant", InternalName: "internal", Locations: map[string]control.Location{
 		"eu-cell": {ClusterID: "eu-cell", IsLiveNow: true, AdTimestamp: f.now.Unix(), EdgeCandidates: []control.EdgeCandidate{{
-			NodeID: "eu-publisher", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "FULL", DTSCURL: "dtsc://eu.example:14200/live+internal",
+			NodeID: "eu-publisher", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "DRY", Playable: true, DTSCURL: "dtsc://eu.example:14200/live+internal",
 			SourceGeneration: "source-generation", SourceRevision: 9007199254740993, SourceObservedAt: f.now.Unix(), DTSCObservedAt: f.now.Unix(),
 		}}},
 	}}}
@@ -88,7 +88,7 @@ func TestLivePushPathsRejectInvalidOrStaleRemoteEvidence(t *testing.T) {
 		"unknown_buffer_clock":   func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].SourceObservedAt = 0 },
 		"unknown_listener_clock": func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].DTSCObservedAt = 0 },
 		"replica":                func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].IsOrigin = false },
-		"dry":                    func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].BufferState = "DRY" },
+		"unplayable":             func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].Playable = false },
 		"offline":                func(_ *discoveryFixture, l *control.Location) { l.IsLiveNow = false },
 		"generation":             func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].SourceGeneration = "another" },
 		"revision":               func(_ *discoveryFixture, l *control.Location) { l.EdgeCandidates[0].SourceRevision = 0 },
@@ -151,6 +151,7 @@ func TestLivePushPathsConsentGenerationFenceAndLifetime(t *testing.T) {
 		loc := r.entry.Locations["eu-cell"]
 		newer := loc.EdgeCandidates[0]
 		newer.NodeID, newer.SourceGeneration, newer.BufferState = "new-publisher", "new-generation", "DRY"
+		newer.Playable = false
 		newer.SourceRevision++
 		loc.EdgeCandidates = append(loc.EdgeCandidates, newer)
 		r.entry.Locations["eu-cell"] = loc
@@ -187,7 +188,7 @@ func TestLivePushPathsLocalPublisherUsesLiveTenantEvidenceNotProjectionAge(t *te
 	r.entry.Locations = map[string]control.Location{"us-cell": {SourceActive: true, OwnerNodeID: "node-00", SourceGeneration: "source-generation", SourceRevision: 9, UpdatedAt: f.now.Add(-24 * time.Hour)}}
 	f.snapshot.Nodes[0].Outputs["DTSC"] = "dtsc://HOST:14200/$"
 	f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{"internal": {
-		TenantID: "tenant", Status: "live", BufferState: "FULL", Inputs: 1, ObservedAt: f.now,
+		TenantID: "tenant", Status: "live", BufferState: "FULL", Playable: true, Inputs: 1, ObservedAt: f.now,
 	}}
 	f.pair.Tenant.Authority.EffectiveClusterGrants[0].MediaConsent.AllowExternalSource = false
 	response, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
@@ -205,7 +206,7 @@ func TestLivePushPathsLocalPublisherUsesLiveTenantEvidenceNotProjectionAge(t *te
 		"replica":       func(s *state.BalancerStreamSummary) { s.Replicated = true },
 		"not_publisher": func(s *state.BalancerStreamSummary) { s.Inputs = 0 },
 		"old_buffer":    func(s *state.BalancerStreamSummary) { s.ObservedAt = f.now.Add(-30 * time.Second) },
-		"dry_buffer":    func(s *state.BalancerStreamSummary) { s.BufferState = "DRY" },
+		"unplayable":    func(s *state.BalancerStreamSummary) { s.Playable = false },
 	} {
 		t.Run(name, func(t *testing.T) {
 			old := f.snapshot.Nodes[0].Streams["internal"]

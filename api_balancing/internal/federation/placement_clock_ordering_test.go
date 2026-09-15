@@ -88,7 +88,7 @@ func TestConfiguredSourceSurvivesEvidenceObservedDuringTheCall(t *testing.T) {
 			MediaConsent: &placementpb.CapacityConsent{AllowIngest: true}})
 	registry.entry = control.StreamEntry{TenantID: "tenant", InternalName: "internal", Locations: map[string]control.Location{
 		"eu-cell": {ClusterID: "eu-cell", IsLiveNow: true, AdTimestamp: f.now.Unix(), EdgeCandidates: []control.EdgeCandidate{{
-			NodeID: "eu-origin", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "FULL",
+			NodeID: "eu-origin", ClusterID: "eu-ingest", IsOrigin: true, BufferState: "FULL", Playable: true,
 			DTSCURL: "dtsc://eu.example:14200/pull+internal", DTSCObservedAt: f.now.Unix(),
 		}}},
 	}}

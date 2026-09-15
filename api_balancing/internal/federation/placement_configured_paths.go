@@ -220,7 +220,7 @@ func (reader *ConfiguredSourcePlacementPaths) livesOn(node state.EnhancedBalance
 		return false
 	}
 	stream, running := node.Streams[descriptor.InternalName]
-	return running && stream.TenantID == authority.TenantID && stream.Status == "live" && stream.BufferState == "FULL" &&
+	return running && stream.TenantID == authority.TenantID && stream.Status == "live" && stream.Playable &&
 		stream.Inputs > 0 && freshPlacementEvidence(stream.ObservedAt, now)
 }
 
@@ -301,7 +301,7 @@ func (reader *ConfiguredSourcePlacementPaths) federatedSource(ctx context.Contex
 		}
 		for _, edge := range location.EdgeCandidates {
 			grant, granted := authority.SourceGrants[edge.ClusterID]
-			if !granted || grant.CellID != cellID || !grant.AllowIngest || !edge.IsOrigin || edge.NodeID == "" || edge.BufferState != "FULL" ||
+			if !granted || grant.CellID != cellID || !grant.AllowIngest || !edge.IsOrigin || edge.NodeID == "" || !edge.Playable ||
 				!freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) || !validPlacementDTSC(edge.DTSCURL, descriptor.RuntimeName) {
 				continue
 			}

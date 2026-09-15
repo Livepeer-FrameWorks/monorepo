@@ -38,7 +38,7 @@ func TestHandleStreamAdvertisement_MapsRAMIntoEdgeCandidates(t *testing.T) {
 		IsLive:        true,
 		Timestamp:     time.Now().Unix(),
 		Edges: []*foghornfederationpb.PeerStreamEdge{
-			{NodeId: "edge-1", ClusterId: "virtual-b", BaseUrl: "https://e1", DtscUrl: "dtsc://e1/live+s1", BwAvailable: 1000, RamUsed: 256, RamMax: 1024,
+			{NodeId: "edge-1", ClusterId: "virtual-b", BaseUrl: "https://e1", DtscUrl: "dtsc://e1/live+s1", BwAvailable: 1000, RamUsed: 256, RamMax: 1024, Playable: true,
 				IsOrigin: true, SourceGeneration: "generation", SourceRevision: 9007199254740993, SourceObservedAt: 1800000000, DtscObservedAt: 1800000001},
 		},
 	}, &channelCell)
@@ -60,7 +60,7 @@ func TestHandleStreamAdvertisement_MapsRAMIntoEdgeCandidates(t *testing.T) {
 	if c.NodeID != "edge-1" || c.DTSCURL != "dtsc://e1/live+s1" {
 		t.Fatalf("edge fields wrong: %+v", c)
 	}
-	if c.ClusterID != "virtual-b" || c.SourceGeneration != "generation" || c.SourceRevision != 9007199254740993 || c.SourceObservedAt != 1800000000 || c.DTSCObservedAt != 1800000001 {
+	if c.ClusterID != "virtual-b" || !c.Playable || c.SourceGeneration != "generation" || c.SourceRevision != 9007199254740993 || c.SourceObservedAt != 1800000000 || c.DTSCObservedAt != 1800000001 {
 		t.Fatalf("virtual cluster or exact publisher revision lost: %+v", c)
 	}
 }

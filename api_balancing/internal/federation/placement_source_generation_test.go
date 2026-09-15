@@ -11,7 +11,7 @@ import (
 )
 
 func TestLivePushSourceGenerationUsesCurrentOwner(t *testing.T) {
-	for _, scenario := range []string{"current", "withdrawn", "newer dry", "duplicate", "stale", "replica", "foreign", "managed", "expired", "canceled"} {
+	for _, scenario := range []string{"current", "withdrawn", "newer unplayable", "duplicate", "stale", "replica", "foreign", "managed", "expired", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, reader, registry := livePathFixture(t)
 			authority, err := balancer.CompilePlacementAuthority(f.pair, placement.Serve, f.now)
@@ -24,10 +24,11 @@ func TestLivePushSourceGenerationUsesCurrentOwner(t *testing.T) {
 			switch scenario {
 			case "withdrawn":
 				registry.entry.Locations["us-cell"] = control.Location{SourceRevision: loc.EdgeCandidates[0].SourceRevision, SourceActive: false}
-			case "newer dry":
+			case "newer unplayable":
 				next := loc.EdgeCandidates[0]
 				next.SourceRevision++
 				next.NodeID, next.SourceGeneration, next.BufferState = "next", "next-generation", "DRY"
+				next.Playable = false
 				loc.EdgeCandidates = append(loc.EdgeCandidates, next)
 			case "duplicate":
 				loc.EdgeCandidates = append(loc.EdgeCandidates, loc.EdgeCandidates[0])

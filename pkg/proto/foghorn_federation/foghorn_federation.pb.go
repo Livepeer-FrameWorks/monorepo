@@ -224,7 +224,9 @@ type EdgeCandidate struct {
 	SourceGeneration string `protobuf:"bytes,15,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
 	SourceRevision   int64  `protobuf:"varint,16,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
 	// Virtual media cluster of this node, distinct from the responding cell.
-	ClusterId     string `protobuf:"bytes,17,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	ClusterId string `protobuf:"bytes,17,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	// Media-serving readiness. buffer_state remains the native Mist diagnostic.
+	Playable      bool `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -376,6 +378,13 @@ func (x *EdgeCandidate) GetClusterId() string {
 		return x.ClusterId
 	}
 	return ""
+}
+
+func (x *EdgeCandidate) GetPlayable() bool {
+	if x != nil {
+		return x.Playable
+	}
+	return false
 }
 
 type OriginPullNotification struct {
@@ -2251,8 +2260,10 @@ type PeerStreamEdge struct {
 	// not refresh the source buffer or the DTSC listener. Zero means unknown.
 	DtscObservedAt   int64 `protobuf:"varint,16,opt,name=dtsc_observed_at,json=dtscObservedAt,proto3" json:"dtsc_observed_at,omitempty"`
 	SourceObservedAt int64 `protobuf:"varint,17,opt,name=source_observed_at,json=sourceObservedAt,proto3" json:"source_observed_at,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Media-serving readiness. buffer_state remains the native Mist diagnostic.
+	Playable      bool `protobuf:"varint,18,opt,name=playable,proto3" json:"playable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PeerStreamEdge) Reset() {
@@ -2402,6 +2413,13 @@ func (x *PeerStreamEdge) GetSourceObservedAt() int64 {
 		return x.SourceObservedAt
 	}
 	return 0
+}
+
+func (x *PeerStreamEdge) GetPlayable() bool {
+	if x != nil {
+		return x.Playable
+	}
+	return false
 }
 
 // PeerHeartbeat carried session liveness and capability exchange. Peer liveness
@@ -3528,7 +3546,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"candidates\x18\x01 \x03(\v2!.foghorn_federation.EdgeCandidateR\n" +
 	"candidates\x12*\n" +
-	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\x98\x04\n" +
+	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\xb4\x04\n" +
 	"\rEdgeCandidate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3549,7 +3567,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x11source_generation\x18\x0f \x01(\tR\x10sourceGeneration\x12'\n" +
 	"\x0fsource_revision\x18\x10 \x01(\x03R\x0esourceRevision\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x11 \x01(\tR\tclusterId\"\xae\x03\n" +
+	"cluster_id\x18\x11 \x01(\tR\tclusterId\x12\x1a\n" +
+	"\bplayable\x18\x12 \x01(\bR\bplayable\"\xae\x03\n" +
 	"\x16OriginPullNotification\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12$\n" +
@@ -3734,7 +3753,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x05edges\x18\x06 \x03(\v2\".foghorn_federation.PeerStreamEdgeR\x05edges\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x121\n" +
 	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\x12&\n" +
-	"\x0fcontrol_cell_id\x18\t \x01(\tR\rcontrolCellId\"\xb9\x04\n" +
+	"\x0fcontrol_cell_id\x18\t \x01(\tR\rcontrolCellId\"\xd5\x04\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3755,7 +3774,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x0f \x01(\tR\tclusterId\x12(\n" +
 	"\x10dtsc_observed_at\x18\x10 \x01(\x03R\x0edtscObservedAt\x12,\n" +
-	"\x12source_observed_at\x18\x11 \x01(\x03R\x10sourceObservedAt\"\x89\x03\n" +
+	"\x12source_observed_at\x18\x11 \x01(\x03R\x10sourceObservedAt\x12\x1a\n" +
+	"\bplayable\x18\x12 \x01(\bR\bplayable\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +

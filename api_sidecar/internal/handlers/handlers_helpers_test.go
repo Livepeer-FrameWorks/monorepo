@@ -116,7 +116,8 @@ func TestDetermineQualityTier(t *testing.T) {
 
 func TestEnrichStreamBufferTrigger(t *testing.T) {
 	trigger := &ipcpb.StreamBufferTrigger{
-		MistIssues: stringPtr("VeryLowBuffer"),
+		BufferState: "DRY",
+		MistIssues:  stringPtr("VeryLowBuffer"),
 		Tracks: []*ipcpb.StreamTrack{
 			{
 				TrackName: "video_1",

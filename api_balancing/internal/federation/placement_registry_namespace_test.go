@@ -36,7 +36,7 @@ func TestPushSourceReadsItsOwnLocationUnderTheRegistryKeyNotTheCell(t *testing.T
 	}
 
 	f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{
-		"internal": {TenantID: "tenant", Status: "live", BufferState: "FULL", Inputs: 1, ObservedAt: f.now},
+		"internal": {TenantID: "tenant", Status: "live", BufferState: "FULL", Playable: true, Inputs: 1, ObservedAt: f.now},
 	}
 	authority, err := balancer.CompilePlacementAuthority(f.pair, placement.Serve, f.now)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestConfiguredSourceSkipsItsOwnRegistryKeyWhenScanningPeers(t *testing.T) {
 	// mistaken for a peer offering a relay source.
 	registry.entry = control.StreamEntry{TenantID: "tenant", InternalName: "internal", Locations: map[string]control.Location{
 		registryKey: {ClusterID: registryKey, IsLiveNow: true, AdTimestamp: f.now.Unix(), EdgeCandidates: []control.EdgeCandidate{{
-			NodeID: "self", ClusterID: "us", IsOrigin: true, BufferState: "FULL",
+			NodeID: "self", ClusterID: "us", IsOrigin: true, BufferState: "FULL", Playable: true,
 			DTSCURL: "dtsc://self.example:14200/pull+internal", DTSCObservedAt: f.now.Unix(),
 		}}},
 	}}

@@ -4420,7 +4420,7 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	internalName := mist.ExtractInternalName(streamBuffer.GetStreamName())
 	// An edge that predates the last applied periodic level is stale: the level
 	// already reflects Mist's state after this transition.
-	if state.DefaultManager().BufferLevelNewerThan(internalName, trigger.GetNodeId(), trigger.GetTriggerUnixMillis()) {
+	if state.DefaultManager().PlayabilityLevelNewerThan(internalName, trigger.GetNodeId(), trigger.GetTriggerUnixMillis()) {
 		p.logger.WithFields(logging.Fields{"internal_name": internalName, "node_id": trigger.GetNodeId(), "buffer_state": streamBuffer.GetBufferState()}).Debug("STREAM_BUFFER edge older than the applied buffer level; not applied")
 	} else {
 		if err := state.DefaultManager().UpdateStreamFromBuffer(
@@ -5409,12 +5409,11 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		state.DefaultManager().ApplyStreamInstanceIdentity(internal, nodeID, resolvedTenant)
 	}
 	state.DefaultManager().ObserveStreamProcesses(internal, nodeID, slu.GetProcessObservation())
-	// The report's buffer level is Mist's current classification; it restores
-	// readiness after a restart or a resumed publisher without a transition and
-	// is ordered against STREAM_BUFFER edges by sample time.
-	if bufferState := slu.GetBufferState(); bufferState != "" && slu.GetBufferSampledUnixMillis() > 0 {
-		if state.DefaultManager().ObserveStreamBufferLevel(internal, nodeID, bufferState, slu.GetBufferSampledUnixMillis()) {
-			p.logger.WithFields(logging.Fields{"internal_name": internal, "node_id": nodeID, "buffer_state": bufferState}).Debug("Applied buffer level from periodic report")
+	// The report's playability level heals a missed STREAM_BUFFER transition
+	// without overwriting Mist's native buffer-state diagnostic.
+	if slu.BufferPlayable != nil && slu.GetBufferSampledUnixMillis() > 0 {
+		if state.DefaultManager().ObserveStreamPlayabilityLevel(internal, nodeID, slu.GetBufferPlayable(), slu.GetBufferSampledUnixMillis()) {
+			p.logger.WithFields(logging.Fields{"internal_name": internal, "node_id": nodeID, "buffer_playable": slu.GetBufferPlayable()}).Debug("Applied buffer playability level from periodic report")
 		}
 	}
 	return "", false, nil

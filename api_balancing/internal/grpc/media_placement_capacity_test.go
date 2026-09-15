@@ -74,7 +74,7 @@ func TestCapacityPreviewRPCRegistrationAndWire(t *testing.T) {
 	s := &FoghornGRPCServer{}
 	s.SetPlacementCapacityObserver(&balancer.PlacementCapacityObserver{CellID: "cell", Owner: func() balancer.PlacementCapacityOwner { return capacityRPCOwner{} }, Snapshot: func() *state.BalancerSnapshot { return &state.BalancerSnapshot{} }})
 	now := time.Now().UTC()
-	sourceSnapshot := &state.BalancerSnapshot{Nodes: []state.EnhancedBalancerNodeSnapshot{{NodeID: "publisher", ClusterID: "cluster", IsActive: true, Host: "https://publisher.example", LastHeartbeat: now, OutputsObservedAt: now, Outputs: map[string]any{"DTSC": "dtsc://HOST:14200/$"}, Streams: map[string]state.BalancerStreamSummary{"stream": {TenantID: "tenant", Status: "live", BufferState: "FULL", Inputs: 1, ObservedAt: now}}}}}
+	sourceSnapshot := &state.BalancerSnapshot{Nodes: []state.EnhancedBalancerNodeSnapshot{{NodeID: "publisher", ClusterID: "cluster", IsActive: true, Host: "https://publisher.example", LastHeartbeat: now, OutputsObservedAt: now, Outputs: map[string]any{"DTSC": "dtsc://HOST:14200/$"}, Streams: map[string]state.BalancerStreamSummary{"stream": {TenantID: "tenant", Status: "live", BufferState: "FULL", Playable: true, Inputs: 1, ObservedAt: now}}}}}
 	s.SetPlacementPushSourceObserver(&federation.PlacementPushSourceObserver{Inventory: &balancer.PlacementCapacityObserver{CellID: "cell", Owner: func() balancer.PlacementCapacityOwner { return capacityRPCOwner{publisher: true} }, Snapshot: func() *state.BalancerSnapshot { return sourceSnapshot }}, Registry: sourceRPCRegistry{}})
 	s.RegisterServices(server)
 	go func() { _ = server.Serve(listener) }()

@@ -21,9 +21,7 @@ func NewLivePresence(sm *state.StreamStateManager) LivePresence {
 }
 
 // LiveSourceNodes returns node IDs currently buffering the source plus a
-// boolean indicating whether any are live. The semantic for "live" is
-// at least one instance with BufferState == "FULL"; this matches the
-// load balancer's notion of "actively serveable".
+// boolean indicating whether any have playable media.
 func (a *streamStateLivePresence) LiveSourceNodes(internalName string) ([]string, bool) {
 	if a == nil || a.sm == nil || internalName == "" {
 		return nil, false
@@ -39,7 +37,7 @@ func (a *streamStateLivePresence) LiveSourceNodes(internalName string) ([]string
 			continue
 		}
 		nodes = append(nodes, nodeID)
-		if inst.BufferState == "FULL" {
+		if inst.Playable {
 			anyLive = true
 		}
 	}

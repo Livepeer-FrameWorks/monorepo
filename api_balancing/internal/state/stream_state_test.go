@@ -917,6 +917,46 @@ func TestUpdateStreamFromBuffer_ParsesDetailsAndIssues(t *testing.T) {
 	}
 }
 
+func TestUpdateStreamFromBufferUsesMistPlayabilitySemantics(t *testing.T) {
+	for _, tc := range []struct {
+		state    string
+		playable bool
+	}{
+		{state: "FULL", playable: true},
+		{state: "DRY", playable: true},
+		{state: "RECOVER", playable: true},
+		{state: "EMPTY", playable: false},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			sm := NewStreamStateManager()
+			if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "node", "tenant", tc.state, ""); err != nil {
+				t.Fatal(err)
+			}
+			instance := sm.GetStreamInstances("stream")["node"]
+			if instance.Playable != tc.playable || sm.GetStreamState("stream").Playable != tc.playable {
+				t.Fatalf("state %s playable=%t, want %t", tc.state, instance.Playable, tc.playable)
+			}
+		})
+	}
+}
+
+func TestStreamUnionPlayableWhileAnyLiveInstanceIsPlayable(t *testing.T) {
+	sm := NewStreamStateManager()
+	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "video-only", "tenant", "DRY", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "warming", "tenant", "EMPTY", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !sm.GetStreamState("stream").Playable {
+		t.Fatal("an unplayable instance cleared another node's playable buffer")
+	}
+	sm.SetOffline("stream", "video-only")
+	if sm.GetStreamState("stream").Playable {
+		t.Fatal("union remained playable after its only playable instance went offline")
+	}
+}
+
 func TestUpdateNodeStatsStartsLiveIntervalOnInput(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()

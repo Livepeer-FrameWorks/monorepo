@@ -178,6 +178,7 @@ type StreamState struct {
 	TenantID     string         `json:"tenant_id"`
 	Status       string         `json:"status"`       // "live", "offline", etc.
 	BufferState  string         `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
+	Playable     bool           `json:"playable"`
 	Tracks       []StreamTrack  `json:"tracks"`
 	Issues       string         `json:"issues,omitempty"`
 	HasIssues    bool           `json:"has_issues"`
@@ -245,6 +246,7 @@ type StreamInstanceState struct {
 	TenantID           string                              `json:"tenant_id"`
 	Status             string                              `json:"status"`
 	BufferState        string                              `json:"buffer_state"`
+	Playable           bool                                `json:"playable"`
 	LastTrackList      string                              `json:"last_track_list,omitempty"`
 	Viewers            int                                 `json:"viewers"`
 	BytesUp            int64                               `json:"bytes_up,omitempty"`
@@ -256,10 +258,10 @@ type StreamInstanceState struct {
 	RawDetails         map[string]any                      `json:"raw_details,omitempty"`
 	ProcessObservation *ipcpb.MistStreamProcessObservation `json:"-"`
 	BufferObservation  *StreamBufferObservation            `json:"-"`
-	// BufferLevelUnixMillis is when Helmsman last sampled Mist for the buffer
-	// state carried on a periodic report (a level). Edges (STREAM_BUFFER) and
-	// levels are ordered by these times so neither can regress the other.
-	BufferLevelUnixMillis int64 `json:"buffer_level_unix_millis,omitempty"`
+	// BufferPlayableSampledUnixMillis is when Helmsman last sampled Mist for
+	// playability. Edges (STREAM_BUFFER) and levels are ordered by these times
+	// so neither can regress the other.
+	BufferPlayableSampledUnixMillis int64 `json:"buffer_playable_sampled_unix_millis,omitempty"`
 }
 
 // VirtualViewerState represents the lifecycle state of a virtual viewer
@@ -708,12 +710,15 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 
 	// Update basic fields
 	state.BufferState = bufferState
+	state.Playable = nativeBufferStatePlayable(bufferState)
 	state.Status = "live" // Set to live when buffer is available
 	state.LastUpdate = now
 
 	inst.BufferState = bufferState
+	inst.Playable = nativeBufferStatePlayable(bufferState)
 	inst.Status = "live"
 	inst.LastUpdate = now
+	state.Playable = sm.anyPlayableInstanceLocked(internalName)
 
 	// Parse stream details if provided
 	if streamDetailsJSON != "" {
@@ -769,6 +774,24 @@ func (sm *StreamStateManager) deriveUnionStatsLocked(internalName string, s *Str
 	s.Inputs = inputs
 	s.BytesUp = bytesUp
 	s.BytesDown = bytesDown
+}
+
+func nativeBufferStatePlayable(bufferState string) bool {
+	switch bufferState {
+	case "FULL", "DRY", "RECOVER":
+		return true
+	default:
+		return false
+	}
+}
+
+func (sm *StreamStateManager) anyPlayableInstanceLocked(internalName string) bool {
+	for _, inst := range sm.streamInstances[internalName] {
+		if inst != nil && inst.Status != "offline" && inst.Playable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetStreamState returns the current state for a stream
@@ -1377,6 +1400,7 @@ func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalNam
 	now := time.Now()
 	inst.Status = "offline"
 	inst.BufferState = "EMPTY"
+	inst.Playable = false
 	inst.ProcessObservation = nil
 	inst.BufferObservation = nil
 	// Zero presence counters: the balancer and union derivation read
@@ -1405,6 +1429,7 @@ func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalNam
 		union.Status = "offline"
 		union.BufferState = "EMPTY"
 	}
+	union.Playable = sm.anyPlayableInstanceLocked(internalName)
 	union.LastUpdate = now
 	sm.deriveUnionStatsLocked(internalName, union)
 	streamPayload, _ := json.Marshal(union)
@@ -1541,6 +1566,7 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 		inst.TotalConnections = 0
 		inst.Status = "offline"
 		inst.BufferState = "EMPTY"
+		inst.Playable = false
 		inst.ProcessObservation = nil
 		inst.BufferObservation = nil
 		inst.Replicated = false
@@ -1556,6 +1582,7 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 				union.Status = "offline"
 				union.BufferState = "EMPTY"
 			}
+			union.Playable = sm.anyPlayableInstanceLocked(internalName)
 			union.LastUpdate = now
 			if payload, err := json.Marshal(union); err == nil {
 				streamWrites = append(streamWrites, streamWrite{internalName: internalName, payload: payload})
@@ -2111,6 +2138,7 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 type BalancerStreamSummary struct {
 	TenantID    string    `json:"tenant_id"`
 	BufferState string    `json:"buffer_state"`
+	Playable    bool      `json:"playable"`
 	Status      string    `json:"status"`
 	ObservedAt  time.Time `json:"observed_at"`
 	Total       uint64    `json:"total"`
@@ -2166,7 +2194,7 @@ func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot 
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
-				TenantID: inst.TenantID, BufferState: inst.BufferState, Status: inst.Status, ObservedAt: inst.LastUpdate,
+				TenantID: inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable, Status: inst.Status, ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
 				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
@@ -3266,7 +3294,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
-				TenantID: inst.TenantID, BufferState: inst.BufferState,
+				TenantID: inst.TenantID, BufferState: inst.BufferState, Playable: inst.Playable,
 				Status:     inst.Status,
 				ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),

@@ -90,45 +90,32 @@ func (sm *StreamStateManager) ObserveStreamBuffer(internalName, nodeID string, o
 	return true
 }
 
-// ObserveStreamBufferLevel applies the buffer state carried on a node's periodic
+// ObserveStreamPlayabilityLevel applies the readiness carried on a node's periodic
 // stream report, sampled from Mist's API at sampledUnixMillis. A level is
 // authoritative only when it is newer than the last applied STREAM_BUFFER edge
 // and the last applied level; an offline instance is never revived by a level,
 // the live report's stats update revives it first. It returns whether the level
 // was applied; state is persisted only when it changed.
-func (sm *StreamStateManager) ObserveStreamBufferLevel(internalName, nodeID, bufferState string, sampledUnixMillis int64) bool {
-	switch bufferState {
-	case "FULL", "DRY", "EMPTY", "RECOVER":
-	default:
-		return false
-	}
+func (sm *StreamStateManager) ObserveStreamPlayabilityLevel(internalName, nodeID string, playable bool, sampledUnixMillis int64) bool {
 	if internalName == "" || nodeID == "" || sampledUnixMillis <= 0 {
 		return false
 	}
 	sm.mu.Lock()
 	instance := sm.streamInstances[internalName][nodeID]
-	if instance == nil || instance.Status == "offline" || instance.BufferLevelUnixMillis >= sampledUnixMillis ||
+	if instance == nil || instance.Status == "offline" || instance.BufferPlayableSampledUnixMillis >= sampledUnixMillis ||
 		(instance.BufferObservation != nil && instance.BufferObservation.EventUnixMillis >= sampledUnixMillis) {
 		sm.mu.Unlock()
 		return false
 	}
-	instance.BufferLevelUnixMillis = sampledUnixMillis
-	changed := instance.BufferState != bufferState
-	instance.BufferState = bufferState
+	instance.BufferPlayableSampledUnixMillis = sampledUnixMillis
+	changed := instance.Playable != playable
+	instance.Playable = playable
 	union := sm.streams[internalName]
 	var streamPayload []byte
 	if union != nil {
-		// The union is ready while any live instance is ready; otherwise it
-		// follows this node's level.
-		unionState := bufferState
-		for _, other := range sm.streamInstances[internalName] {
-			if other != nil && other.Status != "offline" && (other.BufferState == "FULL" || other.BufferState == "RECOVER") {
-				unionState = other.BufferState
-				break
-			}
-		}
-		if union.BufferState != unionState {
-			union.BufferState = unionState
+		unionPlayable := sm.anyPlayableInstanceLocked(internalName)
+		if union.Playable != unionPlayable {
+			union.Playable = unionPlayable
 			changed = true
 		}
 		streamPayload = marshalStateOrNil(union)
@@ -162,14 +149,14 @@ func marshalStateOrNil(value any) []byte {
 	return encoded
 }
 
-// BufferLevelNewerThan reports whether a periodic level newer than eventUnixMillis
+// PlayabilityLevelNewerThan reports whether a periodic level newer than eventUnixMillis
 // has been applied for the instance, in which case a STREAM_BUFFER edge with that
 // event time is stale and must not be applied.
-func (sm *StreamStateManager) BufferLevelNewerThan(internalName, nodeID string, eventUnixMillis int64) bool {
+func (sm *StreamStateManager) PlayabilityLevelNewerThan(internalName, nodeID string, eventUnixMillis int64) bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	instance := sm.streamInstances[internalName][nodeID]
-	return instance != nil && instance.BufferLevelUnixMillis > eventUnixMillis
+	return instance != nil && instance.BufferPlayableSampledUnixMillis > eventUnixMillis
 }
 
 // ApplyStreamInstanceIdentity stamps the resolved owner tenant on a node's stream

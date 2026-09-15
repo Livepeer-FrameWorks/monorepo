@@ -295,8 +295,11 @@ The player:
 When a local cluster doesn't have the requested content, Foghorn checks peer clusters before returning an error. This extends the single-cluster scoring with a two-phase remote lookup. It backs stored-media resolution, node-bound source lookup, and the candidates this cell returns to a querying peer. A live viewer's cross-cell destination comes from placement's own destination discovery, which observes peer cells directly rather than through this lookup.
 
 Stream-specific advertisements also provide a warm registry view. Every five seconds,
-the sender reports each node's own buffer state and original-versus-replicated input status;
-an aggregate full stream cannot make a dry replica full. Confirmed push publishers include
+the sender reports each node's native Mist buffer state, independent media playability,
+and original-versus-replicated input status. `FULL`, `DRY`, and `RECOVER` are playable
+Mist states; `DRY` means a booted buffer has a health issue (for example, a valid
+video-only stream reporting `HLSnoaudio!`), not that the stream is empty. Routing gates
+on playability while diagnostics retain the native state. Confirmed push publishers include
 their generation/revision, and each edge identifies its virtual media cluster independently
 of the sending Foghorn cell. Both receive directions preserve these fields and RAM metrics
 through a shared projection. Old peers without generation fields remain unbound. This warm

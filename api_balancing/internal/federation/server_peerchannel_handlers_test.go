@@ -153,6 +153,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 						GeoLat:      5.5,
 						GeoLon:      6.6,
 						BufferState: "FULL",
+						Playable:    true,
 					}},
 					Timestamp: time.Now().Unix(),
 				}},

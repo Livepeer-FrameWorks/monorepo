@@ -481,6 +481,7 @@ func TestRedisStreamRoundTrip(t *testing.T) {
 		TenantID:     "tenant-redis",
 		Status:       "live",
 		BufferState:  "FULL",
+		Playable:     true,
 	}
 	if err := store.SetStream(internalName, in); err != nil {
 		t.Fatalf("SetStream: %v", err)
@@ -523,6 +524,7 @@ func TestRedisStreamInstanceRoundTrip(t *testing.T) {
 		TenantID:    "tenant-redis",
 		Status:      "live",
 		BufferState: "FULL",
+		Playable:    true,
 		Inputs:      1,
 	}
 	if err := store.SetStreamInstance(internalName, nodeID, in); err != nil {

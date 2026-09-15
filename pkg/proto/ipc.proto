@@ -1961,11 +1961,14 @@ message StreamLifecycleUpdate {
   optional uint32 video_buffer_ms = 36;
   optional uint32 video_jitter_ms = 37;
   optional string stream_id = 38;          // Enriched by Foghorn (UUID); REQUIRED for analytics joins
-  // When Helmsman sampled Mist's API for buffer_state. A periodic report is a
-  // level observation; STREAM_BUFFER triggers are edges. Foghorn keeps whichever
+  // When Helmsman sampled Mist's API for buffer_playable. A periodic report is
+  // a level observation; STREAM_BUFFER triggers are edges. Foghorn keeps whichever
   // is newer, so a report cannot regress a fresher transition and a missed
   // transition heals on the next report.
   optional int64 buffer_sampled_unix_millis = 42;
+  // Current media-serving readiness, independent of Mist's process status and
+  // health diagnostics. A video-only DRY stream can still be playable.
+  optional bool buffer_playable = 43;
 }
 
 // Exact local-runtime liveness result. This is a separate oneof payload so an

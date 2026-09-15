@@ -1854,36 +1854,39 @@ func TestStreamAPIToMistTrigger_TrackDetailsJSON(t *testing.T) {
 	}
 }
 
-// The periodic report carries Mist's buffer classification as a level so Foghorn
-// can recover readiness without a STREAM_BUFFER transition; the mapping mirrors
-// input_buffer.cpp (Online = booted, Mist "issues" = DRY, anything else EMPTY).
-func TestMistBufferStateFromAPIMirrorsTriggerClassification(t *testing.T) {
+func TestMistAPIHasPlayableBufferUsesBufferedMedia(t *testing.T) {
 	cases := []struct {
 		name   string
-		stream map[string]any
 		health map[string]any
-		want   string
+		tracks []map[string]any
+		want   bool
 	}{
-		{"online without issues", map[string]any{"status": "Online"}, map[string]any{"buffer": 120000.0}, "FULL"},
-		{"online with mist issues", map[string]any{"status": "Online"}, map[string]any{"issues": "unstable connection (671629ms JSON frame)! "}, "DRY"},
-		{"online with blank issues", map[string]any{"status": "Online"}, map[string]any{"issues": "  "}, "FULL"},
-		{"waiting for data", map[string]any{"status": "Waiting for data"}, map[string]any{}, "EMPTY"},
-		{"missing status", map[string]any{}, map[string]any{"issues": "x"}, "EMPTY"},
+		{"video only with HLS warning", map[string]any{"buffer": 56_000.0, "issues": "HLSnoaudio!"}, []map[string]any{{"type": "video", "codec": "H264"}}, true},
+		{"audio only", map[string]any{"buffer": 1.0}, []map[string]any{{"type": "audio", "codec": "AAC"}}, true},
+		{"track buffer fallback", map[string]any{}, []map[string]any{{"type": "video", "codec": "H264", "buffer": 500}}, true},
+		{"unbuffered media", map[string]any{"buffer": 0.0}, []map[string]any{{"type": "video", "codec": "H264"}}, false},
+		{"jpeg thumbnail only", map[string]any{"buffer": 56_000.0}, []map[string]any{{"type": "video", "codec": "JPEG"}}, false},
+		{"metadata only", map[string]any{"buffer": 56_000.0}, []map[string]any{{"type": "meta", "codec": "JSON"}}, false},
 	}
 	for _, tc := range cases {
-		if got := mistBufferStateFromAPI(tc.stream, tc.health); got != tc.want {
-			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		if got := mistAPIHasPlayableBuffer(tc.health, tc.tracks); got != tc.want {
+			t.Fatalf("%s: got %t want %t", tc.name, got, tc.want)
 		}
 	}
 }
 
-func TestConvertStreamAPIToMistTriggerReportsBufferLevel(t *testing.T) {
+func TestConvertStreamAPIToMistTriggerReportsPlayabilityWithoutInventingBufferState(t *testing.T) {
 	before := time.Now().UnixMilli()
 	trigger := convertStreamAPIToMistTrigger("edge-1", "live+abc", "abc",
-		map[string]any{"status": "Online", "inputs": 1.0, "viewers": 0.0}, map[string]any{"buffer": 120000.0}, nil, 2, logging.NewLogger())
+		map[string]any{"status": "Waiting for data", "inputs": 1.0, "viewers": 0.0},
+		map[string]any{"buffer": 120000.0, "issues": "HLSnoaudio!"},
+		[]map[string]any{{"type": "video", "codec": "H264"}}, 1, logging.NewLogger())
 	slu := trigger.GetStreamLifecycleUpdate()
-	if slu == nil || slu.GetBufferState() != "FULL" {
-		t.Fatalf("expected FULL buffer level on the report, got %+v", slu)
+	if slu == nil || slu.BufferPlayable == nil || !slu.GetBufferPlayable() {
+		t.Fatalf("expected playable buffer level on the report, got %+v", slu)
+	}
+	if slu.BufferState != nil {
+		t.Fatalf("periodic report invented native buffer state %q", slu.GetBufferState())
 	}
 	if sampled := slu.GetBufferSampledUnixMillis(); sampled < before || sampled > time.Now().UnixMilli() {
 		t.Fatalf("buffer sample time %d outside the poll window", sampled)

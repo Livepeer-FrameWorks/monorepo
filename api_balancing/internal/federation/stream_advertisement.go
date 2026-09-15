@@ -45,7 +45,7 @@ func applyRegistryStreamAdvertisement(ad *foghornfederationpb.StreamAdvertisemen
 		edges = append(edges, control.EdgeCandidate{
 			NodeID: edge.GetNodeId(), ClusterID: edge.GetClusterId(), BaseURL: edge.GetBaseUrl(), DTSCURL: edge.GetDtscUrl(),
 			IsOrigin: edge.GetIsOrigin(), BWAvailable: int64(edge.GetBwAvailable()), CPUPercent: edge.GetCpuPercent(),
-			ViewerCount: int32(edge.GetViewerCount()), GeoLat: edge.GetGeoLat(), GeoLon: edge.GetGeoLon(), BufferState: edge.GetBufferState(),
+			ViewerCount: int32(edge.GetViewerCount()), GeoLat: edge.GetGeoLat(), GeoLon: edge.GetGeoLon(), BufferState: edge.GetBufferState(), Playable: edge.GetPlayable(),
 			RAMUsed: edge.GetRamUsed(), RAMMax: edge.GetRamMax(), SourceGeneration: edge.GetSourceGeneration(), SourceRevision: edge.GetSourceRevision(),
 			SourceObservedAt: edge.GetSourceObservedAt(), DTSCObservedAt: edge.GetDtscObservedAt(),
 		})

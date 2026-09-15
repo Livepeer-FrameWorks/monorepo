@@ -107,6 +107,12 @@ Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. The peer m
 2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
 3. **Origin-Pull**: Foghorn arranges a DTSC pull from the remote origin into a local edge, and the viewer is served from there. Subsequent viewers are served locally. Viewers are never redirected to another cluster
 
+Source advertisements carry both Mist's native buffer health state and a separate
+media-playability signal. `FULL`, `DRY`, and `RECOVER` can all serve viewers; `DRY`
+means the booted buffer has a diagnostic issue, not that it is empty. This distinction
+matters for valid video-only streams, which Mist may flag with `HLSnoaudio!` while
+continuing to serve video. Federation refuses only sources whose media is not playable.
+
 ### Leader-Only Peering
 
 Each cluster elects one Foghorn instance (via Redis `SET NX`, 15s TTL) to run PeerChannel connections. This prevents duplicate peer traffic in HA deployments.

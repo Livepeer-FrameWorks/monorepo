@@ -152,7 +152,7 @@ func TestUserNewUsesGlobalPlacementGate(t *testing.T) {
 			source := &federation.LivePushPlacementPaths{CellID: "us-cell", Snapshot: func() *state.BalancerSnapshot { return &state.BalancerSnapshot{} }, Registry: viewerPlacementRegistry{
 				entry: control.StreamEntry{TenantID: "tenant", InternalName: "stream", Locations: map[string]control.Location{
 					"eu-cell": {IsLiveNow: true, AdTimestamp: now.Unix(), EdgeCandidates: []control.EdgeCandidate{{NodeID: "publisher", ClusterID: "eu", IsOrigin: true,
-						BufferState: "FULL", SourceGeneration: "source", SourceRevision: 1, SourceObservedAt: now.Unix()}}},
+						BufferState: "FULL", Playable: true, SourceGeneration: "source", SourceRevision: 1, SourceObservedAt: now.Unix()}}},
 				}},
 			}}
 			adapter := &ViewerPlacementAdapter{Authority: viewerPlacementPairReader{pair: pair}, Source: source, Gate: gate}

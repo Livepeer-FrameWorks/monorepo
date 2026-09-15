@@ -175,7 +175,7 @@ func TestPushPreparationOnPublisherNeedsNoSourceNotification(t *testing.T) {
 		SourceActive: true, OwnerNodeID: req.NodeId, SourceGeneration: req.Query.SourceGeneration, SourceRevision: 9,
 	}}
 	f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{"internal": {
-		TenantID: "tenant", Status: "live", BufferState: "FULL", Inputs: 1, ObservedAt: f.now,
+		TenantID: "tenant", Status: "live", BufferState: "FULL", Playable: true, Inputs: 1, ObservedAt: f.now,
 	}}
 	media.Arrange, media.Registry = nil, nil
 	ctx := context.Background()

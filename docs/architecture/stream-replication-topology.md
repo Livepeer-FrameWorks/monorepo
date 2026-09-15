@@ -54,6 +54,12 @@ Producer discovers ingest through HTTP, GraphQL, or gRPC
 and `Replicated == false`. Durable admission permits one active ingest generation per tenant stream;
 the registry projects that generation into runtime source ownership.
 
+**Buffer readiness**: Mist emits `FULL` after the fragment buffer boots, `DRY` when that
+playable buffer acquires a health issue, `RECOVER` when the issue clears, and `EMPTY`
+when the buffer is removed. Foghorn preserves that diagnostic state but routes on the
+separate `Playable` fact. In particular, `DRY` does not reject a video-only source merely
+because HLS reports that it has no audio track.
+
 ### Intra-Cluster Replication: Origin → Edges
 
 Live stream replication within a cluster is demand-driven. Edges pull via DTSC only when viewers need the stream.

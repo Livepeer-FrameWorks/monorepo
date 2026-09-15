@@ -588,6 +588,7 @@ func HandleRootPage(c *gin.Context) {
                             <th>Tenant</th>
                             <th>Status</th>
                             <th>Buffer</th>
+							<th>Playable</th>
                             <th>Viewers</th>
                             <th>Connections</th>
                             <th>Inputs</th>
@@ -613,6 +614,7 @@ func HandleRootPage(c *gin.Context) {
                                 {{else if .BufferState}}<span class="tag warning">{{.BufferState}}</span>
                                 {{else}}<span class="secondary">-</span>{{end}}
                             </td>
+							<td>{{if .Playable}}<span class="tag success">Yes</span>{{else}}<span class="tag danger">No</span>{{end}}</td>
                             <td>{{.Viewers}}</td>
                             <td>{{.TotalConnections}}</td>
                             <td>{{.Inputs}}</td>
@@ -639,6 +641,7 @@ func HandleRootPage(c *gin.Context) {
                             <th>Node</th>
                             <th>Status</th>
                             <th>Buffer</th>
+							<th>Playable</th>
                             <th>Viewers</th>
                             <th>Connections</th>
                             <th>Inputs</th>
@@ -664,6 +667,7 @@ func HandleRootPage(c *gin.Context) {
                                 {{else if .BufferState}}<span class="tag warning">{{.BufferState}}</span>
                                 {{else}}<span class="secondary">-</span>{{end}}
                             </td>
+							<td>{{if .Playable}}<span class="tag success">Yes</span>{{else}}<span class="tag danger">No</span>{{end}}</td>
                             <td>{{.Viewers}}</td>
                             <td>{{.TotalConnections}}</td>
                             <td>{{.Inputs}}</td>
@@ -891,6 +895,7 @@ func HandleRootPage(c *gin.Context) {
 		InternalName     string
 		Status           string
 		BufferState      string
+		Playable         bool
 		Viewers          int
 		TotalConnections int
 		Inputs           int
@@ -911,6 +916,7 @@ func HandleRootPage(c *gin.Context) {
 		TenantID         string
 		Status           string
 		BufferState      string
+		Playable         bool
 		Viewers          int
 		TotalConnections int
 		Inputs           int
@@ -1117,6 +1123,7 @@ func HandleRootPage(c *gin.Context) {
 			InternalName:     stream.InternalName,
 			Status:           stream.Status,
 			BufferState:      stream.BufferState,
+			Playable:         stream.Playable,
 			Viewers:          stream.Viewers,
 			TotalConnections: stream.TotalConnections,
 			Inputs:           stream.Inputs,
@@ -1146,6 +1153,7 @@ func HandleRootPage(c *gin.Context) {
 				TenantID:         inst.TenantID,
 				Status:           inst.Status,
 				BufferState:      inst.BufferState,
+				Playable:         inst.Playable,
 				Viewers:          inst.Viewers,
 				TotalConnections: inst.TotalConnections,
 				Inputs:           inst.Inputs,

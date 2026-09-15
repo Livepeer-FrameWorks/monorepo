@@ -121,6 +121,8 @@ message EdgeCandidate {
   int64 source_revision = 16;
   // Virtual media cluster of this node, distinct from the responding cell.
   string cluster_id = 17;
+  // Media-serving readiness. buffer_state remains the native Mist diagnostic.
+  bool playable = 18;
 }
 
 message OriginPullNotification {
@@ -426,6 +428,8 @@ message PeerStreamEdge {
   // not refresh the source buffer or the DTSC listener. Zero means unknown.
   int64 dtsc_observed_at = 16;
   int64 source_observed_at = 17;
+  // Media-serving readiness. buffer_state remains the native Mist diagnostic.
+  bool playable = 18;
 }
 
 // PeerHeartbeat carried session liveness and capability exchange. Peer liveness

@@ -47,8 +47,8 @@ func TestQueryStreamGenerationDescribesExactPublisherNotLastReportingNode(t *tes
 		if candidate.GetClusterId() != "virtual-source" {
 			t.Fatalf("source node borrowed responding cell identity: %v", candidate)
 		}
-		if candidate.GetBufferState() != "FULL" {
-			t.Fatalf("node-specific buffer state lost: %v", candidate)
+		if candidate.GetBufferState() != "FULL" || !candidate.GetPlayable() {
+			t.Fatalf("node-specific buffer readiness lost: %v", candidate)
 		}
 		if candidate.GetNodeId() == "publisher" {
 			if candidate.GetSourceGeneration() != "generation" || candidate.GetSourceRevision() != 7 || !candidate.GetIsOrigin() {

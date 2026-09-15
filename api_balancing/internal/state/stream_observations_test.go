@@ -122,28 +122,30 @@ func TestStreamObservationsRejectStaleAndInvalidSamples(t *testing.T) {
 	}
 }
 
-// A periodic level restores readiness for a live instance and is ordered
+// A periodic playability level restores readiness for a live instance without
+// replacing Mist's native diagnostic state and is ordered
 // against STREAM_BUFFER edges by time in both directions.
-func TestObserveStreamBufferLevelOrdersAgainstEdges(t *testing.T) {
+func TestObserveStreamPlayabilityLevelOrdersAgainstEdges(t *testing.T) {
 	sm := NewStreamStateManager()
 	sm.UpdateNodeStats("stream", "node", 0, 1, 0, 0, false)
+	sm.streamInstances["stream"]["node"].BufferState = "DRY"
+	sm.streams["stream"].BufferState = "DRY"
 
-	// A level for an instance that only has a stale EMPTY applies.
-	if !sm.ObserveStreamBufferLevel("stream", "node", "FULL", 1_000) {
+	if !sm.ObserveStreamPlayabilityLevel("stream", "node", true, 1_000) {
 		t.Fatal("first level was not applied")
 	}
-	if inst := sm.streamInstances["stream"]["node"]; inst.BufferState != "FULL" || inst.BufferLevelUnixMillis != 1_000 {
+	if inst := sm.streamInstances["stream"]["node"]; !inst.Playable || inst.BufferState != "DRY" || inst.BufferPlayableSampledUnixMillis != 1_000 {
 		t.Fatalf("instance after level: %+v", inst)
 	}
-	if union := sm.streams["stream"]; union == nil || union.BufferState != "FULL" {
+	if union := sm.streams["stream"]; union == nil || !union.Playable || union.BufferState != "DRY" {
 		t.Fatalf("union after level: %+v", union)
 	}
 
 	// An older level cannot regress a newer one.
-	if sm.ObserveStreamBufferLevel("stream", "node", "DRY", 900) {
+	if sm.ObserveStreamPlayabilityLevel("stream", "node", false, 900) {
 		t.Fatal("older level was applied")
 	}
-	if sm.streamInstances["stream"]["node"].BufferState != "FULL" {
+	if !sm.streamInstances["stream"]["node"].Playable {
 		t.Fatal("older level changed the state")
 	}
 
@@ -151,27 +153,27 @@ func TestObserveStreamBufferLevelOrdersAgainstEdges(t *testing.T) {
 	if !sm.ObserveStreamBuffer("stream", "node", StreamBufferObservation{RuntimeName: "live+stream", BufferPID: 7, State: "DRY", EventID: "e1", EventUnixMillis: 2_000}) {
 		t.Fatal("newer edge was not recorded")
 	}
-	if sm.ObserveStreamBufferLevel("stream", "node", "FULL", 1_500) {
+	if sm.ObserveStreamPlayabilityLevel("stream", "node", false, 1_500) {
 		t.Fatal("level older than the edge was applied")
 	}
-	if !sm.BufferLevelNewerThan("stream", "node", 500) || sm.BufferLevelNewerThan("stream", "node", 1_000) {
-		t.Fatal("BufferLevelNewerThan must compare strictly against the applied level")
+	if !sm.PlayabilityLevelNewerThan("stream", "node", 500) || sm.PlayabilityLevelNewerThan("stream", "node", 1_000) {
+		t.Fatal("PlayabilityLevelNewerThan must compare strictly against the applied level")
 	}
 
 	// A level newer than the edge applies and makes an even older edge stale.
-	if !sm.ObserveStreamBufferLevel("stream", "node", "FULL", 3_000) {
+	if !sm.ObserveStreamPlayabilityLevel("stream", "node", false, 3_000) {
 		t.Fatal("level newer than the edge was not applied")
 	}
-	if !sm.BufferLevelNewerThan("stream", "node", 2_500) {
+	if sm.streamInstances["stream"]["node"].Playable || sm.streamInstances["stream"]["node"].BufferState != "DRY" {
+		t.Fatal("playability level overwrote the native state or failed to apply")
+	}
+	if !sm.PlayabilityLevelNewerThan("stream", "node", 2_500) {
 		t.Fatal("edge older than the newest level must be reported stale")
 	}
 
-	// Unknown states and offline instances are never applied.
-	if sm.ObserveStreamBufferLevel("stream", "node", "BOGUS", 4_000) {
-		t.Fatal("unknown state was applied")
-	}
+	// Offline instances are never revived.
 	sm.SetOffline("stream", "node")
-	if sm.ObserveStreamBufferLevel("stream", "node", "FULL", 5_000) {
+	if sm.ObserveStreamPlayabilityLevel("stream", "node", true, 5_000) {
 		t.Fatal("a level revived an offline instance")
 	}
 }

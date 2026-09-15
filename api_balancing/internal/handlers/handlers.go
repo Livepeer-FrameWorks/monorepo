@@ -702,6 +702,7 @@ func HandleNodesOverview(c *gin.Context) {
 				"viewers":       s.Viewers,
 				"tenant_id":     s.TenantID,
 				"buffer_state":  s.BufferState,
+				"playable":      s.Playable,
 				"inputs":        s.Inputs,
 				"bytes_up":      s.BytesUp,
 				"bytes_down":    s.BytesDown,
@@ -714,6 +715,7 @@ func HandleNodesOverview(c *gin.Context) {
 					instMap[nodeID] = map[string]interface{}{
 						"viewers":      inst.Viewers,
 						"buffer_state": inst.BufferState,
+						"playable":     inst.Playable,
 						"bytes_up":     inst.BytesUp,
 						"bytes_down":   inst.BytesDown,
 						"inputs":       inst.Inputs,

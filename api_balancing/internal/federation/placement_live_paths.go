@@ -199,7 +199,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 				generation: loc.SourceGeneration, revision: loc.SourceRevision}
 			if known && grant.CellID == reader.CellID && grant.AllowIngest && entry.IngestMode == control.IngestPush {
 				stream := node.Streams[sourceContext.internalName]
-				if node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.BufferState == "FULL" && stream.Inputs > 0 && !stream.Replicated &&
+				if node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.Playable && stream.Inputs > 0 && !stream.Replicated &&
 					freshPlacementEvidence(node.LastHeartbeat, now) && freshPlacementEvidence(stream.ObservedAt, now) {
 					claim.present = true
 					claim.expiresAt = minPlacementExpiry(node.LastHeartbeat.Add(30*time.Second), stream.ObservedAt.Add(30*time.Second))
@@ -233,7 +233,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 			}
 			claim := placementPublisher{cellID: cellID, clusterID: edge.ClusterID, nodeID: edge.NodeID,
 				generation: edge.SourceGeneration, revision: edge.SourceRevision, expiresAt: time.Unix(loc.AdTimestamp, 0).Add(30 * time.Second)}
-			claim.present = loc.IsLiveNow && edge.BufferState == "FULL"
+			claim.present = loc.IsLiveNow && edge.Playable
 			claim.present = claim.present && freshPlacementEvidence(time.Unix(edge.SourceObservedAt, 0), now)
 			claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.SourceObservedAt, 0).Add(30*time.Second))
 			if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, runtimeName) {

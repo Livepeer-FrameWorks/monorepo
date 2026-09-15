@@ -3562,14 +3562,14 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	if replicated, ok := mistStreamReplicatedValue(streamData); ok {
 		streamLifecycleUpdate.Replicated = &replicated
 	}
-	// Mist classifies its STREAM_BUFFER trigger from the same facts this poll
-	// returns: FULL once the buffer has booted (stream status Online), DRY while
-	// the health JSON carries "issues", EMPTY otherwise. Reporting that level
-	// every poll lets Foghorn recover readiness after a restart or a publisher
-	// that returned inside Mist's resume window, where no transition fires.
-	bufferState := mistBufferStateFromAPI(streamData, healthData)
+	// The API status is process-facing and does not mirror InputBuffer's state
+	// machine: a stream may say "Waiting for data" while its booted buffer is
+	// actively serving media. Report only the independently observed readiness
+	// level here. Native FULL/DRY/RECOVER/EMPTY diagnostics remain owned by the
+	// STREAM_BUFFER edge that Mist emits.
+	bufferPlayable := mistAPIHasPlayableBuffer(healthData, trackDetails)
 	sampledAt := time.Now().UnixMilli()
-	streamLifecycleUpdate.BufferState = &bufferState
+	streamLifecycleUpdate.BufferPlayable = &bufferPlayable
 	streamLifecycleUpdate.BufferSampledUnixMillis = &sampledAt
 
 	// Add health data as stream details
@@ -3809,21 +3809,44 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 }
 
-// mistBufferStateFromAPI derives the STREAM_BUFFER state Mist would report right
-// now from its active_streams row: the buffer emits FULL when it has booted
-// (status Online), DRY whenever its health JSON carries "issues", RECOVER when
-// they clear (a level cannot distinguish RECOVER from FULL, and Foghorn treats
-// both as ready), and EMPTY when it is torn down. Only Mist's own "issues" field
-// counts; Helmsman's derived warnings do not change buffer classification.
-func mistBufferStateFromAPI(streamData, healthData map[string]any) string {
-	status, ok := streamData["status"].(string)
-	if !ok || status != "Online" {
-		return "EMPTY"
+func mistAPIHasPlayableBuffer(healthData map[string]any, trackDetails []map[string]any) bool {
+	buffered := numericValuePositive(healthData["buffer"])
+	mediaTrack := false
+	for _, track := range trackDetails {
+		trackType := getString(track["type"])
+		codec := getString(track["codec"])
+		if trackType != "audio" && (trackType != "video" || normalizeTrackCodec(codec) == "JPEG") {
+			continue
+		}
+		mediaTrack = true
+		if numericValuePositive(track["buffer"]) {
+			buffered = true
+		}
 	}
-	if issues, ok := healthData["issues"].(string); ok && strings.TrimSpace(issues) != "" {
-		return "DRY"
+	return mediaTrack && buffered
+}
+
+func numericValuePositive(value any) bool {
+	switch v := value.(type) {
+	case float64:
+		return v > 0
+	case float32:
+		return v > 0
+	case int:
+		return v > 0
+	case int32:
+		return v > 0
+	case int64:
+		return v > 0
+	case uint:
+		return v > 0
+	case uint32:
+		return v > 0
+	case uint64:
+		return v > 0
+	default:
+		return false
 	}
-	return "FULL"
 }
 
 func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]any, trackCount int) bool {

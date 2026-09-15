@@ -287,6 +287,9 @@ func TestHandleStreamBuffer_PersistsLiveStateForInternalName(t *testing.T) {
 	if got.BufferState != "FULL" {
 		t.Errorf("buffer state not recorded: got %q want FULL", got.BufferState)
 	}
+	if !got.Playable {
+		t.Error("FULL buffer state was not marked playable")
+	}
 	if got.NodeID != nodeID {
 		t.Errorf("state node mismatch: got %q want %q", got.NodeID, nodeID)
 	}
