@@ -476,6 +476,27 @@ features:
           mcp: { required: true }
           webapp: { required: true }
           docs: { required: true }
+      - slug: vod-upload-validation
+        name: Upload validation and presign hardening
+        description: Enforce declared size, content type, and container validity on presigned VOD uploads.
+        status: partial
+        gap_reason: |
+          Presign rejects a missing size and quota-checks the declared size; container validity is proven by the
+          processing boot in Mist, which fails the job on unparsable input. Still missing: comparing actual object
+          size with the declared size on completion, Content-Type and size conditions on presigned parts, a shorter
+          multipart expiry than 2 hours, and a bucket lifecycle rule for abandoned multipart uploads (in-app recovery
+          jobs compensate today). Design in docs/rfcs/vod-upload-validation.md.
+        depends_on: [vod]
+        required_surfaces:
+          graphql:
+            { required: false, reason: "Server-side enforcement on the existing upload mutations." }
+          mcp: { required: false, reason: "Same mutations as GraphQL." }
+          webapp:
+            {
+              required: false,
+              reason: "Enforcement is invisible except for clearer upload errors.",
+            }
+          docs: { required: true }
 
   - slug: clips
     name: Clips
@@ -648,10 +669,13 @@ features:
     description: Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster.
     status: partial
     gap_reason: |
-      Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). The orchestration
-      remainder is cluster-wide: client-side processing stats in MistServer and processing-aware scheduling in Foghorn, so heavy
-      jobs (full transcodes, large AI models) land on dedicated compute nodes — leveraging the Livepeer network — while
-      ultralight work stays on the edge.
+      Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). Processing jobs
+      run on foghorn.processing_jobs and Foghorn already routes each job by processing class against per-node advertised
+      capacity and in-flight load, gated on tenant entitlement. Live and DVR processing is resolved per lifecycle by
+      Commodore as signed process config rather than as jobs. The remainder is a per-job processing class, GPU/ONNX-profile
+      aware placement so large AI models land on dedicated compute nodes (leveraging the Livepeer network) while ultralight
+      work stays on the edge, live processing as a job, and a tenant-facing processing surface. Design in
+      docs/rfcs/processing-orchestration.md.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -728,7 +752,7 @@ features:
     description: Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission.
     status: roadmap
     gap_reason: |
-      Not designed yet. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not
+      Designed, not built. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not
       measured anywhere, job cost is content-dependent and only knowable after the fact, and co-placed jobs interfere
       (GPU sharing, memory bandwidth, encoder contention with live serving). Needs supply-side GPU/VRAM telemetry, a
       demand-side cost predictor with a measured-feedback loop, and an interference term — design tracked in
@@ -827,6 +851,41 @@ features:
         routes: ["/network"]
       docs:
         pages: [builders/playback.mdx, operators/multi-cluster.mdx]
+
+  - slug: network-egress-economics
+    name: Network egress economics and peering
+    area: infrastructure
+    kind: foundation
+    audience: platform
+    description: Operator-side supply-cost attribution, destination-network traffic analysis, percentile demand forecasting, and evidence-gated transit or peering evaluation for media egress.
+    status: roadmap
+    gap_reason: |
+      FrameWorks attributes viewer egress and quality to serving clusters, but it does not record destination ASN,
+      carrier contracts, 95th-percentile exposure, route-level egress, or fully loaded network cost. Managed DNS and
+      managed delivery/overflow remain the operating baseline. ASN acquisition and a peering point of presence are
+      conditional options, not scheduled work. Decision contract in docs/rfcs/network-egress-peering.md.
+    related: [viewer-routing, media-placement, federation-network, edge-clusters]
+    required_surfaces:
+      graphql:
+        {
+          required: false,
+          reason: "Operator-confidential infrastructure analysis; no tenant API is committed.",
+        }
+      mcp:
+        {
+          required: false,
+          reason: "No agent surface is committed before the supply-cost authority is designed.",
+        }
+      webapp:
+        {
+          required: false,
+          reason: "No dashboard surface is committed before measurement and ownership are approved.",
+        }
+      docs:
+        {
+          required: false,
+          reason: "Research and decision criteria are tracked in the internal RFC.",
+        }
 
   - slug: edge-clusters
     name: Edge clusters
@@ -1185,6 +1244,8 @@ features:
           through streamingConfig, and the custom-domain backend lifecycle is shipped (domain verification state machine,
           delegated ACME issuance, certificate status tracking). The missing product surface is customer-facing self-serve:
           dashboard/MCP workflows for custom domain onboarding, verification and certificate status, and proxy policy.
+          Authoritative DNS still runs on managed providers (Cloudflare, Bunny); self-hosted Anycast DNS is a backlog
+          item designed in docs/rfcs/dns-anycast.md.
         required_surfaces:
           graphql: { required: true }
           mcp: { required: true }
@@ -1278,8 +1339,8 @@ features:
     status: roadmap
     gap_reason: |
       Replication today is on-demand only: viewer-driven origin-pull plus direct ingest-edge serving. There is no
-      pre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. The
-      stream-replication RFC is being rewritten with this orchestration scope.
+      pre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. Design in
+      docs/rfcs/stream-replication.md; demand-driven destination preparation already ships with media placement.
     related: [federation-network, viewer-routing]
     required_surfaces:
       graphql: { required: true }
@@ -1346,7 +1407,7 @@ features:
   - slug: placement-policy
     name: Placement policy and storage tiering
     area: infrastructure
-    description: Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.
+    description: Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.
     status: roadmap
     gap_reason: |
       Partially built. A typed single-backend immutable storage descriptor ships today (desired-state bootstrap with

@@ -1003,6 +1003,50 @@
             "mcp": false,
             "webapp": false
           }
+        },
+        {
+          "slug": "vod-upload-validation",
+          "name": "Upload validation and presign hardening",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "Enforce declared size, content type, and container validity on presigned VOD uploads.",
+          "status": "partial",
+          "gap_reason": "Presign rejects a missing size and quota-checks the declared size; container validity is proven by the\nprocessing boot in Mist, which fails the job on unparsable input. Still missing: comparing actual object\nsize with the declared size on completion, Content-Type and size conditions on presigned parts, a shorter\nmultipart expiry than 2 hours, and a bucket lifecycle rule for abandoned multipart uploads (in-app recovery\njobs compensate today). Design in docs/rfcs/vod-upload-validation.md.\n",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": false,
+              "reason": "Server-side enforcement on the existing upload mutations."
+            },
+            "mcp": {
+              "required": false,
+              "reason": "Same mutations as GraphQL."
+            },
+            "webapp": {
+              "required": false,
+              "reason": "Enforcement is invisible except for clearer upload errors."
+            }
+          },
+          "surfaces": {
+            "graphql": {},
+            "mcp": {},
+            "cli": {},
+            "webapp": {},
+            "docs": {}
+          },
+          "depends_on": [
+            "vod"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": false,
+            "graphql": false,
+            "mcp": false,
+            "webapp": false
+          }
         }
       ],
       "actual_surfaces": {
@@ -1013,7 +1057,8 @@
         "webapp": true
       },
       "enables": [
-        "scheduled-vod-streams"
+        "scheduled-vod-streams",
+        "vod-upload-validation"
       ],
       "family_surfaces": {
         "cli": false,
@@ -1257,7 +1302,7 @@
       "audience": "product",
       "description": "Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster.",
       "status": "partial",
-      "gap_reason": "Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). The orchestration\nremainder is cluster-wide: client-side processing stats in MistServer and processing-aware scheduling in Foghorn, so heavy\njobs (full transcodes, large AI models) land on dedicated compute nodes — leveraging the Livepeer network — while\nultralight work stays on the edge.\n",
+      "gap_reason": "Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). Processing jobs\nrun on foghorn.processing_jobs and Foghorn already routes each job by processing class against per-node advertised\ncapacity and in-flight load, gated on tenant entitlement. Live and DVR processing is resolved per lifecycle by\nCommodore as signed process config rather than as jobs. The remainder is a per-job processing class, GPU/ONNX-profile\naware placement so large AI models land on dedicated compute nodes (leveraging the Livepeer network) while ultralight\nwork stays on the edge, live processing as a job, and a tenant-facing processing surface. Design in\ndocs/rfcs/processing-orchestration.md.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -1459,7 +1504,7 @@
       "audience": "product",
       "description": "Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission.",
       "status": "roadmap",
-      "gap_reason": "Not designed yet. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not\nmeasured anywhere, job cost is content-dependent and only knowable after the fact, and co-placed jobs interfere\n(GPU sharing, memory bandwidth, encoder contention with live serving). Needs supply-side GPU/VRAM telemetry, a\ndemand-side cost predictor with a measured-feedback loop, and an interference term — design tracked in\ndocs/rfcs/workload-cost-model.md.\n",
+      "gap_reason": "Designed, not built. Processing dispatch today routes by node class and in-flight count only; GPU and VRAM are not\nmeasured anywhere, job cost is content-dependent and only knowable after the fact, and co-placed jobs interfere\n(GPU sharing, memory bandwidth, encoder contention with live serving). Needs supply-side GPU/VRAM telemetry, a\ndemand-side cost predictor with a measured-feedback loop, and an interference term — design tracked in\ndocs/rfcs/workload-cost-model.md.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -2534,7 +2579,7 @@
           "audience": "product",
           "description": "Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery.",
           "status": "partial",
-          "gap_reason": "Navigator reconciles platform and media-cluster DNS for operated deployments, the API exposes tenant streaming domains\nthrough streamingConfig, and the custom-domain backend lifecycle is shipped (domain verification state machine,\ndelegated ACME issuance, certificate status tracking). The missing product surface is customer-facing self-serve:\ndashboard/MCP workflows for custom domain onboarding, verification and certificate status, and proxy policy.\n",
+          "gap_reason": "Navigator reconciles platform and media-cluster DNS for operated deployments, the API exposes tenant streaming domains\nthrough streamingConfig, and the custom-domain backend lifecycle is shipped (domain verification state machine,\ndelegated ACME issuance, certificate status tracking). The missing product surface is customer-facing self-serve:\ndashboard/MCP workflows for custom domain onboarding, verification and certificate status, and proxy policy.\nAuthoritative DNS still runs on managed providers (Cloudflare, Bunny); self-hosted Anycast DNS is a backlog\nitem designed in docs/rfcs/dns-anycast.md.\n",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -2780,7 +2825,7 @@
       "audience": "product",
       "description": "Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions).",
       "status": "roadmap",
-      "gap_reason": "Replication today is on-demand only: viewer-driven origin-pull plus direct ingest-edge serving. There is no\npre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. The\nstream-replication RFC is being rewritten with this orchestration scope.\n",
+      "gap_reason": "Replication today is on-demand only: viewer-driven origin-pull plus direct ingest-edge serving. There is no\npre-emptive spread, no hub/hop role between origin and edge, and no per-stream replication policy. Design in\ndocs/rfcs/stream-replication.md; demand-driven destination preparation already ships with media placement.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -2906,7 +2951,7 @@
       "area": "infrastructure",
       "kind": "product",
       "audience": "product",
-      "description": "Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.",
+      "description": "Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger.",
       "status": "roadmap",
       "gap_reason": "Partially built. A typed single-backend immutable storage descriptor ships today (desired-state bootstrap with\nfingerprinted backend ownership and fail-closed guards; see docs/architecture/durable-media-storage.md),\ngiving each cluster a typed, durable storage backend rather than an untyped implicit copy. Still deferred by design\n(docs/rfcs/placement-policy-engine.md): the multi-backend storage registry (cluster_storage_backends /\nartifact_locations), the cold-to-hot tier ladder, and storage/processing policy enforcement. Ingest/viewer\nplacement management is tracked separately under media-placement; its implemented controls do not choose\ndurable-copy locations or processing workers. Signed media authority is shared infrastructure, not proof\nthat these future placement domains are enforced.\n",
       "required_surfaces": {
