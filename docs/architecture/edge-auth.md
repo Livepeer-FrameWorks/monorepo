@@ -228,6 +228,14 @@ MistServer controller LSP UI
 The current model uses server-only TLS. Foghorn validates edge identity through
 enrollment tokens and fingerprints, but edges do not present client certificates.
 
+This is a property of the shared helper, not a per-service choice.
+`pkg/grpcutil/tls.go` builds every gRPC server's `tls.Config` from a certificate
+reloader alone and never sets `ClientAuth` or `ClientCAs`; `ClientAuth` defaults
+to `tls.NoClientCert`, and `tls.RequireAndVerifyClientCert` appears nowhere in the
+repository. So no gRPC listener in the platform, internal or external, requests a
+client certificate. Adding mTLS is a change to `pkg/grpcutil`, not a deployment
+toggle.
+
 Future work: per-edge client certificates issued during enrollment, Foghorn
 verifies `CN=node_id`. See `docs/rfcs/service-identity-and-cluster-binding.md`
 for the conceptual proposal (not yet implemented).

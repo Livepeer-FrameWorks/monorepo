@@ -20,7 +20,7 @@ Rate limiting exists in `api_gateway/internal/middleware/ratelimit.go` as a toke
 
 GeoIP (`pkg/geoip/geoip.go`) is used for viewer routing decisions, not for blocking or reputation scoring.
 
-There is no JA3/JA4 TLS fingerprinting, no bot detection, no IP reputation services, and no connection-level security telemetry. No DNS query logging exists — Navigator (`api_dns/`) uses the Cloudflare API for DNS management with no self-hosted DNS infrastructure. No WebRTC connection forensics are available (no platform-managed TURN/STUN; see the nat-traversal RFC).
+There is no JA3/JA4 TLS fingerprinting, no bot detection, no IP reputation services, and no connection-level security telemetry. No DNS query logging exists: Navigator (`api_dns/`) drives managed providers through their APIs, Cloudflare and Bunny (`api_dns/internal/provider/`), and never answers a query itself, so there is no point in the stack where query-level data could be observed. That is a property of using managed DNS at all, not of which vendor is configured. No WebRTC connection forensics are available (no platform-managed TURN/STUN; see the nat-traversal RFC).
 
 Evidence:
 
@@ -112,7 +112,7 @@ ClickHouse materialized views over connection, DNS, and TLS fingerprint data. Al
 
 - [Evidence] `api_gateway/internal/middleware/ratelimit.go` (token bucket rate limiting)
 - [Evidence] `pkg/geoip/geoip.go` (GeoIP for routing, not security)
-- [Evidence] `api_dns/` (Cloudflare-based DNS, no self-hosted)
+- [Evidence] `api_dns/internal/provider/{cloudflare,bunny}` (managed providers only, no self-hosted authoritative DNS)
 - [Reference] `docs/rfcs/dns-anycast.md` (prerequisite for Phase 3)
 - [Reference] `docs/rfcs/nat-traversal.md` (related — WebRTC connection context)
 - [Reference] JA3 TLS fingerprinting: https://github.com/salesforce/ja3

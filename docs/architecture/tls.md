@@ -62,15 +62,31 @@ separate from the gRPC split.
 
 gRPC clients construct an explicit dial tuple: address, ServerName, CA material,
 and insecure policy. The address is the network route; the ServerName is the TLS
-identity. These are not interchangeable.
+identity. These are not interchangeable, and the ServerName must name the
+certificate the dialed endpoint actually serves, not the service's usual internal
+name. A client dialing a public media FQDN such as
+`foghorn.media-eu-1.frameworks.network` verifies that FQDN against the Web PKI; it
+must not carry `foghorn.internal` over from an internal-listener config. A client
+dialing a raw WireGuard address or IP still needs the ServerName that appears in
+the certificate's SANs, because the address itself carries no identity. This is
+why the tuple belongs to endpoint resolution rather than to a process-level
+default.
 
-When a custom CA path or inline CA PEM is configured, `pkg/grpcutil.ClientTLS`
-requires a non-empty ServerName and fails closed otherwise. Client packages in
-`pkg/clients/` export canonical service names but do not read environment
-variables. Entrypoints read environment and pass fully specified client config.
+`pkg/grpcutil.ClientTLS` enforces the tuple. When a custom CA path or inline CA
+PEM is configured it requires a non-empty ServerName (or `DefaultServerName`) and
+fails closed otherwise; custom CA material is appended to the system pool, so a
+client configured with the internal CA still verifies public certificates
+normally. Client packages in `pkg/clients/` export canonical service names but do
+not read environment variables. Entrypoints read environment and pass fully
+specified client config.
 
 `GRPC_TLS_SERVER_NAME` is not a process-wide runtime knob. Multi-client services
 such as Bridge must pass one ServerName per downstream client.
+
+`GRPC_ALLOW_INSECURE` is not a production option: both `ServerTLS` and
+`ClientTLS` return an error when it is set and `config.IsProduction()` is true.
+Transport TLS is therefore mandatory in production even though the helpers accept
+a plaintext mode for dev and test.
 
 Bridge is not a general Foghorn client. Its only permitted direct Foghorn RPC is
 the public edge-bootstrap `PreRegisterEdge` rendezvous after Quartermaster has

@@ -199,4 +199,4 @@ Out of scope for this RFC. That remains a larger full-PKI recovery event.
 - `api_dns/internal/logic/internal_ca.go`
 - `api_mesh/internal/agent/agent.go`
 - `PLAN_REPO_WIDE_GRPC_TLS_2026-04-02.md`
-- `docs/rfcs/grpc-tls-mesh.md`
+- `docs/architecture/tls.md`
