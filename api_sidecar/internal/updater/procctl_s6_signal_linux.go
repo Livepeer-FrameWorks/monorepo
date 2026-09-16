@@ -52,12 +52,18 @@ func mistControllerParentPIDs(procRoot string) ([]int, error) {
 		if readErr != nil {
 			continue
 		}
-		ppid := 0
+		ppid := -1
 		for line := range strings.SplitSeq(string(status), "\n") {
 			if value, ok := strings.CutPrefix(line, "PPid:"); ok {
-				ppid, _ = strconv.Atoi(strings.TrimSpace(value))
+				parsedPPID, parseErr := strconv.Atoi(strings.TrimSpace(value))
+				if parseErr == nil {
+					ppid = parsedPPID
+				}
 				break
 			}
+		}
+		if ppid < 0 {
+			continue
 		}
 		controllers[pid] = ppid
 	}

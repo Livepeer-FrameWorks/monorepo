@@ -96,9 +96,9 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	testBinary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+	testBinary, executableErr := os.Executable()
+	if executableErr != nil {
+		t.Fatal(executableErr)
 	}
 	for _, path := range []string{filepath.Join(root, "bin", "MistController"), filepath.Join(staged, "bin", "MistController")} {
 		if err := copyFile(testBinary, path, 0o755); err != nil {
@@ -108,7 +108,9 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 	ready := filepath.Join(parent, "ready")
 	marker := filepath.Join(parent, "marker")
 	observed := filepath.Join(parent, "observed")
-	cmd := exec.Command(filepath.Join(root, "bin", "MistController"), "-test.run=^TestReplaceMistPayloadInPlacePreservesExecutableLookupPath$")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "MistController"), "-test.run=^TestReplaceMistPayloadInPlacePreservesExecutableLookupPath$")
 	cmd.Env = append(os.Environ(),
 		helperEnv+"=old",
 		"FW_MIST_EXEC_READY="+ready,
