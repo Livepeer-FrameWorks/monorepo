@@ -332,6 +332,7 @@
       "{{ go_service_install_dir }}/{{ go_service_name }}"
   args:
     creates: "{{ go_service_install_sentinel }}"
+    executable: /bin/bash
   when: not ansible_check_mode
 
 - name: Find obsolete install sentinels

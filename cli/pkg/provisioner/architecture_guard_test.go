@@ -138,6 +138,10 @@ func TestGoServiceRoleVerifiesInstalledBinaryReceipt(t *testing.T) {
 	if !strings.Contains(string(vars), "go_service_binary_receipt:") {
 		t.Error("go_service vars do not declare the binary integrity receipt")
 	}
+	normalizeBlock := namedAnsibleTaskBlock(t, string(install), "Normalize extracted binary name")
+	if strings.Contains(normalizeBlock, "pipefail") && !strings.Contains(normalizeBlock, "executable: /bin/bash") {
+		t.Error("go_service binary normalization uses pipefail without selecting /bin/bash")
+	}
 }
 
 func TestArchitectureGuard_noGetBinaryURLInProvisioners(t *testing.T) {
