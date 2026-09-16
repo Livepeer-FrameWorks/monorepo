@@ -3961,11 +3961,51 @@ func TestEnsureEdgeTelemetryJWTKeypairDerivesPublicKey(t *testing.T) {
 	if err := ensureEdgeTelemetryJWTKeypair(runtimeData, env); err != nil {
 		t.Fatalf("ensureEdgeTelemetryJWTKeypair: %v", err)
 	}
-	if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
-		t.Fatal("EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64 should be derived")
+	if _, ok := env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]; ok {
+		t.Fatal("derived public key must not mutate shared env")
 	}
-	if got := runtimeData["edge_telemetry_jwt_public_key_pem_b64"]; got != env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] {
-		t.Fatalf("runtime public key = %v, want derived env public key", got)
+	if got, _ := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string); strings.TrimSpace(got) == "" {
+		t.Fatal("runtime public key should be derived")
+	}
+}
+
+func TestBuildServiceEnvVarsScopesDerivedTelemetryPublicKey(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Services: map[string]inventory.ServiceConfig{
+			"bridge":  {Enabled: true},
+			"foghorn": {Enabled: true},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true},
+		},
+	}
+	sharedEnv := map[string]string{
+		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
+	}
+	runtimeData := map[string]any{}
+	if err := ensureEdgeTelemetryJWTKeypair(runtimeData, sharedEnv); err != nil {
+		t.Fatalf("ensureEdgeTelemetryJWTKeypair: %v", err)
+	}
+
+	bridgeEnv, err := buildServiceEnvVars(&orchestrator.Task{
+		Type: "bridge", ServiceID: "bridge",
+	}, manifest, runtimeData, "", "", sharedEnv, nil, "native")
+	if err != nil {
+		t.Fatalf("build bridge env: %v", err)
+	}
+	if _, ok := bridgeEnv["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]; ok {
+		t.Fatal("unrelated service inherited derived telemetry public key")
+	}
+
+	foghornEnv, err := buildServiceEnvVars(&orchestrator.Task{
+		Type: "foghorn", ServiceID: "foghorn",
+	}, manifest, runtimeData, "", "", sharedEnv, nil, "native")
+	if err != nil {
+		t.Fatalf("build foghorn env: %v", err)
+	}
+	if strings.TrimSpace(foghornEnv["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
+		t.Fatal("foghorn did not receive derived telemetry public key")
 	}
 }
 
@@ -4020,8 +4060,8 @@ func TestValidateEdgeTelemetryTopologyAcceptsDurableKeyAndCaddyPlacement(t *test
 	if err := validateEdgeTelemetryTopology(manifest, env); err != nil {
 		t.Fatalf("validateEdgeTelemetryTopology: %v", err)
 	}
-	if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
-		t.Fatal("shared env should receive derived public key for the provision run")
+	if _, ok := env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]; ok {
+		t.Fatal("topology validation must not add derived material to shared env")
 	}
 }
 

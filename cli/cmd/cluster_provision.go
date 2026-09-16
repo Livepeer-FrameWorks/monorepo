@@ -1721,14 +1721,6 @@ func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]any, env map[string]st
 	}
 	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = strings.TrimSpace(privateB64)
 	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = strings.TrimSpace(publicB64)
-	if env != nil {
-		if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"]) == "" {
-			env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] = strings.TrimSpace(privateB64)
-		}
-		if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
-			env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] = strings.TrimSpace(publicB64)
-		}
-	}
 	return nil
 }
 
