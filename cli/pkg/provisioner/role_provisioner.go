@@ -26,16 +26,13 @@ type RoleVarsBuilder func(ctx context.Context, host inventory.Host, config Servi
 type RoleDetector func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error)
 
 // RoleFingerprinter is the optional Go-layer desired-state hook used by
-// `cluster diff` and `cluster apply` to decide whether a host needs touching
-// at all. It produces an ExpectedFile per FileKind the service models: binary,
-// env file, systemd unit, certs. Signature mirrors RoleVarsBuilder so the
-// fingerprinter sees the same ServiceConfig the vars builder sees; otherwise
-// it would have to duplicate provisioner logic to render desired-state content
-// for hashing.
+// `cluster diff` and `cluster apply` to classify a confirmed change. It
+// produces an ExpectedFile per FileKind the service models: binary, env file,
+// systemd unit, certs. Signature mirrors RoleVarsBuilder so the fingerprinter
+// sees the same ServiceConfig the vars builder sees.
 //
-// Returning a nil Fingerprint or a Fingerprint with no entries marks the
-// service as unmodeled — callers fall through to DiffUnknown for that
-// service rather than guessing.
+// Returning no entries leaves the change classified as infrastructure; it
+// does not bypass the authoritative Ansible check-mode planner.
 type RoleFingerprinter func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.Fingerprint, error)
 
 // RoleBuildHelpers is a tiny handle the builder/detector uses to reach the
@@ -109,10 +106,10 @@ type RolePlaybookProvisioner struct {
 	// preexisting services from services created in the current run.
 	Detector RoleDetector
 
-	// Fingerprinter is optional. When nil, Fingerprint returns a nil
-	// fingerprint and callers fall through to DiffUnknown — the safe heavy
-	// path. Services opt in by registering a fingerprinter that returns the
-	// expected on-host file hashes for the kinds they model.
+	// Fingerprinter is optional. When nil, Fingerprint returns no typed file
+	// evidence; the Ansible check-mode planner still determines whether the
+	// role would change managed state. Services opt in by registering a
+	// fingerprinter that returns expected hashes for the file kinds they model.
 	Fingerprinter RoleFingerprinter
 
 	// AnsibleRoot is the absolute path to the ansible/ tree. Resolved once
@@ -202,9 +199,9 @@ func (r *RolePlaybookProvisioner) DetectWithConfig(ctx context.Context, host inv
 	return r.Detector(ctx, host, config, r.helpers())
 }
 
-// Fingerprint delegates to the per-service fingerprinter. Returns nil when
-// the provisioner has no fingerprinter registered — `cluster diff` reads
-// that as "this service is not modeled here, fall through to DiffUnknown."
+// Fingerprint delegates to the per-service fingerprinter. A nil result means
+// the provisioner has no typed file evidence; Ansible check mode still decides
+// whether the host differs from desired state.
 func (r *RolePlaybookProvisioner) Fingerprint(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.Fingerprint, error) {
 	if r.Fingerprinter == nil {
 		return nil, nil
@@ -284,6 +281,13 @@ func (r *RolePlaybookProvisioner) CheckDiff(ctx context.Context, host inventory.
 // A false result means the role reported changed=0 and the live step can be
 // skipped without suppressing required restarts or init changes.
 func (r *RolePlaybookProvisioner) WouldChange(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (bool, error) {
+	inspection, err := r.InspectChanges(ctx, host, config, tags)
+	return inspection.Changed, err
+}
+
+// InspectChanges runs the same check-mode plan as WouldChange and preserves
+// the names of tasks that reported changes for operator-facing diagnostics.
+func (r *RolePlaybookProvisioner) InspectChanges(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (ChangeInspection, error) {
 	if len(tags) == 0 {
 		tags = []string{"install", "configure", "service"}
 	}
@@ -294,12 +298,12 @@ func (r *RolePlaybookProvisioner) WouldChange(ctx context.Context, host inventor
 		Diff:     false,
 		Outputer: recap,
 	}); err != nil {
-		return true, err
+		return ChangeInspection{Changed: true}, err
 	}
 	if !recap.HasRecap() {
-		return true, fmt.Errorf("%s: ansible check emitted no PLAY RECAP", r.RoleName)
+		return ChangeInspection{Changed: true}, fmt.Errorf("%s: ansible check emitted no PLAY RECAP", r.RoleName)
 	}
-	return recap.Changed(), nil
+	return ChangeInspection{Changed: recap.Changed(), Tasks: recap.Tasks()}, nil
 }
 
 // Restart runs the role's restart tag, which knows the correct unit or

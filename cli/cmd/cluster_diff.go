@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -22,18 +24,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const clusterDiffTimeout = 30 * time.Minute
+
 func newClusterDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "Typed change-kind survey: what would `cluster apply` need to touch?",
-		Long: `Compare desired (manifest + release artifacts) against observed (sha256 of
-files on each host) for every service that has registered a fingerprinter.
+		Long: `Compare desired (manifest + release artifacts) against observed host state.
+Every service is checked through the same read-only Ansible planner used by
+live provisioning. File fingerprints add binary/env/unit/cert detail where
+available; changes outside that typed model are reported as infra.
 
 Diff kinds: binary, env, unit, cert, infra, unknown.
 
-Services without a complete, authoritative fingerprint report 'unknown'.
-Unknown is informational: it is not evidence of drift and does not prescribe
-any mutation.
+Unknown means the authoritative check could not complete. It is informational:
+it is not evidence of drift and does not prescribe any mutation.
 
 Exits non-zero only when a classifiable diff is detected, so CI can gate on
 proven drift without treating unmodeled state as changed.`,
@@ -91,7 +96,7 @@ func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
 	onlyHosts := stringSliceFlag(cmd, "only-hosts")
 	onlyServices := stringSliceFlag(cmd, "only-services")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), clusterDiffTimeout)
 	defer cancel()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
@@ -170,10 +175,19 @@ type diffProbeTarget struct {
 	phase    orchestrator.Phase
 	hostName string
 	host     inventory.Host
+	prov     provisioner.Provisioner
+	config   provisioner.ServiceConfig
 	desired  *detect.Fingerprint
 	paths    []string
 	modeled  []detect.FileKind
 	unknown  string
+	fpError  string
+}
+
+type authoritativeDiff struct {
+	changed bool
+	tasks   []string
+	err     error
 }
 
 type diffProvCacheEntry struct {
@@ -279,46 +293,10 @@ func collectClusterDiffEntries(ctx context.Context, opts clusterDiffCollection) 
 		observedByHost[hostName] = got
 	}
 
+	authoritative := inspectClusterDiffTargets(ctx, targets)
 	entries := make([]clusterDiffEntry, 0, len(targets))
-	for _, t := range targets {
-		if t.unknown != "" {
-			entries = append(entries, clusterDiffEntry{
-				Host:    t.hostName,
-				Service: t.service,
-				Deploy:  t.deploy,
-				Phase:   t.phase,
-				Kinds:   []orchestrator.DiffKind{orchestrator.DiffUnknown},
-				Details: map[orchestrator.DiffKind]string{orchestrator.DiffUnknown: t.unknown},
-			})
-			continue
-		}
-		observed := observedByHost[t.hostName]
-		if observed == nil {
-			detail := "ssh probe failed"
-			if probeErrByHost[t.hostName] != "" {
-				detail += ": " + probeErrByHost[t.hostName]
-			}
-			entries = append(entries, clusterDiffEntry{
-				Host:    t.hostName,
-				Service: t.service,
-				Deploy:  t.deploy,
-				Phase:   t.phase,
-				Kinds:   []orchestrator.DiffKind{orchestrator.DiffUnknown},
-				Details: map[orchestrator.DiffKind]string{orchestrator.DiffUnknown: detail},
-				Modeled: t.modeled,
-			})
-			continue
-		}
-		hd := orchestrator.Classify(t.service, t.hostName, t.desired, observed)
-		entries = append(entries, clusterDiffEntry{
-			Host:    hd.Host,
-			Service: hd.Service,
-			Deploy:  t.deploy,
-			Phase:   t.phase,
-			Kinds:   hd.Kinds,
-			Details: hd.Details,
-			Modeled: t.modeled,
-		})
+	for i, t := range targets {
+		entries = append(entries, classifyClusterDiffTarget(t, authoritative[i], observedByHost[t.hostName], probeErrByHost[t.hostName]))
 	}
 
 	// Stable order for output and tests.
@@ -329,6 +307,153 @@ func collectClusterDiffEntries(ctx context.Context, opts clusterDiffCollection) 
 		return entries[i].Service < entries[j].Service
 	})
 	return entries
+}
+
+func classifyClusterDiffTarget(t diffProbeTarget, inspection authoritativeDiff, observed map[string]string, probeErr string) clusterDiffEntry {
+	entry := clusterDiffEntry{Host: t.hostName, Service: t.service, Deploy: t.deploy, Phase: t.phase, Modeled: t.modeled}
+	if t.unknown != "" {
+		entry.Kinds = []orchestrator.DiffKind{orchestrator.DiffUnknown}
+		entry.Details = map[orchestrator.DiffKind]string{orchestrator.DiffUnknown: t.unknown}
+		return entry
+	}
+	if inspection.err != nil {
+		entry.Kinds = []orchestrator.DiffKind{orchestrator.DiffUnknown}
+		entry.Details = map[orchestrator.DiffKind]string{orchestrator.DiffUnknown: "authoritative Ansible check failed: " + inspection.err.Error()}
+		return entry
+	}
+	if !inspection.changed {
+		return entry
+	}
+	if len(t.modeled) > 0 && observed == nil {
+		detail := ansibleChangeDetail(inspection.tasks, "authoritative Ansible check reports managed-state changes; typed fingerprint probe failed")
+		if probeErr != "" {
+			detail += ": " + probeErr
+		}
+		entry.Kinds = inferredAnsibleKinds(inspection.tasks)
+		if len(entry.Kinds) == 0 {
+			entry.Kinds = []orchestrator.DiffKind{orchestrator.DiffInfra}
+		}
+		entry.Details = detailsForKinds(entry.Kinds, detail)
+		return entry
+	}
+	hd := orchestrator.Classify(t.service, t.hostName, t.desired, observed)
+	if len(hd.Kinds) == 0 || (len(hd.Kinds) == 1 && hd.Kinds[0] == orchestrator.DiffUnknown) {
+		detail := ansibleChangeDetail(inspection.tasks, "authoritative Ansible check reports managed-state changes outside the typed file model")
+		if t.fpError != "" {
+			detail += ": " + t.fpError
+		}
+		hd.Kinds = inferredAnsibleKinds(inspection.tasks)
+		if len(hd.Kinds) == 0 {
+			hd.Kinds = []orchestrator.DiffKind{orchestrator.DiffInfra}
+		}
+		hd.Details = detailsForKinds(hd.Kinds, detail)
+	} else {
+		for _, kind := range inferredAnsibleKinds(inspection.tasks) {
+			if !slices.Contains(hd.Kinds, kind) {
+				hd.Kinds = append(hd.Kinds, kind)
+				hd.Details[kind] = ansibleChangeDetail(inspection.tasks, "authoritative Ansible task reported this change")
+			}
+		}
+	}
+	sort.Slice(hd.Kinds, func(i, j int) bool { return hd.Kinds[i] < hd.Kinds[j] })
+	entry.Kinds, entry.Details = hd.Kinds, hd.Details
+	return entry
+}
+
+func inferredAnsibleKinds(tasks []string) []orchestrator.DiffKind {
+	var kinds []orchestrator.DiffKind
+	for _, task := range tasks {
+		name := strings.ToLower(task)
+		kind := orchestrator.DiffKind("")
+		switch {
+		case strings.Contains(name, "reinstall under --check"), strings.Contains(name, "binary integrity"),
+			strings.Contains(name, "install service binary"), strings.Contains(name, "install privateer binary"):
+			kind = orchestrator.DiffBinary
+		case strings.Contains(name, "certificate"), strings.Contains(name, "service pki"), strings.Contains(name, " tls "):
+			kind = orchestrator.DiffCert
+		case strings.Contains(name, "environment file"), strings.Contains(name, "service environment"):
+			kind = orchestrator.DiffEnv
+		case strings.Contains(name, "systemd unit"), strings.Contains(name, "unit file"):
+			kind = orchestrator.DiffUnit
+		default:
+			kind = orchestrator.DiffInfra
+		}
+		if kind != "" && !slices.Contains(kinds, kind) {
+			kinds = append(kinds, kind)
+		}
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
+}
+
+func ansibleChangeDetail(tasks []string, fallback string) string {
+	if len(tasks) == 0 {
+		return fallback
+	}
+	const maxTasks = 4
+	shown := tasks
+	if len(shown) > maxTasks {
+		shown = shown[:maxTasks]
+	}
+	detail := "changed tasks: " + strings.Join(shown, "; ")
+	if remaining := len(tasks) - len(shown); remaining > 0 {
+		detail += fmt.Sprintf("; +%d more", remaining)
+	}
+	return detail
+}
+
+func detailsForKinds(kinds []orchestrator.DiffKind, detail string) map[orchestrator.DiffKind]string {
+	details := make(map[orchestrator.DiffKind]string, len(kinds))
+	for _, kind := range kinds {
+		details[kind] = detail
+	}
+	return details
+}
+
+// inspectClusterDiffTargets runs the same read-only Ansible check-mode planner
+// used by live provisioning. Fingerprints provide typed detail, but this result
+// decides whether the role would actually mutate the host.
+func inspectClusterDiffTargets(ctx context.Context, targets []diffProbeTarget) []authoritativeDiff {
+	results := make([]authoritativeDiff, len(targets))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	limit := make(chan struct{}, 6)
+	for i := range targets {
+		i := i
+		target := targets[i]
+		if target.unknown != "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case limit <- struct{}{}:
+				defer func() { <-limit }()
+			case <-ctx.Done():
+				mu.Lock()
+				results[i] = authoritativeDiff{err: ctx.Err()}
+				mu.Unlock()
+				return
+			}
+			result := authoritativeDiff{}
+			if inspector, ok := target.prov.(provisioner.ChangeInspector); ok {
+				inspection, err := inspector.InspectChanges(ctx, target.host, target.config, nil)
+				result.changed = inspection.Changed
+				result.tasks = inspection.Tasks
+				result.err = err
+			} else if planner, ok := target.prov.(provisioner.ChangePlanner); ok {
+				result.changed, result.err = planner.WouldChange(ctx, target.host, target.config, nil)
+			} else {
+				result.err = fmt.Errorf("provisioner does not implement change precheck")
+			}
+			mu.Lock()
+			results[i] = result
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 func collectServiceDiffTargets(
@@ -383,16 +508,10 @@ func collectServiceDiffTargets(
 			if !ok {
 				continue
 			}
-			base := diffProbeTarget{service: name, deploy: deploy, phase: phase, hostName: hostName, host: host}
+			base := diffProbeTarget{service: name, deploy: deploy, phase: phase, hostName: hostName, host: host, prov: ce.prov}
 
 			if ce.err != nil {
 				base.unknown = ce.err.Error()
-				targets = append(targets, base)
-				continue
-			}
-			fp, ok := ce.prov.(provisioner.Fingerprinter)
-			if !ok {
-				base.unknown = "provisioner does not implement Fingerprinter"
 				targets = append(targets, base)
 				continue
 			}
@@ -403,23 +522,21 @@ func collectServiceDiffTargets(
 				targets = append(targets, base)
 				continue
 			}
-			desired, err := fp.Fingerprint(ctx, host, cfg)
-			if err != nil {
-				base.unknown = err.Error()
-				targets = append(targets, base)
-				continue
+			base.config = cfg
+			if fp, ok := ce.prov.(provisioner.Fingerprinter); ok {
+				desired, fpErr := fp.Fingerprint(ctx, host, cfg)
+				if fpErr != nil {
+					base.fpError = fpErr.Error()
+				} else {
+					base.desired = desired
+				}
 			}
-			if desired == nil || len(desired.Files) == 0 {
-				base.unknown = "no kinds modeled for this service yet"
-				targets = append(targets, base)
-				continue
-			}
-
-			base.desired = desired
-			for _, kind := range desired.SortedKinds() {
-				base.modeled = append(base.modeled, kind)
-				if p := desired.Files[kind].Path; p != "" {
-					base.paths = append(base.paths, p)
+			if base.desired != nil {
+				for _, kind := range base.desired.SortedKinds() {
+					base.modeled = append(base.modeled, kind)
+					if p := base.desired.Files[kind].Path; p != "" {
+						base.paths = append(base.paths, p)
+					}
 				}
 			}
 			targets = append(targets, base)

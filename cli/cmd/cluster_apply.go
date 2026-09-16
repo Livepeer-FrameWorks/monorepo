@@ -110,9 +110,9 @@ func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
 	// restart + gate wait is N×30s in the worst case. Lift the timeout
 	// generously; the gate per-host timeout still bounds individual host
 	// progress, and ctrl-C cancels the whole rollout cleanly.
-	timeout := 60 * time.Second
+	timeout := clusterDiffTimeout
 	if confirm {
-		timeout = 15 * time.Minute
+		timeout = 45 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

@@ -65,18 +65,19 @@ type RecapHost struct {
 	Changed int
 }
 
-// RecapOutputer captures Ansible output and parses PLAY RECAP changed counts.
-// When W is nil it is silent, which is useful for live provision prechecks
-// that only need the yes/no change decision.
+// RecapOutputer captures PLAY RECAP counts and the task names associated with
+// changed host results. When W is nil it parses silently for preflight checks.
 type RecapOutputer struct {
-	W      io.Writer
-	Prefix string
-	Hosts  map[string]RecapHost
+	W            io.Writer
+	Prefix       string
+	Hosts        map[string]RecapHost
+	ChangedTasks map[string][]string
 }
 
 func (o *RecapOutputer) Print(ctx context.Context, reader io.Reader, _ io.Writer, _ ...goansible_result.OptionsFunc) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	currentTask := ""
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
@@ -84,6 +85,17 @@ func (o *RecapOutputer) Print(ctx context.Context, reader io.Reader, _ io.Writer
 		default:
 		}
 		line := scanner.Text()
+		if task, ok := parseTaskLine(line); ok {
+			currentTask = task
+		}
+		if host, ok := parseChangedHost(line); ok && currentTask != "" {
+			if o.ChangedTasks == nil {
+				o.ChangedTasks = map[string][]string{}
+			}
+			if !containsString(o.ChangedTasks[host], currentTask) {
+				o.ChangedTasks[host] = append(o.ChangedTasks[host], currentTask)
+			}
+		}
 		if host, recap, ok := parseRecapLine(line); ok {
 			if o.Hosts == nil {
 				o.Hosts = map[string]RecapHost{}
@@ -105,6 +117,60 @@ func (o *RecapOutputer) Print(ctx context.Context, reader io.Reader, _ io.Writer
 		}
 	}
 	return scanner.Err()
+}
+
+func (o *RecapOutputer) Tasks() []string {
+	if o == nil {
+		return nil
+	}
+	var tasks []string
+	for _, hostTasks := range o.ChangedTasks {
+		for _, task := range hostTasks {
+			if !containsString(tasks, task) {
+				tasks = append(tasks, task)
+			}
+		}
+	}
+	return tasks
+}
+
+func parseTaskLine(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "TASK [") {
+		return "", false
+	}
+	end := strings.Index(line[len("TASK ["):], "]")
+	if end < 0 {
+		return "", false
+	}
+	task := strings.TrimSpace(line[len("TASK [") : len("TASK [")+end])
+	if roleSep := strings.LastIndex(task, " : "); roleSep >= 0 {
+		task = strings.TrimSpace(task[roleSep+3:])
+	}
+	return task, task != ""
+}
+
+func parseChangedHost(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "changed: [") {
+		return "", false
+	}
+	rest := line[len("changed: ["):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		return "", false
+	}
+	host := strings.TrimSpace(rest[:end])
+	return host, host != ""
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *RecapOutputer) HasRecap() bool {

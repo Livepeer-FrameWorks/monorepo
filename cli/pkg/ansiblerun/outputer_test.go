@@ -49,7 +49,10 @@ func TestLineOutputer_NilWriterIsNoop(t *testing.T) {
 
 func TestRecapOutputerParsesChangedCounts(t *testing.T) {
 	out := &RecapOutputer{}
-	src := strings.NewReader("PLAY RECAP *********************************************************************\n" +
+	src := strings.NewReader("TASK [frameworks.infra.go_service : Report pending reinstall under --check] ***\n" +
+		"changed: [edge-eu-1] => {\"msg\": \"would reinstall\"}\n" +
+		"changed: [edge-eu-1] => (item=duplicate task result)\n" +
+		"PLAY RECAP *********************************************************************\n" +
 		"central-eu-1              : ok=20   changed=0    unreachable=0    failed=0\n" +
 		"edge-eu-1                 : ok=21   changed=2    unreachable=0    failed=0\n")
 	if err := out.Print(context.Background(), src, nil); err != nil {
@@ -66,6 +69,10 @@ func TestRecapOutputerParsesChangedCounts(t *testing.T) {
 	}
 	if got := out.Hosts["edge-eu-1"].Changed; got != 2 {
 		t.Fatalf("edge changed=%d, want 2", got)
+	}
+	tasks := out.Tasks()
+	if len(tasks) != 1 || tasks[0] != "Report pending reinstall under --check" {
+		t.Fatalf("changed tasks = %v", tasks)
 	}
 }
 

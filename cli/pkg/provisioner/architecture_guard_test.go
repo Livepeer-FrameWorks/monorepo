@@ -111,6 +111,35 @@ func scanSources(t *testing.T, rule string, files []string, pattern *regexp.Rege
 	}
 }
 
+func TestGoServiceRoleVerifiesInstalledBinaryReceipt(t *testing.T) {
+	_, ansibleDirs := repoSourceRoots(t)
+	if len(ansibleDirs) == 0 {
+		t.Fatal("ansible source root not found")
+	}
+	role := filepath.Join(ansibleDirs[0], "collections", "ansible_collections", "frameworks", "infra", "roles", "go_service")
+	install, err := os.ReadFile(filepath.Join(role, "tasks", "install.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars, err := os.ReadFile(filepath.Join(role, "vars", "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Verify installed binary integrity receipt",
+		"go_service_binary_integrity.rc",
+		"sha256sum \"{{ go_service_install_dir }}/{{ go_service_name }}\"",
+		"go_service_binary_receipt }}.tmp",
+	} {
+		if !strings.Contains(string(install), want) {
+			t.Errorf("go_service install role does not enforce %q", want)
+		}
+	}
+	if !strings.Contains(string(vars), "go_service_binary_receipt:") {
+		t.Error("go_service vars do not declare the binary integrity receipt")
+	}
+}
+
 func TestArchitectureGuard_noGetBinaryURLInProvisioners(t *testing.T) {
 	t.Parallel()
 	prov, _ := repoSourceRoots(t)

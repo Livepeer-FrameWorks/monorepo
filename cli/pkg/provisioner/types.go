@@ -140,6 +140,20 @@ type ChangePlanner interface {
 	WouldChange(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (bool, error)
 }
 
+// ChangeInspection is the authoritative Ansible check-mode result plus the
+// role task names that reported changes. Task names provide operator-facing
+// evidence when no file fingerprint can describe the affected state.
+type ChangeInspection struct {
+	Changed bool
+	Tasks   []string
+}
+
+// ChangeInspector exposes the detailed form of ChangePlanner for commands
+// that need to explain a change instead of making only a yes/no decision.
+type ChangeInspector interface {
+	InspectChanges(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (ChangeInspection, error)
+}
+
 // Restarter is the optional capability a Provisioner implements when it can
 // cleanly restart its managed service(s) via Ansible. cluster restart
 // type-asserts to this so services with non-standard unit names
@@ -150,10 +164,9 @@ type Restarter interface {
 }
 
 // Fingerprinter is the optional capability a Provisioner implements when it
-// can produce a desired-state file-hash snapshot for a host. `cluster diff`
-// type-asserts to this; a nil or absent fingerprint marks the service as
-// unmodeled, and the caller falls through to DiffUnknown (the safe heavy
-// path).
+// can produce typed file-hash evidence for a host. The Ansible ChangePlanner
+// remains authoritative for whether managed state differs; fingerprints let
+// `cluster diff` identify binary, env, unit, and certificate changes precisely.
 type Fingerprinter interface {
 	Fingerprint(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.Fingerprint, error)
 }

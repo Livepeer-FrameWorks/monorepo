@@ -172,6 +172,22 @@
   check_mode: false
   changed_when: false
 
+- name: Verify installed binary integrity receipt
+  ansible.builtin.shell: |
+    set -o pipefail
+    test -f "{{ go_service_install_dir }}/{{ go_service_name }}"
+    test -f "{{ go_service_binary_receipt }}"
+    expected="$(cat "{{ go_service_binary_receipt }}")"
+    actual="$(sha256sum "{{ go_service_install_dir }}/{{ go_service_name }}" | awk '{print $1}')"
+    test -n "$expected"
+    test "$actual" = "$expected"
+  args:
+    executable: /bin/bash
+  register: go_service_binary_integrity
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
 - name: Read installed service version
   ansible.builtin.shell: |
     set -o pipefail
@@ -195,6 +211,7 @@
       {{
         not (go_service_bin_stat.stat.exists | default(false))
         or not (go_service_install_sentinel_stat.stat.exists | default(false))
+        or (go_service_binary_integrity.rc | default(1)) != 0
         or (
           (go_service_version | default('') | length > 0)
           and (go_service_installed_version.stdout | default('')) != go_service_version
@@ -275,7 +292,7 @@
 # pick whichever shipped, then mark the sentinel.
 - name: Normalize extracted binary name
   ansible.builtin.shell: |
-    set -e
+    set -eo pipefail
     candidate=""
     for path in \
       "{{ go_service_install_dir }}/{{ go_service_name }}" \
@@ -304,8 +321,15 @@
       cp "$candidate" "{{ go_service_install_dir }}/{{ go_service_name }}"
     fi
     chmod +x "{{ go_service_install_dir }}/{{ go_service_name }}"
+    binary_sha="$(sha256sum "{{ go_service_install_dir }}/{{ go_service_name }}" | awk '{print $1}')"
+    printf '%s\n' "$binary_sha" > "{{ go_service_binary_receipt }}.tmp"
+    mv "{{ go_service_binary_receipt }}.tmp" "{{ go_service_binary_receipt }}"
     touch "{{ go_service_install_sentinel }}"
-    chown {{ go_service_user }}:{{ go_service_group }} "{{ go_service_install_sentinel }}" "{{ go_service_install_dir }}/{{ go_service_name }}"
+    chmod 0644 "{{ go_service_binary_receipt }}"
+    chown {{ go_service_user }}:{{ go_service_group }} \
+      "{{ go_service_install_sentinel }}" \
+      "{{ go_service_binary_receipt }}" \
+      "{{ go_service_install_dir }}/{{ go_service_name }}"
   args:
     creates: "{{ go_service_install_sentinel }}"
   when: not ansible_check_mode
