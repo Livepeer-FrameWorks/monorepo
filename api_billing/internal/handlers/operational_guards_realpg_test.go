@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -164,6 +165,50 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		}
 		if balance != 1500 || topupStatus != "completed" || transactionCount != 1 {
 			t.Fatalf("top-up state = balance %d status %q transactions %d", balance, topupStatus, transactionCount)
+		}
+	})
+
+	t.Run("stripe lowercase currency credits the admission balance row", func(t *testing.T) {
+		tenantID := uuid.NewString()
+		topupID := uuid.NewString()
+		tierID := uuid.NewString()
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.billing_tiers (id, tier_name, display_name)
+			VALUES ($1, $2, 'Checkout currency real-engine')
+		`, tierID, "checkout-currency-"+tierID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model)
+			VALUES ($1, $2, 'active', 'prepaid')
+		`, tenantID, tierID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.pending_topups (id, tenant_id, provider, amount_cents, currency, expires_at)
+			VALUES ($1, $2, 'stripe', 1500, 'EUR', NOW() + INTERVAL '1 hour')
+		`, topupID, tenantID); err != nil {
+			t.Fatal(err)
+		}
+		service := &Service{db: db, logger: logging.NewLogger()}
+		if err := service.handlePrepaidCheckoutCompleted(ctx, "cs_lower", "pi_lower", tenantID, topupID, 1500, "eur", ProviderStripe, true); err != nil {
+			t.Fatalf("checkout with Stripe currency casing: %v", err)
+		}
+		admission, err := purserdb.New(db).GetTenantAdmissionStatus(ctx, purserdb.GetTenantAdmissionStatusParams{
+			TenantID: tenantID, Currency: billing.DefaultCurrency(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !admission.BalanceCents.Valid || admission.BalanceCents.Int64 != 1500 {
+			t.Fatalf("admission balance = %+v, want 1500 cents in %s", admission.BalanceCents, billing.DefaultCurrency())
+		}
+		var currencies string
+		if err := db.QueryRowContext(ctx, `SELECT string_agg(currency, ',' ORDER BY currency) FROM purser.prepaid_balances WHERE tenant_id = $1`, tenantID).Scan(&currencies); err != nil {
+			t.Fatal(err)
+		}
+		if currencies != "EUR" {
+			t.Fatalf("prepaid balance currencies = %q, want only EUR", currencies)
 		}
 	})
 

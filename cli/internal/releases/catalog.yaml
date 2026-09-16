@@ -112,3 +112,5 @@ releases:
     min_cli_version: v0.3.5
   - version: v0.3.6
     min_cli_version: v0.3.6
+  - version: v0.3.7
+    min_cli_version: v0.3.7

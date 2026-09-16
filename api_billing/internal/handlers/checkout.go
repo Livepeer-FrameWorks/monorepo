@@ -859,6 +859,10 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 	if !strings.EqualFold(topup.Currency, currency) || strings.TrimSpace(currency) == "" {
 		return fmt.Errorf("pending top-up currency mismatch: stored %s, received %s", topup.Currency, currency)
 	}
+	// Providers report currency in their own casing (Stripe sends "eur") while
+	// balance rows are keyed by the uppercase ISO code that admission, burn, and
+	// invoice credit read. Every write below uses the stored top-up currency.
+	currency = strings.ToUpper(topup.Currency)
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("pending top-up provider session is missing")
 	}

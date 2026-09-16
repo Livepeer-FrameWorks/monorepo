@@ -935,8 +935,9 @@ CREATE TABLE IF NOT EXISTS purser.prepaid_balances (
     -- Sub-cent residual from rated micro-events. Each prepaid deduction
     -- accumulates fractional cents here until they cross a whole-cent boundary,
     -- so per-event usage under €0.01 doesn't structurally leak revenue.
-    -- Unit is millionths of a cent (10^-8 of a unit currency).
+    -- Unit is 10^-6 of a unit currency (10,000 per cent), kept in [0, 10000).
     balance_remainder_micro BIGINT NOT NULL DEFAULT 0,
+    -- Uppercase ISO 4217 code; readers match it exactly.
     currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
 
     -- ===== ALERTS =====
@@ -945,7 +946,8 @@ CREATE TABLE IF NOT EXISTS purser.prepaid_balances (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
 
-    UNIQUE(tenant_id, currency)
+    UNIQUE(tenant_id, currency),
+    CONSTRAINT chk_prepaid_balances_currency_iso CHECK (currency ~ '^[A-Z]{3}$')
 );
 
 -- Transaction history for audit trail and debugging
