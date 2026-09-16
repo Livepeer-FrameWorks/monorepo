@@ -7,7 +7,7 @@ const routes = [
   [
     "index.html",
     "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
-    "Sovereign Video Infrastructure",
+    "Run the whole live video path",
   ],
   // Snippet stops before "QoE & Geo" because the built title HTML-encodes the ampersand.
   ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],

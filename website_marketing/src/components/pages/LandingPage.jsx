@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 
 import SdkCodePreview from "./SdkCodePreview";
+import StreamJourney from "./StreamJourney";
 import {
   MarketingFinalCTA,
   MarketingScrollProgress,
@@ -20,6 +21,12 @@ import {
   AgentPipelineStrip,
   DeploymentModes,
   MultistreamFanout,
+  DashboardFrame,
+  StatRow,
+  RetentionCurve,
+  TrendChart,
+  BootWaterfall,
+  analyticsFixtures as fx,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -94,6 +101,62 @@ function DeferredNetworkMap() {
   );
 }
 
+function MediaControlPreview() {
+  return (
+    <div className="media-control-preview" aria-label="Live media workflow">
+      <div className="media-control-preview__bar">
+        <span>LIVE PIPELINE</span>
+        <span className="media-control-preview__live">CONTROLLED</span>
+      </div>
+      <div className="media-control-preview__grid">
+        <div className="media-control-preview__column">
+          <span className="media-control-preview__label">Sources</span>
+          {[
+            ["SRT · RIST", "available"],
+            ["RTMP · WHIP", "available"],
+            ["HLS · MPEG-TS", "available"],
+            ["SDI · NDI", "next"],
+          ].map(([label, status]) => (
+            <div key={label} className="media-control-preview__node" data-status={status}>
+              <span>{label}</span>
+              <small>{status === "next" ? "NEXT" : "LIVE"}</small>
+            </div>
+          ))}
+        </div>
+
+        <div className="media-control-preview__engine">
+          <span className="media-control-preview__label">Media engine</span>
+          <div className="media-control-preview__engine-core">
+            <img src="/mist.svg" alt="" aria-hidden="true" />
+            <strong>MistServer</strong>
+            <span>in-memory live stream</span>
+          </div>
+        </div>
+
+        <div className="media-control-preview__column">
+          <span className="media-control-preview__label">Live operations</span>
+          {[
+            ["Transmux + passthrough", "available"],
+            ["SCTE-35 + HLS I/O", "expanding"],
+            ["ABR processing", "expanding"],
+            ["Composition + AI", "next"],
+          ].map(([label, status]) => (
+            <div key={label} className="media-control-preview__node" data-status={status}>
+              <span>{label}</span>
+              <small>
+                {status === "available" ? "LIVE" : status === "expanding" ? "EXPANDING" : "NEXT"}
+              </small>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="media-control-preview__footer">
+        <span>FrameWorks places, authorizes, observes, and automates the workflow.</span>
+      </div>
+    </div>
+  );
+}
+
 export const HOME_FAQS = [
   {
     question: "What is FrameWorks?",
@@ -132,6 +195,7 @@ const LandingPage = () => {
   const [logoAnimationComplete, setLogoAnimationComplete] = useState(false);
   const [PlayerComponent, setPlayerComponent] = useState(null);
   const [demoState, setDemoState] = useState("booting");
+  const [viewportWidth, setViewportWidth] = useState(1024);
   const demoFixtures =
     config.demoFixtures && config.demoFixtures.length > 0
       ? config.demoFixtures
@@ -182,6 +246,14 @@ const LandingPage = () => {
   }, []);
 
   useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    updateViewportWidth();
+    window.addEventListener("resize", updateViewportWidth);
+
+    return () => window.removeEventListener("resize", updateViewportWidth);
+  }, []);
+
+  useEffect(() => {
     let active = true;
     let idleId;
     let fallbackTimer;
@@ -221,30 +293,30 @@ const LandingPage = () => {
     };
   }, []);
 
-  const corePillars = [
+  const operatingPoints = [
     {
-      id: "developer-first",
-      title: "Developer-First",
+      id: "one-control-plane",
+      title: "One control plane",
       description:
-        "Typed SDKs over a GraphQL API. Agents discover via skill.json, authenticate with a wallet, and pay through MCP.",
+        "Streams, assets, routing, access, analytics, and billing share the same tenant-scoped GraphQL model.",
       tone: "accent",
     },
     {
-      id: "analytics",
-      title: "End-to-End Analytics",
+      id: "people-and-agents",
+      title: "For people and agents",
       description:
-        "Routing decisions, QoE metrics, and player telemetry show why viewer X connected to edge Y.",
+        "Use the dashboard, CLI, SDKs, or MCP. Skipper works from the same documentation and operational signals.",
       tone: "green",
     },
     {
-      id: "sovereignty",
+      id: "deployment",
       title: (
         <>
-          Sovereignty Without Pain <SovereigntyNote />
+          Your infrastructure or ours <SovereigntyNote />
         </>
       ),
       description:
-        "Run the whole stack on your own hardware. No licensing fees. Switch to hybrid for burst capacity or extra geo coverage.",
+        "Use managed regions, enroll your own media edges, or self-host. The application-facing model stays the same.",
       tone: "yellow",
     },
   ];
@@ -298,7 +370,7 @@ const LandingPage = () => {
         "Complete self-hosting stack with shared pool access. Open source with permissive licenses: deploy it anywhere.",
       features: freeTierFeatures,
       ctaType: "external",
-      ctalabel: "Start Free",
+      ctaLabel: "Start Free",
       ctaHref: config.appUrl,
       note: "No credit card required · Deploy in minutes",
     },
@@ -385,9 +457,9 @@ const LandingPage = () => {
         className="landing-hero"
         surface="gradient"
         accents={landingHeroAccents}
-        title="Sovereign Video Infrastructure"
-        description="FrameWorks is live streaming infrastructure for sovereign video operations. Most streaming platforms lock you into their ecosystem; we give you the keys."
-        support="Hosted, hybrid, or fully self-hosted. One platform, three modes. Public domain licensed."
+        title="Run the whole live video path"
+        description="Bring video in, shape it live, route it to the right edge, play it securely, keep every moment, and understand what happened. All through one open control plane."
+        support="MistServer media. Federated delivery. Built-in viewer telemetry. Hosted, hybrid, or on your own edges."
         primaryAction={{
           label: "Start Free",
           href: config.appUrl,
@@ -401,7 +473,7 @@ const LandingPage = () => {
           className: "cta-motion",
           variant: "secondary",
         }}
-        footnote="Free tier includes self-hosting + access to shared bandwidth pool"
+        footnote="Start with the workflow you have. Keep the infrastructure options open."
         mediaSurface="none"
         media={
           <motion.div
@@ -533,8 +605,6 @@ const LandingPage = () => {
                     }}
                   >
                     {(() => {
-                      const viewportWidth =
-                        typeof window !== "undefined" ? window.innerWidth : 1024;
                       let maxSafeTranslation, stripExtension;
 
                       if (showPlayer) {
@@ -611,8 +681,7 @@ const LandingPage = () => {
       <SectionDivider />
 
       <div className="flex flex-col">
-        {/* Rest of the sections remain the same */}
-        <Section className="bg-brand-surface-muted landing-section--platform">
+        <Section id="journey" className="bg-brand-surface-muted landing-section--journey">
           <SectionContainer>
             <MarketingBand
               preset="beam"
@@ -623,256 +692,9 @@ const LandingPage = () => {
               textureStrength="soft"
             >
               <HeadlineStack
-                eyebrow="Platform"
-                title="Built Different"
-                subtitle="Great DX. Deep analytics. Operational sovereignty."
-                align="left"
-                underlineAlign="start"
-                actionsPlacement="inline"
-                actions={
-                  <CTACluster align="end" wrap>
-                    <MarketingCTAButton
-                      intent="secondary"
-                      to="/analytics"
-                      label="Explore analytics"
-                    />
-                    <MarketingCTAButton intent="secondary" to="/about" label="Read our mission" />
-                  </CTACluster>
-                }
-              />
-              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
-                <div className="slab-zone">
-                  <div className="slab-zone__body">
-                    <IconList
-                      items={corePillars}
-                      variant="list"
-                      indicator="dot"
-                      headingLevel="h3"
-                    />
-                  </div>
-                </div>
-                <div className="marketing-figure-cell">
-                  <DeploymentModes />
-                </div>
-              </MarketingGridSplit>
-              <DeferredNetworkMap />
-            </MarketingBand>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        <Section className="bg-brand-surface landing-section--faq">
-          <SectionContainer>
-            <MarketingSlab variant="feature-panel">
-              <MarketingSlabHeader
-                as="h2"
-                eyebrow="FAQ"
-                title="Sovereign live streaming, plainly answered"
-                subtitle="Short answers for operators, builders, and AI search engines trying to understand what FrameWorks does."
-              />
-              <Accordion type="single" collapsible>
-                {HOME_FAQS.map((faq, index) => (
-                  <AccordionItem key={faq.question} value={`home-faq-${index}`}>
-                    <AccordionTrigger>{faq.question}</AccordionTrigger>
-                    <AccordionContent>
-                      <div className="marketing-accordion__answer">
-                        <p>{faq.answer}</p>
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-                ))}
-              </Accordion>
-            </MarketingSlab>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        <Section className="bg-brand-surface landing-section--sdk">
-          <SectionContainer>
-            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
-              <MarketingGridSplit align="stretch" stackAt="lg" seam>
-                {/* Left: Text slab with header/body/actions zones */}
-                <div className="slab-zone">
-                  <div className="slab-zone__header">
-                    <HeadlineStack
-                      eyebrow="Developer First"
-                      title="Code is the Content"
-                      subtitle="Stop fighting with FFmpeg flags. Our SDKs give you drop-in components and hooks for playback and broadcast."
-                      align="left"
-                      underlineAlign="start"
-                    />
-                  </div>
-
-                  <div className="slab-zone__body">
-                    <IconList
-                      items={[
-                        {
-                          title: "Universal Playback",
-                          description:
-                            "One player, every device. Auto-selects the best transport for the browser and network conditions.",
-                        },
-                        {
-                          title: "OBS in the Browser",
-                          description:
-                            "StreamCrafter gives you compositing, encoding, and multi-source mixing. Drop in and go live.",
-                        },
-                        {
-                          title: "WebRTC-First",
-                          description:
-                            "Sub-second latency by default. Real-time streaming without the complexity.",
-                        },
-                        {
-                          title: "Designed for white-labelling",
-                          description:
-                            "Use built-in themes you're already familiar with, bring your own CSS, or override any element with your own component library.",
-                        },
-                      ]}
-                      variant="list"
-                      indicator="check"
-                      gap="md"
-                      headingLevel="h3"
-                    />
-                  </div>
-
-                  <div className="slab-zone__actions">
-                    <MarketingCTAButton
-                      intent="primary"
-                      href={`${docsBase}/streamers/playback`}
-                      label="Read the Docs"
-                      icon="book"
-                    />
-                    <MarketingCTAButton
-                      intent="secondary"
-                      href={config.githubUrl}
-                      label="Self-host on GitHub"
-                      icon="github"
-                      external
-                    />
-                  </div>
-                </div>
-
-                {/* Right: Code zone - full bleed */}
-                <SdkCodePreview variant="flush" className="min-h-[400px] lg:min-h-[500px]" />
-              </MarketingGridSplit>
-            </MarketingBand>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        {/* Agent-Native Section: Part 1, Skipper; Part 2, Open Agent Infra */}
-        <Section className="bg-brand-surface-muted landing-section--agents">
-          <SectionContainer>
-            <MarketingBand
-              surface="panel"
-              tone="steel"
-              texturePattern="seams"
-              textureNoise="film"
-              textureBeam="soft"
-              textureMotion="drift"
-              textureStrength="soft"
-              density="spacious"
-              flush
-            >
-              {/* Part 1: Skipper Spotlight */}
-              <MarketingGridSplit align="stretch" stackAt="lg" seam>
-                <div className="slab-zone">
-                  <div className="slab-zone__header">
-                    <HeadlineStack
-                      eyebrow="Video Consultant"
-                      title="Documentation That Talks Back"
-                      subtitle="Like having a video engineer on your team, with access to the docs and live stream checks."
-                      align="left"
-                      underlineAlign="start"
-                    />
-                  </div>
-
-                  <div className="slab-zone__body">
-                    <IconList
-                      items={[
-                        {
-                          title: "Grounded in real docs",
-                          description:
-                            "FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and more, searched semantically rather than keyword-matched.",
-                        },
-                        {
-                          title: "Live stream diagnostics",
-                          description:
-                            "Rebuffering analysis, packet loss detection, routing checks, and anomaly detection on your running streams.",
-                        },
-                        {
-                          title: "Confidence tagging",
-                          description:
-                            "Every answer is tagged verified, sourced, best guess, or unknown. You can tell when to act and when to verify.",
-                        },
-                        {
-                          title: "Available everywhere",
-                          description:
-                            "Dashboard, docs site widget, and via MCP for your own AI agents.",
-                        },
-                      ]}
-                      variant="list"
-                      indicator="check"
-                      gap="md"
-                      headingLevel="h3"
-                    />
-                  </div>
-
-                  <div className="slab-zone__actions">
-                    <MarketingCTAButton
-                      intent="primary"
-                      href={`${docsBase}/agents/skipper`}
-                      label="Skipper Docs"
-                      icon="book"
-                      external
-                    />
-                    <MarketingCTAButton
-                      intent="secondary"
-                      href={`${config.appUrl}/skipper`}
-                      label="Try in Dashboard"
-                      external
-                    />
-                  </div>
-                </div>
-
-                <SkipperConversationPreview />
-              </MarketingGridSplit>
-
-              {/* Part 2: Open Agent Infrastructure, compact footer strip */}
-              <div className="skipper-agent-strip">
-                <div className="skipper-agent-strip__header">
-                  <span className="skipper-agent-strip__eyebrow">Agent-Native</span>
-                  <span className="skipper-agent-strip__title">
-                    Your agents work here too. Discover via{" "}
-                    <a
-                      href={`https://${config.domain}/SKILL.md`}
-                      className="skipper-agent-strip__link"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      SKILL.md
-                    </a>
-                    , then authenticate, pay, and operate.
-                  </span>
-                </div>
-                <AgentPipelineStrip headingLevel="h3" />
-              </div>
-            </MarketingBand>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        {/* Multistreaming Section */}
-        <Section className="bg-brand-surface landing-section--multistream">
-          <SectionContainer>
-            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
-              <HeadlineStack
-                eyebrow="Multistreaming"
-                title="One Stream, Every Platform"
-                subtitle="Push to Twitch, YouTube, Kick, Facebook, X, and any custom RTMP/SRT destination at the same time, from the origin node."
+                eyebrow="One continuous system"
+                title="Follow one stream through FrameWorks"
+                subtitle="The sources and destinations change. The path stays legible: bring video in, shape it, send it, keep it, and know what happened."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -880,12 +702,92 @@ const LandingPage = () => {
                   <CTACluster align="end">
                     <MarketingCTAButton
                       intent="secondary"
-                      href={`${docsBase}/streamers/multistreaming`}
-                      label="Read the Docs"
+                      href={`${docsBase}/platform/feature-matrix`}
+                      label="All capabilities"
                       icon="book"
                     />
                   </CTACluster>
                 }
+              />
+              <StreamJourney />
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section id="media" className="bg-brand-surface landing-section--media">
+          <SectionContainer>
+            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
+              <HeadlineStack
+                eyebrow="01 · Bring it in / Shape it"
+                title="The media path starts with the signal you already have"
+                subtitle="Connect contribution equipment, browsers, upstream streams, and files. MistServer keeps the live signal close while FrameWorks places, authorizes, and observes the work around it."
+                align="left"
+                underlineAlign="start"
+              />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={[
+                        {
+                          title: "Keep the contribution path open",
+                          description:
+                            "Push over RTMP, E-RTMP, SRT, or WHIP; pull RTSP, RIST, HLS, MPEG-TS, SRT, and Mist sources.",
+                        },
+                        {
+                          title: "Preserve broadcast meaning",
+                          description:
+                            "Carry signal metadata through the media path, including the expanding SCTE-35 and HLS input/output work.",
+                        },
+                        {
+                          title: "Process where it makes sense",
+                          description:
+                            "Use the media edge for lightweight work and Livepeer-backed compute for heavier transcoding and AI workloads.",
+                        },
+                        {
+                          title: "Grow into physical production",
+                          description:
+                            "NDI, SDI, capture devices, PTZ control, composition, and server-side ad workflows join the same managed model as they land.",
+                        },
+                      ]}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                  </div>
+                  <div className="slab-zone__actions">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={`${docsBase}/builders/streams`}
+                      label="Ingest and stream docs"
+                      icon="book"
+                    />
+                  </div>
+                </div>
+                <MediaControlPreview />
+              </MarketingGridSplit>
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section id="delivery" className="bg-brand-surface-muted landing-section--delivery">
+          <SectionContainer>
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="pinlines"
+              textureNoise="film"
+            >
+              <HeadlineStack
+                eyebrow="02 · Send it"
+                title="One live source, routed to every destination"
+                subtitle="Fan out to partner platforms and serve viewers from healthy, eligible edges. Routing, failover, playback policy, and delivery telemetry stay part of the same decision."
+                align="left"
+                underlineAlign="start"
               />
               <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="wide-narrow">
                 <div className="marketing-figure-cell">
@@ -900,9 +802,275 @@ const LandingPage = () => {
                       headingLevel="h3"
                     />
                   </div>
+                  <div className="slab-zone__actions">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={`${docsBase}/builders/multistreaming`}
+                      label="Multistreaming docs"
+                      icon="book"
+                    />
+                  </div>
                 </div>
               </MarketingGridSplit>
+              <div className="journey-map-block">
+                <div className="journey-map-block__copy">
+                  <span>Routing is observable</span>
+                  <p>
+                    See viewer demand, eligible clusters, and the path chosen for each session,
+                    rather than merely a CDN hostname.
+                  </p>
+                </div>
+                <DeferredNetworkMap />
+              </div>
             </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section id="experience" className="bg-brand-surface landing-section--experience">
+          <SectionContainer>
+            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
+              <HeadlineStack
+                eyebrow="03–05 · Play it / Keep it / Know it"
+                title="Live, replay, and insight stay on one timeline"
+                subtitle="Playback and recording are not separate products, and analytics is not a detached reporting layer. The same stream identity connects delivery, viewer experience, durable media, and replay behavior."
+                align="left"
+                underlineAlign="start"
+              />
+
+              <div className="journey-outcomes">
+                <div className="journey-outcome">
+                  <div className="journey-outcome__header">
+                    <span>03 · Play it</span>
+                    <h3>Playback is part of operations</h3>
+                    <p>
+                      Adapt to the browser, enforce access, and return viewer evidence to the same
+                      route and edge that served the session.
+                    </p>
+                  </div>
+                  <IconList
+                    items={[
+                      {
+                        title: "One adaptive player",
+                        description:
+                          "HLS, DASH, WebRTC, WebCodecs, WASM, and progressive playback selected per browser and stream.",
+                      },
+                      {
+                        title: "Access at the boundary",
+                        description:
+                          "Public, JWT, or webhook authorization for live streams, recordings, clips, and VOD.",
+                      },
+                      {
+                        title: "Close the delivery loop",
+                        description:
+                          "Startup, buffering, bitrate, frame drops, geography, and routing decisions share one session timeline.",
+                      },
+                    ]}
+                    variant="list"
+                    indicator="dot"
+                    headingLevel="h4"
+                  />
+                  <MarketingCTAButton
+                    intent="secondary"
+                    href={`${docsBase}/builders/playback`}
+                    label="Playback docs"
+                    icon="book"
+                    className="journey-outcome__action"
+                  />
+                </div>
+
+                <div id="library" className="journey-outcome">
+                  <div className="journey-outcome__header">
+                    <span>04 · Keep it</span>
+                    <h3>The live stream becomes durable media</h3>
+                    <p>
+                      Move from the live buffer to seekable replay, durable chapters, clips, and VOD
+                      without creating a second workflow.
+                    </p>
+                  </div>
+                  <IconList
+                    items={[
+                      {
+                        title: "Record continuously",
+                        description:
+                          "Keep bounded live seekback while long-running recordings finalize into replayable chapters.",
+                      },
+                      {
+                        title: "Cut what already exists",
+                        description:
+                          "Create clips from live buffers, DVR windows, or finalized media through one artifact lifecycle.",
+                      },
+                      {
+                        title: "Retain with intent",
+                        description:
+                          "Apply asset policies, freeze durable copies, and understand the storage consequence.",
+                      },
+                    ]}
+                    variant="list"
+                    indicator="dot"
+                    headingLevel="h4"
+                  />
+                  <MarketingCTAButton
+                    intent="secondary"
+                    href={`${docsBase}/builders/recordings`}
+                    label="Recording docs"
+                    icon="book"
+                    className="journey-outcome__action"
+                  />
+                </div>
+              </div>
+
+              <DashboardFrame
+                title="Stream intelligence"
+                badge="Live + replay"
+                tone="cyan"
+                className="journey-insights"
+              >
+                <div className="journey-insights__header">
+                  <div>
+                    <span>05 · Know it</span>
+                    <h3>One evidence model, not a separate analytics story</h3>
+                  </div>
+                  <p>
+                    Viewer, route, rendition, and asset context survive from the first frame to the
+                    most-replayed moment.
+                  </p>
+                </div>
+
+                <StatRow stats={fx.liveVodStats} />
+
+                <div className="journey-insights__grid">
+                  <section
+                    className="journey-insight-panel"
+                    aria-labelledby="playback-insight-title"
+                  >
+                    <div className="journey-insight-panel__header">
+                      <span>Delivery evidence</span>
+                      <h4 id="playback-insight-title">What viewers actually experienced</h4>
+                    </div>
+                    <TrendChart
+                      data={fx.qoeTrend}
+                      series={fx.qoeSeries}
+                      height={220}
+                      leftTitle="Rebuffer / frame-drop %"
+                      rightTitle="Bitrate (Mbps)"
+                    />
+                  </section>
+
+                  <section className="journey-insight-panel" aria-labelledby="replay-insight-title">
+                    <div className="journey-insight-panel__header">
+                      <span>Content evidence</span>
+                      <h4 id="replay-insight-title">What audiences kept watching</h4>
+                    </div>
+                    <div className="media-library-flow" aria-label="Live media library lifecycle">
+                      <span>Live buffer</span>
+                      <i aria-hidden="true" />
+                      <span>DVR chapters</span>
+                      <i aria-hidden="true" />
+                      <span>Clips + VOD</span>
+                    </div>
+                    <RetentionCurve {...fx.retention} />
+                  </section>
+                </div>
+
+                <div className="journey-insights__boot">
+                  <div className="journey-insight-panel__header">
+                    <span>Startup trace</span>
+                    <h4>See where the first frame spent its time</h4>
+                  </div>
+                  <BootWaterfall
+                    stages={fx.bootWaterfall.stages}
+                    cacheHitRatio={fx.bootWaterfall.cacheHitRatio}
+                  />
+                </div>
+              </DashboardFrame>
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section id="operate" className="bg-brand-surface landing-section--operate">
+          <SectionContainer>
+            <MarketingBand
+              preset="foundation"
+              texturePattern="pinlines"
+              textureNoise="film"
+              textureBeam="soft"
+            >
+              <HeadlineStack
+                eyebrow="06 · Operate it"
+                title="The controls follow the same system"
+                subtitle="People, applications, and agents operate the same tenant-scoped resources. The deployment can change without changing the product you build on top."
+                align="left"
+                underlineAlign="start"
+              />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
+                <div className="slab-zone">
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={operatingPoints}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                  </div>
+                </div>
+                <div className="marketing-figure-cell">
+                  <DeploymentModes />
+                </div>
+              </MarketingGridSplit>
+              <div className="journey-control-grid">
+                <SdkCodePreview variant="flush" className="min-h-[420px]" />
+                <SkipperConversationPreview />
+              </div>
+              <div className="skipper-agent-strip">
+                <div className="skipper-agent-strip__header">
+                  <span className="skipper-agent-strip__eyebrow">Agent-native operations</span>
+                  <span className="skipper-agent-strip__title">
+                    Discover via{" "}
+                    <a
+                      href={`https://${config.domain}/SKILL.md`}
+                      className="skipper-agent-strip__link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      SKILL.md
+                    </a>
+                    , authenticate, fund, inspect, and operate through the same platform APIs.
+                  </span>
+                </div>
+                <AgentPipelineStrip headingLevel="h3" />
+              </div>
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section className="bg-brand-surface landing-section--faq">
+          <SectionContainer>
+            <MarketingSlab variant="feature-panel">
+              <MarketingSlabHeader
+                as="h2"
+                eyebrow="FAQ"
+                title="The complete path, plainly answered"
+                subtitle="Short answers about the media engine, control plane, deployment boundary, and developer surface."
+              />
+              <Accordion type="single" collapsible>
+                {HOME_FAQS.map((faq, index) => (
+                  <AccordionItem key={faq.question} value={`home-faq-${index}`}>
+                    <AccordionTrigger>{faq.question}</AccordionTrigger>
+                    <AccordionContent>
+                      <div className="marketing-accordion__answer">
+                        <p>{faq.answer}</p>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            </MarketingSlab>
           </SectionContainer>
         </Section>
 
