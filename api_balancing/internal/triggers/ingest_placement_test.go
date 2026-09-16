@@ -208,6 +208,7 @@ func TestIngestPlacementAdapterAdmitsFromObservedConnectorOnly(t *testing.T) {
 		wantAllowed              bool
 	}{
 		{"observed rtmp on preferred cluster", "RTMP", "eu", false, true},
+		{"observed whip on preferred cluster", "WebRTC", "eu", false, true},
 		{"observed srt spills only when preferred is empty", "TSSRT", "test-cluster", true, true},
 		{"observed srt refused while preferred has capacity", "TSSRT", "test-cluster", false, false},
 		{"node-to-node connector is not a publisher", "DTSC", "eu", false, false},

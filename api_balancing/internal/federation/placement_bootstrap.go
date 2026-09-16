@@ -50,15 +50,16 @@ func ConfigureLivePlacementDestination(destination *PlacementDestination, deps L
 		IngestFence: deps.IngestFence, Router: transport.Router(), Now: destination.Now}
 	push := &LivePushPreparationRuntime{Authority: discovery.Authority, Paths: paths.Push, Registry: deps.Registry, Arrange: deps.Arrange, Now: destination.Now}
 	serve := &MediaServePreparationRuntime{CellID: discovery.CellID, Authority: discovery.Authority, Paths: paths,
-		Push: push, Snapshot: discovery.Snapshot, Now: destination.Now}
+		Push: push, Registry: deps.Registry, Arrange: deps.Arrange, Snapshot: discovery.Snapshot, Now: destination.Now}
 	media := &PlacementMediaRuntime{
 		Ingest: &LiveIngestPreparationRuntime{CellID: discovery.CellID, Authority: discovery.Authority, Snapshot: discovery.Snapshot, Now: destination.Now},
 		Serve:  serve,
 	}
 	destination.Receipts = &PlacementReceiptStore{Client: deps.Redis, CellID: discovery.CellID, Now: destination.Now}
 	destination.Runtime = &PolicyBoundPlacementRuntime{Policy: gate, Media: media}
-	// Only an arranged push pull carries demand worth retaining; configured and
-	// stored sources hold no cross-cell attempt to keep alive.
+	// Push and configured relays retain the viewer context needed to renew
+	// permission for an existing physical pull. Local configured inputs and
+	// stored media have no pull, so this hook is a no-op for them.
 	destination.RetainPrepared = push.RetainPreparedSourceDemand
 	return nil
 }

@@ -525,6 +525,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source virtual cluster mismatch"}, nil
 	}
 	sourceStreamName := req.StreamName
+	configuredOrigin := false
 	if strings.HasPrefix(req.StreamName, "dvr+") {
 		if !control.DVRRecordingSource(ctx, s.db, req.TenantId, strings.TrimPrefix(req.StreamName, "dvr+"), sourceNodeID) {
 			return &foghornfederationpb.OriginPullAck{
@@ -562,6 +563,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		if control.StreamRegistryInstance != nil {
 			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
 				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+				configuredOrigin = entry.IngestMode == control.IngestPull || entry.IngestMode == control.IngestMistNative
 			} else if strings.Contains(ss.StreamName, "+") {
 				sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
 			}
@@ -588,7 +590,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 			Reason:   "origin-pull temporarily unavailable",
 		}, nil
 	}
-	recorded, err := control.StreamRegistryInstance.RecordOutboundPull(ctx, req.StreamName, control.OutboundPull{
+	outbound := control.OutboundPull{
 		TenantID:             req.TenantId,
 		SourceMediaClusterID: sourceMediaClusterID,
 		SourceGeneration:     req.GetSourceGeneration(), SourceRevision: req.GetSourceRevision(), AttemptID: req.GetAttemptId(),
@@ -596,7 +598,14 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 		DestNodeID:    req.DestNodeId,
 		SourceNodeID:  sourceNodeID,
 		DTSCURL:       dtscURL,
-	})
+	}
+	var recorded control.OutboundPull
+	var err error
+	if configuredOrigin {
+		recorded, err = control.StreamRegistryInstance.RecordOutboundConfiguredPull(ctx, req.StreamName, outbound)
+	} else {
+		recorded, err = control.StreamRegistryInstance.RecordOutboundPull(ctx, req.StreamName, outbound)
+	}
 	if err != nil {
 		log.WithError(err).Warn("Cannot persist outbound pull")
 		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "origin-pull temporarily unavailable"}, nil

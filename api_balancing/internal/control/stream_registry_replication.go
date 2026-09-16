@@ -149,6 +149,18 @@ func syncReplicationView(loc Location) Location {
 // RecordInboundPull records the exact accepted destination. Persistence failures
 // are returned before the caller advertises that destination or starts its pull.
 func (r *StreamRegistry) RecordInboundPull(ctx context.Context, internalName string, pull InboundPull) (InboundPull, error) {
+	return r.recordInboundPull(ctx, internalName, pull, false)
+}
+
+// RecordInboundConfiguredPull permits a configured source with unchanged
+// configuration authority to move to another origin node. The caller must have
+// re-evaluated current configured-source placement and supplied a new attempt;
+// push publishers continue through RecordInboundPull and cannot use this path.
+func (r *StreamRegistry) RecordInboundConfiguredPull(ctx context.Context, internalName string, pull InboundPull) (InboundPull, error) {
+	return r.recordInboundPull(ctx, internalName, pull, true)
+}
+
+func (r *StreamRegistry) recordInboundPull(ctx context.Context, internalName string, pull InboundPull, allowEquivalentSourceReplacement bool) (InboundPull, error) {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" || pull.DestNodeID == "" || pull.SourceClusterID == "" || pull.DTSCURL == "" {
 		return InboundPull{}, fmt.Errorf("replication requires stream, source, destination and DTSC URL")
@@ -190,6 +202,12 @@ func (r *StreamRegistry) RecordInboundPull(ctx context.Context, internalName str
 				return InboundPull{}, ErrReplicationConflict
 			}
 			if pull.SourceRevision > current.SourceRevision && pull.AttemptID != current.AttemptID {
+				return pull, nil
+			}
+			if allowEquivalentSourceReplacement && pull.AttemptID != current.AttemptID &&
+				pull.SourceGeneration == current.SourceGeneration && pull.SourceRevision == current.SourceRevision &&
+				(pull.SourceMediaClusterID != current.SourceMediaClusterID || pull.SourceNodeID != current.SourceNodeID ||
+					SourcePullBaseURL(pull.DTSCURL) != SourcePullBaseURL(current.DTSCURL)) {
 				return pull, nil
 			}
 			// The DTSC comparison is on the media path only. The stored URL

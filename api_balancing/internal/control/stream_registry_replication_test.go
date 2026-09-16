@@ -51,6 +51,24 @@ func TestInboundPullIdentitySurvivesSourceCredentialRotation(t *testing.T) {
 	}
 }
 
+func TestOnlyConfiguredInboundPullCanReplaceAnEquivalentOrigin(t *testing.T) {
+	r := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	first, err := r.RecordInboundPull(t.Context(), "stream", testInbound("edge"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := testInbound("edge")
+	moved.SourceNodeID = "replacement-origin"
+	moved.DTSCURL = "dtsc://replacement-origin/pull+stream"
+	if _, err = r.RecordInboundPull(t.Context(), "stream", moved); !errors.Is(err, ErrReplicationConflict) {
+		t.Fatalf("push-compatible path replaced an equivalent source owner: %v", err)
+	}
+	replacement, err := r.RecordInboundConfiguredPull(t.Context(), "stream", moved)
+	if err != nil || replacement.AttemptID == first.AttemptID || replacement.SourceNodeID != moved.SourceNodeID {
+		t.Fatalf("configured origin failover was not recorded: %+v, %v", replacement, err)
+	}
+}
+
 func TestInboundAcceptanceRenewalPersistsWithoutReplacingAttempt(t *testing.T) {
 	store, _, _ := newTestRedis(t)
 	replica := func(id string) *StreamRegistry {

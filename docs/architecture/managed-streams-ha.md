@@ -24,8 +24,10 @@ then runs a deterministic stable-hash on `stream_id` against that node set,
 so every Foghorn in the cluster computes the same elected pair.
 
 Viewer routing is still cross-cluster: once the source is placed, Foghorn
-records `active_ingest_cluster_id` and federation can route viewers from
-other clusters back to that active source.
+records `active_ingest_cluster_id`. Policy may route a viewer back to that
+source cluster or choose another entitled edge; the latter prepares one
+receipt-bound DTSC relay from the elected origin rather than asking the remote
+edge to interpret or recreate the Mist-native source specification.
 
 **Ownership** has two layers:
 

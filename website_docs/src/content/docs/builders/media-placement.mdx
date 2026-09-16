@@ -13,6 +13,12 @@ capacity-only answer would not prove a playable route. Live routing still places
 Saving placement intent must not be treated as proof that every media path enforces it: rules
 take effect once every cell holding the content acknowledges them.
 
+For configured pull and managed Mist-native streams, a serving edge that may originate the input
+uses its local configured source. If policy selects an edge in another cell, FrameWorks prepares a
+single receipt-bound DTSC relay from the live origin. The remote edge does not receive the upstream
+URI or managed source specification. Direct RTMP, SRT and WHIP publishers use their own final
+ingest-admission path and are not converted into configured relays.
+
 Placement separates ingest from serving viewers. A viewer's distance is measured from the
 viewer location, not from the coordinator receiving the request. An account rule can prefer
 self-hosted capacity, prohibit a cluster class, or compare explicitly priced capacity.

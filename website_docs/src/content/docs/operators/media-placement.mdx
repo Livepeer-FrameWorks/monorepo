@@ -122,14 +122,14 @@ can still reuse the existing media pull. Missing connection ownership rejects pr
 than assuming the node is available. The source adapter supports fresh preparation after expiry
 using retained viewer geography and protocol, with current policy and capacity checks. That request
 context is not permission and is cleared with the pull. Missing context or failed checks cannot
-renew a source. Startup installs this check for placement-marked pulls using the destination's
-shared receipt store. The marker is durable before a new or adopted pull URL is returned; missing
-receipts or an unavailable adapter return an explicit offline source. Unmarked legacy pulls are
-not globally switched by this wiring. The same startup installs public routing and final admission,
+renew a source. Startup installs this check for every tracked pull using the destination's shared
+receipt store. The marker is durable before a new or adopted pull URL is returned; missing receipts
+or an unavailable adapter return an explicit offline source. Push streams retain their
+publisher-bound path. A configured pull or managed Mist-native stream binds a receipt only when it
+relays a live origin from another cell; an edge allowed to originate that configured input uses its
+local source without a federation pull. The same startup installs public routing and final admission,
 and each replica publishes its own enforcement state to the heartbeat ledger the cell's attestation
-is derived from. Verification against actual media, including reconnect behavior, is still
-outstanding. Do not treat the registry marker as permission or as evidence that an older replica
-can enforce placement.
+is derived from. Edge and core must be upgraded together; mixed legacy enforcement is unsupported.
 
 Stored artifacts are served under the same policy: it removes destinations the tenant's rules
 refuse, while storage affinity decides the order of what is left. Choosing which durable backend

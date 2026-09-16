@@ -5,10 +5,12 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
+	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
@@ -17,16 +19,16 @@ import (
 )
 
 // MediaServePreparationRuntime dispatches serving preparation by signed object
-// kind. A push stream keeps its arranged origin pull, because only placement can
-// bind that cross-cell attempt. A configured input or a stored artifact is
-// materialized by the destination's own source resolution, so preparation proves
-// the destination may serve this exact generation and binds no pull; inventing a
-// physical binding for those kinds would claim ownership no publisher holds.
+// kind. Push streams and configured inputs relayed from another cell bind their
+// arranged origin pull. Configured inputs that the destination may originate and
+// stored artifacts are materialized locally and therefore bind no pull.
 type MediaServePreparationRuntime struct {
 	CellID    string
 	Authority PlacementAuthorityReader
 	Paths     *MediaPlacementPaths
 	Push      *LivePushPreparationRuntime
+	Registry  *control.StreamRegistry
+	Arrange   *ArrangeOriginPullDeps
 	Snapshot  func() *state.BalancerSnapshot
 	Now       func() time.Time
 }
@@ -34,17 +36,31 @@ type MediaServePreparationRuntime struct {
 var _ PlacementPreparationRuntime = (*MediaServePreparationRuntime)(nil)
 
 type mediaPreparationState struct {
-	node      state.EnhancedBalancerNodeSnapshot
-	endpoint  string
-	expiresAt time.Time
+	node                  state.EnhancedBalancerNodeSnapshot
+	endpoint              string
+	expiresAt             time.Time
+	configuredRelay       *configuredSource
+	configuredGeneration  string
+	configuredRevision    int64
+	configuredDestination int64
 }
 
 // PushPreparation returns the push half of a configured destination's serving
-// runtime. Source admission binds to it because only a push stream has an
-// arranged cross-cell pull to authorize; a destination that startup has not
-// configured, or one whose serving runtime is not this dispatcher, returns nil so
-// the caller refuses instead of guessing.
+// runtime. A destination that startup has not configured, or one whose serving
+// runtime is not this dispatcher, returns nil so the caller refuses instead of
+// guessing.
 func (destination *PlacementDestination) PushPreparation() *LivePushPreparationRuntime {
+	serve := destination.MediaServePreparation()
+	if serve == nil || serve.Push == nil || serve.Push.Paths != serve.Paths.Push {
+		return nil
+	}
+	return serve.Push
+}
+
+// MediaServePreparation returns the signed-kind dispatcher installed on a
+// placement destination. Final source admission uses the same dispatcher so a
+// configured relay is never checked as though it were a push publisher.
+func (destination *PlacementDestination) MediaServePreparation() *MediaServePreparationRuntime {
 	if destination == nil {
 		return nil
 	}
@@ -57,13 +73,13 @@ func (destination *PlacementDestination) PushPreparation() *LivePushPreparationR
 		return nil
 	}
 	serve, ok := media.Serve.(*MediaServePreparationRuntime)
-	if !ok || serve == nil || serve.Paths == nil || serve.Push == nil || serve.Push.Paths != serve.Paths.Push {
+	if !ok || serve == nil || serve.Paths == nil {
 		return nil
 	}
 	if destination.Discovery == nil || PlacementPathReader(serve.Paths) != destination.Discovery.Paths {
 		return nil
 	}
-	return serve.Push
+	return serve
 }
 
 func (runtime *MediaServePreparationRuntime) now() time.Time {
@@ -85,10 +101,33 @@ func (runtime *MediaServePreparationRuntime) Revalidate(ctx context.Context, req
 	if err != nil {
 		return err
 	}
-	// A configured or stored source is never bound to an arranged pull, so a
-	// receipt that carries one belongs to a different physical decision.
-	if receipt.Pull != nil {
-		return status.Error(codes.FailedPrecondition, "configured source placement has a different physical binding")
+	if observed.configuredRelay == nil {
+		if receipt.Pull != nil {
+			return status.Error(codes.FailedPrecondition, "local media placement has a different physical binding")
+		}
+	} else {
+		if receipt.Pull != nil && !configuredPullMatchesSource(receipt.Pull, observed) {
+			return status.Error(codes.FailedPrecondition, "configured source or destination connection changed")
+		}
+		// A fresh receipt has no pull until Reconcile binds one. A completed
+		// response, however, must still have the exact current physical pull.
+		if receipt.Response == nil {
+			return nil
+		}
+		if runtime.Registry == nil || receipt.Pull == nil {
+			return status.Error(codes.Unavailable, "configured source pull binding is unavailable")
+		}
+		pull, found, pullErr := runtime.Registry.CurrentInboundPull(ctx, req.Query.InternalName, req.NodeId)
+		if pullErr != nil {
+			return pullErr
+		}
+		if !found || pull.TenantID != req.Query.TenantId || pull.DestClusterID != req.ClusterId || pull.DestNodeID != req.NodeId ||
+			pull.AttemptID != receipt.Pull.AttemptID || pull.SourceClusterID != receipt.Pull.SourceCellID ||
+			pull.SourceMediaClusterID != receipt.Pull.SourceClusterID || pull.SourceNodeID != receipt.Pull.SourceNodeID ||
+			pull.SourceGeneration != receipt.Pull.SourceGeneration || pull.SourceRevision != receipt.Pull.SourceRevision ||
+			control.SourcePullBaseURL(pull.DTSCURL) != observed.configuredRelay.dtscURL {
+			return status.Error(codes.FailedPrecondition, "configured source pull is no longer current")
+		}
 	}
 	if receipt.Response != nil && (receipt.Response.GetReady() || receipt.Response.GetEndpoint() != observed.endpoint ||
 		receipt.Response.GetPublicBaseUrl() != observed.node.Host || receipt.Response.GetExpiresAt().AsTime().After(observed.expiresAt)) {
@@ -105,12 +144,41 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	if push {
 		return runtime.Push.Reconcile(ctx, req, receipt, bind)
 	}
-	if receipt.Pull != nil {
-		return nil, status.Error(codes.FailedPrecondition, "configured source placement has a different physical binding")
-	}
 	observed, err := runtime.observe(ctx, req, authority, pair)
 	if err != nil {
 		return nil, err
+	}
+	if observed.configuredRelay == nil {
+		if receipt.Pull != nil {
+			return nil, status.Error(codes.FailedPrecondition, "local media placement has a different physical binding")
+		}
+	} else {
+		if runtime.Registry == nil || runtime.Arrange == nil || runtime.Arrange.Registry != runtime.Registry || bind == nil {
+			return nil, status.Error(codes.Unavailable, "configured source preparation dependencies are unavailable")
+		}
+		source := observed.configuredRelay
+		arrange := ArrangeOriginPullRequest{
+			TenantID: req.Query.TenantId, InternalName: req.Query.InternalName,
+			DestClusterID: req.ClusterId, DestNodeID: req.NodeId, DestNodeBaseURL: observed.node.Host,
+			RemoteCluster: source.cellID, SourceGeneration: observed.configuredGeneration, SourceRevision: observed.configuredRevision,
+			Remote: &federationpb.EdgeCandidate{ClusterId: source.clusterID, NodeId: source.nodeID,
+				SourceGeneration: observed.configuredGeneration, SourceRevision: observed.configuredRevision},
+			BindPull: bind, DestinationFence: observed.configuredDestination, AllowEquivalentSourceReplacement: true,
+		}
+		if receipt.Pull != nil {
+			if !configuredPullMatchesSource(receipt.Pull, observed) {
+				return nil, status.Error(codes.FailedPrecondition, "pending configured pull belongs to another source")
+			}
+			arrange.AttemptID = receipt.Pull.AttemptID
+		}
+		prepared, arrangeErr := runtime.Arrange.ArrangeOriginPull(ctx, arrange)
+		if arrangeErr != nil {
+			return nil, arrangeErr
+		}
+		if prepared == nil || prepared.DestNodeID != req.NodeId || prepared.SourceGeneration != observed.configuredGeneration ||
+			prepared.SourceRevision != observed.configuredRevision || control.SourcePullBaseURL(prepared.PullDTSCURL) != source.dtscURL {
+			return nil, status.Error(codes.FailedPrecondition, "configured source preparation returned an invalid path")
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -204,6 +272,37 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 	if path.Presence != placement.Present && !path.SourceFeasible {
 		return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "selected destination cannot use this source")
 	}
+	state := mediaPreparationState{node: *selected, endpoint: endpoint}
+	if authority.ObjectKind == mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM && ConfiguredIngestMode(authority.IngestMode) {
+		configured := runtime.Paths.Configured
+		if configured == nil || authority.ObjectAuthorityVersion <= 0 {
+			return mediaPreparationState{}, status.Error(codes.Unavailable, "configured source preparation is unavailable")
+		}
+		descriptor, describeErr := configured.describe(ctx, authority)
+		if describeErr != nil || descriptor.Generation != req.Query.SourceGeneration {
+			return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "configured source generation changed")
+		}
+		if path.Presence != placement.Present && !configured.mayOriginate(descriptor, authority, selected.ClusterID) {
+			if runtime.Registry == nil || runtime.Arrange == nil {
+				return mediaPreparationState{}, status.Error(codes.Unavailable, "configured relay preparation is unavailable")
+			}
+			source, sourceErr := configured.liveSource(ctx, descriptor, authority)
+			if sourceErr != nil {
+				return mediaPreparationState{}, sourceErr
+			}
+			if source == nil || source.dtscURL == "" {
+				return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "configured relay source is unavailable")
+			}
+			fence, fenceErr := runtime.Push.currentDestinationFence(ctx, req.NodeId, req.ClusterId)
+			if fenceErr != nil {
+				return mediaPreparationState{}, fenceErr
+			}
+			state.configuredRelay = source
+			state.configuredGeneration = descriptor.Generation
+			state.configuredRevision = authority.ObjectAuthorityVersion
+			state.configuredDestination = fence
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return mediaPreparationState{}, status.FromContextError(err).Err()
 	}
@@ -211,5 +310,14 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 	for _, expiry := range []time.Time{observation.ExpiresAt, selected.LastHeartbeat.Add(30 * time.Second), selected.OutputsObservedAt.Add(30 * time.Second)} {
 		expiresAt = minPlacementExpiry(expiresAt, expiry)
 	}
-	return mediaPreparationState{node: *selected, endpoint: endpoint, expiresAt: expiresAt}, nil
+	state.expiresAt = expiresAt
+	return state, nil
+}
+
+func configuredPullMatchesSource(pull *PlacementPullBinding, observed mediaPreparationState) bool {
+	source := observed.configuredRelay
+	return pull != nil && source != nil && canonicalPullAttempt(pull.AttemptID) &&
+		pull.DestinationFence == observed.configuredDestination && pull.SourceCellID == source.cellID &&
+		pull.SourceClusterID == source.clusterID && pull.SourceNodeID == source.nodeID &&
+		pull.SourceGeneration == observed.configuredGeneration && pull.SourceRevision == observed.configuredRevision
 }

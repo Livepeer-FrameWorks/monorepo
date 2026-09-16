@@ -43,19 +43,17 @@ func (p *Processor) ConfigureLivePreparedSourceAdmission(destination *federation
 	if !ok || media == nil {
 		return errors.New("prepared source requires the destination media runtime")
 	}
-	// Only a push stream has an arranged cross-cell pull to authorize, so this
-	// adapter binds to the push half of the destination's serving runtime. A
-	// configured or stored source has no pull attempt to admit here.
-	serve := destination.PushPreparation()
-	if serve == nil || serve.Authority == nil || serve.Registry == nil || serve.Paths == nil || serve.Arrange == nil ||
-		serve.Paths.CellID != destination.Discovery.CellID || serve.Paths.Registry != serve.Registry || serve.Arrange.Registry != serve.Registry {
-		return errors.New("prepared source requires live push preparation")
+	serve := destination.MediaServePreparation()
+	push := destination.PushPreparation()
+	if serve == nil || push == nil || push.Authority == nil || serve.Registry == nil || push.Paths == nil || serve.Arrange == nil ||
+		push.Paths.CellID != destination.Discovery.CellID || push.Paths.Registry != serve.Registry || serve.Arrange.Registry != serve.Registry {
+		return errors.New("prepared source requires live serving preparation")
 	}
 	authority, ok := destination.Discovery.Authority.(ViewerPlacementAuthorityReader)
 	if !ok || authority == nil {
 		return errors.New("prepared source requires tenant-scoped authority lookup")
 	}
-	adapter := &PushSourcePlacementAdapter{Authority: authority, Media: serve, Receipts: destination.Receipts, Destination: destination}
+	adapter := &MediaSourcePlacementAdapter{Authority: authority, Push: push, Serve: serve, Receipts: destination.Receipts, Destination: destination}
 	p.preparedSourceRegistry = serve.Registry
 	p.preparedSourceAdmission = adapter.ResolveSource
 	return nil
@@ -83,18 +81,19 @@ func (p *Processor) checkPreparedSource(ctx context.Context, streamName, nodeID 
 	return nil
 }
 
-// PushSourcePlacementAdapter resolves signed object identity locally, then checks
-// completed placement and current source state through the existing source flow.
-type PushSourcePlacementAdapter struct {
+// MediaSourcePlacementAdapter resolves signed object identity locally, then
+// dispatches completed source admission by signed ingest mode.
+type MediaSourcePlacementAdapter struct {
 	Authority   ViewerPlacementAuthorityReader
-	Media       *federation.LivePushPreparationRuntime
+	Push        *federation.LivePushPreparationRuntime
+	Serve       *federation.MediaServePreparationRuntime
 	Receipts    *federation.PlacementReceiptStore
 	Destination *federation.PlacementDestination
 }
 
-func (adapter *PushSourcePlacementAdapter) ResolveSource(ctx context.Context, connection PreparedSourceConnection) (federation.PreparedPlacementSource, error) {
-	if adapter == nil || adapter.Authority == nil || adapter.Media == nil || adapter.Receipts == nil {
-		return federation.PreparedPlacementSource{}, errors.New("push source placement adapter is unavailable")
+func (adapter *MediaSourcePlacementAdapter) ResolveSource(ctx context.Context, connection PreparedSourceConnection) (federation.PreparedPlacementSource, error) {
+	if adapter == nil || adapter.Authority == nil || adapter.Push == nil || adapter.Receipts == nil {
+		return federation.PreparedPlacementSource{}, errors.New("media source placement adapter is unavailable")
 	}
 	for _, id := range []string{connection.TenantID, connection.InternalName, connection.ClusterID, connection.NodeID} {
 		if id == "" || strings.TrimSpace(id) != id {
@@ -126,10 +125,12 @@ func (adapter *PushSourcePlacementAdapter) ResolveSource(ctx context.Context, co
 		DestinationFence: fence,
 	}
 	var result federation.PreparedPlacementSource
-	if adapter.Destination != nil {
-		result, err = adapter.Destination.ResolveOrReauthorizeSource(ctx, adapter.Media, identity)
+	if adapter.Destination != nil && adapter.Serve != nil {
+		result, err = adapter.Destination.ResolveOrReauthorizeMediaSource(ctx, adapter.Serve, identity)
+	} else if adapter.Destination != nil {
+		result, err = adapter.Destination.ResolveOrReauthorizeSource(ctx, adapter.Push, identity)
 	} else {
-		result, err = adapter.Media.ResolvePreparedSource(ctx, adapter.Receipts, identity)
+		result, err = adapter.Push.ResolvePreparedSource(ctx, adapter.Receipts, identity)
 	}
 	if current, currentOK := control.LocalSourceConnectionFence(connection.NodeID, connection.ClusterID); !currentOK || current != fence {
 		return federation.PreparedPlacementSource{}, errors.New("source connection changed during admission")

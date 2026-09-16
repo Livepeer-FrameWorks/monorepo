@@ -17,8 +17,9 @@ const acceptedPullAdmissionWindow = 5 * time.Minute
 // destination when a DTSC connection now arrives at sourceNodeID for the
 // stream. The connection is the prepared source path, not a viewer: it must
 // present the credential for its exact destination and attempt, match the current
-// active publisher generation (or DVR recording owner), and be renewed within
-// the admission window. DVR runtime names retain their artifact namespace.
+// active publisher generation, configured source mode or DVR recording owner,
+// and be renewed within the admission window. DVR runtime names retain their
+// artifact namespace.
 func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName, sourceNodeID, credential string, now time.Time) (OutboundPull, bool) {
 	internalName = sourceInternalKey(internalName)
 	sourceNodeID = strings.TrimSpace(sourceNodeID)
@@ -31,7 +32,7 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 	}
 	loc, ok := entry.LocalLocation(r.clusterID)
 	isDVR := strings.HasPrefix(internalName, "dvr+")
-	if !ok || (!isDVR && (!loc.SourceActive || loc.OwnerNodeID != sourceNodeID || loc.SourceGeneration == "")) {
+	if !ok {
 		return OutboundPull{}, false
 	}
 	for _, pull := range loc.OutboundPullers {
@@ -42,10 +43,17 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 			continue
 		}
 		if isDVR {
-			if pull.SourceGeneration != "" || pull.SourceRevision != 0 {
+			if pull.ConfiguredSource || pull.SourceGeneration != "" || pull.SourceRevision != 0 {
+				continue
+			}
+		} else if pull.ConfiguredSource {
+			if entry.IngestMode != IngestPull && entry.IngestMode != IngestMistNative {
 				continue
 			}
 		} else if pull.SourceGeneration != loc.SourceGeneration || pull.SourceRevision != loc.SourceRevision {
+			continue
+		}
+		if !isDVR && !pull.ConfiguredSource && (!loc.SourceActive || loc.OwnerNodeID != sourceNodeID || loc.SourceGeneration == "") {
 			continue
 		}
 		// Only the abandonment bound is enforced, never "this renewal is newer

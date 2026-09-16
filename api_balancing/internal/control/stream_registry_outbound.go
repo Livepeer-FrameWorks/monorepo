@@ -17,6 +17,21 @@ const maxOutboundDestinations = 4096
 // acknowledged. Retries for the same destination/source retain the attempt;
 // a new explicit attempt fences completion of the previous handoff.
 func (r *StreamRegistry) RecordOutboundPull(ctx context.Context, internalName string, pull OutboundPull) (OutboundPull, error) {
+	if pull.ConfiguredSource {
+		return OutboundPull{}, ErrReplicationConflict
+	}
+	return r.recordOutboundPull(ctx, internalName, pull, false)
+}
+
+// RecordOutboundConfiguredPull records a pull from a configured source origin.
+// Its generation is the signed configuration generation, not push publisher
+// ownership, so it is validated against the entry's configured ingest mode.
+func (r *StreamRegistry) RecordOutboundConfiguredPull(ctx context.Context, internalName string, pull OutboundPull) (OutboundPull, error) {
+	pull.ConfiguredSource = true
+	return r.recordOutboundPull(ctx, internalName, pull, true)
+}
+
+func (r *StreamRegistry) recordOutboundPull(ctx context.Context, internalName string, pull OutboundPull, configured bool) (OutboundPull, error) {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" || pull.TenantID == "" || pull.DestClusterID == "" || pull.DestNodeID == "" || pull.SourceNodeID == "" || pull.DTSCURL == "" {
 		return OutboundPull{}, errors.New("outbound pull requires tenant, stream, source and exact destination")
@@ -38,7 +53,11 @@ func (r *StreamRegistry) RecordOutboundPull(ctx context.Context, internalName st
 		if entry.TenantID != "" && entry.TenantID != pull.TenantID {
 			return ErrReplicationConflict
 		}
-		if pull.SourceGeneration != "" && (!loc.SourceActive || loc.SourceGeneration != pull.SourceGeneration || loc.SourceRevision != pull.SourceRevision || loc.OwnerNodeID != pull.SourceNodeID) {
+		if configured {
+			if entry.IngestMode != IngestPull && entry.IngestMode != IngestMistNative {
+				return ErrReplicationConflict
+			}
+		} else if pull.SourceGeneration != "" && (!loc.SourceActive || loc.SourceGeneration != pull.SourceGeneration || loc.SourceRevision != pull.SourceRevision || loc.OwnerNodeID != pull.SourceNodeID) {
 			return ErrReplicationConflict
 		}
 		entry.TenantID = pull.TenantID
@@ -47,7 +66,7 @@ func (r *StreamRegistry) RecordOutboundPull(ctx context.Context, internalName st
 			if current.DestClusterID != pull.DestClusterID || current.DestNodeID != pull.DestNodeID {
 				continue
 			}
-			sameSource := current.SourceNodeID == pull.SourceNodeID && current.SourceGeneration == pull.SourceGeneration && current.SourceRevision == pull.SourceRevision && current.DTSCURL == pull.DTSCURL
+			sameSource := current.ConfiguredSource == pull.ConfiguredSource && current.SourceNodeID == pull.SourceNodeID && current.SourceGeneration == pull.SourceGeneration && current.SourceRevision == pull.SourceRevision && current.DTSCURL == pull.DTSCURL
 			if current.SourceMediaClusterID != pull.SourceMediaClusterID {
 				if (current.SourceMediaClusterID != "" && pull.SourceMediaClusterID == "") ||
 					(sameSource && current.SourceMediaClusterID != "") {

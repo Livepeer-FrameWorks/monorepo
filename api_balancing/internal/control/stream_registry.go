@@ -222,6 +222,7 @@ type Location struct {
 type OutboundPull struct {
 	TenantID             string
 	AttemptID            string
+	ConfiguredSource     bool
 	SourceMediaClusterID string
 	SourceGeneration     string
 	SourceRevision       int64

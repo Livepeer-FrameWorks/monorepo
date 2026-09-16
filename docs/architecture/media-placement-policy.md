@@ -965,25 +965,26 @@ These checks protect the handoff and tracking state. They do not by themselves p
 from the intended generation.
 
 Startup installs `ConfigureLivePreparedSourceAdmission` from the same destination preparation
-runtime and shared receipt store. This does not set the global `SetPreparedSourceAdmission`
-cutover flag: legacy unmarked pulls retain their existing flow. Placement-created pulls carry a
-durable `PlacementRequired` marker in their first registry record; adopting an existing pull
-sets it with an exact-attempt compare-and-set before returning its URL. The marker is required
-even before the separate request-context retention write completes. Retained placement context
-also requires admission if the marker is absent. Neither is permission: missing handlers or
-receipts reject the source. Re-recording the same pull cannot clear its requirement; replacement
-attempts receive their own marker. Old replicas that cannot preserve/enforce this state remain
-part of the fleet activation barrier, not supported by this additive registry field alone.
+runtime and shared receipt store. Every tracked inbound pull requires this admission; there is no
+legacy unmarked bypass. Placement-created pulls carry a durable `PlacementRequired` marker in
+their first registry record, and adopting an existing pull sets it with an exact-attempt
+compare-and-set before returning its URL. The marker is required even before the separate
+request-context retention write completes. Neither the marker nor retained context is permission:
+missing handlers or receipts reject the source. Re-recording the same pull cannot clear its
+requirement, and replacement attempts receive their own marker. Edge and core therefore roll out
+together rather than supporting mixed enforcement generations.
 
-`PushSourcePlacementAdapter` resolves tenant-scoped signed object identity and invokes
-`LivePushPreparationRuntime.ResolvePreparedSource`. That method joins completed placement evidence
-with current signed authority, the exact current inbound pull, publisher generation/endpoint and
-destination membership/listener. It checks authority and physical state again after resolution,
-then reconfirms completed evidence against the receipt epoch and expiry. It neither reranks nor
-starts another pull. A DTSC URI with matching source IDs but a different advertised endpoint is
-not accepted. The handler requires the returned URI and attempt to match its current arrangement,
-checks the bounded lifetime, and returns an explicit offline source on failure; clearing an
-installed adapter does not restore unbound tracked-pull access.
+`MediaSourcePlacementAdapter` resolves tenant-scoped signed object identity and dispatches by the
+signed ingest mode. Push publishers use `LivePushPreparationRuntime.ResolvePreparedSource`.
+Configured `pull` and `mist_native` streams that must relay another cell's live origin use the
+configured serving preparation, which creates its own receipt-bound pull. Configured inputs that
+the destination may originate remain pull-free, as do stored artifacts. Final resolution joins
+completed placement evidence with current signed authority, the exact current inbound pull,
+destination connection and current source path, then reconfirms the receipt epoch and expiry. A
+DTSC URI with matching source IDs but a different advertised endpoint is not accepted. The
+handler requires the returned URI and attempt to match its current arrangement, checks the bounded
+lifetime, and returns an explicit offline source on failure; clearing an installed adapter does
+not restore unbound tracked-pull access.
 
 Pull-backed preparation receipts also bind the destination control-connection fence. Preparation
 reads existing shared connection ownership, including when another Foghorn replica owns the node;
@@ -1012,12 +1013,13 @@ and DTSC endpoint under the current connection; consent withdrawal, unknown inve
 withdrawal and changed source identity fail closed. The source-trigger path allows five seconds
 for fresh admission while individual registry/authority reads remain bounded to one second.
 
-Startup supplies the source adapter with its destination so marked pulls use this resolver. It
-binds to the push half of the serving runtime, because only a push stream has an arranged cross-cell
-pull to reauthorize; a configured or stored source presents no pull attempt here. Unrecorded direct
-sources keep their legacy unbound path, and actual-media reconnect proof remains open. Retained
-context alone does not demonstrate active viewer demand or revoke an already-running media process.
-No new Mist trigger, DTSC extension, or separate viewer network callback is required by this flow.
+Startup supplies the source adapter with its destination so every tracked pull uses this resolver.
+Push publisher pulls and configured cross-cell relays are both reauthorized from retained viewer
+context; local configured inputs and stored artifacts present no pull attempt. Direct publisher
+ingest remains a separate final-admission path based on Mist's observed RTMP, SRT or WebRTC/WHIP
+connector and does not consume a serving receipt. Retained context alone does not demonstrate active
+viewer demand or revoke an already-running media process. No new Mist trigger, DTSC extension, or
+separate viewer network callback is required by this flow.
 
 The shared router also exposes read-only `Evaluate`, which uses the same bounded cross-cell
 discovery and policy evaluation as `Route` without invoking preparation. Its result lifetime

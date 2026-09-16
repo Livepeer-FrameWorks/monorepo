@@ -18,10 +18,11 @@ import (
 
 // acceptedSourcePull reports whether a connection at nodeID is the DTSC pull this
 // origin accepted for a peer destination (NotifyOriginPull) against the node's
-// current publisher generation. Such a connection is the prepared source path
-// placement arranged, not a viewer: final viewer admission would otherwise
-// evaluate the origin node against the viewer policy and refuse the replica.
-// Only the DTSC connector qualifies, and only while the accepted pull is current.
+// current publisher generation or configured source mode. Such a connection is
+// the prepared source path placement arranged, not a viewer: final viewer
+// admission would otherwise evaluate the origin node against the viewer policy
+// and refuse the replica. Only the DTSC connector qualifies, and only while the
+// accepted pull is current.
 func (p *Processor) acceptedSourcePull(ctx context.Context, internalName, nodeID, connector, requestURL string) bool {
 	if !strings.EqualFold(strings.TrimSpace(connector), "DTSC") {
 		return false

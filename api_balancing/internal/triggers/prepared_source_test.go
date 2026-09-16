@@ -19,12 +19,12 @@ import (
 func TestPushSourceAdapterRejectsUnregisteredIdentityBeforeAuthorityRead(t *testing.T) {
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	reads := 0
-	adapter := &PushSourcePlacementAdapter{
+	adapter := &MediaSourcePlacementAdapter{
 		Authority: viewerNamedAuthorityFunc(func(context.Context, string, string) (localauthority.PlacementPair, error) {
 			reads++
 			return localauthority.PlacementPair{}, errors.New("must not read authority without a connection")
 		}),
-		Media: &federation.LivePushPreparationRuntime{}, Receipts: &federation.PlacementReceiptStore{},
+		Push: &federation.LivePushPreparationRuntime{}, Receipts: &federation.PlacementReceiptStore{},
 	}
 	result, err := adapter.ResolveSource(context.Background(), PreparedSourceConnection{
 		TenantID: "tenant", InternalName: "stream", ClusterID: "cluster", NodeID: "edge",
@@ -70,8 +70,10 @@ func TestConfigureLivePreparedSourceAdmissionUsesDestinationRuntime(t *testing.T
 			registry := control.NewStreamRegistry(nil, "cell", time.Minute)
 			push := &federation.LivePushPlacementPaths{CellID: "cell", Registry: registry}
 			paths := &federation.MediaPlacementPaths{Push: push}
+			arrange := &federation.ArrangeOriginPullDeps{Registry: registry}
 			serve := &federation.MediaServePreparationRuntime{CellID: "cell", Paths: paths,
-				Push: &federation.LivePushPreparationRuntime{Authority: viewerPlacementPairReader{}, Registry: registry, Paths: push, Arrange: &federation.ArrangeOriginPullDeps{Registry: registry}}}
+				Registry: registry, Arrange: arrange,
+				Push: &federation.LivePushPreparationRuntime{Authority: viewerPlacementPairReader{}, Registry: registry, Paths: push, Arrange: arrange}}
 			media := &federation.PlacementMediaRuntime{Serve: serve}
 			policy := &federation.PolicyBoundPlacementRuntime{Policy: &federation.PlacementPolicyGate{}, Media: media}
 			client := goredis.NewClient(&goredis.Options{Addr: "unused:6379"})

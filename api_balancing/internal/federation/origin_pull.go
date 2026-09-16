@@ -154,6 +154,10 @@ type ArrangeOriginPullRequest struct {
 	AttemptID         string
 	DestinationFence  int64
 	RefreshAcceptance bool
+	// AllowEquivalentSourceReplacement is reserved for configured sources. Their
+	// configuration generation remains stable when the live origin node changes;
+	// push publisher ownership must never set this flag.
+	AllowEquivalentSourceReplacement bool
 	// BindPull records the physical attempt before source notification or reuse.
 	// A failure leaves preparation pending and cannot advertise a source URL.
 	BindPull func(*PlacementPullBinding) error
@@ -453,7 +457,11 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 
 	// Persist the exact destination before advertising a source URL or starting
 	// its pull. A durable-state failure cannot become an untracked success.
-	pull, err := registry.RecordInboundPull(ctx, req.InternalName, control.InboundPull{
+	record := registry.RecordInboundPull
+	if req.AllowEquivalentSourceReplacement {
+		record = registry.RecordInboundConfiguredPull
+	}
+	pull, err := record(ctx, req.InternalName, control.InboundPull{
 		TenantID: req.TenantID, AttemptID: req.AttemptID, SourceClusterID: req.RemoteCluster, SourceNodeID: req.Remote.NodeId,
 		SourceMediaClusterID: ack.GetSourceClusterId(),
 		SourceGeneration:     req.SourceGeneration, SourceRevision: req.SourceRevision, DestClusterID: destClusterID,

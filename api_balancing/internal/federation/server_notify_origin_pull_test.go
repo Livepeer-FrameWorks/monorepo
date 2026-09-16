@@ -259,13 +259,19 @@ func TestNotifyOriginPullFailsWhenRegistryUnavailable(t *testing.T) {
 func TestNotifyOriginPullKeepsBareMistNativeStreamName(t *testing.T) {
 	server, _, _ := testFederationServerWithCache(t)
 	setLiveStreamState(t, "frameworks-demo", "source-1", "tenant-a", "https://edge-a.example.com")
+	control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+		TenantID: "tenant-a", InternalName: "frameworks-demo", IngestMode: control.IngestMistNative, RuntimeName: "frameworks-demo",
+	})
 
 	ack, err := server.NotifyOriginPull(svcAuthCtx(), &foghornfederationpb.OriginPullNotification{
-		StreamName:    "frameworks-demo",
-		SourceNodeId:  "source-1",
-		DestClusterId: "cluster-b",
-		DestNodeId:    "dest-1",
-		TenantId:      "tenant-a",
+		StreamName:       "frameworks-demo",
+		SourceNodeId:     "source-1",
+		DestClusterId:    "cluster-b",
+		DestNodeId:       "dest-1",
+		TenantId:         "tenant-a",
+		SourceGeneration: "configured-generation",
+		SourceRevision:   5,
+		AttemptId:        uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatalf("NotifyOriginPull error: %v", err)
@@ -280,5 +286,9 @@ func TestNotifyOriginPullKeepsBareMistNativeStreamName(t *testing.T) {
 	}
 	if control.SourcePullCredential(ack.GetDtscUrl()) == "" {
 		t.Fatalf("accepted pull carried no destination credential: %q", ack.GetDtscUrl())
+	}
+	pull, accepted := control.StreamRegistryInstance.AcceptedOutboundPull(t.Context(), "frameworks-demo", "source-1", control.SourcePullCredential(ack.GetDtscUrl()), time.Now())
+	if !accepted || !pull.ConfiguredSource || pull.SourceGeneration != "configured-generation" || pull.SourceRevision != 5 {
+		t.Fatalf("configured DTSC connection was not admitted from its exact pull: %+v accepted=%v", pull, accepted)
 	}
 }
