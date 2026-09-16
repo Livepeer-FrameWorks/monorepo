@@ -142,6 +142,79 @@ func TestExtractTarGz(t *testing.T) {
 	})
 }
 
+func TestExtractTarGzPreservesSafeSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "libs.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	contents := "runtime"
+	for _, hdr := range []*tar.Header{
+		{Name: "lib/libonnxruntime.so.1", Mode: 0o644, Size: int64(len(contents)), Typeflag: tar.TypeReg},
+		{Name: "lib/libonnxruntime.so", Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: "libonnxruntime.so.1"},
+	} {
+		if writeErr := tw.WriteHeader(hdr); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			if _, writeErr := tw.Write([]byte(contents)); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		}
+	}
+	if closeErr := tw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if closeErr := gz.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	dest := filepath.Join(dir, "out")
+	if extractErr := extractTarGz(archivePath, dest); extractErr != nil {
+		t.Fatal(extractErr)
+	}
+	target, err := os.Readlink(filepath.Join(dest, "lib", "libonnxruntime.so"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "libonnxruntime.so.1" {
+		t.Fatalf("symlink target = %q, want libonnxruntime.so.1", target)
+	}
+}
+
+func TestExtractTarGzRejectsEscapingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "evil-link.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "lib/escape", Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: "../../outside"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := extractTarGz(archivePath, filepath.Join(dir, "out")); err == nil {
+		t.Fatal("expected extraction to reject an escaping symlink")
+	}
+}
+
 // safeJoin must reject archive members that would escape the destination, both
 // directly through extractTarGz.
 func TestExtractTarGzRejectsPathTraversal(t *testing.T) {

@@ -217,7 +217,7 @@ func TestNativeEdgeRefreshCommandDarwinSignalsMist(t *testing.T) {
 	cmd := nativeEdgeRefreshCommand("darwin")
 	for _, want := range []string{
 		"launchctl kill USR1 system/com.livepeer.frameworks.mistserver",
-		"pkill -USR1 -f MistController",
+		"pkill -USR1 -o -x MistController",
 		"launchctl kickstart -k system/com.livepeer.frameworks.helmsman",
 		"launchctl kickstart -k system/com.livepeer.frameworks.caddy",
 	} {

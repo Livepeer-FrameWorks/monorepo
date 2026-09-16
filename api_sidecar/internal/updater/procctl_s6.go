@@ -29,7 +29,7 @@ func (s6Controller) SignalMistUSR1(ctx context.Context) error {
 	if signaled {
 		return nil
 	}
-	if err := runCommand(ctx, "pkill", "-USR1", "-f", "MistController"); err == nil {
+	if err := runCommand(ctx, "pkill", "-USR1", "-o", "-x", "MistController"); err == nil {
 		return nil
 	} else {
 		errs = append(errs, err)

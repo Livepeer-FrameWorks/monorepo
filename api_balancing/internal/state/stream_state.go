@@ -399,6 +399,7 @@ type NodeState struct {
 	IsHealthy            bool                `json:"is_healthy"`
 	IsStale              bool                `json:"is_stale"` // Node hasn't reported recently
 	OperationalMode      NodeOperationalMode `json:"operational_mode,omitempty"`
+	OperationalModeSetBy string              `json:"operational_mode_set_by,omitempty"`
 	TenantID             string              `json:"tenant_id,omitempty"`  // Tenant owning this dedicated node
 	ClusterID            string              `json:"cluster_id,omitempty"` // Virtual cluster this node belongs to
 	DeployMode           string              `json:"deploy_mode,omitempty"`
@@ -2000,6 +2001,7 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		sm.nodes[nodeID] = n
 	}
 	n.OperationalMode = normalized
+	n.OperationalModeSetBy = setBy
 	n.LastUpdate = now
 	nodePayload, _ := json.Marshal(n)
 	modePayload, modeMarshalErr := json.Marshal(nodeModeRecord{NodeID: nodeID, Mode: normalized, SetBy: setBy, SetAt: now})
@@ -3816,6 +3818,7 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 					sm.nodes[rec.NodeID] = node
 				}
 				node.OperationalMode = mode
+				node.OperationalModeSetBy = rec.SetBy
 			}
 			sm.mu.Unlock()
 		}

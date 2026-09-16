@@ -196,6 +196,13 @@ func fenceNodeAfterUpdateFailure(ctx context.Context, nodeID string) error {
 	return control.PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE)
 }
 
+func restoreNodeRouting(ctx context.Context, nodeID string) error {
+	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
+		return err
+	}
+	return control.PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL)
+}
+
 func persistFailure(ctx context.Context, nodeID, targetRelease string, cause error, deadline time.Time) error {
 	if err := persistPhase(ctx, nodeID, targetRelease, "failed", cause.Error(), deadline); err != nil {
 		return fmt.Errorf("%w; failed to persist update failure: %w", cause, err)

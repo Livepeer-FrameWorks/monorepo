@@ -1910,13 +1910,20 @@ provider `cluster provision` follows the manifest channel, and `cluster upgrade
 targets against reported node component versions and runtime platform metadata.
 Native and container (single edge image) nodes both converge; only the retired
 multi-container docker mode was excluded.
-Helmsman and Caddy changes apply over the existing Helmsman control stream,
-while Mist normally replaces the complete binary set atomically and sends `USR1`
-to MistController so new child processes use the new binaries without draining
-the node. Cordon, drain, update, warmup
+Helmsman and Caddy changes apply over the existing Helmsman control stream.
+For Mist, Helmsman atomically replaces each release-owned file inside the stable
+install directories, installs the controller last, and sends `USR1` to the
+controller's main/angel process. Mist then performs its built-in rolling handoff:
+active session, ingest, and processing workers continue, protocol listeners are
+re-adopted and roll in place, and newly launched workers use the replacement
+binaries. On Linux, the update is not reported successful until the running
+controller executable matches the installed replacement. The node remains
+available throughout. Cordon, drain, update, warmup
 version confirmation, endpoint probing, and return-to-normal are reserved for
 Mist releases whose CI-generated update contract explicitly requires a
-disruptive apply strategy. Config-schema versions are reported for visibility;
+disruptive apply strategy. Release reconciliation only restores drains owned by
+`update-orchestrator`; it never clears an operator-owned drain or maintenance
+fence. Config-schema versions are reported for visibility;
 actual runtime config still flows through ConfigSeed.
 
 ### frameworks cluster releases target sync

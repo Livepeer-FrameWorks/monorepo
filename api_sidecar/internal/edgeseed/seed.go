@@ -102,7 +102,6 @@ func Run() error {
 	if err := seedBootstrapConfig(fw, caddyIDs); err != nil {
 		return err
 	}
-	probeAtomicSwap()
 	return nil
 }
 
@@ -266,28 +265,6 @@ func ensureLayout(fw, caddyIDs ids) error {
 		}
 	}
 	return nil
-}
-
-// probeAtomicSwap verifies RENAME_EXCHANGE works on the /opt/frameworks
-// filesystem; the in-place MistServer update depends on it. Named volumes
-// pass; NFS/FUSE bind mounts do not, which deserves a loud warning rather
-// than a first-update surprise.
-func probeAtomicSwap() {
-	a, err := os.MkdirTemp(optRoot, ".swap-probe-a-*")
-	if err != nil {
-		fmt.Printf("seed-edge: WARNING: atomic-swap probe setup failed: %v\n", err)
-		return
-	}
-	defer func() { _ = os.RemoveAll(a) }()
-	b, err := os.MkdirTemp(optRoot, ".swap-probe-b-*")
-	if err != nil {
-		fmt.Printf("seed-edge: WARNING: atomic-swap probe setup failed: %v\n", err)
-		return
-	}
-	defer func() { _ = os.RemoveAll(b) }()
-	if err := updater.ExchangeDirsForProbe(a, b); err != nil {
-		fmt.Printf("seed-edge: WARNING: %s does not support atomic directory exchange (%v); in-place MistServer updates will fail — use a local-filesystem volume\n", optRoot, err)
-	}
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

@@ -119,6 +119,7 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	}
 	if local.OperationalMode != "" {
 		incoming.OperationalMode = local.OperationalMode
+		incoming.OperationalModeSetBy = local.OperationalModeSetBy
 	}
 	incoming.AddBandwidth = local.AddBandwidth
 	incoming.PendingRedirects = local.PendingRedirects
@@ -177,6 +178,7 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 		}
 		if n := sm.nodes[nodeID]; n != nil {
 			n.OperationalMode = mode
+			n.OperationalModeSetBy = rec.SetBy
 		}
 	}
 	for k, v := range streams {
@@ -279,6 +281,7 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 			sm.nodes[nodeID] = n
 		}
 		n.OperationalMode = mode
+		n.OperationalModeSetBy = rec.SetBy
 	case StateEntityStream:
 		if change.Operation == StateOpDelete {
 			delete(sm.streams, change.StreamName)

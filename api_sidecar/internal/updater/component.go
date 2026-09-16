@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -146,13 +147,6 @@ func WriteComponentVersion(component, version string) error {
 // installed ones.
 func ComponentVersionKey(component string) (string, error) {
 	return componentVersionKey(component)
-}
-
-// ExchangeDirsForProbe exposes the atomic directory exchange used by
-// component swaps so the edge-container seed can verify the backing
-// filesystem supports it.
-func ExchangeDirsForProbe(a, b string) error {
-	return exchangeDirs(a, b)
 }
 
 func componentVersionKey(component string) (string, error) {
@@ -330,9 +324,15 @@ func applyMistServer(ctx context.Context, artifact string, component *ipcpb.Desi
 	if err := writeMistManagedMetadata(replacement.src, component); err != nil {
 		return err
 	}
-	return replaceDirsAtomically([]dirReplacement{replacement}, func() error {
+	if err := replaceMistPayloadInPlace(replacement.src, replacement.dst, func() error {
 		return currentServiceController().SignalMistUSR1(ctx)
-	})
+	}); err != nil {
+		return err
+	}
+	// Signal delivery is the commit point: once Mist begins its handoff, the
+	// new payload must remain available for delayed controller/listener execs.
+	// A verification timeout fails the update without rolling files backward.
+	return waitMistControllerReload(ctx, filepath.Join(root, "bin", "MistController"))
 }
 
 func writeMistManagedMetadata(root string, component *ipcpb.DesiredComponent) error {
@@ -396,39 +396,33 @@ func componentInstallSentinelPath(root, identity string) string {
 	return filepath.Join(root, ".installed-"+hex.EncodeToString(sum[:]))
 }
 
-func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
+type mistPayloadStage struct {
+	src string
+	dst string
+}
+
+func mistPayloadReplacement(staging, root string) (mistPayloadStage, error) {
 	parent := filepath.Dir(root)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return dirReplacement{}, err
+		return mistPayloadStage{}, err
 	}
 	replacementRoot, err := os.MkdirTemp(parent, ".mistserver-root-*")
 	if err != nil {
-		return dirReplacement{}, err
+		return mistPayloadStage{}, err
 	}
-	cleanup := func(err error) (dirReplacement, error) {
+	cleanup := func(err error) (mistPayloadStage, error) {
 		_ = os.RemoveAll(replacementRoot)
-		return dirReplacement{}, err
+		return mistPayloadStage{}, err
 	}
-	if info, statErr := os.Stat(root); statErr == nil {
-		if !info.IsDir() {
-			return cleanup(fmt.Errorf("MistServer install root is not a directory: %s", root))
-		}
-		if copyErr := copyDirTree(root, replacementRoot); copyErr != nil {
-			return cleanup(copyErr)
-		}
-	} else if errors.Is(statErr, os.ErrNotExist) {
-		if mkErr := os.MkdirAll(replacementRoot, 0o755); mkErr != nil {
-			return cleanup(mkErr)
-		}
-	} else {
+	if info, statErr := os.Stat(root); statErr == nil && !info.IsDir() {
+		return cleanup(fmt.Errorf("MistServer install root is not a directory: %s", root))
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return cleanup(statErr)
 	}
 
-	// Replace the complete release-owned payload. Accelerator bundles keep
-	// their provider runtime below opt/mist-onnx so it participates in the
-	// same atomic root swap as the binaries that link against it. Optional
-	// directories absent from the new artifact are removed rather than carried
-	// forward (notably when moving back to a CPU bundle).
+	// Stage only the release-owned payload. Unmanaged files in the live root
+	// remain untouched when this tree is synchronized into the stable install
+	// directories. Optional directories absent from the artifact are removed.
 	payloadDirs := []string{"bin", "lib", "share", "opt"}
 	replaced := false
 	for _, dir := range payloadDirs {
@@ -440,11 +434,6 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 					return cleanup(fmt.Errorf("MistServer artifact missing %s directory required by current install", dir))
 				} else if !errors.Is(oldErr, os.ErrNotExist) {
 					return cleanup(oldErr)
-				}
-			}
-			if dir == "share" || dir == "opt" {
-				if removeErr := os.RemoveAll(filepath.Join(replacementRoot, dir)); removeErr != nil {
-					return cleanup(removeErr)
 				}
 			}
 			continue
@@ -470,7 +459,7 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 	if _, err := os.Stat(filepath.Join(replacementRoot, "bin", "MistController")); err != nil {
 		return cleanup(fmt.Errorf("MistController missing from staged install root"))
 	}
-	return dirReplacement{src: replacementRoot, dst: root}, nil
+	return mistPayloadStage{src: replacementRoot, dst: root}, nil
 }
 
 func copyDirTree(src, dst string) error {
@@ -676,6 +665,22 @@ func extractTarGz(artifact, dest string) error {
 			if err := out.Close(); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			if filepath.IsAbs(hdr.Linkname) {
+				return fmt.Errorf("archive symlink target must be relative: %s", hdr.Linkname)
+			}
+			if _, err := safeJoin(dest, filepath.Join(filepath.Dir(hdr.Name), hdr.Linkname)); err != nil {
+				return fmt.Errorf("archive symlink target escapes destination: %s -> %s", hdr.Name, hdr.Linkname)
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(target); err != nil {
+				return err
+			}
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -756,68 +761,266 @@ func installFile(src, dst string, mode os.FileMode) error {
 	return os.Rename(tmp, dst)
 }
 
-type dirReplacement struct {
-	src       string
-	dst       string
-	hadDst    bool
-	installed bool
-}
+var mistPayloadDirs = []string{"lib", "share", "opt", "bin"}
 
-func replaceDirsAtomically(replacements []dirReplacement, after func() error) error {
-	prepared := make([]dirReplacement, len(replacements))
-	copy(prepared, replacements)
-	for i := range prepared {
-		_, statErr := os.Stat(prepared[i].dst)
-		if statErr == nil {
-			if exchErr := exchangeDirs(prepared[i].src, prepared[i].dst); exchErr != nil {
-				rollbackErr := rollbackDirReplacements(prepared)
-				return errors.Join(exchErr, rollbackErr)
-			}
-			prepared[i].hadDst = true
-			prepared[i].installed = true
-			continue
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return errors.Join(statErr, rollbackDirReplacements(prepared))
+// replaceMistPayloadInPlace keeps the canonical Mist directory names stable.
+// Mist's rolling restart resolves its replacement binary from /proc/self/exe;
+// renaming the install root would make that path follow the old tree. Files are
+// instead replaced with rename(2), which leaves running mappings alive while
+// the canonical bin directory remains the location used by every later exec.
+func replaceMistPayloadInPlace(stagedRoot, root string, after func() error) error {
+	parent := filepath.Dir(root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	backup, err := os.MkdirTemp(parent, ".mistserver-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(backup) }()
+
+	rootExisted := false
+	if info, statErr := os.Stat(root); statErr == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("MistServer install root is not a directory: %s", root)
 		}
-		if renameErr := os.Rename(prepared[i].src, prepared[i].dst); renameErr != nil {
-			rollbackErr := rollbackDirReplacements(prepared)
-			return errors.Join(renameErr, rollbackErr)
+		rootExisted = true
+		if err := copyDirTree(root, backup); err != nil {
+			return err
 		}
-		prepared[i].installed = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+
+	rollback := func(cause error) error {
+		if !rootExisted {
+			return errors.Join(cause, os.RemoveAll(root))
+		}
+		return errors.Join(cause, syncMistManagedTree(backup, root))
+	}
+	if err := syncMistManagedTree(stagedRoot, root); err != nil {
+		return rollback(err)
 	}
 	if after != nil {
 		if err := after(); err != nil {
-			rollbackErr := rollbackDirReplacements(prepared)
-			return errors.Join(err, rollbackErr)
-		}
-	}
-	for i := range prepared {
-		if prepared[i].hadDst {
-			if err := os.RemoveAll(prepared[i].src); err != nil {
-				return err
-			}
+			return rollback(err)
 		}
 	}
 	return nil
 }
 
-func rollbackDirReplacements(replacements []dirReplacement) error {
-	var errs []error
-	for i := len(replacements) - 1; i >= 0; i-- {
-		replacement := replacements[i]
-		if replacement.installed {
-			if replacement.hadDst {
-				if err := exchangeDirs(replacement.src, replacement.dst); err != nil {
-					errs = append(errs, fmt.Errorf("restore previous install %s: %w", replacement.dst, err))
-				}
-				continue
+func syncMistManagedTree(srcRoot, dstRoot string) error {
+	if err := os.MkdirAll(dstRoot, 0o755); err != nil {
+		return err
+	}
+	// Libraries and support data land before binaries. MistController is
+	// installed last within bin/, so it cannot restart against a partial tree.
+	for _, dir := range mistPayloadDirs {
+		if err := syncDirectoryInPlace(filepath.Join(srcRoot, dir), filepath.Join(dstRoot, dir), dir == "bin"); err != nil {
+			return fmt.Errorf("sync MistServer %s: %w", dir, err)
+		}
+	}
+	if err := syncMistMetadata(srcRoot, dstRoot); err != nil {
+		return fmt.Errorf("sync MistServer metadata: %w", err)
+	}
+	return nil
+}
+
+type treeEntry struct {
+	rel  string
+	info os.FileInfo
+}
+
+func syncDirectoryInPlace(src, dst string, controllerLast bool) error {
+	srcInfo, err := os.Lstat(src)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.RemoveAll(dst)
+	}
+	if err != nil {
+		return err
+	}
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("source is not a directory: %s", src)
+	}
+	if dstInfo, statErr := os.Lstat(dst); statErr == nil && !dstInfo.IsDir() {
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	if err := os.MkdirAll(dst, srcInfo.Mode().Perm()); err != nil {
+		return err
+	}
+
+	var dirs, files []treeEntry
+	present := map[string]struct{}{filepath.Clean("."): {}}
+	if err := filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		present[rel] = struct{}{}
+		if rel == "." {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		entry := treeEntry{rel: rel, info: info}
+		if d.IsDir() {
+			dirs = append(dirs, entry)
+		} else {
+			files = append(files, entry)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, entry := range dirs {
+		target := filepath.Join(dst, entry.rel)
+		if info, statErr := os.Lstat(target); statErr == nil && !info.IsDir() {
+			if err := os.RemoveAll(target); err != nil {
+				return err
 			}
-			if err := os.RemoveAll(replacement.dst); err != nil {
-				errs = append(errs, err)
+		}
+		if err := os.MkdirAll(target, entry.info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	if controllerLast {
+		slices.SortStableFunc(files, func(a, b treeEntry) int {
+			aController := a.rel == "MistController"
+			bController := b.rel == "MistController"
+			if aController != bController {
+				if aController {
+					return 1
+				}
+				return -1
+			}
+			return strings.Compare(a.rel, b.rel)
+		})
+	}
+	for _, entry := range files {
+		if err := installTreeEntry(filepath.Join(src, entry.rel), filepath.Join(dst, entry.rel), entry.info); err != nil {
+			return err
+		}
+	}
+
+	var stale []string
+	if err := filepath.WalkDir(dst, func(path string, _ os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(dst, path)
+		if relErr != nil {
+			return relErr
+		}
+		if _, ok := present[rel]; !ok {
+			stale = append(stale, path)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	slices.SortFunc(stale, func(a, b string) int { return len(b) - len(a) })
+	for _, path := range stale {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installTreeEntry(src, dst string, info os.FileInfo) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".mist-entry-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Remove(tmpPath); err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmpPath) }()
+
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		if err := os.Symlink(target, tmpPath); err != nil {
+			return err
+		}
+	case info.Mode().IsRegular():
+		if err := copyFile(src, tmpPath, info.Mode().Perm()); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported payload entry %s (%s)", src, info.Mode())
+	}
+	if dstInfo, statErr := os.Lstat(dst); statErr == nil && dstInfo.IsDir() {
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	return os.Rename(tmpPath, dst)
+}
+
+func syncMistMetadata(srcRoot, dstRoot string) error {
+	entries, readErr := os.ReadDir(srcRoot)
+	if readErr != nil {
+		return readErr
+	}
+	wantedSentinels := map[string]struct{}{}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".installed-") {
+			wantedSentinels[entry.Name()] = struct{}{}
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			if installErr := installTreeEntry(filepath.Join(srcRoot, entry.Name()), filepath.Join(dstRoot, entry.Name()), info); installErr != nil {
+				return installErr
 			}
 		}
 	}
-	return errors.Join(errs...)
+	if info, statErr := os.Lstat(filepath.Join(srcRoot, "manifest.json")); statErr == nil {
+		if installErr := installTreeEntry(filepath.Join(srcRoot, "manifest.json"), filepath.Join(dstRoot, "manifest.json"), info); installErr != nil {
+			return installErr
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	} else if removeErr := os.Remove(filepath.Join(dstRoot, "manifest.json")); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return removeErr
+	}
+	dstEntries, dstReadErr := os.ReadDir(dstRoot)
+	if dstReadErr != nil {
+		return dstReadErr
+	}
+	for _, entry := range dstEntries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".installed-") {
+			if _, ok := wantedSentinels[entry.Name()]; !ok {
+				if err := os.Remove(filepath.Join(dstRoot, entry.Name())); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func sortedKeys(values map[string]string) []string {

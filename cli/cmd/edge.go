@@ -2381,7 +2381,7 @@ func newEdgeUpdateCmd() *cobra.Command {
 
 func nativeEdgeRefreshCommand(edgeOS string) string {
 	if edgeOS == "darwin" {
-		return "launchctl kill USR1 system/com.livepeer.frameworks.mistserver || pkill -USR1 -f MistController; launchctl kickstart -k system/com.livepeer.frameworks.helmsman; launchctl kickstart -k system/com.livepeer.frameworks.caddy"
+		return "launchctl kill USR1 system/com.livepeer.frameworks.mistserver || pkill -USR1 -o -x MistController; launchctl kickstart -k system/com.livepeer.frameworks.helmsman; launchctl kickstart -k system/com.livepeer.frameworks.caddy"
 	}
 	return "systemctl is-active --quiet frameworks-mistserver && systemctl reload frameworks-mistserver || systemctl start frameworks-mistserver; systemctl try-restart frameworks-helmsman; systemctl reload-or-restart frameworks-caddy"
 }

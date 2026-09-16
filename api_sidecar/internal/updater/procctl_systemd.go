@@ -13,7 +13,7 @@ func (systemdController) SignalMistUSR1(ctx context.Context) error {
 	if errService == nil {
 		return nil
 	}
-	errProc := runCommand(ctx, "pkill", "-USR1", "-f", "MistController")
+	errProc := runCommand(ctx, "pkill", "-USR1", "-o", "-x", "MistController")
 	if errProc == nil {
 		return nil
 	}

@@ -1,9 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestParseRolloutPlanRejectsInvalidJSON(t *testing.T) {
@@ -119,6 +123,35 @@ func TestEligibleNodesSkipsManuallyFencedNodes(t *testing.T) {
 	}
 	if eligible[0].NodeID != "legacy-empty-mode" || eligible[1].NodeID != "normal" {
 		t.Fatalf("eligible nodes = %q, %q; want legacy-empty-mode, normal", eligible[0].NodeID, eligible[1].NodeID)
+	}
+}
+
+func TestReconcileEligibleNodesRedrivesOnlyOrchestratedDrain(t *testing.T) {
+	mock := installMockDB(t)
+	now := time.Now()
+	nodes := []*state.NodeState{
+		{NodeID: "normal", ClusterID: "cluster-a", IsHealthy: true, OperationalMode: state.NodeModeNormal, DeployMode: "native", OS: "linux", Arch: "amd64"},
+		{NodeID: "rollout-drain", ClusterID: "cluster-a", IsHealthy: true, OperationalMode: state.NodeModeDraining, OperationalModeSetBy: "update-orchestrator", DeployMode: "native", OS: "linux", Arch: "amd64"},
+		{NodeID: "manual-drain", ClusterID: "cluster-a", IsHealthy: true, OperationalMode: state.NodeModeDraining, OperationalModeSetBy: "operator", DeployMode: "native", OS: "linux", Arch: "amd64"},
+		{NodeID: "maintenance", ClusterID: "cluster-a", IsHealthy: true, OperationalMode: state.NodeModeMaintenance, DeployMode: "native", OS: "linux", Arch: "amd64"},
+	}
+
+	mock.ExpectQuery(`FROM foghorn\.node_update_state`).
+		WithArgs("rollout-drain").
+		WillReturnRows(sqlmock.NewRows(loadProgressColumns()).
+			AddRow("stable:v1.2.3", "draining", now.Add(time.Hour), now, "{}"))
+	eligible, err := reconcileEligibleNodes(context.Background(), nodes, "cluster-a")
+	if err != nil {
+		t.Fatalf("reconcileEligibleNodes: %v", err)
+	}
+	if len(eligible) != 2 {
+		t.Fatalf("eligible len = %d, want 2", len(eligible))
+	}
+	if eligible[0].NodeID != "normal" || eligible[1].NodeID != "rollout-drain" {
+		t.Fatalf("eligible nodes = %q, %q; want normal, rollout-drain", eligible[0].NodeID, eligible[1].NodeID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

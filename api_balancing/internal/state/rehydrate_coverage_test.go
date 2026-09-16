@@ -181,6 +181,9 @@ func TestRehydrate_LoadsAllRepositoriesRehydrate(t *testing.T) {
 	if got := sm.GetNodeOperationalMode("node-2"); got != NodeModeDraining {
 		t.Fatalf("expected node-2 draining after rehydrate, got %q", got)
 	}
+	if node := sm.GetNodeState("node-2"); node == nil || node.OperationalModeSetBy != "op" {
+		t.Fatalf("expected node-2 mode owner op after rehydrate, got %+v", node)
+	}
 	// node-1 had no maintenance row -> defaults to normal.
 	if got := sm.GetNodeOperationalMode("node-1"); got != NodeModeNormal {
 		t.Fatalf("expected node-1 normal, got %q", got)

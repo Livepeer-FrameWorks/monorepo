@@ -27,99 +27,7 @@ func TestWriteComponentVersionRejectsUnknownComponent(t *testing.T) {
 	}
 }
 
-func TestReplaceDirsAtomicallyRollsBackAfterFailure(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	oldBin := filepath.Join(root, "bin")
-	oldLib := filepath.Join(root, "lib")
-	newBin := filepath.Join(root, "new-bin")
-	newLib := filepath.Join(root, "new-lib")
-	for _, dir := range []string{oldBin, oldLib, newBin, newLib} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(oldBin, "MistController"), []byte("old-bin"), 0o644); err != nil {
-		t.Fatalf("write old bin: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oldLib, "libmist.so"), []byte("old-lib"), 0o644); err != nil {
-		t.Fatalf("write old lib: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(newBin, "MistController"), []byte("new-bin"), 0o644); err != nil {
-		t.Fatalf("write new bin: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(newLib, "libmist.so"), []byte("new-lib"), 0o644); err != nil {
-		t.Fatalf("write new lib: %v", err)
-	}
-
-	err := replaceDirsAtomically([]dirReplacement{
-		{src: newBin, dst: oldBin},
-		{src: newLib, dst: oldLib},
-	}, func() error {
-		return errors.New("restart failed")
-	})
-	if err == nil {
-		t.Fatal("replaceDirsAtomically succeeded despite post-replacement failure")
-	}
-
-	binBytes, err := os.ReadFile(filepath.Join(oldBin, "MistController"))
-	if err != nil {
-		t.Fatalf("read restored bin: %v", err)
-	}
-	if string(binBytes) != "old-bin" {
-		t.Fatalf("bin content = %q, want old-bin", string(binBytes))
-	}
-	libBytes, err := os.ReadFile(filepath.Join(oldLib, "libmist.so"))
-	if err != nil {
-		t.Fatalf("read restored lib: %v", err)
-	}
-	if string(libBytes) != "old-lib" {
-		t.Fatalf("lib content = %q, want old-lib", string(libBytes))
-	}
-}
-
-func TestReplaceDirsAtomicallyKeepsDestinationVisible(t *testing.T) {
-	t.Parallel()
-
-	parent := t.TempDir()
-	root := filepath.Join(parent, "mistserver")
-	staged := filepath.Join(parent, "mistserver-staged")
-	for _, dir := range []string{filepath.Join(root, "bin"), filepath.Join(staged, "bin")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "MistController"), []byte("old-bin"), 0o755); err != nil {
-		t.Fatalf("write old controller: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(staged, "bin", "MistController"), []byte("new-bin"), 0o755); err != nil {
-		t.Fatalf("write new controller: %v", err)
-	}
-
-	err := replaceDirsAtomically([]dirReplacement{{src: staged, dst: root}}, func() error {
-		controller, readErr := os.ReadFile(filepath.Join(root, "bin", "MistController"))
-		if readErr != nil {
-			t.Fatalf("live root disappeared during replacement: %v", readErr)
-		}
-		if string(controller) != "new-bin" {
-			t.Fatalf("controller during replacement = %q, want new-bin", string(controller))
-		}
-		return errors.New("force rollback")
-	})
-	if err == nil {
-		t.Fatal("replaceDirsAtomically succeeded despite forced rollback")
-	}
-	controller, err := os.ReadFile(filepath.Join(root, "bin", "MistController"))
-	if err != nil {
-		t.Fatalf("read restored controller: %v", err)
-	}
-	if string(controller) != "old-bin" {
-		t.Fatalf("controller after rollback = %q, want old-bin", string(controller))
-	}
-}
-
-func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) {
+func TestMistPayloadReplacementStagesReleaseOwnedPayload(t *testing.T) {
 	t.Parallel()
 
 	parent := t.TempDir()
@@ -178,12 +86,8 @@ func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) 
 	if filepath.Dir(replacement.src) != parent {
 		t.Fatalf("replacement src parent = %q, want %q", filepath.Dir(replacement.src), parent)
 	}
-	wrapper, err := os.ReadFile(filepath.Join(replacement.src, "run.sh"))
-	if err != nil {
-		t.Fatalf("read staged wrapper: %v", err)
-	}
-	if string(wrapper) != "#!/bin/sh\n" {
-		t.Fatalf("wrapper = %q, want preserved script", string(wrapper))
+	if _, statErr := os.Stat(filepath.Join(replacement.src, "run.sh")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unmanaged wrapper was copied into release staging: %v", statErr)
 	}
 	controller, err := os.ReadFile(filepath.Join(replacement.src, "bin", "MistController"))
 	if err != nil {
@@ -242,6 +146,100 @@ func TestMistPayloadReplacementRemovesAbsentOptionalPayload(t *testing.T) {
 	defer os.RemoveAll(replacement.src)
 	if _, err := os.Stat(filepath.Join(replacement.src, "opt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale optional provider payload survived CPU replacement: %v", err)
+	}
+}
+
+func TestReplaceMistPayloadInPlaceKeepsCanonicalDirectories(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mistserver")
+	staged := filepath.Join(parent, "staged")
+	for _, dir := range []string{filepath.Join(root, "bin"), filepath.Join(root, "lib"), filepath.Join(staged, "bin"), filepath.Join(staged, "lib")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, contents := range map[string]string{
+		filepath.Join(root, "bin", "MistController"):   "old-controller",
+		filepath.Join(root, "bin", "MistOutHTTP"):      "old-output",
+		filepath.Join(root, "lib", "libmist.so"):       "old-lib",
+		filepath.Join(staged, "bin", "MistController"): "new-controller",
+		filepath.Join(staged, "bin", "MistOutHTTP"):    "new-output",
+		filepath.Join(staged, "lib", "libmist.so"):     "new-lib",
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "run.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binBefore, err := os.Stat(filepath.Join(root, "bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackRan := false
+	if replaceErr := replaceMistPayloadInPlace(staged, root, func() error {
+		callbackRan = true
+		binDuring, statErr := os.Stat(filepath.Join(root, "bin"))
+		if statErr != nil {
+			return statErr
+		}
+		if !os.SameFile(binBefore, binDuring) {
+			return errors.New("canonical bin directory was replaced")
+		}
+		controller, readErr := os.ReadFile(filepath.Join(root, "bin", "MistController"))
+		if readErr != nil {
+			return readErr
+		}
+		if string(controller) != "new-controller" {
+			return errors.New("new controller was not visible before signal")
+		}
+		return nil
+	}); replaceErr != nil {
+		t.Fatalf("replaceMistPayloadInPlace: %v", replaceErr)
+	}
+	if !callbackRan {
+		t.Fatal("post-install callback did not run")
+	}
+	wrapper, err := os.ReadFile(filepath.Join(root, "run.sh"))
+	if err != nil || string(wrapper) != "#!/bin/sh\n" {
+		t.Fatalf("unmanaged wrapper was not preserved: content=%q err=%v", wrapper, err)
+	}
+}
+
+func TestReplaceMistPayloadInPlaceRollsBackSignalFailure(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mistserver")
+	staged := filepath.Join(parent, "staged")
+	for _, dir := range []string{filepath.Join(root, "bin"), filepath.Join(staged, "bin")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "MistController"), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "bin", "MistController"), []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "bin", "MistOutHTTP"), []byte("new-only"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := replaceMistPayloadInPlace(staged, root, func() error { return errors.New("signal failed") })
+	if err == nil || !strings.Contains(err.Error(), "signal failed") {
+		t.Fatalf("expected signal failure, got %v", err)
+	}
+	controller, err := os.ReadFile(filepath.Join(root, "bin", "MistController"))
+	if err != nil || string(controller) != "old" {
+		t.Fatalf("controller was not rolled back: content=%q err=%v", controller, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bin", "MistOutHTTP")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new-only binary survived rollback: %v", err)
 	}
 }
 

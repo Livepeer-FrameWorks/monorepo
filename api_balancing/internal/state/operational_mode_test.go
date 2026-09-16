@@ -42,6 +42,9 @@ func TestSetGetNodeOperationalMode(t *testing.T) {
 	if got := sm.GetNodeOperationalMode("n1"); got != NodeModeMaintenance {
 		t.Fatalf("mode = %q, want maintenance", got)
 	}
+	if node := sm.GetNodeState("n1"); node == nil || node.OperationalModeSetBy != "test" {
+		t.Fatalf("mode owner = %+v, want test", node)
+	}
 
 	if err := sm.SetNodeOperationalMode(ctx, "n1", "turbo", "test"); err == nil {
 		t.Fatal("invalid mode must be rejected")

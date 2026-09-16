@@ -57,18 +57,41 @@ func loadProgressColumns() []string {
 	return []string{"target_release", "phase", "deadline", "updated_at", "expected_components"}
 }
 
-func TestDesiredComponentsIncludeMist(t *testing.T) {
+func TestDesiredComponentsRequireDrain(t *testing.T) {
 	t.Parallel()
 
-	if !desiredComponentsIncludeMist(sampleComponents()) {
-		t.Fatal("expected mist component to require Mist update path")
+	if desiredComponentsRequireDrain(sampleComponents()) {
+		t.Fatal("rolling Mist component unexpectedly requires a drain")
 	}
-	if desiredComponentsIncludeMist(append(sampleHelmsmanComponents(), nil)) {
-		t.Fatal("non-Mist components should use direct update path")
+	disruptive := sampleComponents()
+	disruptive[0].DrainRequired = true
+	if !desiredComponentsRequireDrain(disruptive) {
+		t.Fatal("explicitly disruptive component did not require a drain")
 	}
 }
 
-func TestApplyReleaseUpdateRoutesMistThroughDrainStateMachine(t *testing.T) {
+func TestDrainCanReturnToRollingApplyBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	rolling := sampleComponents()
+	disruptive := sampleComponents()
+	disruptive[0].DrainRequired = true
+
+	for _, phase := range []string{"cordoning", "draining", "drained"} {
+		if !drainCanReturnToRollingApply(phase, rolling) {
+			t.Fatalf("phase %s did not return to rolling apply", phase)
+		}
+		if drainCanReturnToRollingApply(phase, disruptive) {
+			t.Fatalf("phase %s bypassed an explicit drain requirement", phase)
+		}
+	}
+	for _, phase := range []string{"updating_restore", "warming_restore", "updating", "warming"} {
+		if drainCanReturnToRollingApply(phase, rolling) {
+			t.Fatalf("phase %s changed apply strategy after dispatch", phase)
+		}
+	}
+}
+
+func TestApplyReleaseUpdateKeepsRollingMistUpdateRoutable(t *testing.T) {
 	prevDB := control.GetDB()
 	control.SetDB(nil)
 	control.Init(logging.NewLogger(), nil, nil)
@@ -80,6 +103,28 @@ func TestApplyReleaseUpdateRoutesMistThroughDrainStateMachine(t *testing.T) {
 	})
 
 	err := applyReleaseUpdate(context.Background(), "node-1", "cluster-a", "stable:v1.2.3", sampleComponents(), rolloutPlan{})
+	if !errors.Is(err, control.ErrNotConnected) {
+		t.Fatalf("applyReleaseUpdate error = %v, want ErrNotConnected from control stream push", err)
+	}
+	if got := sm.GetNodeOperationalMode("node-1"); got != state.NodeModeNormal {
+		t.Fatalf("node mode = %q, want normal for atomic Mist replacement", got)
+	}
+}
+
+func TestApplyReleaseUpdateRoutesExplicitDrainThroughStateMachine(t *testing.T) {
+	prevDB := control.GetDB()
+	control.SetDB(nil)
+	control.Init(logging.NewLogger(), nil, nil)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() {
+		control.SetDB(prevDB)
+		control.Init(logging.NewLogger(), nil, nil)
+		state.ResetDefaultManagerForTests()
+	})
+	components := sampleComponents()
+	components[0].DrainRequired = true
+
+	err := applyReleaseUpdate(context.Background(), "node-1", "cluster-a", "stable:v1.2.3", components, rolloutPlan{})
 	if !errors.Is(err, control.ErrNotConnected) {
 		t.Fatalf("applyReleaseUpdate error = %v, want ErrNotConnected from control stream push", err)
 	}
@@ -222,10 +267,7 @@ func TestBuildComponentsForNodeRedriveIncludesAllArtifacts(t *testing.T) {
 		if c.GetArtifactUrl() == "" || c.GetChecksum() == "" {
 			t.Fatalf("component %s missing artifact metadata: %+v", c.GetComponent(), c)
 		}
-		if c.GetComponent() == "mist" && !c.GetDrainRequired() {
-			t.Fatal("mist component must require a drain token")
-		}
-		if c.GetComponent() != "mist" && c.GetDrainRequired() {
+		if c.GetDrainRequired() {
 			t.Fatalf("component %s unexpectedly requires a drain token", c.GetComponent())
 		}
 	}

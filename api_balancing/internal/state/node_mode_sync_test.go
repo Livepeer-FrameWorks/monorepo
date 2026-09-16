@@ -133,6 +133,9 @@ func TestNodeMode_WriteThroughAndRehydrate(t *testing.T) {
 	if got := smB.GetNodeOperationalMode("node-1"); got != NodeModeDraining {
 		t.Fatalf("rehydrated mode = %q, want draining (dedicated key over node JSON)", got)
 	}
+	if node := smB.GetNodeState("node-1"); node == nil || node.OperationalModeSetBy != "test" {
+		t.Fatalf("rehydrated mode owner = %+v, want test", node)
+	}
 
 	// Live propagation: a mode change on A reaches B via the changelog.
 	if err := smA.SetNodeOperationalMode(context.Background(), "node-1", NodeModeMaintenance, "test"); err != nil {

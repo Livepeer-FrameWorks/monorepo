@@ -52,7 +52,8 @@
     argv:
       - pkill
       - -USR1
-      - -f
+      - -o
+      - -x
       - MistController
   register: mistserver_reloaded
   changed_when: mistserver_reloaded.rc == 0

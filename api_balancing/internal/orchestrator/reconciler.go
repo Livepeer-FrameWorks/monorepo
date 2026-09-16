@@ -118,7 +118,10 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 	}
 	_, snapshot := state.DefaultManager().GetClusterSnapshot()
 	clusterNodes := nodesInCluster(snapshot, target.GetClusterId())
-	nodes := eligibleNodes(clusterNodes, target.GetClusterId())
+	nodes, err := reconcileEligibleNodes(ctx, clusterNodes, target.GetClusterId())
+	if err != nil {
+		return err
+	}
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -163,6 +166,34 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 				return err
 			}
 			if !hasComponents {
+				continue
+			}
+			if drainCanReturnToRollingApply(progress.Phase, direct) {
+				current, currentErr := currentNodeComponents(ctx, node.NodeID)
+				if currentErr != nil {
+					return currentErr
+				}
+				pending, hasPending, pendingErr := buildComponentsForNode(ctx, components, current, node, targetRelease)
+				if pendingErr != nil {
+					return pendingErr
+				}
+				if err = restoreNodeRouting(ctx, node.NodeID); err != nil {
+					return err
+				}
+				if !hasPending {
+					if err = persistPhase(ctx, node.NodeID, targetRelease, "idle", "", time.Time{}); err != nil {
+						return err
+					}
+					continue
+				}
+				if err = ApplyDirectUpdate(ctx, DirectUpdateRequest{
+					NodeID:        node.NodeID,
+					ClusterID:     target.GetClusterId(),
+					TargetRelease: targetRelease,
+					Components:    pending,
+				}); err != nil {
+					return err
+				}
 				continue
 			}
 			switch progress.Phase {
@@ -216,7 +247,7 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 }
 
 func applyReleaseUpdate(ctx context.Context, nodeID, clusterID, targetRelease string, components []*ipcpb.DesiredComponent, plan rolloutPlan) error {
-	if desiredComponentsIncludeMist(components) {
+	if desiredComponentsRequireDrain(components) {
 		return ApplyMistUpdate(ctx, MistUpdateRequest{
 			NodeID:        nodeID,
 			ClusterID:     clusterID,
@@ -234,13 +265,22 @@ func applyReleaseUpdate(ctx context.Context, nodeID, clusterID, targetRelease st
 	})
 }
 
-func desiredComponentsIncludeMist(components []*ipcpb.DesiredComponent) bool {
+func desiredComponentsRequireDrain(components []*ipcpb.DesiredComponent) bool {
 	for _, component := range components {
-		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), "mist") {
+		if component != nil && component.GetDrainRequired() {
 			return true
 		}
 	}
 	return false
+}
+
+func drainCanReturnToRollingApply(phase string, components []*ipcpb.DesiredComponent) bool {
+	switch phase {
+	case "cordoning", "draining", "drained":
+		return !desiredComponentsRequireDrain(components)
+	default:
+		return false
+	}
 }
 
 // buildComponentsForNode resolves release components for a single node into
@@ -273,7 +313,6 @@ func buildComponentsForNode(ctx context.Context, components map[string]releaseCo
 		switch component {
 		case "mist":
 			msg.SwapStrategy = "replace-all-usr1"
-			msg.DrainRequired = true
 		case "helmsman":
 			msg.SwapStrategy = "alongside-then-exec"
 		default:
@@ -367,6 +406,35 @@ func eligibleNodes(nodes []*state.NodeState, clusterID string) []*state.NodeStat
 	return out
 }
 
+func reconcileEligibleNodes(ctx context.Context, nodes []*state.NodeState, clusterID string) ([]*state.NodeState, error) {
+	out := make([]*state.NodeState, 0, len(nodes))
+	for _, node := range nodes {
+		if node == nil || node.ClusterID != clusterID || !node.IsHealthy || node.IsStale || !nodeSupportsAutomaticReleaseUpdate(node) {
+			continue
+		}
+		mode := node.OperationalMode
+		if mode == "" || mode == state.NodeModeNormal {
+			out = append(out, node)
+			continue
+		}
+		if mode != state.NodeModeDraining {
+			continue
+		}
+		if node.OperationalModeSetBy != "update-orchestrator" {
+			continue
+		}
+		progress, err := loadProgress(ctx, node.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		if updatePhaseInFlight(progress.Phase) {
+			out = append(out, node)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out, nil
+}
+
 func nodesInCluster(nodes []*state.NodeState, clusterID string) []*state.NodeState {
 	out := make([]*state.NodeState, 0, len(nodes))
 	for _, node := range nodes {
@@ -379,6 +447,13 @@ func nodesInCluster(nodes []*state.NodeState, clusterID string) []*state.NodeSta
 }
 
 func nodeAllowsAutomaticReleaseUpdate(node *state.NodeState) bool {
+	if !nodeSupportsAutomaticReleaseUpdate(node) {
+		return false
+	}
+	return node.OperationalMode == "" || node.OperationalMode == state.NodeModeNormal
+}
+
+func nodeSupportsAutomaticReleaseUpdate(node *state.NodeState) bool {
 	if node == nil {
 		return false
 	}
@@ -392,7 +467,11 @@ func nodeAllowsAutomaticReleaseUpdate(node *state.NodeState) bool {
 	if nodePlatformKey(node) == "" {
 		return false
 	}
-	return node.OperationalMode == "" || node.OperationalMode == state.NodeModeNormal
+	return true
+}
+
+func updatePhaseInFlight(phase string) bool {
+	return phase != "" && phase != "idle" && phase != "failed"
 }
 
 func releaseComponentForNode(componentName string, component releaseComponent, node *state.NodeState) (releaseComponent, bool) {
