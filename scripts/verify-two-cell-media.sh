@@ -5,8 +5,9 @@
 # edge-node-1, Mist on localhost:18090). Cell B: a second platform cell (us-primary) whose
 # Foghorn (foghorn-b) serves the tenant's virtual private cluster demo-selfhosted
 # (edge-node-b, Mist on localhost:8081). Every Foghorn is platform-run; the two cells
-# federate. One Commodore and one Quartermaster serve both. The script publishes into A,
-# resolves viewers through both cells onto the private edge and asserts real media there,
+# federate. One Commodore and one Quartermaster serve both. The script resolves RTMP through
+# both cells under an ingest policy, publishes to the exact node they agree on, resolves
+# viewers through both cells onto the private edge and asserts real media there,
 # then exercises private-only refusal, capacity fallback, publisher reconnect and a
 # control-plane outage. It is a make target (verify-two-cell-media), not a CI gate: it
 # rebuilds images, needs Docker and the edited Mist image, and takes minutes.
@@ -92,7 +93,7 @@ pull_location_is() { # pull_location_is <foghorn> <edge-host>
   local loc; loc="$(pull_location "$1")"; [[ "$loc" == *"$2"* ]]
 }
 PULL_UPSTREAM=fw-two-cell-upstream
-PULL_UPSTREAM_HOST="$PULL_UPSTREAM:8000"
+PULL_UPSTREAM_HOST="$PULL_UPSTREAM:80"
 # Mist's HTTP-reachable inputs are the playlist ones, so the upstream is an HLS
 # rendition of a seeded recording rather than the recording itself.
 PULL_UPSTREAM_FILE=index.m3u8
@@ -110,63 +111,35 @@ start_pull_upstream() { # serves a small HLS rendition for the configured pull i
     -hls_segment_filename /out/seg%03d.ts /out/index.m3u8 >/dev/null 2>&1 || true
   [ -s "$dir/index.m3u8" ] || fail "could not build the pull upstream playlist"
   docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
-  docker run -d --name "$PULL_UPSTREAM" --network "$network" -v "$dir:/srv:ro" \
-    --entrypoint python3 "$MIST_IMAGE" -m http.server 8000 --directory /srv >/dev/null
-  wait_for 60 "the pull upstream file server" bash -c \
-    "docker run --rm --network $network --entrypoint python3 $MIST_IMAGE -c \"import urllib.request,sys; r=urllib.request.urlopen('http://$PULL_UPSTREAM_HOST/$PULL_UPSTREAM_FILE',timeout=5); sys.exit(0 if r.status==200 else 1)\""
+  docker run -d --name "$PULL_UPSTREAM" --network "$network" \
+    -v "$dir:/usr/share/nginx/html:ro" nginx:1.30.1-alpine >/dev/null
+  wait_for 60 "the pull upstream file server" docker run --rm --network "$network" \
+    --entrypoint curl "$MIST_IMAGE" -fsS -m 5 -o /dev/null "http://$PULL_UPSTREAM_HOST/$PULL_UPSTREAM_FILE"
 }
-media_flows() { # media_flows <playlist-url>: true when a TS segment with sync bytes is served
+media_flows() { # media_flows <playlist-url>: true when a video frame can be read
   # Runs inside the compose network: the playlist URL names an edge by its service name.
   local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
-  docker run --rm -i --network "$network" --entrypoint python3 "$MIST_IMAGE" - "$1" <<'PY'
-import sys, urllib.request, urllib.parse
-def fetch(url, limit=None):
-    with urllib.request.urlopen(url, timeout=10) as r:
-        return r.read(limit) if limit else r.read()
-def flows(url, depth=0):
-    if depth > 3:
-        return False
-    try:
-        body = fetch(url).decode("utf-8", "replace")
-    except Exception:
-        return False
-    for line in body.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        child = urllib.parse.urljoin(url, line)
-        if ".m3u8" in child:
-            if flows(child, depth + 1):
-                return True
-            continue
-        try:
-            d = fetch(child, 564)
-        except Exception:
-            continue
-        if len(d) >= 564 and d[0] == 0x47 and d[188] == 0x47 and d[376] == 0x47:
-            return True
-    return False
-sys.exit(0 if flows(sys.argv[1]) else 1)
-PY
+  docker run --rm --network "$network" --entrypoint ffmpeg "$MIST_IMAGE" \
+    -hide_banner -loglevel error -rw_timeout 10000000 -i "$1" -map 0:v:0 -frames:v 1 -f null -
 }
 policy_state() { # prints "revision parentRevision rolloutStatus"
   gql 'query($scope: MediaPlacementScopeInput!){ mediaPlacementPolicy(scope:$scope){ __typename ... on MediaPlacementPolicyState { revision parentRevision rollout { status } } ... on MediaPlacementError { message } } }' '{"scope":{"kind":"TENANT"}}' \
     | jq -r '.data.mediaPlacementPolicy | if .__typename=="MediaPlacementPolicyState" then "\(.revision) \(.parentRevision) \(.rollout.status)" else error(.message) end'
 }
-apply_serve_policy() { # apply_serve_policy <rules-json>
-  local state rev parent review token acks
+apply_policy() { # apply_policy <INGEST|SERVE> <rules-json>
+  local verb=$1 rules=$2 state rev parent review token acks
   state="$(policy_state)"; rev="${state%% *}"; parent="$(echo "$state" | awk '{print $2}')"
   review="$(gql 'query($input: ReviewMediaPlacementChangeInput!){ reviewMediaPlacementChange(input:$input){ __typename ... on MediaPlacementReview { reviewToken differences { path } warnings { id acknowledgementRequired } } ... on MediaPlacementError { message code fields { path } } } }' \
-    "$(jq -cn --arg rev "$rev" --arg parent "$parent" --argjson rules "$1" '{input:{scope:{kind:"TENANT"},expectedRevision:$rev,expectedParentRevision:$parent,updates:[{verb:"SERVE",kind:"SET",rules:$rules}]}}')")"
+    "$(jq -cn --arg rev "$rev" --arg parent "$parent" --arg verb "$verb" --argjson rules "$rules" '{input:{scope:{kind:"TENANT"},expectedRevision:$rev,expectedParentRevision:$parent,updates:[{verb:$verb,kind:"SET",rules:$rules}]}}')")"
   # Reviewing rules identical to the saved policy is rejected as a no-op change
   # (INVALID_INPUT without field errors); that means the desired policy is already saved.
   if [ "$(echo "$review" | jq -r '.data.reviewMediaPlacementChange | select(.__typename=="MediaPlacementError") | "\(.code) \(.fields|length)"')" = "INVALID_INPUT 0" ]; then
-    log "serve policy already saved at revision $rev; waiting for it to be effective"
+    log "$verb policy already saved at revision $rev; waiting for it to be effective"
   else
   token="$(echo "$review" | jq -r '.data.reviewMediaPlacementChange | if .__typename=="MediaPlacementReview" then .reviewToken else error(.message) end')"
   acks="$(echo "$review" | jq -c '[.data.reviewMediaPlacementChange.warnings[].id]')"
   gql 'mutation($input: ApplyMediaPlacementChangeInput!){ applyMediaPlacementChange(input:$input){ __typename ... on MediaPlacementChange { revision rollout { status } } ... on MediaPlacementError { message } } }' \
-    "$(jq -cn --arg rev "$rev" --arg parent "$parent" --arg token "$token" --arg key "two-cell-$(date +%s%N)" --argjson rules "$1" --argjson acks "$acks" '{input:{scope:{kind:"TENANT"},expectedRevision:$rev,expectedParentRevision:$parent,updates:[{verb:"SERVE",kind:"SET",rules:$rules}],reviewToken:$token,idempotencyKey:$key,acknowledgedWarningIds:$acks}}')" \
+    "$(jq -cn --arg rev "$rev" --arg parent "$parent" --arg token "$token" --arg key "two-cell-$(date +%s%N)" --arg verb "$verb" --argjson rules "$rules" --argjson acks "$acks" '{input:{scope:{kind:"TENANT"},expectedRevision:$rev,expectedParentRevision:$parent,updates:[{verb:$verb,kind:"SET",rules:$rules}],reviewToken:$token,idempotencyKey:$key,acknowledgedWarningIds:$acks}}')" \
     | jq -r '.data.applyMediaPlacementChange | if .__typename=="MediaPlacementChange" then "applied revision \(.revision) rollout \(.rollout.status)" else error(.message) end'
   fi
   # Activation needs every cell to acknowledge the delivery; the proof asserts placement
@@ -174,7 +147,10 @@ apply_serve_policy() { # apply_serve_policy <rules-json>
   # transcodes have starved the dev Postgres for minutes during this proof).
   wait_for 420 "placement rollout to become effective" bash -c "$(declare -f gql policy_state); BRIDGE=$BRIDGE API_TOKEN=$API_TOKEN; [ \"\$(policy_state | awk '{print \$3}')\" = EFFECTIVE ]"
 }
+apply_serve_policy() { apply_policy SERVE "$1"; }
+apply_ingest_policy() { apply_policy INGEST "$1"; }
 PREFER_B_FALLBACK_A='{"schemaVersion":1,"constraints":{"deny":[]},"preferences":{"groups":[{"id":"own","match":{"clusterIds":["demo-selfhosted"]},"spillover":"CAPACITY_ONLY"},{"id":"platform","match":{"clusterIds":["demo-media"]}}]}}'
+INGEST_A_ONLY='{"schemaVersion":1,"constraints":{"deny":[]},"preferences":{"groups":[{"id":"platform-origin","match":{"clusterIds":["demo-media"]},"spillover":"NEVER"}]}}'
 PRIVATE_ONLY='{"schemaVersion":1,"constraints":{"allow":{"any":[{"clusterIds":["demo-selfhosted"]}]},"deny":[]},"preferences":{"groups":[{"id":"own","match":{"clusterIds":["demo-selfhosted"]},"spillover":"NEVER"}]}}'
 # One all-matching group (a selector without fields matches everything): every permitted
 # node forms one pool, so a known good node is used while another is down. Conditional
@@ -182,7 +158,9 @@ PRIVATE_ONLY='{"schemaVersion":1,"constraints":{"allow":{"any":[{"clusterIds":["
 UNRESTRICTED='{"schemaVersion":1,"constraints":{"deny":[]},"preferences":{"groups":[{"id":"any","match":{}}]}}'
 
 mist_a_idle() { # true once Mist A reports no active stream
-  [ "$(compose exec -T mistserver python3 -c 'import urllib.request,json,urllib.parse; cmd=json.dumps({"active_streams":{"fields":["status"]}}); r=urllib.request.urlopen("http://localhost:4242/api2?command="+urllib.parse.quote(cmd), timeout=5); d=json.loads(r.read()); print(len(d["active_streams"].get("data") or {}))' 2>/dev/null)" = 0 ]
+  compose exec -T mistserver curl -fsS --get \
+    --data-urlencode 'command={"active_streams":{"streams":["live+"],"fields":["status"],"longform":true}}' \
+    http://localhost:4242/api2 2>/dev/null | jq -e '(.active_streams // {}) | length == 0' >/dev/null
 }
 stop_publisher() {
   docker rm -f "$PUBLISHER" >/dev/null 2>&1 || true
@@ -209,7 +187,9 @@ publisher_generation() {
 }
 
 mist_a_buffer() {
-  compose exec -T mistserver python3 -c 'import urllib.request,json,urllib.parse; cmd={"active_streams":{"streams":["live+"],"fields":["pid","lastms","inputs"],"longform":True}}; r=urllib.request.urlopen("http://localhost:4242/api2?command="+urllib.parse.quote(json.dumps(cmd)),timeout=5); print(json.dumps(json.loads(r.read())["active_streams"]))'
+  compose exec -T mistserver curl -fsS --get \
+    --data-urlencode 'command={"active_streams":{"streams":["live+"],"fields":["pid","lastms","inputs"],"longform":true}}' \
+    http://localhost:4242/api2 2>/dev/null | jq -c '.active_streams // {}'
 }
 
 # wait_for runs its command in this shell, so the predicate is an ordinary
@@ -251,15 +231,23 @@ fast_reconnect_publisher() {
 }
 start_publisher() {
   stop_publisher
-  local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
+  local network resolved resolved_a resolved_b publish_url; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
   [ -n "$network" ] || fail "compose network not found"
+  resolved_a="$(curl -fsS -m 20 "$FOGHORN_A/ingest/$STREAM_KEY?protocol=rtmp")"
+  resolved_b="$(curl -fsS -m 20 "$FOGHORN_B/ingest/$STREAM_KEY?protocol=rtmp")"
+  for resolved in "$resolved_a" "$resolved_b"; do
+    [ "$(echo "$resolved" | jq -r '.primary.clusterId // empty')" = demo-media ] || fail "RTMP resolver escaped the ingest policy"
+    [ "$(echo "$resolved" | jq -r '.primary.nodeId // empty')" = edge-node-1 ] || fail "RTMP resolver did not select the exact platform origin node"
+  done
+  publish_url="$(echo "$resolved_a" | jq -er '.primary.rtmpUrl | select(type == "string" and length > 0)')" || fail "RTMP resolver returned no publishing URL"
+  [ "$publish_url" = "$(echo "$resolved_b" | jq -er '.primary.rtmpUrl')" ] || fail "control cells disagreed on the RTMP publishing destination"
   # The push is retried: a rejection while an edge is still registering must not end the
   # publisher, and step 8 relies on it reconnecting after the container is removed.
   # no_metadata: ffmpeg's FLV onMetaData becomes a one-frame JSON track in Mist whose
   # single multi-minute frame keeps the stream buffer classified DRY, so no placement
   # publisher claim ever becomes present.
-  docker run -d --name "$PUBLISHER" --network "$network" --entrypoint sh "$MIST_IMAGE" -c \
-    "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac /tmp/source.mp4 && while true; do ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /tmp/source.mp4 -map 0:v:0 -map 0:a:0 -c copy -flvflags no_metadata -f flv rtmp://mistserver:1935/live/$STREAM_KEY; sleep 3; done" >/dev/null
+  docker run -d --name "$PUBLISHER" --network "$network" -e PUBLISH_URL="$publish_url" --entrypoint sh "$MIST_IMAGE" -c \
+    'ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac /tmp/source.mp4 && while true; do ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /tmp/source.mp4 -map 0:v:0 -map 0:a:0 -c copy -flvflags no_metadata -f flv "$PUBLISH_URL"; sleep 3; done' >/dev/null
 }
 edge_location_is() { # edge_location_is <foghorn> <edge-host>
   local loc; loc="$(resolve_location "$1")"; [[ "$loc" == *"$2"* ]]
@@ -332,8 +320,9 @@ wait_for 420 "cell B to learn cell A's Foghorn address" peer_hints_ready framewo
 
 log "4/9 prefer the private cell for viewers, spilling to the platform cluster only on capacity"
 apply_serve_policy "$PREFER_B_FALLBACK_A"
+apply_ingest_policy "$INGEST_A_ONLY"
 
-log "5/9 publish into cell A; viewers arriving at either cell must land on the private edge in cell B with real media"
+log "5/9 resolve ingest through both cells and publish into cell A; viewers arriving at either cell must land on the private edge in cell B with real media"
 start_publisher
 # The policy prefers the private cluster, so cell A must hand its viewer to cell B's edge
 # (cross-cell discovery) rather than substituting its own local node.

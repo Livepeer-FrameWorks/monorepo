@@ -109,7 +109,7 @@ services:
       - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
       - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     networks:
       - frameworks
     ulimits:
