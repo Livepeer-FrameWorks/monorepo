@@ -125,6 +125,20 @@ When release-plan emits `carry_forward` decisions, surface them honestly:
 
 Run these before writing a single bullet.
 
+Before creating a platform tag, commit the new release entry and all schema or
+migration changes, then use the guarded tag path:
+
+    make release-preflight RELEASE_VERSION=vX.Y.Z
+    make release-tag RELEASE_VERSION=vX.Y.Z
+    git push origin vX.Y.Z
+
+`release-preflight` requires the target to be the latest entry in
+`cli/internal/releases/catalog.yaml`, verifies that the release-controlled files
+are committed, validates tag/catalog/migration state, and asks the CLI to emit
+the target's compatibility metadata. `release-tag` repeats that preflight before
+creating an annotated local tag; it never pushes. The tag-triggered release
+workflow runs the same preflight before release planning or artifact builds.
+
 0.  **Read the previous release.** Pulls in the exact tone and structure so this release matches the last one. Either:
 
         gh release view <prev-tag>
