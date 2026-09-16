@@ -65,7 +65,8 @@ User-facing VOD upload flow: GraphQL → Commodore → Foghorn → S3 presign.
 - Full transcoding pipeline (separate RFC: processing-orchestration)
 - Content moderation/scanning
 - Container/track validation: the processing pipeline already establishes it (Current State, item 4)
-- Changing the presigned URL architecture (it's correct for this use case)
+- Replacing presigned direct-to-S3 upload. This RFC hardens the shipped path;
+  [`edge-terminated-vod-upload.md`](edge-terminated-vod-upload.md) drafts the replacement separately.
 
 ## Proposal
 
@@ -103,7 +104,7 @@ store-side backstop under the in-app abort/complete recovery jobs, plus a max ob
 
 ## Alternatives Considered
 
-- **Proxy uploads through backend**: Higher cost, latency, scaling burden. Presigned URLs are correct for video.
+- **Proxy uploads through a control-plane service**: puts media bytes on Foghorn or the Gateway. Terminating uploads on a processing-capable edge node is drafted in [`edge-terminated-vod-upload.md`](edge-terminated-vod-upload.md).
 - **S3 condition keys on presign**: AWS SDK v2's `PresignUploadPart` doesn't support Content-Length conditions for multipart. Only works for single-part PutObject.
 - **Client-side validation only**: Easily bypassed, provides no security.
 
