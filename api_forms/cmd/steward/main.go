@@ -28,11 +28,13 @@ func main() {
 	turnstileKey := config.GetEnv("TURNSTILE_FORMS_SECRET_KEY", "")
 
 	emailConfig := email.Config{
-		Host:     config.GetEnv("SMTP_HOST", ""),
-		Port:     config.GetEnv("SMTP_PORT", "587"),
-		User:     config.GetEnv("SMTP_USER", ""),
-		Password: config.GetEnv("SMTP_PASSWORD", ""),
-		From:     config.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
+		Host:          config.GetEnv("SMTP_HOST", ""),
+		Port:          config.GetEnv("SMTP_PORT", "587"),
+		User:          config.GetEnv("SMTP_USER", ""),
+		Password:      config.GetEnv("SMTP_PASSWORD", ""),
+		From:          config.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
+		FromName:      config.GetEnv("FROM_NAME", "FrameWorks"),
+		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
 	}
 	emailSender := email.NewSender(emailConfig)
 

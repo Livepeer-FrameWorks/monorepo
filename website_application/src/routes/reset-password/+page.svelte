@@ -6,6 +6,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { SvelteURLSearchParams } from "svelte/reactivity";
 
   let token = $state("");
   let password = $state("");
@@ -20,7 +21,16 @@
   const AlertTriangleIcon = getIconComponent("AlertTriangle");
 
   onMount(() => {
-    token = page.url.searchParams.get("token") || "";
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    token = fragment.get("token") ?? page.url.searchParams.get("token") ?? "";
+    const cleanParams = new SvelteURLSearchParams(page.url.searchParams);
+    cleanParams.delete("token");
+    const cleanSearch = cleanParams.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      page.url.pathname + (cleanSearch ? `?${cleanSearch}` : "")
+    );
     if (!token) {
       error = "No reset token provided. Please request a new password reset link.";
     }
@@ -65,6 +75,7 @@
 
 <svelte:head>
   <title>Reset Password - FrameWorks</title>
+  <meta name="referrer" content="no-referrer" />
 </svelte:head>
 
 <section class="min-h-full bg-brand-surface-muted flex items-center justify-center p-4 sm:p-8">

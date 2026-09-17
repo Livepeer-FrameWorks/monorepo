@@ -256,6 +256,7 @@ func TestEmailDeliveryThroughSMTPToEveryRecipient(t *testing.T) {
 	t.Setenv("SMTP_PORT", port)
 	t.Setenv("SMTP_USER", "")
 	t.Setenv("SMTP_PASSWORD", "")
+	t.Setenv("SMTP_ALLOW_INSECURE", "true")
 	t.Setenv("FROM_EMAIL", "lookout@example.test")
 	t.Setenv(config.EnvNotifyEmailTo, "oncall@example.test, lead@example.test")
 	d := &Dispatcher{Channels: Router{}, Mailer: SMTPMailer}
@@ -275,8 +276,8 @@ func TestEmailDeliveryThroughSMTPToEveryRecipient(t *testing.T) {
 			if !strings.Contains(msg.Data, "[Lookout] [CRITICAL] Edge node down") {
 				t.Fatalf("message lacks subject: %q", msg.Data)
 			}
-			if strings.Contains(msg.Data, "<b>down</b>") {
-				t.Fatal("email body is not HTML-escaped")
+			if !strings.Contains(msg.Data, "&lt;b&gt;down&lt;/b&gt;") {
+				t.Fatal("HTML alternative does not escape incident content")
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for SMTP message")

@@ -3,13 +3,15 @@ package notify
 import (
 	"encoding/json"
 	"fmt"
-	"html"
+	"html/template"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"frameworks/api_incidents/internal/incidents"
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
 const (
@@ -163,27 +165,44 @@ func discordBody(m message) ([]byte, error) {
 	})
 }
 
-func emailContent(m message) (subject, body string) {
+func emailContent(m message) (subject, body string, err error) {
 	subject = truncate("[Lookout] "+m.Headline, 200)
-	var b strings.Builder
-	b.WriteString("<h2>")
-	b.WriteString(html.EscapeString(m.Headline))
-	b.WriteString("</h2>")
-	if m.Summary != "" {
-		b.WriteString("<p>")
-		b.WriteString(html.EscapeString(m.Summary))
-		b.WriteString("</p>")
+	status := "Incident update"
+	if strings.HasPrefix(m.Headline, "[RESOLVED]") {
+		status = "Incident resolved"
+	} else if strings.HasPrefix(m.Headline, "[CRITICAL]") {
+		status = "Critical incident"
 	}
-	b.WriteString("<table>")
-	for _, f := range m.Fields {
-		fmt.Fprintf(&b, "<tr><th align=\"left\">%s</th><td>%s</td></tr>", html.EscapeString(f.Name), html.EscapeString(f.Value))
-	}
-	b.WriteString("</table>")
-	if m.Link != "" {
-		fmt.Fprintf(&b, "<p><a href=\"%s\">Open incident</a></p>", html.EscapeString(m.Link))
-	}
-	return subject, b.String()
+	body, err = emailpkg.RenderLayout(emailpkg.LayoutData{
+		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		Preheader:    m.Headline,
+		Eyebrow:      "Lookout · " + status,
+		Title:        m.Headline,
+		SupportEmail: incidentSupportEmail(),
+		Content:      m,
+	}, incidentEmailTemplate, template.FuncMap{
+		"action": func() emailpkg.Action {
+			return emailpkg.Action{URL: m.Link, Label: "Open incident"}
+		},
+	})
+	return subject, body, err
 }
+
+func incidentSupportEmail() string {
+	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
+		return supportEmail
+	}
+	return "support@frameworks.network"
+}
+
+const incidentEmailTemplate = `{{if .Summary}}<p style="margin:0 0 20px; color:#24283b; font-size:15px; line-height:23px;">{{.Summary}}</p>{{end}}
+{{if .Fields}}<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin:20px 0; font-size:13px;">
+  {{range .Fields}}<tr>
+    <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0; background:#f7fafb;">{{.Name}}</th>
+    <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Value}}</td>
+  </tr>{{end}}
+</table>{{end}}
+{{template "action" action}}`
 
 // slackEscape escapes the three characters Slack mrkdwn treats as control
 // sequences.

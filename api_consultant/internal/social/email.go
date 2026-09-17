@@ -1,11 +1,11 @@
 package social
 
 import (
-	"bytes"
 	"fmt"
-	"html/template"
+	"os"
 	"strings"
 
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -20,15 +20,14 @@ func renderSocialEmail(post PostRecord) (string, error) {
 		GeneratedAt:    post.CreatedAt.UTC().Format("January 2, 2006 at 3:04 PM UTC"),
 	}
 
-	tpl, err := template.New("social_draft").Parse(socialEmailTemplate)
-	if err != nil {
-		return "", fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execute template: %w", err)
-	}
-	return buf.String(), nil
+	return emailpkg.RenderLayout(emailpkg.LayoutData{
+		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		Preheader:    "Skipper prepared a social post draft for review.",
+		Eyebrow:      "Social publishing",
+		Title:        "Social post draft",
+		SupportEmail: socialSupportEmail(),
+		Content:      data,
+	}, socialEmailTemplate, nil)
 }
 
 type socialEmailData struct {
@@ -80,45 +79,38 @@ func formatDataPoints(data map[string]any) []string {
 	return points
 }
 
-const socialEmailTemplate = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>Social Post Draft</title></head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0;">
-<div style="max-width: 640px; margin: 0 auto; padding: 24px;">
+func socialSupportEmail() string {
+	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
+		return supportEmail
+	}
+	return "support@frameworks.network"
+}
 
-<div style="background-color: #1DA1F2; color: white; padding: 14px 20px; border-radius: 6px; margin-bottom: 20px;">
-    <strong>FrameWorks — Social Post Draft</strong>
-</div>
+const socialEmailTemplate = `<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Skipper drafted a post for you. Review the text below, then copy it into X when you are ready.</p>
 
-<p>Skipper drafted a tweet for you. Copy the text below and post it on X.</p>
-
-<div style="background-color: #f8f9fa; border: 2px solid #1DA1F2; border-radius: 8px; padding: 20px; margin: 20px 0; font-size: 16px; line-height: 1.5;">
+<div style="background:#f7fafb; border-left:3px solid #0f4b6e; padding:18px; margin:20px 0; color:#24283b; font-size:16px; line-height:24px;">
     {{.TweetText}}
 </div>
 
-<p style="color: #6c757d; font-size: 13px; margin-top: -10px;">
+<p style="color:#667085; font-size:12px; line-height:18px; margin:0 0 22px;">
     {{.TweetLength}}/280 characters
 </p>
 
-<h3 style="color: #2c3e50; margin-top: 24px;">Why this post?</h3>
-<p>{{.ContextSummary}}</p>
+<h2 style="color:#24283b; margin:28px 0 12px; font-size:18px; line-height:24px;">Why this post?</h2>
+<p style="margin:0 0 18px; color:#24283b; font-size:14px; line-height:21px;">{{.ContextSummary}}</p>
 
 {{if .DataPoints}}
-<h3 style="color: #2c3e50; margin-top: 24px;">Supporting data</h3>
-<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+<h2 style="color:#24283b; margin:28px 0 12px; font-size:18px; line-height:24px;">Supporting data</h2>
+<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin-bottom:20px;">
     {{range .DataPoints}}
     <tr>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #eee; font-size: 14px;">{{.}}</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e7edf0; color:#24283b; font-size:13px; line-height:19px;">{{.}}</td>
     </tr>
     {{end}}
 </table>
 {{end}}
 
-<p style="color: #6c757d; font-size: 12px; margin-top: 30px;">
+<p style="color:#667085; font-size:12px; line-height:18px; margin-top:28px;">
     Generated at {{.GeneratedAt}}<br>
     Category: {{.ContentType}}
-</p>
-
-</div>
-</body>
-</html>`
+</p>`

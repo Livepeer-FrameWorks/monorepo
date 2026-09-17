@@ -12,9 +12,24 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type recoveryTurnstileStub struct {
+	response *turnstile.VerifyResponse
+	err      error
+	token    string
+	remoteIP string
+}
+
+func (s *recoveryTurnstileStub) Verify(_ context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error) {
+	s.token = token
+	s.remoteIP = remoteIP
+	return s.response, s.err
+}
 
 // goodBehavior is a bot-check payload that passes validateBehavior: a clicked
 // human checkbox, no honeypot, and a >=3s human-plausible interaction.
@@ -103,6 +118,134 @@ func TestVerifyEmailKeepsIdentityPendingUntilFreeSetupSucceeds(t *testing.T) {
 	wantCode(t, err, codes.Unavailable)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("verification must not clear the token before Free setup: %v", err)
+	}
+}
+
+func TestResendVerificationDoesNotRevealAccountState(t *testing.T) {
+	tests := []struct {
+		name string
+		rows *sqlmock.Rows
+		err  error
+	}{
+		{name: "unknown", err: sql.ErrNoRows},
+		{name: "verified", rows: sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", true, nil)},
+		{name: "cooldown", rows: sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", false, time.Now().Add(24*time.Hour))},
+	}
+	var wantMessage string
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s, mock, done := newMockServer(t)
+			defer done()
+			expectation := mock.ExpectQuery("SELECT id, COALESCE\\(verified").WithArgs("user@example.com")
+			if test.err != nil {
+				expectation.WillReturnError(test.err)
+			} else {
+				expectation.WillReturnRows(test.rows)
+			}
+			resp, err := s.ResendVerification(context.Background(), &commodorepb.ResendVerificationRequest{Email: "user@example.com"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.GetSuccess() {
+				t.Fatalf("response = %#v, want generic success", resp)
+			}
+			if wantMessage == "" {
+				wantMessage = resp.GetMessage()
+			} else if resp.GetMessage() != wantMessage {
+				t.Fatalf("message = %q, want %q", resp.GetMessage(), wantMessage)
+			}
+		})
+	}
+}
+
+func TestResendVerificationCooldownIsAtomic(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	mock.ExpectQuery("SELECT id, COALESCE\\(verified").
+		WithArgs("user@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", false, time.Now()))
+	mock.ExpectExec("UPDATE commodore.users.*token_expires_at <=").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	resp, err := s.ResendVerification(context.Background(), &commodorepb.ResendVerificationRequest{Email: "user@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.GetSuccess() || !strings.Contains(resp.GetMessage(), "if an account exists") {
+		t.Fatalf("response = %#v, want generic success", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestForgotPasswordPersistsPerAccountCooldown(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+		WithArgs("user@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("user-1"))
+	mock.ExpectExec("UPDATE commodore.users.*reset_token_expires <=").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	resp, err := s.ForgotPassword(context.Background(), &commodorepb.ForgotPasswordRequest{Email: "user@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.GetSuccess() || !strings.Contains(resp.GetMessage(), "if an account exists") {
+		t.Fatalf("response = %#v, want generic success", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResetPasswordRejectsTokenConsumedDuringHashing(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	mock.ExpectQuery("SELECT id FROM commodore.users WHERE reset_token").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("user-1"))
+	mock.ExpectExec("UPDATE commodore.users.*reset_token =").
+		WithArgs(sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	resp, err := s.ResetPassword(context.Background(), &commodorepb.ResetPasswordRequest{
+		Token:    "already-consumed",
+		Password: "new password with enough entropy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetSuccess() || !strings.Contains(resp.GetMessage(), "invalid or expired") {
+		t.Fatalf("response = %#v, want consumed-token rejection", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoveryTurnstileIsRequiredWhenConfigured(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	validator := &recoveryTurnstileStub{response: &turnstile.VerifyResponse{Success: true}}
+	s.turnstileValidator = validator
+
+	_, err := s.ForgotPassword(context.Background(), &commodorepb.ForgotPasswordRequest{Email: "user@example.com"})
+	wantCode(t, err, codes.PermissionDenied)
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-client-ip", "203.0.113.10"))
+	mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+		WithArgs("user@example.com").
+		WillReturnError(sql.ErrNoRows)
+	resp, err := s.ForgotPassword(ctx, &commodorepb.ForgotPasswordRequest{Email: "user@example.com", TurnstileToken: "proof"})
+	if err != nil || !resp.GetSuccess() {
+		t.Fatalf("response = %#v, error = %v", resp, err)
+	}
+	if validator.token != "proof" || validator.remoteIP != "203.0.113.10" {
+		t.Fatalf("validator received token %q and IP %q", validator.token, validator.remoteIP)
 	}
 }
 

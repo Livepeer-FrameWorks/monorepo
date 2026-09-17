@@ -1,11 +1,13 @@
 package heartbeat
 
 import (
-	"bytes"
 	"fmt"
 	"html/template"
+	"os"
 	"strings"
 	"time"
+
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
 func renderInfraAlertEmail(alerts []InfraAlert) (string, error) {
@@ -56,15 +58,18 @@ func renderInfraAlertEmail(alerts []InfraAlert) (string, error) {
 		},
 	}
 
-	tpl, err := template.New("infra_alert").Funcs(funcs).Parse(infraAlertTemplate)
-	if err != nil {
-		return "", err
+	title := "Infrastructure warning"
+	if severity == "CRITICAL" {
+		title = "Critical infrastructure alert"
 	}
-	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return emailpkg.RenderLayout(emailpkg.LayoutData{
+		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		Preheader:    fmt.Sprintf("%s infrastructure alert for %s/%s.", severity, data.ClusterName, data.NodeID),
+		Eyebrow:      "Infrastructure",
+		Title:        title,
+		SupportEmail: infraSupportEmail(),
+		Content:      data,
+	}, infraAlertTemplate, funcs)
 }
 
 type infraEmailData struct {
@@ -88,8 +93,8 @@ func collectActionItems(alerts []InfraAlert) []string {
 		items = append(items, actionItemsFor(a.AlertType)...)
 	}
 	items = append(items,
-		"Run <code>frameworks edge doctor</code> to diagnose the node.",
-		"Check <code>frameworks edge logs</code> for service errors.",
+		"Run frameworks edge doctor to diagnose the node.",
+		"Check frameworks edge logs for service errors.",
 	)
 	return items
 }
@@ -138,53 +143,55 @@ func infraAlertSubject(alerts []InfraAlert) string {
 		severity, a.ClusterName, a.NodeID, strings.Join(issues, ", "))
 }
 
-const infraAlertTemplate = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>Infrastructure Alert</title></head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0;">
-<div style="max-width: 640px; margin: 0 auto; padding: 24px;">
+func infraSupportEmail() string {
+	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
+		return supportEmail
+	}
+	return "support@frameworks.network"
+}
 
+const infraAlertTemplate = `
 {{if eq .Severity "CRITICAL"}}
-<div style="background-color: #e74c3c; color: white; padding: 14px 20px; border-radius: 6px; margin-bottom: 20px;">
-    <strong>CRITICAL Infrastructure Alert</strong>
+<div style="background:#fff1f1; color:#7c3030; padding:13px 15px; border-left:3px solid #b74242; margin-bottom:20px; font-size:14px; line-height:21px;">
+    <strong>Immediate attention required</strong>
 </div>
 {{else}}
-<div style="background-color: #e67e22; color: white; padding: 14px 20px; border-radius: 6px; margin-bottom: 20px;">
-    <strong>Infrastructure Warning</strong>
+<div style="background:#fff8e8; color:#6f4a16; padding:13px 15px; border-left:3px solid #a66b16; margin-bottom:20px; font-size:14px; line-height:21px;">
+    <strong>Review this node soon</strong>
 </div>
 {{end}}
 
-<p>An infrastructure issue was detected on your cluster.</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">An infrastructure issue was detected on your cluster.</p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-    <tr style="background-color: #eef1f5;">
-        <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ddd;">Cluster</th>
-        <td style="padding: 10px; border-bottom: 2px solid #ddd;"><strong>{{.ClusterName}}</strong> ({{.ClusterID}})</td>
+<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin:20px 0; font-size:13px;">
+    <tr style="background:#eef5f8;">
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #ccdde5;">Cluster</th>
+        <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #ccdde5;"><strong>{{.ClusterName}}</strong> ({{.ClusterID}})</td>
     </tr>
     <tr>
-        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #eee;">Node</th>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;"><code>{{.NodeID}}</code></td>
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #e7edf0;">Node</th>
+        <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;"><code>{{.NodeID}}</code></td>
     </tr>
 </table>
 
-<h3 style="color: #2c3e50; margin-top: 24px;">Issues Detected</h3>
-<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-    <tr style="background-color: #eef1f5;">
-        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Resource</th>
-        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Current</th>
-        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Threshold</th>
-        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Status</th>
+<h2 style="color:#24283b; margin:28px 0 12px; font-size:18px; line-height:24px;">Issues detected</h2>
+<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:13px;">
+    <tr style="background:#eef5f8;">
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #ccdde5;">Resource</th>
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #ccdde5;">Current</th>
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #ccdde5;">Threshold</th>
+        <th style="padding:9px 10px; text-align:left; color:#3d4a68; border-bottom:1px solid #ccdde5;">Status</th>
     </tr>
     {{range .Alerts}}
     <tr>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">{{alertLabel .}}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;"><strong>{{formatPercent .Current}}</strong></td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee;">{{formatPercent .Threshold}}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee; color: {{severityColor .}}; font-weight: bold;">{{.Severity}}</td>
+        <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{alertLabel .}}</td>
+        <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;"><strong>{{formatPercent .Current}}</strong></td>
+        <td style="padding:9px 10px; color:#24283b; border-bottom:1px solid #e7edf0;">{{formatPercent .Threshold}}</td>
+        <td style="padding:9px 10px; border-bottom:1px solid #e7edf0; color:{{severityColor .}}; font-weight:bold;">{{.Severity}}</td>
     </tr>
     {{if hasBaseline .}}
-    <tr style="background-color: #fafafa;">
-        <td colspan="4" style="padding: 6px 10px; border-bottom: 1px solid #eee; color: #6c757d; font-size: 12px;">
+    <tr style="background:#f7fafb;">
+        <td colspan="4" style="padding:6px 10px; border-bottom:1px solid #e7edf0; color:#667085; font-size:11px; line-height:16px;">
             Baseline average: {{formatPercent .Baseline}}
         </td>
     </tr>
@@ -193,19 +200,15 @@ const infraAlertTemplate = `<!DOCTYPE html>
 </table>
 
 {{if .ActionItems}}
-<h3 style="color: #2c3e50; margin-top: 24px;">What To Do</h3>
+<h2 style="color:#24283b; margin:28px 0 12px; font-size:18px; line-height:24px;">What to do</h2>
 <ul style="padding-left: 20px;">
     {{range .ActionItems}}
-    <li style="margin-bottom: 8px;">{{.}}</li>
+    <li style="margin-bottom:8px; color:#24283b; font-size:14px; line-height:21px;">{{.}}</li>
     {{end}}
 </ul>
 {{end}}
 
-<p style="color: #6c757d; font-size: 12px; margin-top: 30px;">
+<p style="color:#667085; font-size:12px; line-height:18px; margin-top:28px;">
     Detected at {{.DetectedAt.Format "January 2, 2006 at 3:04 PM UTC"}}<br>
     This alert will not repeat for 4 hours.
-</p>
-
-</div>
-</body>
-</html>`
+</p>`

@@ -948,6 +948,40 @@ func TestPublicOperationRateLimitMiddlewareNeverReturnsPaymentChallenge(t *testi
 	}
 }
 
+func TestPublicOperationRateLimitMiddlewareWithLimitsUsesIsolatedOperationBucket(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+	router := gin.New()
+	router.POST("/forgot", PublicOperationRateLimitMiddlewareWithLimits(rl, nil, "forgotPassword", 1, 1), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/resend", PublicOperationRateLimitMiddlewareWithLimits(rl, nil, "resendVerification", 1, 1), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	for requestNumber := 1; requestNumber <= 3; requestNumber++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/forgot", nil)
+		request.RemoteAddr = "203.0.113.9:1234"
+		router.ServeHTTP(recorder, request)
+		if requestNumber <= 2 && recorder.Code != http.StatusNoContent {
+			t.Fatalf("forgot request %d status = %d", requestNumber, recorder.Code)
+		}
+		if requestNumber == 3 && recorder.Code != http.StatusTooManyRequests {
+			t.Fatalf("forgot request %d status = %d, want 429", requestNumber, recorder.Code)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/resend", nil)
+	request.RemoteAddr = "203.0.113.9:1234"
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("isolated resend bucket status = %d", recorder.Code)
+	}
+}
+
 func TestEvaluateAccessRateLimitAddsDocumentation(t *testing.T) {
 	rl := NewRateLimiter(RateLimitConfig{})
 	defer rl.Stop()

@@ -173,7 +173,7 @@ type CommodoreServer struct {
 	decklogClient            *decklogclient.BatchedClient
 	defaultMailingListID     int
 	metrics                  *ServerMetrics
-	turnstileValidator       *turnstile.Validator
+	turnstileValidator       turnstileVerifier
 	turnstileFailOpen        bool
 	passwordResetSecret      []byte
 	fieldEncryptor           fieldcrypt.FieldCipher
@@ -212,6 +212,10 @@ type CommodoreServer struct {
 	// each cell via Quartermaster service discovery (resolveFoghornForClusterDirect); wired tests inject a deterministic
 	// fake so the full claim→dispatch→retry→finalize loop can run over real Postgres without a live Foghorn.
 	streamThumbnailDeleteFn func(ctx context.Context, streamID, tenantID, clusterID string) error
+}
+
+type turnstileVerifier interface {
+	Verify(ctx context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error)
 }
 
 func (s *CommodoreServer) observeFieldDecryptFailure(purpose, stored string) {
@@ -5444,9 +5448,19 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 
 	// Mark verified only after the idempotent Free account exists. If this
 	// update fails, the still-valid token can safely retry the same tenant.
-	err = queries.VerifyUserEmail(ctx, commodoredb.VerifyUserEmailParams(verificationUser))
+	rowsAffected, err := queries.VerifyUserEmail(ctx, commodoredb.VerifyUserEmailParams{
+		ID:                verificationUser.ID,
+		TenantID:          verificationUser.TenantID,
+		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to verify email: %v", err)
+	}
+	if rowsAffected == 0 {
+		return &commodorepb.VerifyEmailResponse{
+			Success: false,
+			Message: "invalid or expired verification token",
+		}, nil
 	}
 
 	return &commodorepb.VerifyEmailResponse{
@@ -5462,26 +5476,8 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 		return nil, status.Error(codes.InvalidArgument, "email required")
 	}
 
-	// Optional Turnstile verification (if configured)
-	if s.turnstileValidator != nil && req.GetTurnstileToken() != "" {
-		clientIP := ""
-		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			if ips := md.Get("x-client-ip"); len(ips) > 0 {
-				clientIP = ips[0]
-			} else if ips := md.Get("x-forwarded-for"); len(ips) > 0 {
-				clientIP = strings.Split(ips[0], ",")[0]
-			}
-		}
-
-		turnstileResp, err := s.turnstileValidator.Verify(ctx, req.GetTurnstileToken(), clientIP)
-		if err != nil {
-			s.logger.WithError(err).Warn("Turnstile verification request failed")
-			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
-			}
-		} else if !turnstileResp.Success {
-			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
-		}
+	if err := s.verifyRecoveryTurnstile(ctx, req.GetTurnstileToken()); err != nil {
+		return nil, err
 	}
 
 	// Find user by email
@@ -5489,11 +5485,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	resendUser, err := queries.GetVerificationResendUser(ctx, sql.NullString{String: email, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		// Don't reveal if email exists - return success anyway
-		return &commodorepb.ResendVerificationResponse{
-			Success: true,
-			Message: "if an account exists with that email and is unverified, a new verification link will be sent",
-		}, nil
+		return genericResendVerificationResponse(), nil
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -5501,10 +5493,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 
 	// Already verified
 	if resendUser.Verified {
-		return &commodorepb.ResendVerificationResponse{
-			Success: false,
-			Message: "email is already verified",
-		}, nil
+		return genericResendVerificationResponse(), nil
 	}
 
 	// Rate limiting: check if token was generated within last 5 minutes
@@ -5512,10 +5501,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 		// Token expiry is 24h from creation, so creation time is expiry - 24h
 		tokenCreatedAt := resendUser.TokenExpiresAt.Time.Add(-24 * time.Hour)
 		if time.Since(tokenCreatedAt) < 5*time.Minute {
-			return &commodorepb.ResendVerificationResponse{
-				Success: false,
-				Message: "please wait a few minutes before requesting another verification email",
-			}, nil
+			return genericResendVerificationResponse(), nil
 		}
 	}
 
@@ -5528,13 +5514,17 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
 	// Update user with new token
-	err = queries.UpdateVerificationToken(ctx, commodoredb.UpdateVerificationTokenParams{
+	rowsAffected, err := queries.UpdateVerificationTokenIfAllowed(ctx, commodoredb.UpdateVerificationTokenIfAllowedParams{
 		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
 		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
 		ID:                resendUser.ID,
+		CooldownCutoff:    sql.NullTime{Time: time.Now().Add(23*time.Hour + 55*time.Minute), Valid: true},
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
+	}
+	if rowsAffected == 0 {
+		return genericResendVerificationResponse(), nil
 	}
 
 	// Send verification email
@@ -5544,11 +5534,8 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 			"email":   email,
 			"error":   err,
 		}).Error("Failed to send verification email")
-		//nolint:nilerr // error returned in response message, not as Go error
-		return &commodorepb.ResendVerificationResponse{
-			Success: false,
-			Message: "failed to send verification email, please try again later",
-		}, nil
+		//nolint:nilerr // the public response must not reveal delivery or account state
+		return genericResendVerificationResponse(), nil
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5556,10 +5543,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 		"email":   email,
 	}).Info("Verification email resent")
 
-	return &commodorepb.ResendVerificationResponse{
-		Success: true,
-		Message: "verification email sent",
-	}, nil
+	return genericResendVerificationResponse(), nil
 }
 
 // ForgotPassword initiates the password reset flow
@@ -5568,16 +5552,15 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.F
 	if email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email required")
 	}
+	if err := s.verifyRecoveryTurnstile(ctx, req.GetTurnstileToken()); err != nil {
+		return nil, err
+	}
 
 	// Check if user exists
 	queries := commodoredb.New(s.db)
 	userID, err := queries.FindUserIDByEmail(ctx, sql.NullString{String: email, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
-		// Don't reveal whether email exists - always return success
-		return &commodorepb.ForgotPasswordResponse{
-			Success: true,
-			Message: "if an account exists with that email, a reset link will be sent",
-		}, nil
+		return genericForgotPasswordResponse(), nil
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -5589,16 +5572,20 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.F
 		return nil, status.Errorf(codes.Internal, "failed to generate reset token: %v", err)
 	}
 	resetTokenHash := s.hashTokenWithSecret(resetToken)
-	expiresAt := time.Now().Add(1 * time.Hour)
+	now := time.Now()
+	expiresAt := now.Add(1 * time.Hour)
 
-	// Store hashed reset token
-	err = queries.SetPasswordResetToken(ctx, commodoredb.SetPasswordResetTokenParams{
+	rowsAffected, err := queries.SetPasswordResetTokenIfAllowed(ctx, commodoredb.SetPasswordResetTokenIfAllowedParams{
 		ResetToken:        sql.NullString{String: resetTokenHash, Valid: true},
 		ResetTokenExpires: sql.NullTime{Time: expiresAt, Valid: true},
 		ID:                userID,
+		CooldownCutoff:    sql.NullTime{Time: now.Add(55 * time.Minute), Valid: true},
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create reset token: %v", err)
+	}
+	if rowsAffected == 0 {
+		return genericForgotPasswordResponse(), nil
 	}
 
 	// Send password reset email
@@ -5616,10 +5603,50 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.F
 		}).Info("Password reset email sent")
 	}
 
+	return genericForgotPasswordResponse(), nil
+}
+
+func (s *CommodoreServer) verifyRecoveryTurnstile(ctx context.Context, token string) error {
+	if s.turnstileValidator == nil {
+		return nil
+	}
+	if strings.TrimSpace(token) == "" {
+		return status.Error(codes.PermissionDenied, "bot verification failed")
+	}
+	clientIP := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ips := md.Get("x-client-ip"); len(ips) > 0 {
+			clientIP = ips[0]
+		} else if ips := md.Get("x-forwarded-for"); len(ips) > 0 {
+			clientIP = strings.TrimSpace(strings.Split(ips[0], ",")[0])
+		}
+	}
+	turnstileResp, err := s.turnstileValidator.Verify(ctx, token, clientIP)
+	if err != nil {
+		s.logger.WithError(err).Warn("Turnstile verification request failed")
+		if s.turnstileFailOpen {
+			return nil
+		}
+		return status.Error(codes.PermissionDenied, "bot verification failed")
+	}
+	if !turnstileResp.Success {
+		return status.Error(codes.PermissionDenied, "bot verification failed")
+	}
+	return nil
+}
+
+func genericResendVerificationResponse() *commodorepb.ResendVerificationResponse {
+	return &commodorepb.ResendVerificationResponse{
+		Success: true,
+		Message: "if an account exists with that email and is unverified, a new verification link will be sent",
+	}
+}
+
+func genericForgotPasswordResponse() *commodorepb.ForgotPasswordResponse {
 	return &commodorepb.ForgotPasswordResponse{
 		Success: true,
 		Message: "if an account exists with that email, a reset link will be sent",
-	}, nil
+	}
 }
 
 // ResetPassword resets a user's password with a valid token
@@ -5654,12 +5681,20 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.Re
 		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
 	}
 
-	// Update password and clear reset token
-	err = queries.ResetUserPassword(ctx, commodoredb.ResetUserPasswordParams{
-		PasswordHash: sql.NullString{String: hashedPassword, Valid: true}, ID: userID,
+	// Update password only if this token is still valid, then consume it.
+	rowsAffected, err := queries.ResetUserPassword(ctx, commodoredb.ResetUserPasswordParams{
+		PasswordHash: sql.NullString{String: hashedPassword, Valid: true},
+		ID:           userID,
+		ResetToken:   sql.NullString{String: tokenHash, Valid: true},
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update password: %v", err)
+	}
+	if rowsAffected == 0 {
+		return &commodorepb.ResetPasswordResponse{
+			Success: false,
+			Message: "invalid or expired reset token",
+		}, nil
 	}
 
 	return &commodorepb.ResetPasswordResponse{
@@ -9666,30 +9701,30 @@ func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
 		fromEmail = "noreply@frameworks.network"
 	}
 
-	baseURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
-	if baseURL == "" {
-		return fmt.Errorf("WEBAPP_PUBLIC_URL is required")
+	baseURL, err := validatedAccountEmailBaseURL(os.Getenv("WEBAPP_PUBLIC_URL"))
+	if err != nil {
+		return err
 	}
-	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, url.QueryEscape(token))
+	message, err := renderVerificationEmail(baseURL, token)
+	if err != nil {
+		return err
+	}
 
-	subject := "Verify your FrameWorks account"
-	body := fmt.Sprintf(`
-<!DOCTYPE html><html><body>
-  <p>Welcome to FrameWorks!</p>
-  <p>Please <a href="%s">click here to verify your email address</a>.</p>
-  <p>This link expires in 24 hours.</p>
-  <p>If you did not create an account, you can ignore this email.</p>
-</body></html>`, verifyURL)
-
+	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
+	if fromName == "" {
+		fromName = "FrameWorks"
+	}
 	sender := emailpkg.NewSender(emailpkg.Config{
-		Host:     smtpHost,
-		Port:     smtpPort,
-		User:     smtpUser,
-		Password: smtpPass,
-		From:     fromEmail,
-		FromName: os.Getenv("FROM_NAME"),
+		Host:          smtpHost,
+		Port:          smtpPort,
+		User:          smtpUser,
+		Password:      smtpPass,
+		From:          fromEmail,
+		FromName:      fromName,
+		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
 	})
-	return sender.SendMail(context.Background(), email, subject, body)
+	message.To = email
+	return sender.Send(context.Background(), message)
 }
 
 // sendPasswordResetEmail sends a password reset link
@@ -9713,29 +9748,30 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 		fromEmail = "noreply@frameworks.network"
 	}
 
-	baseURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
-	if baseURL == "" {
-		return fmt.Errorf("WEBAPP_PUBLIC_URL is required")
+	baseURL, err := validatedAccountEmailBaseURL(os.Getenv("WEBAPP_PUBLIC_URL"))
+	if err != nil {
+		return err
 	}
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
+	message, err := renderPasswordResetEmail(baseURL, token)
+	if err != nil {
+		return err
+	}
 
-	subject := "Reset your FrameWorks password"
-	body := fmt.Sprintf(`
-<!DOCTYPE html><html><body>
-  <p>We received a request to reset your password.</p>
-  <p><a href="%s">Click here to reset your password</a> (valid for 1 hour).</p>
-  <p>If you did not request this, you can safely ignore this email.</p>
-</body></html>`, resetURL)
-
+	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
+	if fromName == "" {
+		fromName = "FrameWorks"
+	}
 	sender := emailpkg.NewSender(emailpkg.Config{
-		Host:     smtpHost,
-		Port:     smtpPort,
-		User:     smtpUser,
-		Password: smtpPass,
-		From:     fromEmail,
-		FromName: os.Getenv("FROM_NAME"),
+		Host:          smtpHost,
+		Port:          smtpPort,
+		User:          smtpUser,
+		Password:      smtpPass,
+		From:          fromEmail,
+		FromName:      fromName,
+		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
 	})
-	return sender.SendMail(context.Background(), email, subject, body)
+	message.To = email
+	return sender.Send(context.Background(), message)
 }
 
 // ============================================================================

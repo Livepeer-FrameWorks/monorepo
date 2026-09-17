@@ -323,6 +323,39 @@ func PublicOperationRateLimitMiddleware(rl *RateLimiter, tp *TrustedProxies, ope
 	}
 }
 
+// PublicOperationRateLimitMiddlewareWithLimits applies an isolated per-IP
+// bucket to a sensitive public operation such as password recovery. Keeping
+// the operation in the bucket key prevents unrelated public traffic from
+// consuming recovery capacity while still bounding each abuse surface.
+func PublicOperationRateLimitMiddlewareWithLimits(rl *RateLimiter, tp *TrustedProxies, operation string, limit, burst int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if rl == nil {
+			c.Next()
+			return
+		}
+		clientIP := ClientIPFromRequestWithTrust(c.Request, tp)
+		bucket := "public:" + operation + ":" + clientIP
+		allowed, remaining, resetSeconds := rl.Allow(bucket, limit, burst)
+		headers := map[string]string{
+			"X-RateLimit-Limit":     strconv.Itoa(limit),
+			"X-RateLimit-Remaining": strconv.Itoa(remaining),
+			"X-RateLimit-Reset":     strconv.Itoa(resetSeconds),
+		}
+		if !allowed {
+			decision := rateLimitExceededDecision(limit, resetSeconds, headers)
+			for key, value := range decision.Headers {
+				c.Header(key, value)
+			}
+			c.AbortWithStatusJSON(decision.Status, decision.Body)
+			return
+		}
+		for key, value := range headers {
+			c.Header(key, value)
+		}
+		c.Next()
+	}
+}
+
 // graphqlRequest represents a minimal GraphQL request for operation extraction
 type graphqlRequest struct {
 	Query         string                 `json:"query"`

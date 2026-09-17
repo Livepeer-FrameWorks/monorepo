@@ -4,15 +4,26 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Turnstile } from "svelte-turnstile";
 
   let email = $state("");
   let loading = $state(false);
   let submitted = $state(false);
   let error = $state("");
+  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
+  let turnstileToken = $state("");
+  let turnstileWidgetId = $state("");
 
   // Icons
   const KeyIcon = getIconComponent("Key");
   const CheckCircleIcon = getIconComponent("CheckCircle");
+
+  function resetTurnstile() {
+    turnstileToken = "";
+    if (typeof window !== "undefined" && turnstileWidgetId) {
+      window.turnstile?.reset?.(turnstileWidgetId);
+    }
+  }
 
   async function handleSubmit(event: Event) {
     event.preventDefault();
@@ -26,7 +37,7 @@
     error = "";
 
     try {
-      const result = await auth.forgotPassword(email.trim());
+      const result = await auth.forgotPassword(email.trim(), turnstileToken);
 
       if (result.success) {
         submitted = true;
@@ -34,9 +45,11 @@
         // Backend may still return success to not reveal if email exists
         // but we handle any explicit errors
         error = result.error || "Failed to send reset email";
+        resetTurnstile();
       }
     } catch {
       error = "Network error. Please try again.";
+      resetTurnstile();
     } finally {
       loading = false;
     }
@@ -100,13 +113,34 @@
               />
             </div>
 
+            {#if turnstileSiteKey}
+              <div>
+                <Turnstile
+                  siteKey={turnstileSiteKey}
+                  theme="dark"
+                  action="forgot_password"
+                  bind:widgetId={turnstileWidgetId}
+                  on:callback={({ detail }) => {
+                    turnstileToken = detail?.token ?? detail ?? "";
+                    error = "";
+                  }}
+                  on:error={() => (turnstileToken = "")}
+                  on:expired={() => (turnstileToken = "")}
+                />
+              </div>
+            {/if}
+
             {#if error}
               <div class="p-3 border bg-destructive/10 border-destructive/30">
                 <p class="text-destructive text-sm">{error}</p>
               </div>
             {/if}
 
-            <Button type="submit" class="w-full" disabled={loading || !email.trim()}>
+            <Button
+              type="submit"
+              class="w-full"
+              disabled={loading || !email.trim() || (turnstileSiteKey && !turnstileToken)}
+            >
               {#if loading}
                 <div class="loading-spinner mr-2"></div>
               {/if}

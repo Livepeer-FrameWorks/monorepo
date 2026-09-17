@@ -35,6 +35,7 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 		{name: "login", handler: h.Login()},
 		{name: "wallet login", handler: h.WalletLogin()},
 		{name: "register", handler: h.Register()},
+		{name: "verify email", handler: h.VerifyEmail()},
 		{name: "resend verification", handler: h.ResendVerification()},
 		{name: "forgot password", handler: h.ForgotPassword()},
 		{name: "reset password", handler: h.ResetPassword()},
@@ -64,6 +65,85 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 				t.Fatalf("body: expected invalid request error, got %q", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestVerifyEmailAcceptsTokenOnlyInJSONBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var gotToken string
+	fake := &clientstest.FakeCommodore{
+		VerifyEmailFn: func(_ context.Context, token string) (*commodorepb.VerifyEmailResponse, error) {
+			gotToken = token
+			return &commodorepb.VerifyEmailResponse{Success: true, Message: "verified"}, nil
+		},
+	}
+	h := &AuthHandlers{commodore: fake, logger: logging.NewLogger()}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/verify", strings.NewReader(`{"token":"secret-token"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.VerifyEmail()(c)
+	if recorder.Code != http.StatusOK || gotToken != "secret-token" {
+		t.Fatalf("status = %d, token = %q, body = %s", recorder.Code, gotToken, recorder.Body.String())
+	}
+}
+
+func TestRecoveryHandlersForwardTurnstileTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var resendToken, forgotToken string
+	fake := &clientstest.FakeCommodore{
+		ResendVerificationFn: func(_ context.Context, _, token string) (*commodorepb.ResendVerificationResponse, error) {
+			resendToken = token
+			return &commodorepb.ResendVerificationResponse{Success: true, Message: "accepted"}, nil
+		},
+		ForgotPasswordFn: func(_ context.Context, _, token string) (*commodorepb.ForgotPasswordResponse, error) {
+			forgotToken = token
+			return &commodorepb.ForgotPasswordResponse{Success: true, Message: "accepted"}, nil
+		},
+	}
+	h := &AuthHandlers{commodore: fake, logger: logging.NewLogger()}
+	for path, handler := range map[string]gin.HandlerFunc{
+		"/auth/resend-verification": h.ResendVerification(),
+		"/auth/forgot-password":     h.ForgotPassword(),
+	} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(`{"email":"user@example.com","turnstile_token":"proof"}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		handler(c)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+	if resendToken != "proof" || forgotToken != "proof" {
+		t.Fatalf("turnstile tokens = resend %q forgot %q", resendToken, forgotToken)
+	}
+}
+
+func TestRecoveryHandlersSurfaceBotCheckFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	botError := status.Error(codes.PermissionDenied, "bot verification failed")
+	fake := &clientstest.FakeCommodore{
+		ResendVerificationFn: func(context.Context, string, string) (*commodorepb.ResendVerificationResponse, error) {
+			return nil, botError
+		},
+		ForgotPasswordFn: func(context.Context, string, string) (*commodorepb.ForgotPasswordResponse, error) {
+			return nil, botError
+		},
+	}
+	h := &AuthHandlers{commodore: fake, logger: logging.NewLogger()}
+	for path, handler := range map[string]gin.HandlerFunc{
+		"/auth/resend-verification": h.ResendVerification(),
+		"/auth/forgot-password":     h.ForgotPassword(),
+	} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(`{"email":"user@example.com","turnstile_token":"invalid"}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		handler(c)
+		if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "BOT_CHECK_FAILED") {
+			t.Fatalf("%s response = %d %s", path, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

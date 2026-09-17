@@ -7,6 +7,8 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { getIconComponent } from "$lib/iconUtils";
+  import { Turnstile } from "svelte-turnstile";
+  import { SvelteURLSearchParams } from "svelte/reactivity";
 
   let verificationStatus = $state<"pending" | "success" | "error">("pending");
   let message = $state("");
@@ -18,22 +20,43 @@
   let resendMessage = $state("");
   let resendSuccess = $state(false);
   let resendCooldown = $state(0);
+  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
+  let turnstileToken = $state("");
+  let turnstileWidgetId = $state("");
 
   // Icons
   const MailIcon = getIconComponent("Mail");
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const AlertTriangleIcon = getIconComponent("AlertTriangle");
 
+  function resetTurnstile() {
+    turnstileToken = "";
+    if (typeof window !== "undefined" && turnstileWidgetId) {
+      window.turnstile?.reset?.(turnstileWidgetId);
+    }
+  }
+
   onMount(async () => {
-    const token = page.url.searchParams.get("token");
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    const token = fragment.get("token") ?? page.url.searchParams.get("token");
     resendEmail = page.url.searchParams.get("email") ?? "";
+    const cleanParams = new SvelteURLSearchParams(page.url.searchParams);
+    cleanParams.delete("token");
+    const cleanSearch = cleanParams.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      page.url.pathname + (cleanSearch ? `?${cleanSearch}` : "")
+    );
 
     if (token) {
       // Verify the token
       loading = true;
       try {
-        const response = await fetch(`${AUTH_URL}/verify/${encodeURIComponent(token)}`, {
-          method: "GET",
+        const response = await fetch(`${AUTH_URL}/verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
         });
 
         const data = await response.json();
@@ -66,7 +89,7 @@
     resendSuccess = false;
 
     try {
-      const result = await auth.resendVerification(resendEmail.trim());
+      const result = await auth.resendVerification(resendEmail.trim(), turnstileToken);
 
       if (result.success) {
         resendSuccess = true;
@@ -82,10 +105,12 @@
       } else {
         resendSuccess = false;
         resendMessage = result.error || "Failed to send verification email.";
+        resetTurnstile();
       }
     } catch {
       resendSuccess = false;
       resendMessage = "Network error. Please try again.";
+      resetTurnstile();
     } finally {
       resendLoading = false;
     }
@@ -94,6 +119,7 @@
 
 <svelte:head>
   <title>Email Verification - FrameWorks</title>
+  <meta name="referrer" content="no-referrer" />
 </svelte:head>
 
 <section class="min-h-full bg-brand-surface-muted flex items-center justify-center p-4 sm:p-8">
@@ -162,11 +188,25 @@
                 bind:value={resendEmail}
                 disabled={resendLoading || resendCooldown > 0}
               />
+              {#if turnstileSiteKey}
+                <Turnstile
+                  siteKey={turnstileSiteKey}
+                  theme="dark"
+                  action="resend_verification"
+                  bind:widgetId={turnstileWidgetId}
+                  on:callback={({ detail }) => (turnstileToken = detail?.token ?? detail ?? "")}
+                  on:error={() => (turnstileToken = "")}
+                  on:expired={() => (turnstileToken = "")}
+                />
+              {/if}
               <Button
                 type="submit"
                 variant="outline"
                 class="w-full justify-center"
-                disabled={resendLoading || resendCooldown > 0 || !resendEmail.trim()}
+                disabled={resendLoading ||
+                  resendCooldown > 0 ||
+                  !resendEmail.trim() ||
+                  (turnstileSiteKey && !turnstileToken)}
               >
                 {#if resendLoading}
                   Sending...
@@ -233,11 +273,25 @@
                 bind:value={resendEmail}
                 disabled={resendLoading || resendCooldown > 0}
               />
+              {#if turnstileSiteKey}
+                <Turnstile
+                  siteKey={turnstileSiteKey}
+                  theme="dark"
+                  action="resend_verification"
+                  bind:widgetId={turnstileWidgetId}
+                  on:callback={({ detail }) => (turnstileToken = detail?.token ?? detail ?? "")}
+                  on:error={() => (turnstileToken = "")}
+                  on:expired={() => (turnstileToken = "")}
+                />
+              {/if}
               <Button
                 type="submit"
                 variant="outline"
                 class="w-full justify-center"
-                disabled={resendLoading || resendCooldown > 0 || !resendEmail.trim()}
+                disabled={resendLoading ||
+                  resendCooldown > 0 ||
+                  !resendEmail.trim() ||
+                  (turnstileSiteKey && !turnstileToken)}
               >
                 {#if resendLoading}
                   Sending...

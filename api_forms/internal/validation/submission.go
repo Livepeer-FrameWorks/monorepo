@@ -5,6 +5,14 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
+)
+
+const (
+	maxNameLength    = 120
+	maxEmailLength   = 320
+	maxCompanyLength = 200
+	maxMessageLength = 10000
 )
 
 type ContactRequest struct {
@@ -66,13 +74,22 @@ func ValidateSubmission(req *ContactRequest, turnstileEnabled bool) []string {
 	if len(strings.TrimSpace(req.Name)) < 2 {
 		errors = append(errors, "Name is required (minimum 2 characters)")
 	}
+	if utf8.RuneCountInString(req.Name) > maxNameLength {
+		errors = append(errors, "Name is too long")
+	}
 
-	if !emailRegex.MatchString(req.Email) {
+	if utf8.RuneCountInString(req.Email) > maxEmailLength || !emailRegex.MatchString(req.Email) {
 		errors = append(errors, "Valid email is required")
+	}
+	if utf8.RuneCountInString(req.Company) > maxCompanyLength {
+		errors = append(errors, "Company is too long")
 	}
 
 	if len(strings.TrimSpace(req.Message)) < 10 {
 		errors = append(errors, "Message is required (minimum 10 characters)")
+	}
+	if utf8.RuneCountInString(req.Message) > maxMessageLength {
+		errors = append(errors, "Message is too long")
 	}
 
 	content := strings.ToLower(fmt.Sprintf("%s %s %s %s",

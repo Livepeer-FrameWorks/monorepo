@@ -14,16 +14,17 @@ type Config struct {
 
 func LoadConfig() Config {
 	fromEmail := config.GetEnv("FROM_EMAIL", "noreply@frameworks.network")
-	fromName := config.GetEnv("FROM_NAME", "")
+	fromName := config.GetEnv("FROM_NAME", "FrameWorks")
 
 	return Config{
 		SMTP: email.Config{
-			Host:     config.GetEnv("SMTP_HOST", ""),
-			Port:     config.GetEnv("SMTP_PORT", "587"),
-			User:     config.GetEnv("SMTP_USER", ""),
-			Password: config.GetEnv("SMTP_PASSWORD", ""),
-			From:     fromEmail,
-			FromName: fromName,
+			Host:          config.GetEnv("SMTP_HOST", ""),
+			Port:          config.GetEnv("SMTP_PORT", "587"),
+			User:          config.GetEnv("SMTP_USER", ""),
+			Password:      config.GetEnv("SMTP_PASSWORD", ""),
+			From:          fromEmail,
+			FromName:      fromName,
+			AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
 		},
 		DefaultPreferences: PreferenceDefaults{
 			Email:     config.GetEnvBool("SKIPPER_NOTIFY_EMAIL", false),

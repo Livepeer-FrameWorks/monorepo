@@ -106,9 +106,10 @@ func TestEmailNotifierSendsToBillingEmail(t *testing.T) {
 
 	notifier := NewEmailNotifier(Config{
 		SMTP: email.Config{
-			Host: host,
-			Port: port,
-			From: "noreply@example.com",
+			Host:          host,
+			Port:          port,
+			From:          "noreply@example.com",
+			AllowInsecure: true,
 		},
 	}, logging.NewLoggerWithService("skipper-test"))
 
@@ -134,5 +135,26 @@ func TestEmailNotifierSendsToBillingEmail(t *testing.T) {
 	}
 	if !strings.Contains(capture.data, "Skipper Investigation Report") {
 		t.Fatalf("expected email body to include report header")
+	}
+}
+
+func TestRenderTemplateUsesBrandLayoutAndEscapesContent(t *testing.T) {
+	notifier := &EmailNotifier{webAppURL: "https://app.example.test/app"}
+	body, err := notifier.renderTemplate(emailReportData{
+		TenantName:  `<script>alert("x")</script>`,
+		Summary:     "Streams are healthy",
+		ReportURL:   "https://app.example.test/app/skipper?report=inv-1",
+		GeneratedAt: time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"FrameWorks", "#0f4b6e", "Investigation report", "View full report", "&lt;script&gt;"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("email missing %q", want)
+		}
+	}
+	if strings.Contains(body, `<script>`) {
+		t.Fatalf("tenant name was not escaped: %s", body)
 	}
 }

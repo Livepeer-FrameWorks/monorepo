@@ -162,6 +162,9 @@ type FakeCommodore struct {
 	RefreshTokenFn                      func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
 	MintMistAdminSessionFn              func(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
 	RegisterFn                          func(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error)
+	VerifyEmailFn                       func(ctx context.Context, token string) (*commodorepb.VerifyEmailResponse, error)
+	ResendVerificationFn                func(ctx context.Context, email, turnstileToken string) (*commodorepb.ResendVerificationResponse, error)
+	ForgotPasswordFn                    func(ctx context.Context, email, turnstileToken string) (*commodorepb.ForgotPasswordResponse, error)
 	ResolveIngestEndpointFn             func(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error)
 	ResolveViewerEndpointFn             func(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
 	ResolveViewerEndpointWithProtocolFn func(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error)
@@ -191,6 +194,27 @@ type FakeCommodore struct {
 	UpdatePushTargetFn                  func(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error)
 	DeletePushTargetFn                  func(ctx context.Context, id string) (*commodorepb.DeletePushTargetResponse, error)
 	ResolvePlaybackPolicyFn             func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
+}
+
+func (f *FakeCommodore) VerifyEmail(ctx context.Context, token string) (*commodorepb.VerifyEmailResponse, error) {
+	if f.VerifyEmailFn == nil {
+		panic("FakeCommodore.VerifyEmail not stubbed")
+	}
+	return f.VerifyEmailFn(ctx, token)
+}
+
+func (f *FakeCommodore) ResendVerification(ctx context.Context, email, turnstileToken string) (*commodorepb.ResendVerificationResponse, error) {
+	if f.ResendVerificationFn == nil {
+		panic("FakeCommodore.ResendVerification not stubbed")
+	}
+	return f.ResendVerificationFn(ctx, email, turnstileToken)
+}
+
+func (f *FakeCommodore) ForgotPassword(ctx context.Context, email, turnstileToken string) (*commodorepb.ForgotPasswordResponse, error) {
+	if f.ForgotPasswordFn == nil {
+		panic("FakeCommodore.ForgotPassword not stubbed")
+	}
+	return f.ForgotPasswordFn(ctx, email, turnstileToken)
 }
 
 func (f *FakeCommodore) GetStream(ctx context.Context, streamID string) (*commodorepb.Stream, error) {

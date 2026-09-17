@@ -92,6 +92,23 @@ func TestContactHandlerRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestContactHandlerRejectsOversizedBody(t *testing.T) {
+	harness := setupContactHandler(false)
+	body := `{"name":"Jane Doe","email":"jane@example.com","message":"` + strings.Repeat("x", contactMaxBodyBytes) + `"}`
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	harness.router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(harness.sender.calls) != 0 {
+		t.Fatal("oversized request sent an email")
+	}
+}
+
 func TestContactHandlerValidatesRequiredFields(t *testing.T) {
 	harness := setupContactHandler(false)
 	payload := map[string]interface{}{
@@ -393,6 +410,18 @@ func TestBuildEmailHTMLNewlines(t *testing.T) {
 	html := buildEmailHTML("Jane", "jane@example.com", "ACME", "line1\nline2", "1.2.3.4")
 	if !strings.Contains(html, "<br>") {
 		t.Fatalf("expected output to contain <br>, got %s", html)
+	}
+}
+
+func TestBuildEmailHTMLEscapesSubmittedContent(t *testing.T) {
+	html := buildEmailHTML(`<script>alert("name")</script>`, "jane@example.com", "ACME", `<img src=x onerror=alert(1)>`, "1.2.3.4")
+	if strings.Contains(html, `<script>`) || strings.Contains(html, `<img src=x`) {
+		t.Fatalf("submitted content was not escaped: %s", html)
+	}
+	for _, want := range []string{"&lt;script&gt;", "&lt;img"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("escaped email missing %q", want)
+		}
 	}
 }
 

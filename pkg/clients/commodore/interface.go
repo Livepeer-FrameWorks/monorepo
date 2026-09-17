@@ -78,7 +78,7 @@ type Interface interface {
 	RefreshToken(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
 	VerifyEmail(ctx context.Context, token string) (*commodorepb.VerifyEmailResponse, error)
 	ResendVerification(ctx context.Context, email, turnstileToken string) (*commodorepb.ResendVerificationResponse, error)
-	ForgotPassword(ctx context.Context, email string) (*commodorepb.ForgotPasswordResponse, error)
+	ForgotPassword(ctx context.Context, email, turnstileToken string) (*commodorepb.ForgotPasswordResponse, error)
 	ResetPassword(ctx context.Context, token, password string) (*commodorepb.ResetPasswordResponse, error)
 	UpdateMe(ctx context.Context, req *commodorepb.UpdateMeRequest) (*commodorepb.User, error)
 	UpdateNewsletter(ctx context.Context, subscribed bool) (*commodorepb.UpdateNewsletterResponse, error)

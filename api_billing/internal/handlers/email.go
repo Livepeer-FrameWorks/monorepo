@@ -1,29 +1,29 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"html/template"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // EmailService handles email notifications
 type EmailService struct {
-	smtpHost     string
-	smtpPort     int
-	smtpUser     string
-	smtpPassword string
-	fromEmail    string
-	fromName     string
-	logger       logging.Logger
+	smtpHost      string
+	smtpPort      int
+	smtpUser      string
+	smtpPassword  string
+	fromEmail     string
+	fromName      string
+	allowInsecure bool
+	logger        logging.Logger
 }
 
 // EmailData represents data for email templates
@@ -94,14 +94,19 @@ func NewEmailService(logger logging.Logger) *EmailService {
 		port = 587 // Default SMTP port
 	}
 
+	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
+	if fromName == "" {
+		fromName = "FrameWorks"
+	}
 	return &EmailService{
-		smtpHost:     os.Getenv("SMTP_HOST"),
-		smtpPort:     port,
-		smtpUser:     os.Getenv("SMTP_USER"),
-		smtpPassword: os.Getenv("SMTP_PASSWORD"),
-		fromEmail:    os.Getenv("FROM_EMAIL"),
-		fromName:     os.Getenv("FROM_NAME"),
-		logger:       logger,
+		smtpHost:      os.Getenv("SMTP_HOST"),
+		smtpPort:      port,
+		smtpUser:      os.Getenv("SMTP_USER"),
+		smtpPassword:  os.Getenv("SMTP_PASSWORD"),
+		fromEmail:     os.Getenv("FROM_EMAIL"),
+		fromName:      fromName,
+		allowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
+		logger:        logger,
 	}
 }
 
@@ -329,7 +334,7 @@ func (es *EmailService) SendAccountSuspendedEmail(tenantEmail, tenantName string
 		TenantName: tenantName,
 		Balance:    balance,
 		Currency:   currency,
-		LoginURL:   os.Getenv("WEBAPP_PUBLIC_URL") + "/account/billing",
+		LoginURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/") + "/account/billing",
 	}
 
 	body, err := es.renderTemplate("account_suspended", data)
@@ -343,14 +348,20 @@ func (es *EmailService) SendAccountSuspendedEmail(tenantEmail, tenantName string
 // sendEmail sends an email via SMTP
 func (es *EmailService) sendEmail(to, subject, body string) error {
 	sender := emailpkg.NewSender(emailpkg.Config{
-		Host:     es.smtpHost,
-		Port:     strconv.Itoa(es.smtpPort),
-		User:     es.smtpUser,
-		Password: es.smtpPassword,
-		From:     es.fromEmail,
-		FromName: es.fromName,
+		Host:          es.smtpHost,
+		Port:          strconv.Itoa(es.smtpPort),
+		User:          es.smtpUser,
+		Password:      es.smtpPassword,
+		From:          es.fromEmail,
+		FromName:      es.fromName,
+		AllowInsecure: es.allowInsecure,
 	})
-	err := sender.SendMail(context.Background(), to, subject, body)
+	err := sender.Send(context.Background(), emailpkg.Message{
+		To:       to,
+		Subject:  subject,
+		HTMLBody: body,
+		ReplyTo:  billingSupportEmail(),
+	})
 
 	if err != nil {
 		es.logger.WithFields(logging.Fields{
@@ -369,279 +380,7 @@ func (es *EmailService) sendEmail(to, subject, body string) error {
 	return nil
 }
 
-// renderTemplate renders an email template with data
+// renderTemplate renders an email template with data.
 func (es *EmailService) renderTemplate(templateName string, data EmailData) (string, error) {
-	templates := map[string]string{
-		"invoice_created": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>New Invoice</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 640px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #2c3e50;">New Invoice from FrameWorks</h2>
-
-        <p>Hello {{.TenantName}},</p>
-
-        <p>A new invoice has been generated for your FrameWorks account:</p>
-
-        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0;">
-            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
-            <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
-            <p><strong>Due Date:</strong> {{.DueDate.Format "January 2, 2006"}}</p>
-        </div>
-
-        {{if .UsageWaived}}
-        <p style="background-color: #e8f8f4; border-left: 3px solid #16a085; padding: 12px 16px; border-radius: 4px; color: #0b6b54;">
-            Metered usage would have cost {{printf "%.2f" .GrossMeteredAmount}} {{.Currency}} — usage is on us during beta. Metered total: 0.00 {{.Currency}}.
-        </p>
-        {{end}}
-
-        {{if .LineItemGroups}}
-        <h3 style="color: #2c3e50; margin-top: 30px;">Charges</h3>
-        {{range .LineItemGroups}}
-        <h4 style="color: #2c3e50; margin-top: 20px; margin-bottom: 8px;">
-            {{if .ClusterName}}{{.ClusterName}}{{else}}Cluster {{.ClusterID}}{{end}}
-            {{if eq .ClusterKind "tenant_private"}}<span style="font-size: 0.75em; color: #16a085; background: #e8f8f4; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Self-hosted</span>{{end}}
-            {{if eq .ClusterKind "third_party_marketplace"}}<span style="font-size: 0.75em; color: #8e44ad; background: #f3eaf8; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Marketplace</span>{{end}}
-            {{if eq .ClusterKind "platform_official"}}<span style="font-size: 0.75em; color: #2980b9; background: #eaf3fb; padding: 2px 8px; border-radius: 10px; margin-left: 8px;">Platform</span>{{end}}
-        </h4>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 0.95em;">
-            <tr style="background-color: #f8f9fa;">
-                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Item</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Quantity</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Unit price</th>
-                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Total</th>
-            </tr>
-            {{range .Lines}}
-            <tr{{if .IsZeroPrice}} style="color: #666;"{{end}}>
-                <td style="padding: 8px 10px; border-bottom: 1px solid #eee;">
-                    {{.Description}}
-                    {{if .DimensionLabel}}<div style="font-size: 0.8em; color: #95a5a6;">{{.DimensionLabel}}</div>{{end}}
-                    {{if .PricingLabel}}<div style="font-size: 0.8em; color: #95a5a6;">{{.PricingLabel}}</div>{{end}}
-                </td>
-                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.Quantity}}{{if .Unit}} {{.Unit}}{{end}}</td>
-                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.UnitPrice}} {{.Currency}}</td>
-                <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">
-                    {{if and .IsZeroPrice (ne .PricingSource "beta_free")}}<span style="color: #16a085; font-weight: 600;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}
-                </td>
-            </tr>
-            {{end}}
-        </table>
-        {{end}}
-        {{end}}
-
-        {{if .PaymentRequired}}
-        <p>Open this invoice to choose an available payment method. The checkout will collect only the outstanding balance:</p>
-        {{else}}
-        <p>No payment is required for this invoice. You can still review its details:</p>
-        {{end}}
-
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">{{if .PaymentRequired}}View and Pay Invoice{{else}}View Invoice{{end}}</a>
-        </p>
-
-        <p>If you have any questions, please contact our support team.</p>
-
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-
-		"payment_success": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Payment Confirmed</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #27ae60;">Payment Confirmed!</h2>
-        
-        <p>Hello {{.TenantName}},</p>
-        
-        <p>We've successfully received your payment. Thank you!</p>
-        
-        <div style="background-color: #d4edda; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #27ae60;">
-            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
-            <p><strong>Amount Paid:</strong> {{.Amount}} {{.Currency}}</p>
-            <p><strong>Payment Method:</strong> {{.PaymentMethod}}</p>
-            <p><strong>Payment Date:</strong> {{.PaidAt.Format "January 2, 2006 at 3:04 PM"}}</p>
-        </div>
-        
-        <p>Your account has been updated and all services remain active.</p>
-        
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #27ae60; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Account</a>
-        </p>
-        
-        <p>Thank you for using FrameWorks!</p>
-        
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-
-		"payment_failed": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Payment Failed</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #e74c3c;">Payment Failed</h2>
-        
-        <p>Hello {{.TenantName}},</p>
-        
-        <p>We were unable to process your payment for the following invoice:</p>
-        
-        <div style="background-color: #f8d7da; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #e74c3c;">
-            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
-            <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
-            <p><strong>Payment Method:</strong> {{.PaymentMethod}}</p>
-        </div>
-        
-        <p>Please check your payment method and try again, or contact your bank if the issue persists.</p>
-        
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #e74c3c; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Retry Payment</a>
-        </p>
-        
-        <p>If you continue to experience issues, please contact our support team.</p>
-        
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-
-		"payment_action_required": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Action Required</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #f39c12;">Confirm Your Payment</h2>
-
-        <p>Hello {{.TenantName}},</p>
-
-        <p>Your bank requires extra confirmation before we can complete the payment for the following invoice:</p>
-
-        <div style="background-color: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #f39c12;">
-            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
-            <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
-        </div>
-
-        <p>Please confirm the payment to keep your services active:</p>
-
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.ActionURL}}" style="background-color: #f39c12; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Confirm Payment</a>
-        </p>
-
-        <p>If you did not initiate this payment, please contact our support team.</p>
-
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-
-		"overdue_reminder": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Payment Reminder</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #f39c12;">Payment Reminder</h2>
-        
-        <p>Hello {{.TenantName}},</p>
-        
-        <p>This is a friendly reminder that the following invoice is now overdue:</p>
-        
-        <div style="background-color: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #f39c12;">
-            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
-            <p><strong>Amount Due:</strong> {{.Amount}} {{.Currency}}</p>
-            <p><strong>Days Overdue:</strong> {{.DaysPastDue}} days</p>
-        </div>
-        
-        <p>To avoid any service interruptions, please make payment as soon as possible.</p>
-        
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #f39c12; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Pay Now</a>
-        </p>
-        
-        <p>If you have any questions or need assistance, please contact our support team.</p>
-        
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-		"account_suspended": `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Account Suspended</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #e74c3c;">Account Suspended</h2>
-
-        <p>Hello {{.TenantName}},</p>
-
-        <p>Your account has been suspended because your prepaid balance is negative.</p>
-
-        <div style="background-color: #f8d7da; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #e74c3c;">
-            <p><strong>Current Balance:</strong> {{.Balance}} {{.Currency}}</p>
-        </div>
-
-        <p>Please top up your balance to restore access and continue creating new resources.</p>
-
-        <p style="text-align: center; margin: 30px 0;">
-            <a href="{{.LoginURL}}" style="background-color: #e74c3c; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Go to Billing</a>
-        </p>
-
-        <p>If you believe this is a mistake, contact our support team.</p>
-
-        <p>Best regards,<br>The FrameWorks Team</p>
-    </div>
-</body>
-</html>`,
-	}
-
-	tmplContent, exists := templates[templateName]
-	if !exists {
-		return "", fmt.Errorf("template %s not found", templateName)
-	}
-
-	// Template functions for email rendering
-	funcMap := template.FuncMap{
-		"divFloat": func(a, b float64) float64 {
-			if b == 0 {
-				return 0
-			}
-			return a / b
-		},
-	}
-
-	tmpl, err := template.New(templateName).Funcs(funcMap).Parse(tmplContent)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return buf.String(), nil
+	return es.renderBillingTemplate(templateName, data)
 }

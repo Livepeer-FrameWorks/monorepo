@@ -1480,6 +1480,7 @@ message ResendVerificationResponse {
 
 message ForgotPasswordRequest {
   string email = 1;
+  string turnstile_token = 2;
 }
 
 message ForgotPasswordResponse {

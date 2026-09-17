@@ -304,7 +304,7 @@ type Querier interface {
 	RegisterStreamThumbnailServingCell(ctx context.Context, arg RegisterStreamThumbnailServingCellParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
 	RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cellID string) (int64, error)
-	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) error
+	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int64, error)
 	ResolveChapterByPlaybackID(ctx context.Context, playbackID string) (ResolveChapterByPlaybackIDRow, error)
 	ResolveClipByHash(ctx context.Context, clipHash string) (ResolveClipByHashRow, error)
 	ResolveClipByInternalName(ctx context.Context, internalName string) (ResolveClipByInternalNameRow, error)
@@ -336,6 +336,7 @@ type Querier interface {
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
 	SetMediaPlacementChangeRollout(ctx context.Context, arg SetMediaPlacementChangeRolloutParams) (int64, error)
 	SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error
+	SetPasswordResetTokenIfAllowed(ctx context.Context, arg SetPasswordResetTokenIfAllowedParams) (int64, error)
 	SetStreamPlaybackPolicy(ctx context.Context, arg SetStreamPlaybackPolicyParams) (string, error)
 	SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (string, error)
 	SettleStreamCleanupForFinalization(ctx context.Context, arg SettleStreamCleanupForFinalizationParams) (string, error)
@@ -365,7 +366,7 @@ type Querier interface {
 	UpdateUserFirstName(ctx context.Context, arg UpdateUserFirstNameParams) error
 	UpdateUserLastName(ctx context.Context, arg UpdateUserLastNameParams) error
 	UpdateUserName(ctx context.Context, arg UpdateUserNameParams) error
-	UpdateVerificationToken(ctx context.Context, arg UpdateVerificationTokenParams) error
+	UpdateVerificationTokenIfAllowed(ctx context.Context, arg UpdateVerificationTokenIfAllowedParams) (int64, error)
 	UpsertArtifactCatalogTombstone(ctx context.Context, arg UpsertArtifactCatalogTombstoneParams) (int64, error)
 	UpsertArtifactCreationIntent(ctx context.Context, arg UpsertArtifactCreationIntentParams) (string, error)
 	UpsertBootstrapMistSource(ctx context.Context, arg UpsertBootstrapMistSourceParams) error
@@ -380,7 +381,7 @@ type Querier interface {
 	UpsertTenantMediaRetentionPolicy(ctx context.Context, arg UpsertTenantMediaRetentionPolicyParams) error
 	UserOwnsWallet(ctx context.Context, arg UserOwnsWalletParams) (bool, error)
 	ValidateAPITokenHash(ctx context.Context, tokenHash string) (ValidateAPITokenHashRow, error)
-	VerifyUserEmail(ctx context.Context, arg VerifyUserEmailParams) error
+	VerifyUserEmail(ctx context.Context, arg VerifyUserEmailParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

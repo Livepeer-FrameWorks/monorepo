@@ -283,23 +283,29 @@ func (q *Queries) LockUserAuthenticationMethods(ctx context.Context, arg LockUse
 	return has_password_signin, err
 }
 
-const resetUserPassword = `-- name: ResetUserPassword :exec
+const resetUserPassword = `-- name: ResetUserPassword :execrows
 UPDATE commodore.users
 SET password_hash = $1,
     reset_token = NULL,
     reset_token_expires = NULL,
     updated_at = NOW()
 WHERE id = $2
+  AND reset_token = $3
+  AND reset_token_expires > NOW()
 `
 
 type ResetUserPasswordParams struct {
 	PasswordHash sql.NullString `db:"password_hash" json:"password_hash"`
 	ID           string         `db:"id" json:"id"`
+	ResetToken   sql.NullString `db:"reset_token" json:"reset_token"`
 }
 
-func (q *Queries) ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) error {
-	_, err := q.db.ExecContext(ctx, resetUserPassword, arg.PasswordHash, arg.ID)
-	return err
+func (q *Queries) ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resetUserPassword, arg.PasswordHash, arg.ID, arg.ResetToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setPasswordResetToken = `-- name: SetPasswordResetToken :exec
@@ -317,6 +323,38 @@ type SetPasswordResetTokenParams struct {
 func (q *Queries) SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error {
 	_, err := q.db.ExecContext(ctx, setPasswordResetToken, arg.ResetToken, arg.ResetTokenExpires, arg.ID)
 	return err
+}
+
+const setPasswordResetTokenIfAllowed = `-- name: SetPasswordResetTokenIfAllowed :execrows
+UPDATE commodore.users
+SET reset_token = $1,
+    reset_token_expires = $2,
+    updated_at = NOW()
+WHERE id = $3
+  AND (
+    reset_token_expires IS NULL
+    OR reset_token_expires <= $4
+  )
+`
+
+type SetPasswordResetTokenIfAllowedParams struct {
+	ResetToken        sql.NullString `db:"reset_token" json:"reset_token"`
+	ResetTokenExpires sql.NullTime   `db:"reset_token_expires" json:"reset_token_expires"`
+	ID                string         `db:"id" json:"id"`
+	CooldownCutoff    sql.NullTime   `db:"cooldown_cutoff" json:"cooldown_cutoff"`
+}
+
+func (q *Queries) SetPasswordResetTokenIfAllowed(ctx context.Context, arg SetPasswordResetTokenIfAllowedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPasswordResetTokenIfAllowed,
+		arg.ResetToken,
+		arg.ResetTokenExpires,
+		arg.ID,
+		arg.CooldownCutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateUserFirstName = `-- name: UpdateUserFirstName :exec
@@ -376,21 +414,37 @@ func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) 
 	return err
 }
 
-const updateVerificationToken = `-- name: UpdateVerificationToken :exec
+const updateVerificationTokenIfAllowed = `-- name: UpdateVerificationTokenIfAllowed :execrows
 UPDATE commodore.users
-SET verification_token = $1, token_expires_at = $2, updated_at = NOW()
+SET verification_token = $1,
+    token_expires_at = $2,
+    updated_at = NOW()
 WHERE id = $3
+  AND verified = FALSE
+  AND (
+    token_expires_at IS NULL
+    OR token_expires_at <= $4
+  )
 `
 
-type UpdateVerificationTokenParams struct {
+type UpdateVerificationTokenIfAllowedParams struct {
 	VerificationToken sql.NullString `db:"verification_token" json:"verification_token"`
 	TokenExpiresAt    sql.NullTime   `db:"token_expires_at" json:"token_expires_at"`
 	ID                string         `db:"id" json:"id"`
+	CooldownCutoff    sql.NullTime   `db:"cooldown_cutoff" json:"cooldown_cutoff"`
 }
 
-func (q *Queries) UpdateVerificationToken(ctx context.Context, arg UpdateVerificationTokenParams) error {
-	_, err := q.db.ExecContext(ctx, updateVerificationToken, arg.VerificationToken, arg.TokenExpiresAt, arg.ID)
-	return err
+func (q *Queries) UpdateVerificationTokenIfAllowed(ctx context.Context, arg UpdateVerificationTokenIfAllowedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateVerificationTokenIfAllowed,
+		arg.VerificationToken,
+		arg.TokenExpiresAt,
+		arg.ID,
+		arg.CooldownCutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const userOwnsWallet = `-- name: UserOwnsWallet :one
@@ -414,21 +468,29 @@ func (q *Queries) UserOwnsWallet(ctx context.Context, arg UserOwnsWalletParams) 
 	return owned, err
 }
 
-const verifyUserEmail = `-- name: VerifyUserEmail :exec
+const verifyUserEmail = `-- name: VerifyUserEmail :execrows
 UPDATE commodore.users
 SET verified = true,
     verification_token = NULL,
     token_expires_at = NULL,
     updated_at = NOW()
-WHERE id = $1 AND tenant_id = $2
+WHERE id = $1
+  AND tenant_id = $2
+  AND verification_token = $3
+  AND verified = FALSE
+  AND token_expires_at > NOW()
 `
 
 type VerifyUserEmailParams struct {
-	ID       string `db:"id" json:"id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	ID                string         `db:"id" json:"id"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	VerificationToken sql.NullString `db:"verification_token" json:"verification_token"`
 }
 
-func (q *Queries) VerifyUserEmail(ctx context.Context, arg VerifyUserEmailParams) error {
-	_, err := q.db.ExecContext(ctx, verifyUserEmail, arg.ID, arg.TenantID)
-	return err
+func (q *Queries) VerifyUserEmail(ctx context.Context, arg VerifyUserEmailParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, verifyUserEmail, arg.ID, arg.TenantID, arg.VerificationToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

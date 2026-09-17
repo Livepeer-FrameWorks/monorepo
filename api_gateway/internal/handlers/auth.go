@@ -518,17 +518,15 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 // VerifyEmail handles email verification
 func (h *AuthHandlers) VerifyEmail() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Token can come from path param or query param
-		token := c.Param("token")
-		if token == "" {
-			token = c.Query("token")
+		var req struct {
+			Token string `json:"token" binding:"required"`
 		}
-		if token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "verification token required"})
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
 			return
 		}
 
-		resp, err := h.commodore.VerifyEmail(c.Request.Context(), token)
+		resp, err := h.commodore.VerifyEmail(c.Request.Context(), req.Token)
 		if err != nil {
 			h.logger.WithError(err).Error("Email verification failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed"})
@@ -563,6 +561,9 @@ func (h *AuthHandlers) ResendVerification() gin.HandlerFunc {
 		resp, err := h.commodore.ResendVerification(c.Request.Context(), req.Email, req.TurnstileToken)
 		if err != nil {
 			h.logger.WithError(err).Error("Resend verification failed")
+			if handleBotCheckError(c, err) {
+				return
+			}
 			// Still return generic success to not reveal if email exists
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,
@@ -582,16 +583,20 @@ func (h *AuthHandlers) ResendVerification() gin.HandlerFunc {
 func (h *AuthHandlers) ForgotPassword() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Email string `json:"email" binding:"required,email"`
+			Email          string `json:"email" binding:"required,email"`
+			TurnstileToken string `json:"turnstile_token"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
 			return
 		}
 
-		resp, err := h.commodore.ForgotPassword(c.Request.Context(), req.Email)
+		resp, err := h.commodore.ForgotPassword(c.Request.Context(), req.Email, req.TurnstileToken)
 		if err != nil {
 			h.logger.WithError(err).Error("Forgot password failed")
+			if handleBotCheckError(c, err) {
+				return
+			}
 			// Still return success to not reveal if email exists
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,

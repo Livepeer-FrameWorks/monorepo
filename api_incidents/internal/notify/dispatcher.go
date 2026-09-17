@@ -106,7 +106,10 @@ func (d *Dispatcher) sendEmail(ctx context.Context, m message) error {
 	if err != nil {
 		return err
 	}
-	subject, body := emailContent(m)
+	subject, body, err := emailContent(m)
+	if err != nil {
+		return fmt.Errorf("render incident email: %w", err)
+	}
 	var errs []error
 	for _, recipient := range config.NotifyEmailRecipients() {
 		if sendErr := sender.SendMail(ctx, recipient, subject, body); sendErr != nil {
@@ -177,11 +180,12 @@ func SMTPMailer() (MailSender, error) {
 		return nil, errors.New("SMTP_HOST is not configured")
 	}
 	return email.NewSender(email.Config{
-		Host:     host,
-		Port:     pkgconfig.GetEnv("SMTP_PORT", "587"),
-		User:     pkgconfig.GetEnv("SMTP_USER", ""),
-		Password: pkgconfig.GetEnv("SMTP_PASSWORD", ""),
-		From:     pkgconfig.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
-		FromName: pkgconfig.GetEnv("FROM_NAME", ""),
+		Host:          host,
+		Port:          pkgconfig.GetEnv("SMTP_PORT", "587"),
+		User:          pkgconfig.GetEnv("SMTP_USER", ""),
+		Password:      pkgconfig.GetEnv("SMTP_PASSWORD", ""),
+		From:          pkgconfig.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
+		FromName:      pkgconfig.GetEnv("FROM_NAME", "FrameWorks"),
+		AllowInsecure: pkgconfig.GetEnvBool("SMTP_ALLOW_INSECURE", false),
 	}), nil
 }

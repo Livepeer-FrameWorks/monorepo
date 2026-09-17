@@ -7461,10 +7461,11 @@ func (x *ResendVerificationResponse) GetMessage() string {
 }
 
 type ForgotPasswordRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Email         string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Email          string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
+	TurnstileToken string                 `protobuf:"bytes,2,opt,name=turnstile_token,json=turnstileToken,proto3" json:"turnstile_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ForgotPasswordRequest) Reset() {
@@ -7500,6 +7501,13 @@ func (*ForgotPasswordRequest) Descriptor() ([]byte, []int) {
 func (x *ForgotPasswordRequest) GetEmail() string {
 	if x != nil {
 		return x.Email
+	}
+	return ""
+}
+
+func (x *ForgotPasswordRequest) GetTurnstileToken() string {
+	if x != nil {
+		return x.TurnstileToken
 	}
 	return ""
 }
@@ -14697,9 +14705,10 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0fturnstile_token\x18\x02 \x01(\tR\x0eturnstileToken\"P\n" +
 	"\x1aResendVerificationResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"-\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"V\n" +
 	"\x15ForgotPasswordRequest\x12\x14\n" +
-	"\x05email\x18\x01 \x01(\tR\x05email\"L\n" +
+	"\x05email\x18\x01 \x01(\tR\x05email\x12'\n" +
+	"\x0fturnstile_token\x18\x02 \x01(\tR\x0eturnstileToken\"L\n" +
 	"\x16ForgotPasswordResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"H\n" +

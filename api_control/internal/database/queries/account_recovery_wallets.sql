@@ -5,41 +5,65 @@ WHERE verification_token = $1
   AND verified = false
   AND token_expires_at > NOW();
 
--- name: VerifyUserEmail :exec
+-- name: VerifyUserEmail :execrows
 UPDATE commodore.users
 SET verified = true,
     verification_token = NULL,
     token_expires_at = NULL,
     updated_at = NOW()
-WHERE id = $1 AND tenant_id = $2;
+WHERE id = sqlc.arg(id)
+  AND tenant_id = sqlc.arg(tenant_id)
+  AND verification_token = sqlc.arg(verification_token)
+  AND verified = FALSE
+  AND token_expires_at > NOW();
 
 -- name: GetVerificationResendUser :one
 SELECT id, COALESCE(verified, false)::boolean AS verified, token_expires_at
 FROM commodore.users
 WHERE email = $1;
 
--- name: UpdateVerificationToken :exec
+-- name: UpdateVerificationTokenIfAllowed :execrows
 UPDATE commodore.users
-SET verification_token = $1, token_expires_at = $2, updated_at = NOW()
-WHERE id = $3;
+SET verification_token = sqlc.arg(verification_token),
+    token_expires_at = sqlc.arg(token_expires_at),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND verified = FALSE
+  AND (
+    token_expires_at IS NULL
+    OR token_expires_at <= sqlc.arg(cooldown_cutoff)
+  );
 
 -- name: SetPasswordResetToken :exec
 UPDATE commodore.users
 SET reset_token = $1, reset_token_expires = $2, updated_at = NOW()
 WHERE id = $3;
 
+-- name: SetPasswordResetTokenIfAllowed :execrows
+UPDATE commodore.users
+SET reset_token = sqlc.arg(reset_token),
+    reset_token_expires = sqlc.arg(reset_token_expires),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND (
+    reset_token_expires IS NULL
+    OR reset_token_expires <= sqlc.arg(cooldown_cutoff)
+  );
+
 -- name: FindUserByResetToken :one
 SELECT id
 FROM commodore.users
 WHERE reset_token = $1 AND reset_token_expires > NOW();
 
--- name: ResetUserPassword :exec
+-- name: ResetUserPassword :execrows
 UPDATE commodore.users
-SET password_hash = $1,
+SET password_hash = sqlc.arg(password_hash),
     reset_token = NULL,
     reset_token_expires = NULL,
     updated_at = NOW()
-WHERE id = $2;
+WHERE id = sqlc.arg(id)
+  AND reset_token = sqlc.arg(reset_token)
+  AND reset_token_expires > NOW();
 
 -- name: UpdateUserFirstName :exec
 UPDATE commodore.users

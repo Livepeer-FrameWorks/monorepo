@@ -502,7 +502,7 @@ func TestRenderInfraAlertEmail(t *testing.T) {
 	}
 
 	// Verify key content is present.
-	for _, want := range []string{"CRITICAL", "node-1", "prod", "99.2%", "92.1%", "Baseline average", "45.3%"} {
+	for _, want := range []string{"FrameWorks", "#0f4b6e", "CRITICAL", "node-1", "prod", "99.2%", "92.1%", "Baseline average", "45.3%"} {
 		if !contains(body, want) {
 			t.Errorf("email body missing %q", want)
 		}

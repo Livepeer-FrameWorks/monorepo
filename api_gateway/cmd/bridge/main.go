@@ -527,11 +527,19 @@ func main() {
 			middleware.PublicOperationRateLimitMiddleware(rateLimiter, trustedProxies, "walletLogin"),
 			authHandlers.WalletLogin())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/register", authHandlers.Register())
-		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/verify/:token", authHandlers.VerifyEmail())
-		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/resend-verification", authHandlers.ResendVerification())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/verify",
+			middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "verifyEmail", 10, 5),
+			authHandlers.VerifyEmail())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/resend-verification",
+			middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "resendVerification", 5, 5),
+			authHandlers.ResendVerification())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/refresh", authHandlers.RefreshToken())
-		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/forgot-password", authHandlers.ForgotPassword())
-		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/reset-password", authHandlers.ResetPassword())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/forgot-password",
+			middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "forgotPassword", 5, 5),
+			authHandlers.ForgotPassword())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/reset-password",
+			middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "resetPassword", 10, 5),
+			authHandlers.ResetPassword())
 		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/webapp-url", authHandlers.WebappURL())
 		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/token/validate", middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients), func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{

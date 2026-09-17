@@ -1031,8 +1031,8 @@ func (c *GRPCClient) ResendVerification(ctx context.Context, email, turnstileTok
 }
 
 // ForgotPassword initiates password reset flow
-func (c *GRPCClient) ForgotPassword(ctx context.Context, email string) (*commodorepb.ForgotPasswordResponse, error) {
-	return c.user.ForgotPassword(ctx, &commodorepb.ForgotPasswordRequest{Email: email})
+func (c *GRPCClient) ForgotPassword(ctx context.Context, email, turnstileToken string) (*commodorepb.ForgotPasswordResponse, error) {
+	return c.user.ForgotPassword(ctx, &commodorepb.ForgotPasswordRequest{Email: email, TurnstileToken: turnstileToken})
 }
 
 // ResetPassword resets a user's password with a token

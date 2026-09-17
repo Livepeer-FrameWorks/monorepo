@@ -389,13 +389,14 @@ function createAuthStore() {
       }
     },
 
-    async forgotPassword(email: string): Promise<LoginResponse> {
+    async forgotPassword(email: string, turnstileToken?: string): Promise<LoginResponse> {
       try {
         const response = await authAPI.post<{
           success: boolean;
           message: string;
         }>("/forgot-password", {
           email,
+          turnstile_token: turnstileToken,
         });
         return { success: response.data.success, error: response.data.message };
       } catch (error: unknown) {

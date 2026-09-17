@@ -171,6 +171,29 @@ func TestValidateSubmission_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateSubmission_MaximumLengths(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ContactRequest)
+		want   string
+	}{
+		{name: "name", mutate: func(req *ContactRequest) { req.Name = strings.Repeat("n", maxNameLength+1) }, want: "Name is too long"},
+		{name: "email", mutate: func(req *ContactRequest) { req.Email = strings.Repeat("a", maxEmailLength) + "@example.com" }, want: "Valid email is required"},
+		{name: "company", mutate: func(req *ContactRequest) { req.Company = strings.Repeat("c", maxCompanyLength+1) }, want: "Company is too long"},
+		{name: "message", mutate: func(req *ContactRequest) { req.Message = strings.Repeat("m", maxMessageLength+1) }, want: "Message is too long"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := validRequest()
+			test.mutate(req)
+			errs := ValidateSubmission(req, true)
+			if !strings.Contains(strings.Join(errs, "\n"), test.want) {
+				t.Fatalf("errors = %v, want %q", errs, test.want)
+			}
+		})
+	}
+}
+
 func TestValidateBehavior_TimingBoundary(t *testing.T) {
 	now := float64(time.Now().UnixMilli())
 

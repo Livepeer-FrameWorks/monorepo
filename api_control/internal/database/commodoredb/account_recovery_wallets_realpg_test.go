@@ -39,15 +39,42 @@ func TestAccountRecoveryWalletRepository_RealPG(t *testing.T) {
 	if err != nil || verification.ID != userID || verification.TenantID != tenantID {
 		t.Fatalf("verification lookup=%#v err=%v", verification, err)
 	}
-	if err := q.VerifyUserEmail(ctx, VerifyUserEmailParams{ID: userID, TenantID: otherTenantID}); err != nil {
+	verifiedRows, err := q.VerifyUserEmail(ctx, VerifyUserEmailParams{
+		ID:                userID,
+		TenantID:          otherTenantID,
+		VerificationToken: sql.NullString{String: verificationHash, Valid: true},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if verifiedRows != 0 {
+		t.Fatal("cross-tenant verification updated the user")
+	}
+	verifiedRows, err = q.VerifyUserEmail(ctx, VerifyUserEmailParams{
+		ID:                userID,
+		TenantID:          tenantID,
+		VerificationToken: sql.NullString{String: "rotated-verification-hash", Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifiedRows != 0 {
+		t.Fatal("stale verification token updated the user")
 	}
 	resend, err := q.GetVerificationResendUser(ctx, sql.NullString{String: "recover@example.com", Valid: true})
 	if err != nil || resend.Verified {
 		t.Fatalf("cross-tenant verification changed user: %#v err=%v", resend, err)
 	}
-	if err := q.VerifyUserEmail(ctx, VerifyUserEmailParams{ID: userID, TenantID: tenantID}); err != nil {
+	verifiedRows, err = q.VerifyUserEmail(ctx, VerifyUserEmailParams{
+		ID:                userID,
+		TenantID:          tenantID,
+		VerificationToken: sql.NullString{String: verificationHash, Valid: true},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if verifiedRows != 1 {
+		t.Fatalf("verified rows = %d, want 1", verifiedRows)
 	}
 	resend, err = q.GetVerificationResendUser(ctx, sql.NullString{String: "recover@example.com", Valid: true})
 	if err != nil || !resend.Verified || resend.TokenExpiresAt.Valid {
@@ -55,12 +82,17 @@ func TestAccountRecoveryWalletRepository_RealPG(t *testing.T) {
 	}
 
 	newVerificationHash := "new-verification-hash"
-	if err := q.UpdateVerificationToken(ctx, UpdateVerificationTokenParams{
+	updated, err := q.UpdateVerificationTokenIfAllowed(ctx, UpdateVerificationTokenIfAllowedParams{
 		VerificationToken: sql.NullString{String: newVerificationHash, Valid: true},
 		TokenExpiresAt:    sql.NullTime{Time: time.Now().Add(time.Hour), Valid: true},
 		ID:                userID,
-	}); err != nil {
+		CooldownCutoff:    sql.NullTime{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if updated != 0 {
+		t.Fatal("verified user accepted a replacement verification token")
 	}
 	resetHash := "reset-hash"
 	if err := q.SetPasswordResetToken(ctx, SetPasswordResetTokenParams{
@@ -75,10 +107,27 @@ func TestAccountRecoveryWalletRepository_RealPG(t *testing.T) {
 	if found, err := q.FindUserByResetToken(ctx, sql.NullString{String: resetHash, Valid: true}); err != nil || found != userID {
 		t.Fatalf("reset lookup=%q err=%v", found, err)
 	}
-	if err := q.ResetUserPassword(ctx, ResetUserPasswordParams{
-		PasswordHash: sql.NullString{String: "new-password", Valid: true}, ID: userID,
-	}); err != nil {
+	updated, err = q.ResetUserPassword(ctx, ResetUserPasswordParams{
+		PasswordHash: sql.NullString{String: "new-password", Valid: true},
+		ID:           userID,
+		ResetToken:   sql.NullString{String: resetHash, Valid: true},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if updated != 1 {
+		t.Fatalf("updated reset rows = %d, want 1", updated)
+	}
+	updated, err = q.ResetUserPassword(ctx, ResetUserPasswordParams{
+		PasswordHash: sql.NullString{String: "second-password", Valid: true},
+		ID:           userID,
+		ResetToken:   sql.NullString{String: resetHash, Valid: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 0 {
+		t.Fatal("consumed reset token changed the password a second time")
 	}
 	if _, err := q.FindUserByResetToken(ctx, sql.NullString{String: resetHash, Valid: true}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("consumed reset token err=%v", err)
