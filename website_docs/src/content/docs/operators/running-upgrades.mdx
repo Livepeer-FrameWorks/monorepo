@@ -511,25 +511,25 @@ a degraded mode. There is no
 "upgrade edges first" or "run old sidecars against a new Foghorn" step: deploy the
 control plane, then redeploy every edge.
 
-### Multi-region event mesh, alerting, and incidents (v0.3.5)
+### Multi-region event mesh, alerting, and incidents (v0.3.8)
 
-v0.3.5 changes production topology as well as binaries. `release apply` carries the topology
+v0.3.8 changes production topology as well as binaries. `release apply` carries the topology
 change in a safe order; only the managed alerting dependencies and the pull-source pin conversion
 run separately:
 
 | Change                                                                                                                                                                | Command                                                |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Privateer seed DNS, the `lookout.incidents` topic, MirrorMaker2 links in both directions with the JMX exporter, platform services, Lookout and its `lookout` database | `cluster release apply`                                |
-| vmagent `region` and `cluster` labels, the MirrorMaker2 scrape, vmalert, Alertmanager                                                                                 | `cluster provision --version v0.3.5 --only interfaces` |
+| vmagent `region` and `cluster` labels, the MirrorMaker2 scrape, vmalert, Alertmanager                                                                                 | `cluster provision --version v0.3.8 --only interfaces` |
 | Pull-source pins                                                                                                                                                      | `cluster data-migrate`                                 |
 
 `release apply` converges the mesh and Kafka in its pre-upgrade stage (see
 [The release command](#the-release-command-reconciliations-run-automatically)) before any service
 rolls:
 
-- Privateer seeds gain `decklog.<aggregator-region>` and keep the names v0.3.4 binaries dial:
+- Privateer seeds gain `decklog.<aggregator-region>` and keep the names v0.3.7 binaries dial:
   `signalman.<region>` on Bridge hosts, and a plain `decklog` on central writer hosts resolving
-  to the aggregator-region replicas. Each mesh host also receives the v0.3.5 Privateer binary.
+  to the aggregator-region replicas. Each mesh host also receives the v0.3.8 Privateer binary.
 - `lookout.incidents` is created on the aggregator Kafka cluster. No broker or controller is
   reconfigured or restarted.
 - The existing MirrorMaker2 workers restart with the JMX exporter, which pauses replication into
@@ -544,7 +544,7 @@ topics the new Signalman reads already exist.
 #### Before you start
 
 1. **Upgrade the CLI and the manifest together.** Run `frameworks update`, then confirm
-   `frameworks version` reports v0.3.5 or later. The v0.3.5 CLI rejects the old
+   `frameworks version` reports v0.3.8 or later. The v0.3.8 CLI rejects the old
    `infrastructure.kafka.mirrormaker.host`, `mirrormaker.hosts`, and `regional[].mirror_topics`
    fields. An older CLI rejects `mirrormaker.links`, `services.lookout`, `observability.vmalert`, and
    `observability.alertmanager`. Merge the new manifest only when every operator has the new CLI;
@@ -560,7 +560,7 @@ topics the new Signalman reads already exist.
      `lookout.incidents` topic on the aggregator Kafka cluster.
    - Add `observability.vmalert` and `observability.alertmanager`. Alertmanager runs on one host.
    - Replace `allowed_cluster_ids` in the bootstrap overlay, as described in
-     [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v035).
+     [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v038).
 3. **Set the alerting inputs** in the shared secrets file with the GitOps helper
    `gitops/scripts/sops-env.sh`. From the GitOps repository root, omitting the value makes the
    helper prompt for it without echoing:
@@ -587,7 +587,7 @@ topics the new Signalman reads already exist.
    `provision --only interfaces` refuses while any Alertmanager input above is missing. Both list
    every missing key. See [Alerting and Incidents](/operators/alerting).
 
-4. **Check Redis Sentinel.** A v0.3.5 Foghorn configured with a Sentinel topology waits for it and
+4. **Check Redis Sentinel.** A v0.3.8 Foghorn configured with a Sentinel topology waits for it and
    exits if it stays unreachable. The previous Foghorn logged a warning and ran without Redis, so
    look for `Failed to initialize redis` in `frameworks cluster logs foghorn-eu --tail 500` (and
    for every other Foghorn alias) and fix Sentinel first.
@@ -603,14 +603,14 @@ topics the new Signalman reads already exist.
    declared MM2 worker.
 
 ```bash
-frameworks cluster release plan --version v0.3.5
-frameworks cluster release apply --version v0.3.5 --dry-run
+frameworks cluster release plan --version v0.3.8
+frameworks cluster release apply --version v0.3.8 --dry-run
 ```
 
 2. Apply the release:
 
    ```bash
-   frameworks cluster release apply --version v0.3.5 --yes
+   frameworks cluster release apply --version v0.3.8 --yes
    ```
 
    The pre-upgrade stage restarts Privateer one host at a time, verifies mesh health, creates
@@ -619,30 +619,30 @@ frameworks cluster release apply --version v0.3.5 --dry-run
    ahead of Bridge, installs Lookout, removes Periscope-Ingest from hosts outside the aggregator
    region after the remaining replicas are healthy, and runs postdeploy migrations.
 
-   While it runs, services on v0.3.4 and v0.3.5 resolve every name they dial. An upgraded
+   While it runs, services on v0.3.7 and v0.3.8 resolve every name they dial. An upgraded
    Quartermaster may emit platform-scoped service events that the older Decklog rejects; its
    outbox retries them once Decklog is upgraded.
 
    If any step fails, fix the cause and rerun the same command. Hosts already converged and
-   services already at v0.3.5 are skipped.
+   services already at v0.3.8 are skipped.
 
 3. Convert pull-source pins with the data migration in
-   [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v035):
+   [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v038):
 
    ```bash
-   frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
-   frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+   frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
+   frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
    ```
 
 4. Install alerting once Lookout is healthy, because Alertmanager delivers every alert group to it:
 
    ```bash
-   frameworks cluster provision --version v0.3.5 --only interfaces --dry-run
-   frameworks cluster provision --version v0.3.5 --only interfaces
+   frameworks cluster provision --version v0.3.8 --only interfaces --dry-run
+   frameworks cluster provision --version v0.3.8 --only interfaces
    frameworks cluster grafana sync
    ```
 
-   `--version v0.3.5` pins the provision to the release you just applied, whatever the manifest
+   `--version v0.3.8` pins the provision to the release you just applied, whatever the manifest
    channel currently resolves to. The run adds `region` and `cluster` labels to every vmagent
    (restarting each), scrapes the MirrorMaker2 exporter on its worker hosts, and installs vmalert
    and Alertmanager. Tasks that already match their rendered state, such as Privateer after the
@@ -668,25 +668,25 @@ frameworks cluster release apply --version v0.3.5 --dry-run
 
 #### Rollback
 
-- v0.3.5 declares no rollback restrictions and no reconciliation transitions, so a service whose
+- v0.3.8 declares no rollback restrictions and no reconciliation transitions, so a service whose
   health check fails during step 2 is rolled back automatically, as described in
   [Rollback behavior](#rollback-behavior). Rerun `release apply`; converged hosts and services
-  already at v0.3.5 are skipped.
+  already at v0.3.8 are skipped.
 - A failure in the pre-upgrade stage stops the release before any migration or service upgrade.
-  Hosts that converged stay converged, which is safe for the v0.3.4 services still running.
+  Hosts that converged stay converged, which is safe for the v0.3.7 services still running.
 - Lookout is a new installation and has no automatic rollback. A Lookout that fails its health
   check stops `release apply` after the services before it have upgraded; fix the cause and rerun.
   To continue without it, disable `services.lookout`, `observability.alertmanager`, and
   `observability.vmalert` together; Alertmanager refuses to provision without a Lookout service in
   the manifest.
-- To return an individual service to v0.3.4, keep the v0.3.5 CLI and manifest and run
-  `frameworks cluster upgrade <service> --version v0.3.4`. The seeds keep the names v0.3.4
+- To return an individual service to v0.3.7, keep the v0.3.8 CLI and manifest and run
+  `frameworks cluster upgrade <service> --version v0.3.7`. The seeds keep the names v0.3.7
   binaries dial, so a rolled-back Bridge or central writer still resolves Signalman and Decklog.
   Lookout has no earlier artifact. Expand migrations stay in place for the older binaries. The
   Navigator postdeploy migration deletes exact per-domain certificates for tenant custom domains,
   and a rolled-back Navigator does not get them back.
-- Do not roll back the CLI or the manifest to recover. The older CLI cannot parse the v0.3.5
-  manifest, and the v0.3.5 CLI cannot parse the older one.
+- Do not roll back the CLI or the manifest to recover. The older CLI cannot parse the v0.3.8
+  manifest, and the v0.3.8 CLI cannot parse the older one.
 - MirrorMaker2 links and Privateer are not rolled back. The added link only creates
   source-prefixed topic copies, which older consumers ignore. A failed link is repaired forward:
   fix the cause and rerun `release apply`. While a link is down, Signalmans in its target region
@@ -696,9 +696,9 @@ frameworks cluster release apply --version v0.3.5 --dry-run
 - Alerting is outside the serving path. If `provision --only interfaces` fails, fix the reported
   input and rerun it.
 
-### Pull-source pins become stream placement rules (v0.3.5)
+### Pull-source pins become stream placement rules (v0.3.8)
 
-v0.3.5 stores where a pull or managed stream's source may run as the stream's own ingest placement
+v0.3.8 stores where a pull or managed stream's source may run as the stream's own ingest placement
 rules (its source location) and lets placement rules name nodes. The per-source
 `allowed_cluster_ids` pins remain in the schema and are still enforced by Foghorn during this
 release; Commodore mirrors every written location's clusters into them.
@@ -706,15 +706,15 @@ release; Commodore mirrors every written location's clusters into them.
 Before rendering, replace every `allowed_cluster_ids` key under `commodore.pull_streams` and
 `commodore.mist_native_streams` in the bootstrap overlay with
 `source_location: { clusters: [...] }` (see [Cluster manifest](/operators/cluster-manifest#stream-source-location)).
-The v0.3.5 CLI rejects the old key.
+The v0.3.8 CLI rejects the old key.
 
 After the control plane is deployed, convert existing pins with the release-catalogued data
 migration:
 
 ```bash
-frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5 --dry-run
-frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
-frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8 --dry-run
+frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
+frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
 ```
 
 The dry run counts streams whose rules would change without writing. The run converts each pinned
@@ -725,11 +725,11 @@ and the pins share no cluster, the pins replace the rule's allowed clusters. Ver
 while any pinned stream lacks an equivalent rule. The migration is required before the contract
 phase.
 
-Node placement activates per cell: once every live Foghorn replica in a cell runs v0.3.5 and
+Node placement activates per cell: once every live Foghorn replica in a cell runs v0.3.8 and
 enforces placement, the cell attests `node_placement_ready`, and tenants whose cells all attest are issued node-capable
 authority. Rules that name nodes are refused until then. The pin columns,
 `commodore.stream_cluster_pins` and the Foghorn pin readers are removed in the release after
-v0.3.5, which requires this migration to be verified and every media cell to attest node
+v0.3.8, which requires this migration to be verified and every media cell to attest node
 placement.
 
 ## Version selection

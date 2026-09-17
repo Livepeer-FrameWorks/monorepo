@@ -131,7 +131,7 @@ func verifyNavigatorAutomaticMigrationPhasesConverge(t *testing.T, db *sql.DB) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	seedNavigatorCredentialCleanupProof(t, ctx, db)
-	for _, version := range []string{"v0.3.0", "v0.3.5"} {
+	for _, version := range []string{"v0.3.0", "v0.3.8"} {
 		for _, phase := range []string{"expand", "postdeploy"} {
 			dir := "migrations/navigator/" + version + "/" + phase
 			entries, err := fs.ReadDir(dbsql.Content, dir)
@@ -162,7 +162,7 @@ func verifyNavigatorAutomaticMigrationPhasesConverge(t *testing.T, db *sql.DB) {
 	assertNavigatorCustomDomainExactCertificatesRetired(t, ctx, db)
 }
 
-// assertNavigatorCustomDomainExactCertificatesRetired proves the v0.3.5
+// assertNavigatorCustomDomainExactCertificatesRetired proves the v0.3.8
 // postdeploy removed the retained cert_failed domain's exact certificate while
 // the domain row and platform certificate survive.
 func assertNavigatorCustomDomainExactCertificatesRetired(t *testing.T, ctx context.Context, db *sql.DB) {
@@ -180,7 +180,7 @@ SELECT COUNT(*) FROM navigator.tenant_custom_domains WHERE domain = 'custom.exam
 		t.Fatal(err)
 	}
 	if exactCerts != 0 || platformCerts != 1 || customDomainRows != 1 {
-		t.Fatalf("v0.3.5 exact-certificate cleanup exact_certs=%d platform_certs=%d custom_domain_rows=%d", exactCerts, platformCerts, customDomainRows)
+		t.Fatalf("v0.3.8 exact-certificate cleanup exact_certs=%d platform_certs=%d custom_domain_rows=%d", exactCerts, platformCerts, customDomainRows)
 	}
 }
 

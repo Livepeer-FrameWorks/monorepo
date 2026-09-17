@@ -1442,7 +1442,7 @@ only the source location.
 
 ## Pull-source pin conversion and retirement
 
-Data migration `commodore_pull_source_pins_to_stream_rules_v0_3_5`
+Data migration `commodore_pull_source_pins_to_stream_rules_v0_3_8`
 (`api_control/internal/placementpolicy/pull_source_pins_migration.go`, required before the contract
 phase) converts every non-empty `stream_pull_sources.allowed_cluster_ids` and
 `stream_mist_sources.allowed_cluster_ids` of a non-deleted stream into the stream's own ingest
@@ -1472,7 +1472,7 @@ release's own contract phase: its Foghorn still enforces pins while cells attest
 runs after its deploy, and its Commodore mirrors locations into the pin columns for mixed-version
 replicas. Retirement requires:
 
-1. `commodore_pull_source_pins_to_stream_rules_v0_3_5` completed and verified.
+1. `commodore_pull_source_pins_to_stream_rules_v0_3_8` completed and verified.
 2. Every media cell attesting node placement (`node_placement_ready`), so tenant authorities are
    issued at schema 3 and no replica depends on pins.
 

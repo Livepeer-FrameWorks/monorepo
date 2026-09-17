@@ -14,7 +14,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const PullSourcePinsToStreamRulesID = "commodore_pull_source_pins_to_stream_rules_v0_3_5"
+const PullSourcePinsToStreamRulesID = "commodore_pull_source_pins_to_stream_rules_v0_3_8"
 
 const zeroStreamID = "00000000-0000-0000-0000-000000000000"
 
@@ -52,7 +52,7 @@ type pullSourcePinsCheckpoint struct {
 // commodoredb query contracts and cannot depend on the store.
 func RegisterPullSourcePinsToStreamRules() {
 	datamigrate.Register(datamigrate.Migration{
-		ID: PullSourcePinsToStreamRulesID, Service: "commodore", IntroducedIn: "v0.3.5",
+		ID: PullSourcePinsToStreamRulesID, Service: "commodore", IntroducedIn: "v0.3.8",
 		RequiredBeforePhase: "contract",
 		Description:         "convert per-source pull and managed-stream cluster pins into each stream's own ingest placement rules",
 		Run:                 RunPullSourcePinsToStreamRules,

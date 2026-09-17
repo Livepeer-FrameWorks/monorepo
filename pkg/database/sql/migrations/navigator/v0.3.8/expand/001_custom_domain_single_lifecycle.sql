@@ -1,4 +1,4 @@
--- v0.3.5: custom domains are served only through the tenant bundle. Renewal
+-- v0.3.8: custom domains are served only through the tenant bundle. Renewal
 -- failures are recorded separately from issuance status, and a failed
 -- issuance carries its own retry time.
 

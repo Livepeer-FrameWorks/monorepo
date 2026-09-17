@@ -1,4 +1,4 @@
--- v0.3.5: persist operator-initiated control-cell reassignment of
+-- v0.3.8: persist operator-initiated control-cell reassignment of
 -- tenant-private clusters and the Foghorn cell that most recently observed
 -- each node.
 

@@ -310,7 +310,7 @@ investigation.
 The `lookout` database is created with its owner and runtime roles, and its baseline applied, by
 `frameworks cluster provision` on a new cluster and by the service-database step of
 `cluster migrate --phase expand` / `cluster release apply` on an existing one (see
-`docs/standards/schema-migrations.md`, "New service databases"). The database is new in v0.3.5 and
+`docs/standards/schema-migrations.md`, "New service databases"). The database is new in v0.3.8 and
 has no migrations. The pre-deploy gate refuses `cluster upgrade lookout` while the database is
 missing or empty. The release catalog maps service `lookout` to database `lookout`, and
 `pkg/database/capabilities.go` probes the incident columns and the outbox leasing and settlement

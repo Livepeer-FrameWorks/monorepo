@@ -279,7 +279,7 @@ func TestRunMigrateCreatesServiceDatabasesBeforeLedgerChecks(t *testing.T) {
 	run := func(dryRun bool, phase string) error {
 		calls, guardExcluded, ensureDryRun = nil, nil, false
 		cmd, _ := commandWithOutput()
-		return runMigrate(cmd, &resolvedCluster{Manifest: &inventory.Manifest{}}, dryRun, phase, true, "v0.3.5", true, false)
+		return runMigrate(cmd, &resolvedCluster{Manifest: &inventory.Manifest{}}, dryRun, phase, true, "v0.3.8", true, false)
 	}
 
 	if err := run(false, "expand"); err != nil {
@@ -327,7 +327,7 @@ func TestRunMigrateStartsItsBudgetAfterServiceDatabaseBaselines(t *testing.T) {
 		return nil
 	}
 	cmd, _ := commandWithOutput()
-	if err := runMigrate(cmd, &resolvedCluster{Manifest: &inventory.Manifest{}}, false, "expand", true, "v0.3.5", true, false); err != nil {
+	if err := runMigrate(cmd, &resolvedCluster{Manifest: &inventory.Manifest{}}, false, "expand", true, "v0.3.8", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if ensureHadDeadline {
@@ -342,11 +342,11 @@ func TestPostgresGateRefusesMissingServiceDatabaseBeforeLedgerChecks(t *testing.
 	seams := &serviceDatabaseSeams{states: []map[string]provisioner.ServiceDatabaseState{{"lookout": {}}}}
 	seams.install(t)
 	manifest := postgresServiceDatabaseManifest()
-	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.5")
+	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
 	if err == nil {
 		t.Fatal("gate passed for a service whose database does not exist")
 	}
-	for _, want := range []string{"lookout", "missing or have no baseline", "frameworks cluster release apply --version v0.3.5", "frameworks cluster migrate --phase expand --to-version v0.3.5"} {
+	for _, want := range []string{"lookout", "missing or have no baseline", "frameworks cluster release apply --version v0.3.8", "frameworks cluster migrate --phase expand --to-version v0.3.8"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("gate refusal %q lacks %q", err, want)
 		}
@@ -362,7 +362,7 @@ func TestPostgresGateIncludesExplicitCompletionForUnverifiedDatabase(t *testing.
 	}}}
 	seams.install(t)
 	manifest := postgresServiceDatabaseManifest()
-	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.5")
+	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
 	if err == nil || !strings.Contains(err.Error(), "--complete-interrupted-baselines") {
 		t.Fatalf("err = %v, want explicit completion remediation", err)
 	}

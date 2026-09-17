@@ -1,4 +1,4 @@
--- v0.3.5: platform-scoped service events (an ownerless cluster has no tenant)
+-- v0.3.8: platform-scoped service events (an ownerless cluster has no tenant)
 -- and lease-token fencing for outbox settlement.
 
 ALTER TABLE quartermaster.service_event_outbox

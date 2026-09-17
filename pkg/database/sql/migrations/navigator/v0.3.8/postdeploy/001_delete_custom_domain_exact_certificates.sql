@@ -1,4 +1,4 @@
--- v0.3.5: exact per-domain certificates for tenant custom domains have no
+-- v0.3.8: exact per-domain certificates for tenant custom domains have no
 -- consumer; edges receive custom domains only as tenant bundle SANs. Platform
 -- certificates and tenant certificates for other domains are untouched.
 

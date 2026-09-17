@@ -749,7 +749,7 @@ func TestNavigatorCustomDomainSingleLifecycle_RealYugabyte(t *testing.T) {
 }
 
 // verifyNavigatorCustomDomainSingleLifecycle proves the tenant-bundle-only
-// custom-domain transitions and the v0.3.5 migrations on a real engine.
+// custom-domain transitions and the v0.3.8 migrations on a real engine.
 func verifyNavigatorCustomDomainSingleLifecycle(t *testing.T, db *sql.DB) {
 	t.Helper()
 	enc, err := fieldcrypt.DeriveFieldEncryptor([]byte("navigator-real-postgres-contract-secret"), "navigator-store")
@@ -761,12 +761,12 @@ func verifyNavigatorCustomDomainSingleLifecycle(t *testing.T, db *sql.DB) {
 	const tenantA = "20000000-0000-0000-0000-000000000001"
 	const tenantB = "20000000-0000-0000-0000-000000000002"
 
-	expand, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.5/expand/001_custom_domain_single_lifecycle.sql")
+	expand, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.8/expand/001_custom_domain_single_lifecycle.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, string(expand)); err != nil {
-		t.Fatalf("replay v0.3.5 expand on current baseline: %v", err)
+		t.Fatalf("replay v0.3.8 expand on current baseline: %v", err)
 	}
 
 	admit := func(tenantID, domain, status string) {
@@ -885,12 +885,12 @@ INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expire
 VALUES ('tenant:' || $1::text, '["issued.example.test"]'::jsonb, 'bundle-cert', 'bundle-key', NOW() + INTERVAL '1 day')`, tenantA); err != nil {
 		t.Fatalf("seed tenant bundle: %v", err)
 	}
-	postdeploy, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.5/postdeploy/001_delete_custom_domain_exact_certificates.sql")
+	postdeploy, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.8/postdeploy/001_delete_custom_domain_exact_certificates.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, string(postdeploy)); err != nil {
-		t.Fatalf("apply v0.3.5 postdeploy: %v", err)
+		t.Fatalf("apply v0.3.8 postdeploy: %v", err)
 	}
 	certRows, err := db.QueryContext(ctx, `SELECT COALESCE(tenant_id::text, ''), domain FROM navigator.certificates ORDER BY 1, 2`)
 	if err != nil {
