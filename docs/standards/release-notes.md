@@ -50,7 +50,6 @@ Use one manifest source consistently throughout the examples. Public notes norma
 
 The compact normal sequence is:
 
-    frameworks cluster migrate validate
     frameworks cluster release plan --manifest <path> --version vX.Y.Z
     frameworks cluster release apply --manifest <path> --version vX.Y.Z --dry-run
     frameworks cluster release apply --manifest <path> --version vX.Y.Z --yes
@@ -60,20 +59,21 @@ The compact normal sequence is:
 
 `release plan` is the credential-free, static preview. `release apply --dry-run` is the live preflight: it resolves access and authentication, then runs the same migration, transition, and service checks the real rollout will use. `release apply` owns the ordered expand migrations, service upgrades, declared release transitions, and postdeploy migrations. Do not duplicate those steps in the normal-path command block.
 
+Do not put `cluster migrate validate` in routine operator instructions. It validates the migration files embedded in the installed CLI and takes no manifest because it does not inspect a cluster. Release CI and `make release-preflight` own that source/package validation. It remains a maintainer and diagnostic command, not a deployment phase.
+
 `cluster diff` is verification, not a mandatory invitation to run `cluster provision`. If it reports intended infrastructure or rendered-config drift, name the specific reconciliation command separately.
 
-#### Required data migrations
+#### Data migrations and contract migrations
 
-Data migrations are conditional, not boilerplate. When the release catalog declares them, explain whether upgraded binaries must be live before their handlers exist and whether the first `release apply` intentionally stops at the postdeploy gate. Name the required IDs and their ordering or dependency constraints, but link detailed repair and inspection procedures to the operator runbook.
+Service-owned data migrations are separate from schema migrations. `release apply` owns expand and postdeploy schema phases, but it does not execute `cluster data-migrate`; catalogued data migrations are explicit operator steps because they may scan or rewrite live service data in resumable batches.
 
-The compact pattern is:
+When the target release declares a data migration, include its exact dry-run, run, and verify commands after the target service binaries are live:
 
-    frameworks cluster data-migrate list --manifest <path> --to-version vX.Y.Z
+    frameworks cluster data-migrate run <service>.<migration_id> --manifest <path> --dry-run
     frameworks cluster data-migrate run <service>.<migration_id> --manifest <path>
     frameworks cluster data-migrate verify <service>.<migration_id> --manifest <path>
-    frameworks cluster release apply --manifest <path> --version vX.Y.Z --yes
 
-Repeat the run and verify pair for every migration declared by that release. State explicitly whether a gate exit leaves already-upgraded services running so operators do not mistake an intentional two-pass rollout for an automatic rollback.
+State the catalog gate. A migration required before `postdeploy` may intentionally make the first `release apply` stop at that gate; after `run` and `verify`, rerun the same `release apply --yes` command. A migration required only before `contract` runs after the normal release application and does not require a second `release apply`. Include it in the introducing release so operators complete the data conversion before a later destructive phase makes it urgent.
 
 Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block:
 
@@ -83,7 +83,7 @@ Contract migrations are always outside `release apply`. When a release has contr
 Classify everything else explicitly instead of using `cluster provision` as a catch-all:
 
 - **Platform artifact:** handled by `cluster release apply`.
-- **Managed dependency or rendered host configuration:** name the exact `cluster provision` or component-specific reconciliation command and when to run it.
+- **Managed dependency or rendered host configuration:** name the exact component-specific reconciliation command and when to run it. If only `cluster provision` can perform the work, use the narrowest supported selector, explain exactly what it changes and why `release apply` does not own it, and list it once after the release application. Never add an unscoped `cluster provision` as a second generic deployment pass.
 - **Control-plane desired state:** use `cluster control-plane plan`, then `cluster control-plane reconcile` with the affected domain(s).
 - **Host or data infrastructure:** name the dedicated lifecycle command and its own safety procedure.
 
