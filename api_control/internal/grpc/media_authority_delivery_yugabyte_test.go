@@ -5,6 +5,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,4 +29,24 @@ func startPlacementDeliveryYugabyte(t *testing.T, prefix string) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestMediaAuthorityQueueIndexesUseRangeSharding_RealYugabyte(t *testing.T) {
+	db := startPlacementDeliveryYugabyte(t, "authority_queue_indexes")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, name := range []string{
+		"idx_media_authority_deliveries_due_v2",
+		"idx_media_authority_versions_expiry_v2",
+		"idx_media_authority_refresh_inbox_due_v2",
+		"idx_media_authority_refresh_inbox_completed_v2",
+	} {
+		var definition string
+		if err := db.QueryRowContext(ctx, `SELECT pg_get_indexdef(to_regclass('commodore.' || $1))`, name).Scan(&definition); err != nil {
+			t.Fatalf("read %s definition: %v", name, err)
+		}
+		if strings.Contains(definition, " HASH") {
+			t.Fatalf("%s is hash-sharded instead of range-sharded: %s", name, definition)
+		}
+	}
 }

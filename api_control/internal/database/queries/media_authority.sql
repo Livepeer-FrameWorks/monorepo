@@ -221,27 +221,99 @@ WITH requeued AS (
 SELECT COUNT(*)::bigint AS requeued_count FROM requeued;
 
 -- name: ListMediaAuthorityDeliveryStats :many
+WITH current_deliveries AS MATERIALIZED (
+    SELECT current.authority_kind, current.authority_id, current.authority_version,
+           delivery.cell_id, delivery.status, delivery.created_at
+    FROM commodore.media_authority_current AS current
+    JOIN LATERAL (
+        SELECT cell_id, status, created_at
+        FROM commodore.media_authority_deliveries
+        WHERE authority_kind = current.authority_kind
+          AND authority_id = current.authority_id
+          AND authority_version = current.authority_version
+        OFFSET 0
+    ) AS delivery ON TRUE
+)
 SELECT current.authority_kind,
-       COUNT(*) FILTER (WHERE delivery.status IN ('pending', 'delivering'))::bigint AS pending_count,
+       COUNT(*) FILTER (WHERE current.status IN ('pending', 'delivering'))::bigint AS pending_count,
        COALESCE(MAX(
            current.authority_version - COALESCE(distribution.highest_acknowledged_version, 0)
        ), 0)::bigint AS max_version_lag,
        COALESCE(MAX(
-           CASE WHEN delivery.status IN ('pending', 'delivering')
-                THEN EXTRACT(EPOCH FROM (NOW() - delivery.created_at))
+           CASE WHEN current.status IN ('pending', 'delivering')
+                THEN EXTRACT(EPOCH FROM (NOW() - current.created_at))
                 ELSE 0 END
        ), 0)::double precision AS oldest_pending_seconds
-FROM commodore.media_authority_current AS current
-JOIN commodore.media_authority_deliveries AS delivery
-  ON delivery.authority_kind = current.authority_kind
- AND delivery.authority_id = current.authority_id
- AND delivery.authority_version = current.authority_version
+FROM current_deliveries AS current
 LEFT JOIN commodore.media_authority_distribution AS distribution
   ON distribution.authority_kind = current.authority_kind
  AND distribution.authority_id = current.authority_id
- AND distribution.cell_id = delivery.cell_id
+ AND distribution.cell_id = current.cell_id
 GROUP BY current.authority_kind
 ORDER BY current.authority_kind;
+
+-- name: DeleteCompletedMediaAuthorityRefreshInbox :execrows
+WITH candidates AS (
+    SELECT queued.source_service, queued.source_event_id
+    FROM commodore.media_authority_refresh_inbox AS queued
+    WHERE queued.status = 'completed'
+      AND queued.completed_at < sqlc.arg(completed_before)::timestamptz
+    ORDER BY queued.completed_at, queued.source_service, queued.source_event_id
+    LIMIT sqlc.arg(batch_size)
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM commodore.media_authority_refresh_inbox AS inbox
+USING candidates
+WHERE inbox.source_service = candidates.source_service
+  AND inbox.source_event_id = candidates.source_event_id;
+
+-- name: DeleteExpiredMediaAuthorityDeliveries :execrows
+WITH candidates AS MATERIALIZED (
+    SELECT version.authority_kind, version.authority_id, version.authority_version
+    FROM commodore.media_authority_versions AS version
+    LEFT JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = version.authority_kind
+     AND current.authority_id = version.authority_id
+     AND current.authority_version = version.authority_version
+    WHERE version.valid_until < sqlc.arg(expired_before)
+      AND current.authority_id IS NULL
+    ORDER BY version.valid_until, version.authority_kind,
+             version.authority_id, version.authority_version
+    LIMIT sqlc.arg(batch_size)
+)
+DELETE FROM commodore.media_authority_deliveries AS delivery
+USING candidates
+WHERE delivery.authority_kind = candidates.authority_kind
+  AND delivery.authority_id = candidates.authority_id
+  AND delivery.authority_version = candidates.authority_version
+  AND delivery.status IN ('acknowledged', 'superseded');
+
+-- name: DeleteOrphanedMediaAuthorityVersions :execrows
+WITH candidates AS MATERIALIZED (
+    SELECT version.authority_kind, version.authority_id, version.authority_version
+    FROM commodore.media_authority_versions AS version
+    LEFT JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = version.authority_kind
+     AND current.authority_id = version.authority_id
+     AND current.authority_version = version.authority_version
+    WHERE version.valid_until < sqlc.arg(expired_before)
+      AND current.authority_id IS NULL
+    ORDER BY version.valid_until, version.authority_kind,
+             version.authority_id, version.authority_version
+    LIMIT sqlc.arg(batch_size)
+)
+DELETE FROM commodore.media_authority_versions AS version
+USING candidates
+WHERE version.authority_kind = candidates.authority_kind
+  AND version.authority_id = candidates.authority_id
+  AND version.authority_version = candidates.authority_version
+  AND NOT EXISTS (
+      SELECT 1
+      FROM commodore.media_authority_deliveries AS delivery
+      WHERE delivery.authority_kind = version.authority_kind
+        AND delivery.authority_id = version.authority_id
+        AND delivery.authority_version = version.authority_version
+  );
 
 -- name: InsertMediaAuthorityRefreshInbox :execrows
 INSERT INTO commodore.media_authority_refresh_inbox (

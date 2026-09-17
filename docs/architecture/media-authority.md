@@ -79,9 +79,20 @@ Per-cell obligations lease and retry
 independently, and a newer version terminally supersedes older pending work. On
 Foghorn registration/reconnect, Foghorn requests replay by its explicit control
 cell ID, never by a virtual cluster ID. Periodic reconciliation/backfill covers
-a missed source event. A cell acknowledges only after signature, schema,
+a missed source event. That pass enqueues tenants only; the tenant completion
+transaction owns dependent-object fanout, so streams and artifacts are not
+also enqueued directly and signed twice for the same safety pass. Purser's
+subscription trigger compares every authority-bearing field and ignores an
+UPDATE that wrote identical values. A cell acknowledges only after signature, schema,
 digest, audience, time, invariant, and monotonic-version checks pass and the
 envelope plus decoded indexes commit to the Foghorn database.
+
+Queue indexes that order by `next_attempt_at` are explicitly range-sharded.
+YugabyteDB otherwise makes the first index key a hash key, which turns a due
+time lookup into a full-table scan even when only a few rows are pending.
+Backlog metrics materialize the small current-authority delivery set first and
+then join distribution state; historical deliveries are never the driving
+side of that observation query.
 
 Foghorn authority apply uses the fixed `maut` two-key advisory namespace and a
 five-second transaction-local `lock_timeout`. Artifact projection first takes
@@ -402,6 +413,14 @@ without Quartermaster or Purser calls.
 Foghorn retains apply/verification audit observations for 30 days and deletes
 expired rows in bounded local batches. This diagnostic retention never changes
 the signed current authority or its decision.
+
+Commodore retains completed refresh-inbox work for seven days and expired
+central authority history for thirty days after `valid_until`. Hourly bounded
+batches delete only acknowledged or superseded deliveries for a non-current
+version, then remove versions with no remaining delivery. Current versions and
+pending or delivering obligations are never eligible, even when old. Targets
+and acknowledged-distribution high-water marks remain as the durable record of
+which cells must receive future revocations and how far each cell converged.
 
 For signing-key rotation, publish the next public key to every Foghorn trust set
 before activating its Commodore private key. Keep the previous public key until

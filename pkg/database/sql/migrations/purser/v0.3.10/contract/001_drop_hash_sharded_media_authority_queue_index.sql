@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS purser.idx_purser_media_authority_refresh_pending;

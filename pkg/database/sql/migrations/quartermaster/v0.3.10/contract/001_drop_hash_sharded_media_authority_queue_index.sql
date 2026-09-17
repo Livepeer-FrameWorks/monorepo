@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS quartermaster.idx_quartermaster_media_authority_refresh_pending;

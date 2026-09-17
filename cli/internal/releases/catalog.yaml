@@ -124,3 +124,5 @@ releases:
         required_before_phase: contract
   - version: v0.3.9
     min_cli_version: v0.3.9
+  - version: v0.3.10
+    min_cli_version: v0.3.10

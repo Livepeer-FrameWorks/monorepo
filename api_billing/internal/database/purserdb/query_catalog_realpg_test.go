@@ -140,6 +140,43 @@ func assertMediaAuthorityRefreshTriggers(t *testing.T, db *sql.DB) {
 			t.Fatalf("real PostgreSQL trigger did not enqueue %q; got %v", reason, reasons)
 		}
 	}
+	var subscriptionRevision int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT revision FROM purser.media_authority_refresh_outbox
+		WHERE tenant_id = $1 AND reason = 'subscription_authority_changed'
+	`, tenantID).Scan(&subscriptionRevision); err != nil {
+		t.Fatalf("read subscription authority revision: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions SET status = status WHERE tenant_id = $1
+	`, tenantID); err != nil {
+		t.Fatalf("write unchanged subscription state: %v", err)
+	}
+	var unchangedRevision int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT revision FROM purser.media_authority_refresh_outbox
+		WHERE tenant_id = $1 AND reason = 'subscription_authority_changed'
+	`, tenantID).Scan(&unchangedRevision); err != nil {
+		t.Fatalf("read unchanged subscription authority revision: %v", err)
+	}
+	if unchangedRevision != subscriptionRevision {
+		t.Fatalf("no-op subscription update advanced authority revision: got %d want %d", unchangedRevision, subscriptionRevision)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions SET billing_period_start = NOW() WHERE tenant_id = $1
+	`, tenantID); err != nil {
+		t.Fatalf("write changed subscription state: %v", err)
+	}
+	var changedRevision int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT revision FROM purser.media_authority_refresh_outbox
+		WHERE tenant_id = $1 AND reason = 'subscription_authority_changed'
+	`, tenantID).Scan(&changedRevision); err != nil {
+		t.Fatalf("read changed subscription authority revision: %v", err)
+	}
+	if changedRevision != subscriptionRevision+1 {
+		t.Fatalf("changed subscription update authority revision = %d, want %d", changedRevision, subscriptionRevision+1)
+	}
 
 	if _, err := db.ExecContext(ctx, `
 		UPDATE purser.media_authority_refresh_outbox
@@ -197,6 +234,7 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	db := startQueryCatalogRealYugabyte(t)
 	preparePurserQueryCatalog(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
+	assertMediaAuthorityRefreshTriggers(t, db)
 }
 
 func assertTenantAdmissionQueryExecution(t *testing.T, db *sql.DB) {

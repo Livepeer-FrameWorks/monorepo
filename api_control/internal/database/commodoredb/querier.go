@@ -60,8 +60,11 @@ type Querier interface {
 	DeleteCatalogOnlyClip(ctx context.Context, arg DeleteCatalogOnlyClipParams) error
 	DeleteCatalogOnlyDVR(ctx context.Context, arg DeleteCatalogOnlyDVRParams) error
 	DeleteCatalogOnlyVOD(ctx context.Context, arg DeleteCatalogOnlyVODParams) error
+	DeleteCompletedMediaAuthorityRefreshInbox(ctx context.Context, arg DeleteCompletedMediaAuthorityRefreshInboxParams) (int64, error)
 	DeleteDVRChapterPlaybackByArtifact(ctx context.Context, arg DeleteDVRChapterPlaybackByArtifactParams) error
 	DeleteDeviceAuthorization(ctx context.Context, id string) error
+	DeleteExpiredMediaAuthorityDeliveries(ctx context.Context, arg DeleteExpiredMediaAuthorityDeliveriesParams) (int64, error)
+	DeleteOrphanedMediaAuthorityVersions(ctx context.Context, arg DeleteOrphanedMediaAuthorityVersionsParams) (int64, error)
 	DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error)
 	DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefreshTokensForUserParams) error
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error

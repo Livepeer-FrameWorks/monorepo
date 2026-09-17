@@ -759,11 +759,14 @@ correctness proofs, not multi-node failover or sustained-throughput certificatio
 The PostgreSQL backlog contract captures and explains the actual generated claim with 20,000
 acknowledged historical deliveries, 2,000 pending deliveries and 20 cells. A local warm-cache
 sample measured 7.403 ms execution, with 12 subsequent claims at 6.958 ms median and 8.660 ms
-maximum within the one-second worker budget. The plan scanned authority-version history; zero
-shared-read blocks mean this does not establish cold-cache behavior. History growth/retention,
-larger and sustained workloads, Yugabyte load behavior, multi-node failure and live activation
-remain release gates. Avoiding unnecessary commercial quotes reduces renewal churn but does
-not establish a bound on retained authority history.
+maximum within the one-second worker budget. Production Yugabyte exposed the missing part of
+that proof: an implicit first key becomes `HASH`, so the nominal due-time index still produced a
+full-table scan. The v0.3.10 queue indexes declare `ASC` range keys explicitly and their
+postdeploy checks reject a hash-sharded definition. Real-Yugabyte contracts inspect those
+definitions and exercise claim and retention semantics. Commodore keeps completed inbox rows for
+seven days and non-current expired authority history for thirty days, deleting only terminal
+deliveries in bounded batches. Current and retryable state is never retention-eligible. Larger
+sustained workloads, multi-node failure and live activation remain operational capacity gates.
 
 Tests exercise actual local gRPC transport through the production Purser interceptor chain,
 service credential isolation, mutation/expiry rejection by the typed client, consent/ownership

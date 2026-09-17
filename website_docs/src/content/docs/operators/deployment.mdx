@@ -107,6 +107,12 @@ request covered by ready local authority must not increment it, except for inges
 single bounded Commodore live-claim check. A static alert on every central RPC would be wrong during
 normal connected operation. New management mutations and new x402 settlement remain online-only.
 
+Authority work queues use range-sharded due-time indexes on YugabyteDB. If Commodore repeatedly logs
+`Failed to observe media authority delivery backlog` or `Failed to claim short-lease media authority
+delivery`, verify the v0.3.10 expand and postdeploy migrations before increasing worker timeouts. The
+normal retention jobs preserve all current and retryable authority while bounding completed inbox rows
+and expired terminal history; operators should not delete those tables manually.
+
 ## Quick Start
 
 **Production Deployment (Recommended):**

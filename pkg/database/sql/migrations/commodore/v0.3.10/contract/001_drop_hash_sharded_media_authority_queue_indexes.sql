@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS commodore.idx_media_authority_deliveries_pending;
+DROP INDEX IF EXISTS commodore.idx_media_authority_refresh_inbox_pending;

@@ -9584,6 +9584,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	// signed authority version to every target Foghorn control cell.
 	go commodoreServer.runMediaAuthorityWorkers(context.Background())
 	go commodoreServer.runMediaAuthorityReconciler(context.Background())
+	go commodoreServer.runMediaAuthorityRetention(context.Background())
 
 	// Register all services
 	commodorepb.RegisterInternalServiceServer(server, commodoreServer)

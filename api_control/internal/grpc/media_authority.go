@@ -32,18 +32,24 @@ import (
 )
 
 const (
-	mediaAuthorityRefreshInterval = 10 * time.Minute
-	mediaAuthorityValidity        = 24 * time.Hour
-	mediaAuthorityWorkerInterval  = time.Second
-	mediaAuthorityLease           = 2 * time.Minute
-	mediaAuthorityRefreshBatch    = 8
-	mediaAuthorityDeliveryBatch   = 8
-	mediaAuthorityRefreshWorkers  = 8
-	mediaAuthorityDeliveryWorkers = 8
-	mediaAuthorityRefreshTimeout  = 90 * time.Second
-	mediaAuthorityDeliveryTimeout = 35 * time.Second
-	mediaAuthoritySettleTimeout   = 5 * time.Second
-	mediaAuthorityStatsTimeout    = 5 * time.Second
+	mediaAuthorityRefreshInterval   = 10 * time.Minute
+	mediaAuthorityValidity          = 24 * time.Hour
+	mediaAuthorityWorkerInterval    = time.Second
+	mediaAuthorityLease             = 2 * time.Minute
+	mediaAuthorityRefreshBatch      = 8
+	mediaAuthorityDeliveryBatch     = 8
+	mediaAuthorityRefreshWorkers    = 8
+	mediaAuthorityDeliveryWorkers   = 8
+	mediaAuthorityRefreshTimeout    = 90 * time.Second
+	mediaAuthorityDeliveryTimeout   = 35 * time.Second
+	mediaAuthoritySettleTimeout     = 5 * time.Second
+	mediaAuthorityStatsTimeout      = 5 * time.Second
+	mediaAuthorityHistoryRetention  = 30 * 24 * time.Hour
+	mediaAuthorityInboxRetention    = 7 * 24 * time.Hour
+	mediaAuthorityRetentionInterval = time.Hour
+	mediaAuthorityRetentionTimeout  = 30 * time.Second
+	mediaAuthorityRetentionBatch    = 1000
+	mediaAuthorityRetentionPasses   = 16
 )
 
 type mediaAuthorityCompileFence struct {
@@ -1266,38 +1272,10 @@ func (s *CommodoreServer) runMediaAuthorityReconciler(ctx context.Context) {
 				s.logger.WithError(enqueueErr).WithField("tenant_id", tenantID).Warn("Failed to enqueue media authority reconciliation")
 			}
 		}
-		streams, err := queries.ListLiveStreamMediaAuthoritySources(ctx)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to enumerate live streams for media authority reconciliation")
-		} else {
-			for _, stream := range streams {
-				_, enqueueErr := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-					SourceService: "commodore",
-					SourceEventID: fmt.Sprintf("reconcile:%d:live_stream:%s", bucket, stream.StreamID),
-					TenantID:      stream.TenantID,
-					Reason:        "media_object:live_stream:" + stream.StreamID + ":periodic_reconciliation",
-				})
-				if enqueueErr != nil {
-					s.logger.WithError(enqueueErr).WithField("stream_id", stream.StreamID).Warn("Failed to enqueue live-stream authority reconciliation")
-				}
-			}
-		}
-		artifacts, err := queries.ListArtifactMediaAuthoritySources(ctx)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to enumerate artifacts for media authority reconciliation")
-		} else {
-			for _, artifact := range artifacts {
-				_, enqueueErr := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-					SourceService: "commodore",
-					SourceEventID: fmt.Sprintf("reconcile:%d:%s:%s", bucket, artifact.ArtifactKind, artifact.AuthorityID),
-					TenantID:      artifact.TenantID,
-					Reason:        "media_object:" + artifact.ArtifactKind + ":" + artifact.AuthorityID + ":periodic_reconciliation",
-				})
-				if enqueueErr != nil {
-					s.logger.WithError(enqueueErr).WithField("artifact_id", artifact.AuthorityID).Warn("Failed to enqueue artifact authority reconciliation")
-				}
-			}
-		}
+		// Completing each tenant reconciliation durably fans out to every one of
+		// its streams and artifacts. Enqueuing those objects here as well signed
+		// every unchanged object twice per safety pass and created competing
+		// deadline chains without improving missed-event recovery.
 	}
 
 	reconcile()
@@ -1311,6 +1289,58 @@ func (s *CommodoreServer) runMediaAuthorityReconciler(ctx context.Context) {
 			reconcile()
 		}
 	}
+}
+
+func (s *CommodoreServer) runMediaAuthorityRetention(ctx context.Context) {
+	if s.db == nil {
+		return
+	}
+	sweep := func() {
+		sweepCtx, cancel := context.WithTimeout(ctx, mediaAuthorityRetentionTimeout)
+		defer cancel()
+		if err := s.sweepMediaAuthorityRetention(sweepCtx, time.Now().UTC()); err != nil && ctx.Err() == nil {
+			s.logger.WithError(err).Warn("Failed to retain media authority history")
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(mediaAuthorityRetentionInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
+}
+
+func (s *CommodoreServer) sweepMediaAuthorityRetention(ctx context.Context, now time.Time) error {
+	queries := commodoredb.New(s.db)
+	for pass := 0; pass < mediaAuthorityRetentionPasses; pass++ {
+		inboxRows, err := queries.DeleteCompletedMediaAuthorityRefreshInbox(ctx, commodoredb.DeleteCompletedMediaAuthorityRefreshInboxParams{
+			CompletedBefore: now.Add(-mediaAuthorityInboxRetention), BatchSize: mediaAuthorityRetentionBatch,
+		})
+		if err != nil {
+			return fmt.Errorf("delete completed media authority refresh inbox: %w", err)
+		}
+		deliveryRows, err := queries.DeleteExpiredMediaAuthorityDeliveries(ctx, commodoredb.DeleteExpiredMediaAuthorityDeliveriesParams{
+			ExpiredBefore: now.Add(-mediaAuthorityHistoryRetention), BatchSize: mediaAuthorityRetentionBatch,
+		})
+		if err != nil {
+			return fmt.Errorf("delete expired media authority deliveries: %w", err)
+		}
+		versionRows, err := queries.DeleteOrphanedMediaAuthorityVersions(ctx, commodoredb.DeleteOrphanedMediaAuthorityVersionsParams{
+			ExpiredBefore: now.Add(-mediaAuthorityHistoryRetention), BatchSize: mediaAuthorityRetentionBatch,
+		})
+		if err != nil {
+			return fmt.Errorf("delete expired media authority versions: %w", err)
+		}
+		if inboxRows < mediaAuthorityRetentionBatch && deliveryRows < mediaAuthorityRetentionBatch && versionRows < mediaAuthorityRetentionBatch {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (s *CommodoreServer) processMediaAuthorityRefreshBatch(ctx context.Context) {
