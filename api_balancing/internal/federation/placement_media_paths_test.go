@@ -393,6 +393,27 @@ func TestMediaServePreparationAcceptsConfiguredSourceWithoutPullBinding(t *testi
 	}
 }
 
+func TestMediaServePreparationDoesNotOriginateOutsideNodePolicy(t *testing.T) {
+	f, reader, _ := configuredFixture(t, "pull", "rtsp://upstream.example/live", []string{"us"})
+	f.pair.Tenant.Authority.SchemaVersion = sharedauthority.NodePlacementSchemaVersion
+	f.pair.Object.Authority.SchemaVersion = sharedauthority.NodePlacementSchemaVersion
+	f.pair.Tenant.Authority.MediaPlacement.Ingest = &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
+		Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"us"}, NodeIds: []string{"node-00"}}}},
+	}}
+	f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{
+		"internal": {TenantID: "tenant", Status: "live", Playable: true, Inputs: 1, ObservedAt: f.now},
+	}
+	f.snapshot.Nodes[0].Outputs["DTSC"] = "dtsc://HOST:14200/$"
+	authority := configuredAuthority(t, f)
+	f.query.SourceGeneration = generationFor(t, reader, authority)
+	runtime, request := mediaServeFixture(t, f)
+	request.NodeId = "node-01"
+
+	if prepared, err := runtime.Reconcile(context.Background(), request, PlacementReceipt{}, nil); err == nil {
+		t.Fatalf("node outside the ingest policy originated the configured input: %+v", prepared)
+	}
+}
+
 func TestMediaServePreparationRefusesDestinationWithoutASourcePath(t *testing.T) {
 	// The input may only be dialed from another cluster and nothing is live, so
 	// no destination in this cell has a source path.

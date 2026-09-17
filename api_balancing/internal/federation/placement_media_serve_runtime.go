@@ -278,15 +278,15 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 		if configured == nil || authority.ObjectAuthorityVersion <= 0 {
 			return mediaPreparationState{}, status.Error(codes.Unavailable, "configured source preparation is unavailable")
 		}
-		descriptor, describeErr := configured.describe(ctx, authority)
+		descriptor, dial, describeErr := configured.describe(ctx, authority)
 		if describeErr != nil || descriptor.Generation != req.Query.SourceGeneration {
 			return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "configured source generation changed")
 		}
-		if path.Presence != placement.Present && !configured.mayOriginate(descriptor, authority, selected.ClusterID) {
+		if path.Presence != placement.Present && !configured.mayOriginate(descriptor, authority, dial, selected.ClusterID, selected.NodeID, configured.now()) {
 			if runtime.Registry == nil || runtime.Arrange == nil {
 				return mediaPreparationState{}, status.Error(codes.Unavailable, "configured relay preparation is unavailable")
 			}
-			source, sourceErr := configured.liveSource(ctx, descriptor, authority)
+			source, sourceErr := configured.liveSource(ctx, descriptor, authority, dial)
 			if sourceErr != nil {
 				return mediaPreparationState{}, sourceErr
 			}

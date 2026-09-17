@@ -22425,10 +22425,10 @@ topics the new Signalman reads already exist.
    database, and list non-aggregator Periscope-Ingest replicas for removal without removing any
    declared MM2 worker.
 
-```bash
-frameworks cluster release plan --version v0.3.8
-frameworks cluster release apply --version v0.3.8 --dry-run
-```
+    ```bash
+    frameworks cluster release plan --version v0.3.8
+    frameworks cluster release apply --version v0.3.8 --dry-run
+    ```
 
 2. Apply the release:
 
