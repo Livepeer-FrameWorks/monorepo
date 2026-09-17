@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -13,6 +16,46 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
+
+func TestPrepareUpgradeRuntimeDataIncludesInternalPKI(t *testing.T) {
+	rootCert, _, intermediateCert, intermediateKey := genTestInternalCA(t)
+	intermediateKeyDER, err := x509.MarshalECPrivateKey(intermediateKey)
+	if err != nil {
+		t.Fatalf("marshal intermediate key: %v", err)
+	}
+	encode := func(blockType string, der []byte) string {
+		return base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}))
+	}
+	sharedEnv := map[string]string{
+		"SERVICE_TOKEN": "service-token",
+		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64":         encode("CERTIFICATE", rootCert.Raw),
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64": encode("CERTIFICATE", intermediateCert.Raw),
+		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64":  encode("EC PRIVATE KEY", intermediateKeyDER),
+	}
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Services: map[string]inventory.ServiceConfig{
+			"navigator": {Enabled: true},
+			"lookout":   {Enabled: true},
+		},
+	}
+
+	runtimeData, err := prepareUpgradeRuntimeData(manifest, "", sharedEnv, "system-tenant")
+	if err != nil {
+		t.Fatalf("prepareUpgradeRuntimeData: %v", err)
+	}
+	if runtimeData["service_token"] != "service-token" || runtimeData["system_tenant_id"] != "system-tenant" {
+		t.Fatalf("upgrade runtime identities = %#v", runtimeData)
+	}
+	pki, ok := runtimeData["internal_pki_bootstrap"].(*internalPKIBootstrap)
+	if !ok || pki == nil {
+		t.Fatalf("upgrade runtime data missing internal PKI: %#v", runtimeData)
+	}
+	if _, _, err := pki.issueLeaf("lookout", "", manifest.RootDomain, inventory.Host{Name: "central-eu-1"}); err != nil {
+		t.Fatalf("issue Lookout leaf from upgrade runtime PKI: %v", err)
+	}
+}
 
 func TestUpgradeTaskConfigEnforcesLivepeerProductionValidation(t *testing.T) {
 	manifest := &inventory.Manifest{

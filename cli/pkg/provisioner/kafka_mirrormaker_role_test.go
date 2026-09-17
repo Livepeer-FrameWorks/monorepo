@@ -80,6 +80,43 @@ func TestKafkaMirrorMakerRoleLoadsLoopbackJMXExporter(t *testing.T) {
 	}
 }
 
+func TestKafkaMirrorMakerCheckModeHandlesMissingInstallDirectories(t *testing.T) {
+	install := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/tasks/install.yml")
+	for _, want := range []string{
+		"register: kafka_mm_identity_probe",
+		"owner: \"{{ kafka_mm_user if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}\"",
+		"group: \"{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}\"",
+		"register: kafka_mm_jmx_exporter_stat",
+		"kafka_mm_jmx_exporter_refresh_required",
+	} {
+		if !strings.Contains(install, want) {
+			t.Errorf("MirrorMaker install tasks missing check-mode prerequisite %q", want)
+		}
+	}
+
+	configure := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/tasks/configure.yml")
+	for _, want := range []string{
+		"register: kafka_mm_identity_probe",
+		"register: kafka_mm_install_dir_stat",
+		"register: kafka_mm_jmx_exporter_dir_stat",
+		"not ansible_check_mode or (kafka_mm_install_dir_stat.stat.exists | default(false))",
+		"not ansible_check_mode or (kafka_mm_jmx_exporter_dir_stat.stat.exists | default(false))",
+	} {
+		if !strings.Contains(configure, want) {
+			t.Errorf("MirrorMaker configure tasks missing first-install guard %q", want)
+		}
+	}
+}
+
+func TestKafkaMirrorMakerArgumentSpecAcceptsRenderedSourceFields(t *testing.T) {
+	meta := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/meta/main.yml")
+	for _, field := range []string{"emit_checkpoints:", "tasks_max:"} {
+		if !strings.Contains(meta, field) {
+			t.Errorf("MirrorMaker argument spec rejects rendered source field %q", field)
+		}
+	}
+}
+
 // jmx_exporter patterns are unanchored. Without the ":" terminator the
 // replication-latency-ms alternative also matches replication-latency-ms-max,
 // collapsing max/avg into one metric name that the alert rules never see.

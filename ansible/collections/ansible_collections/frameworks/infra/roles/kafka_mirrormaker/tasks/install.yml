@@ -44,12 +44,23 @@
     shell: /usr/sbin/nologin
     create_home: false
 
+- name: Probe kafka runtime identity
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - -c
+      - "getent passwd {{ kafka_mm_user | quote }} >/dev/null && getent group {{ kafka_mm_group | quote }} >/dev/null"
+  register: kafka_mm_identity_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
 - name: Ensure mirrormaker dirs
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ kafka_mm_user }}"
-    group: "{{ kafka_mm_group }}"
+    owner: "{{ kafka_mm_user if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
+    group: "{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
     mode: "0755"
   loop:
     - "{{ kafka_mm_install_dir }}"
@@ -137,15 +148,37 @@
   ansible.builtin.assert:
     that:
       - kafka_mm_jmx_exporter_artifact_url | length > 0
-      - kafka_mm_jmx_exporter_artifact_checksum | length > 0
+      - kafka_mm_jmx_exporter_artifact_checksum is match('^(sha1|sha224|sha256|sha384|sha512):[0-9a-fA-F]+$')
     fail_msg: "frameworks.infra.kafka_mirrormaker requires the pinned JMX exporter javaagent URL and checksum"
+
+- name: Stat JMX exporter javaagent
+  ansible.builtin.stat:
+    path: "{{ kafka_mm_jmx_exporter_jar }}"
+    checksum_algorithm: "{{ kafka_mm_jmx_exporter_artifact_checksum.split(':', 1)[0] }}"
+  register: kafka_mm_jmx_exporter_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether JMX exporter refresh is required
+  ansible.builtin.set_fact:
+    kafka_mm_jmx_exporter_refresh_required: >-
+      {{
+        not (kafka_mm_jmx_exporter_stat.stat.exists | default(false)) or
+        (kafka_mm_jmx_exporter_stat.stat.checksum | default('')) != kafka_mm_jmx_exporter_artifact_checksum.split(':', 1)[1]
+      }}
+
+- name: Report pending JMX exporter refresh under --check
+  ansible.builtin.debug:
+    msg: "kafka-mirrormaker would refresh the pinned JMX exporter javaagent"
+  changed_when: kafka_mm_jmx_exporter_refresh_required | bool
+  when: ansible_check_mode
 
 - name: Ensure JMX exporter directory
   ansible.builtin.file:
     path: "{{ kafka_mm_jmx_exporter_dir }}"
     state: directory
     owner: root
-    group: "{{ kafka_mm_group }}"
+    group: "{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
     mode: "0755"
 
 # get_url re-downloads whenever the on-disk jar no longer matches the pinned

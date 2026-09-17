@@ -85,3 +85,10 @@ argument_specs:
             type: int
             required: false
             default: 1
+          emit_checkpoints:
+            type: bool
+            required: false
+            default: true
+          tasks_max:
+            type: int
+            required: false

@@ -459,7 +459,14 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if tenantErr != nil {
 		return result, fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
 	}
-	upgradeRuntimeData := map[string]any{"system_tenant_id": systemTenantID}
+	sharedEnv, envErr := rc.PreparedSharedEnv()
+	if envErr != nil {
+		return result, fmt.Errorf("load manifest env_files for service configuration: %w", envErr)
+	}
+	upgradeRuntimeData, runtimeErr := prepareUpgradeRuntimeData(manifest, filepath.Dir(manifestPath), sharedEnv, systemTenantID)
+	if runtimeErr != nil {
+		return result, runtimeErr
+	}
 
 	// Confirmation once, before touching any replica.
 	if !dryRun && !yes {
@@ -514,6 +521,15 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	result.changed = anyUpgraded
 	return result, nil
+}
+
+func prepareUpgradeRuntimeData(manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string, systemTenantID string) (map[string]any, error) {
+	runtimeData, err := provisionRuntimeData(manifest, manifestDir, sharedEnv)
+	if err != nil {
+		return nil, fmt.Errorf("prepare service upgrade runtime data: %w", err)
+	}
+	runtimeData["system_tenant_id"] = systemTenantID
+	return runtimeData, nil
 }
 
 // resolveUpgradeHosts returns every host an upgrade must touch for serviceName.

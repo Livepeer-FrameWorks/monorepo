@@ -98,6 +98,15 @@ type tailWriter struct {
 	data  []byte
 }
 
+type tailCapturingOutputer struct {
+	delegate goansible_result.ResultsOutputer
+	tail     io.Writer
+}
+
+func (o *tailCapturingOutputer) Print(ctx context.Context, reader io.Reader, writer io.Writer, options ...goansible_result.OptionsFunc) error {
+	return o.delegate.Print(ctx, io.TeeReader(reader, o.tail), writer, options...)
+}
+
 func newTailWriter(limit int) *tailWriter {
 	return &tailWriter{limit: limit}
 }
@@ -184,11 +193,13 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 	if len(opts.EnvVars) > 0 {
 		execOpts = append(execOpts, goansible_execute.WithEnvVars(opts.EnvVars))
 	}
-	var failureTail *tailWriter
+	failureTail := newTailWriter(ansibleFailureTailBytes)
 	if opts.Outputer != nil {
-		execOpts = append(execOpts, goansible_execute.WithOutput(opts.Outputer))
+		execOpts = append(execOpts, goansible_execute.WithOutput(&tailCapturingOutputer{
+			delegate: opts.Outputer,
+			tail:     failureTail,
+		}))
 	} else {
-		failureTail = newTailWriter(ansibleFailureTailBytes)
 		execOpts = append(execOpts,
 			goansible_execute.WithWrite(io.MultiWriter(os.Stdout, failureTail)),
 			goansible_execute.WithWriteError(io.MultiWriter(os.Stderr, failureTail)),
@@ -197,7 +208,7 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 	runner := goansible_execute.NewDefaultExecute(execOpts...)
 
 	if err := runner.Execute(ctx); err != nil {
-		if failureTail == nil || strings.TrimSpace(failureTail.String()) == "" {
+		if strings.TrimSpace(failureTail.String()) == "" {
 			return err
 		}
 		return fmt.Errorf("%w\n\nAnsible output tail:\n%s", err, strings.TrimSpace(failureTail.String()))

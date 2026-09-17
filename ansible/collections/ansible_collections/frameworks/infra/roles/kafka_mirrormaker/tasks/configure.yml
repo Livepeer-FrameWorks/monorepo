@@ -1,21 +1,53 @@
 ---
+- name: Probe kafka runtime identity under --check
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - -c
+      - "getent passwd {{ kafka_mm_user | quote }} >/dev/null && getent group {{ kafka_mm_group | quote }} >/dev/null"
+  register: kafka_mm_identity_probe
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: ansible_check_mode
+
+- name: Stat MirrorMaker config directory under --check
+  ansible.builtin.stat:
+    path: "{{ kafka_mm_install_dir }}"
+  register: kafka_mm_install_dir_stat
+  check_mode: false
+  changed_when: false
+  when: ansible_check_mode
+
+- name: Stat JMX exporter config directory under --check
+  ansible.builtin.stat:
+    path: "{{ kafka_mm_jmx_exporter_dir }}"
+  register: kafka_mm_jmx_exporter_dir_stat
+  check_mode: false
+  changed_when: false
+  when: ansible_check_mode
+
 - name: Render mm2.properties
   ansible.builtin.template:
     src: mm2.properties.j2
     dest: "{{ kafka_mm_properties_path }}"
-    owner: "{{ kafka_mm_user }}"
-    group: "{{ kafka_mm_group }}"
+    owner: "{{ kafka_mm_user if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
+    group: "{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
     mode: "0640"
   notify: kafka_mirrormaker restart
+  when:
+    - not ansible_check_mode or (kafka_mm_install_dir_stat.stat.exists | default(false))
 
 - name: Render JMX exporter config
   ansible.builtin.template:
     src: jmx-exporter.yml.j2
     dest: "{{ kafka_mm_jmx_exporter_config_path }}"
     owner: root
-    group: "{{ kafka_mm_group }}"
+    group: "{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
     mode: "0644"
   notify: kafka_mirrormaker restart
+  when:
+    - not ansible_check_mode or (kafka_mm_jmx_exporter_dir_stat.stat.exists | default(false))
 
 - name: Render systemd unit
   ansible.builtin.template:

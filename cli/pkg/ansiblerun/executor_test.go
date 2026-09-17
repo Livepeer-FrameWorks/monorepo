@@ -90,6 +90,26 @@ func TestExecutorIncludesOutputTailOnFailure(t *testing.T) {
 	}
 }
 
+func TestExecutorIncludesOutputTailWithCustomOutputer(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "ansible-playbook")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho failed-task-detail\nexit 2\n"), 0o755); err != nil {
+		t.Fatalf("write fake ansible-playbook: %v", err)
+	}
+
+	err := (&Executor{Binary: binary}).Execute(context.Background(), ExecuteOptions{
+		Playbook:  filepath.Join(dir, "playbook.yml"),
+		Inventory: filepath.Join(dir, "inventory.yml"),
+		Outputer:  &RecapOutputer{},
+	})
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	if !strings.Contains(err.Error(), "Ansible output tail:") || !strings.Contains(err.Error(), "failed-task-detail") {
+		t.Fatalf("custom outputer failure omitted Ansible details: %v", err)
+	}
+}
+
 func TestPreviewDoesNotRenderExtraVarsValues(t *testing.T) {
 	exec := &Executor{}
 	argv, err := exec.Preview(ExecuteOptions{
