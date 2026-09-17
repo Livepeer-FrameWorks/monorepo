@@ -968,6 +968,7 @@ func TestChannelToStringAllValues(t *testing.T) {
 		{signalmanpb.Channel_CHANNEL_ALL, "all"},
 		{signalmanpb.Channel_CHANNEL_MESSAGING, "messaging"},
 		{signalmanpb.Channel_CHANNEL_AI, "ai"},
+		{signalmanpb.Channel_CHANNEL_PLATFORM, "platform"},
 		{signalmanpb.Channel(9999), "unknown"},
 	}
 
@@ -996,6 +997,7 @@ func TestEventTypeToStringAllValues(t *testing.T) {
 		{signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE, "play_rewrite"},
 		{signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, "node_lifecycle_update"},
 		{signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING, "load_balancing"},
+		{signalmanpb.EventType_EVENT_TYPE_INCIDENT_UPDATED, "incident_updated"},
 		{signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT, "viewer_connect"},
 		{signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT, "viewer_disconnect"},
 		{signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, "client_lifecycle_update"},

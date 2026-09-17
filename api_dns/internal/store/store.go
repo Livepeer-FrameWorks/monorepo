@@ -126,15 +126,19 @@ type TenantAliasRetirement struct {
 type TenantCustomDomain struct {
 	TenantID         string
 	Domain           string
-	Status           string // pending_verification | verified | cert_issuing | cert_issued | cert_failed | tearing_down
+	Status           string // pending_verification | verified | pending_alias | cert_issuing | cert_issued | cert_failed | tearing_down
 	AcmeDNSSubdomain string
-	IssuerID         sql.NullString
-	LastVerifiedAt   sql.NullTime
-	CertIssuedAt     sql.NullTime
-	CertExpiresAt    sql.NullTime
-	LastError        sql.NullString
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// IssuerID and CertExpiresAt describe the tenant bundle serving the SAN.
+	IssuerID           sql.NullString
+	LastVerifiedAt     sql.NullTime
+	CertIssuedAt       sql.NullTime
+	CertExpiresAt      sql.NullTime
+	LastError          sql.NullString
+	LastRenewalError   sql.NullString
+	LastRenewalErrorAt sql.NullTime
+	NextAttemptAt      sql.NullTime
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // CustomDomainHasCertificateAuthority is the canonical credential-retention
@@ -143,7 +147,7 @@ type TenantCustomDomain struct {
 // credentials.
 func CustomDomainHasCertificateAuthority(status string) bool {
 	switch status {
-	case "verified", "cert_issuing", "cert_issued", "cert_failed":
+	case "verified", "pending_alias", "cert_issuing", "cert_issued", "cert_failed":
 		return true
 	default:
 		return false
@@ -151,11 +155,13 @@ func CustomDomainHasCertificateAuthority(status string) bool {
 }
 
 // CustomDomainParticipatesInTenantBundle is deliberately narrower than
-// credential retention. A failed custom-domain order must not poison renewal
-// of the tenant alias and every otherwise healthy custom SAN.
+// credential retention. Only domains whose bundle order has started join the
+// tenant SAN set: a verified or pending_alias domain must not join the alias's
+// own first issuance, and a failed domain must not poison renewal of the alias
+// and every otherwise healthy custom SAN.
 func CustomDomainParticipatesInTenantBundle(status string) bool {
 	switch status {
-	case "verified", "cert_issuing", "cert_issued":
+	case "cert_issuing", "cert_issued":
 		return true
 	default:
 		return false

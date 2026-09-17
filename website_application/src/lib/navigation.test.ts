@@ -101,6 +101,33 @@ describe("navigation route hygiene", () => {
     ]);
   });
 
+  it("resolves incident routes with breadcrumbs", () => {
+    expect(getRouteInfo("/infrastructure/incidents")).toMatchObject({
+      name: "Incidents",
+      parent: "Infrastructure",
+    });
+    expect(
+      getBreadcrumbs("/infrastructure/incidents/1dc1de17-0000-4000-8000-000000000001")
+    ).toEqual([
+      { name: "Dashboard", href: "/" },
+      { name: "Infrastructure" },
+      { name: "Incidents", href: "/infrastructure/incidents" },
+      { name: "Incident" },
+    ]);
+    expect(getRouteInfo("/infrastructure/incidents/abc")?.name).toBe("Incident");
+    expect(getRouteInfo("/admin/incidents")).toMatchObject({
+      name: "Incidents",
+      parent: "Platform Admin",
+    });
+    expect(getBreadcrumbs("/admin/incidents/abc")).toEqual([
+      { name: "Dashboard", href: "/" },
+      { name: "Platform Admin" },
+      { name: "Incidents", href: "/admin/incidents" },
+      { name: "Incident" },
+    ]);
+    expect(navigationConfig.admin.children?.incidents.requiresPlatformOperator).toBe(true);
+  });
+
   it("includes hidden infrastructure routes in route metadata", () => {
     const routePaths = getAllRoutes().map((route) => route.path);
     expect(routePaths).toContain("/infrastructure/marketplace");

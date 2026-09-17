@@ -57,7 +57,6 @@ type billingOutboxRow struct {
 
 // EnqueueBillingEventTx writes a billing-event outbox row inside the
 // caller's transaction. A failed INSERT rolls back with the caller's tx.
-// Callers without a tx use enqueueBillingEvent below.
 func (s *PurserServer) EnqueueBillingEventTx(
 	ctx context.Context,
 	exec purserdb.DBTX,
@@ -83,22 +82,6 @@ func (s *PurserServer) EnqueueBillingEventTx(
 		return "", fmt.Errorf("insert billing event outbox row: %w", err)
 	}
 	return persistedID.String(), nil
-}
-
-// enqueueBillingEvent writes the outbox row in its own short transaction.
-// Use EnqueueBillingEventTx when the caller already holds a transaction.
-func (s *PurserServer) enqueueBillingEvent(
-	ctx context.Context,
-	eventType, tenantID, userID, resourceType, resourceID string,
-	payload *ipcpb.BillingEvent,
-) {
-	if s.db == nil || tenantID == "" {
-		return
-	}
-	if _, err := s.EnqueueBillingEventTx(ctx, s.db, eventType, tenantID, userID, resourceType, resourceID, payload); err != nil {
-		s.logger.WithError(err).WithField("event_type", eventType).
-			Warn("Failed to enqueue billing event outbox row")
-	}
 }
 
 type billingOutboxStore struct {

@@ -9,6 +9,7 @@ import (
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,6 +68,15 @@ func pushFullRow() *sqlmock.Rows {
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
 		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
+}
+
+// expectStreamPlacementRead mocks the batched own-policy read that attaches
+// source locations to stream reads. rows nil means no stream has own rules.
+func expectStreamPlacementRead(mock sqlmock.Sqlmock, rows *sqlmock.Rows) {
+	if rows == nil {
+		rows = sqlmock.NewRows([]string{"stream_id", "revision", "policy_payload"})
+	}
+	mock.ExpectQuery("ListStreamMediaPlacementPolicies").WillReturnRows(rows)
 }
 
 func TestCreateStream(t *testing.T) {
@@ -212,6 +222,7 @@ func TestUpdateStream(t *testing.T) {
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, nil))
+		expectStreamPlacementRead(mock, nil)
 
 		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
 			StreamId: "s1", Name: proto.String("New Title"),
@@ -243,6 +254,7 @@ func TestUpdateStream(t *testing.T) {
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, nil))
+		expectStreamPlacementRead(mock, nil)
 
 		if _, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{StreamId: "s1"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -276,6 +288,7 @@ func TestUpdateStream(t *testing.T) {
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
 				nil, nil, nil, nil, false))
+		expectStreamPlacementRead(mock, nil)
 
 		monitoring := commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
 		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
@@ -372,6 +385,13 @@ func TestListStreams(t *testing.T) {
 			WillReturnRows(pushListRow().
 				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil).
 				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil))
+		restricted, err := proto.Marshal(&placementpb.PolicySet{Revision: 1, Ingest: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
+			Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"edge-a"}, NodeIds: []string{"node-1"}}}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectStreamPlacementRead(mock, sqlmock.NewRows([]string{"stream_id", "revision", "policy_payload"}).AddRow("s1", int64(1), restricted))
 
 		resp, err := s.ListStreams(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamsRequest{})
 		if err != nil {
@@ -382,6 +402,14 @@ func TestListStreams(t *testing.T) {
 		}
 		if resp.GetStreams()[0].GetStreamId() != "s1" || resp.GetStreams()[1].GetTitle() != "Second" {
 			t.Errorf("unexpected mapping: %+v", resp.GetStreams())
+		}
+		first, second := resp.GetStreams()[0].GetSourceLocation(), resp.GetStreams()[1].GetSourceLocation()
+		if first.GetMode() != commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_RESTRICTED || len(first.GetClusters()) != 1 ||
+			first.GetClusters()[0].GetClusterId() != "edge-a" || len(first.GetClusters()[0].GetNodeIds()) != 1 {
+			t.Errorf("stored source location read back as %+v", first)
+		}
+		if second.GetMode() != commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_ANY {
+			t.Errorf("stream without own rules reported %+v", second)
 		}
 		if resp.GetPagination().GetTotalCount() != 2 {
 			t.Errorf("TotalCount = %d, want 2", resp.GetPagination().GetTotalCount())

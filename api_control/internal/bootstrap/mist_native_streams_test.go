@@ -98,19 +98,30 @@ func TestMonitoringNullBoolValidatesToggle(t *testing.T) {
 	}
 }
 
+func singleClusterLocation(cluster string) *SourceLocation {
+	return &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: cluster}}}
+}
+
 func TestValidateMistNativeShape(t *testing.T) {
 	good := MistNativeStream{
-		PlaybackID:        "frameworks-demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"cluster-edge"},
+		PlaybackID:     "frameworks-demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
+		SourceKind:     "exec",
+		SourceLocation: singleClusterLocation("cluster-edge"),
 	}
-	if err := validateMistNativeShape(good); err != nil {
-		t.Fatalf("good shape rejected: %v", err)
+	location, err := validateMistNativeShape(good)
+	if err != nil || strings.Join(location.ClusterIDs(), ",") != "cluster-edge" {
+		t.Fatalf("good shape rejected: %+v %v", location, err)
+	}
+	withNode := good
+	withNode.SourceLocation = &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "cluster-edge", NodeIDs: []string{"edge-1"}}}}
+	if _, err := validateMistNativeShape(withNode); err != nil {
+		t.Fatalf("node inside the single source cluster rejected: %v", err)
 	}
 
+	legacy := []string{"cluster-edge"}
 	cases := []struct {
 		name    string
 		mutate  func(*MistNativeStream)
@@ -122,21 +133,23 @@ func TestValidateMistNativeShape(t *testing.T) {
 		{"empty_source", func(m *MistNativeStream) { m.Source = "" }, "source"},
 		{"unknown_kind", func(m *MistNativeStream) { m.SourceKind = "ffmpeg" }, "source_kind"},
 		{"negative_placement", func(m *MistNativeStream) { m.PlacementCount = -1 }, "placement_count"},
-		{"empty_allowed_clusters", func(m *MistNativeStream) { m.AllowedClusterIDs = nil }, "allowed_cluster_ids"},
-		{"blank_allowed_cluster_entry", func(m *MistNativeStream) { m.AllowedClusterIDs = []string{"  "} }, "non-empty"},
+		{"missing_source_location", func(m *MistNativeStream) { m.SourceLocation = nil }, "exactly one source cluster"},
+		{"empty_source_location", func(m *MistNativeStream) { m.SourceLocation = &SourceLocation{} }, "source location"},
+		{"blank_source_cluster", func(m *MistNativeStream) { m.SourceLocation = singleClusterLocation("  ") }, "source location cluster"},
+		{"legacy_allowed_cluster_ids", func(m *MistNativeStream) { m.LegacyAllowedClusterIDs = &legacy }, "source_location"},
 		{"multiple_source_clusters", func(m *MistNativeStream) {
-			m.AllowedClusterIDs = []string{"cluster-edge", "cluster-edge-us"}
+			m.SourceLocation = &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "cluster-edge"}, {ClusterID: "cluster-edge-us"}}}
 		}, "exactly one source cluster"},
 		{"multi_cluster_multi_edge", func(m *MistNativeStream) {
 			m.PlacementCount = 2
-			m.AllowedClusterIDs = []string{"cluster-edge", "cluster-edge-us"}
+			m.SourceLocation = &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "cluster-edge"}, {ClusterID: "cluster-edge-us"}}}
 		}, "exactly one source cluster"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := good
 			tc.mutate(&m)
-			err := validateMistNativeShape(m)
+			_, err := validateMistNativeShape(m)
 			if err == nil {
 				t.Fatalf("expected error containing %q", tc.errLike)
 			}
@@ -179,15 +192,15 @@ func TestReconcileMistNativeStreams_NoopOnIdempotentRerun(t *testing.T) {
 			AddRow("stream-uuid", "frameworks-demo"))
 
 	res, err := ReconcileMistNativeStreams(ctx, db, []MistNativeStream{{
-		PlaybackID:        "frameworks-demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Description:       "Loop",
-		Source:            source,
-		SourceKind:        "exec",
-		AlwaysOn:          true,
-		PlacementCount:    1,
-		AllowedClusterIDs: []string{"cluster-edge"},
+		PlaybackID:     "frameworks-demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Description:    "Loop",
+		Source:         source,
+		SourceKind:     "exec",
+		AlwaysOn:       true,
+		PlacementCount: 1,
+		SourceLocation: singleClusterLocation("cluster-edge"),
 		ProcessPolicy: []any{
 			map[string]any{"process": "Thumbs", "track_select": "video=lowres", "x-LSP-name": "Thumbnail Sprites"},
 		},
@@ -240,13 +253,13 @@ func TestReconcileMistNativeStreams_PrunesAbsentFromDesired(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	res, err := ReconcileMistNativeStreams(ctx, db, []MistNativeStream{{
-		PlaybackID:        "frameworks-demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            source,
-		SourceKind:        "exec",
-		AlwaysOn:          true,
-		AllowedClusterIDs: []string{"cluster-edge"},
+		PlaybackID:     "frameworks-demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         source,
+		SourceKind:     "exec",
+		AlwaysOn:       true,
+		SourceLocation: singleClusterLocation("cluster-edge"),
 	}}, stubTenantResolver{tenantID: "tenant-uuid"})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -317,12 +330,12 @@ func TestReconcileMistNativeStreams_RejectsModeMismatch(t *testing.T) {
 		))
 
 	_, err = ReconcileMistNativeStreams(ctx, db, []MistNativeStream{{
-		PlaybackID:        "frameworks-demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"cluster-edge"},
+		PlaybackID:     "frameworks-demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		SourceLocation: singleClusterLocation("cluster-edge"),
 	}}, stubTenantResolver{tenantID: "tenant-uuid"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to convert") {
 		t.Fatalf("expected refuse-to-convert error, got: %v", err)

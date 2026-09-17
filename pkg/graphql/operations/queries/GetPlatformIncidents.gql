@@ -1,0 +1,16 @@
+# Platform-operator incident list across platform and tenant scopes.
+# Requires the platform_operator grant.
+query GetPlatformIncidents($first: Int = 50, $after: String, $filter: PlatformIncidentFilterInput) {
+  platform {
+    incidents(page: { first: $first, after: $after }, filter: $filter) {
+      nodes {
+        ...IncidentFields
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+}

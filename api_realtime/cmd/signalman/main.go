@@ -23,6 +23,8 @@ import (
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"google.golang.org/grpc"
@@ -59,6 +61,7 @@ func main() {
 
 	// Create Kafka metrics
 	serviceMetrics.KafkaMessages, serviceMetrics.KafkaDuration, serviceMetrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
+	serviceMetrics.KafkaDuplicateEvents = metricsCollector.NewCounter("kafka_duplicate_events_total", "Kafka events dropped because their event ID was already broadcast", []string{"topic"})
 
 	// Initialize gRPC server
 	signalmanServer := signalmangrpc.NewSignalmanServer(logger, serviceMetrics)
@@ -77,9 +80,9 @@ func main() {
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "signalman-group")
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "signalman")
-	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
-	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
-	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
+	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", topology.TopicAnalyticsEvents)
+	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", topology.TopicServiceEvents)
+	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", topology.TopicDecklogDLQ)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -174,6 +177,10 @@ func main() {
 		}
 	}
 
+	// Local topics and MirrorMaker2 copies from other regions can deliver the
+	// same event more than once; broadcast each event ID once per window.
+	recentEvents := newEventIDWindow(signalmanEventDedupCapacity, signalmanEventDedupTTL)
+
 	// Register Kafka message handler that routes analytics events to gRPC hub
 	analyticsHandler := func(ctx context.Context, msg kafka.Message) error {
 		var event kafka.AnalyticsEvent
@@ -189,6 +196,13 @@ func main() {
 			if k == "tenant_id" && event.TenantID == "" {
 				event.TenantID = v
 			}
+			if k == "event_id" && event.EventID == "" {
+				event.EventID = v
+			}
+		}
+		if recentEvents.seen(event.EventID) {
+			serviceMetrics.RecordDuplicateEvent(msg.Topic)
+			return nil
 		}
 
 		if event.EventType == "client_lifecycle_batch" {
@@ -205,25 +219,9 @@ func main() {
 			return nil
 		}
 
-		// Route event to gRPC hub
 		channel := mapEventTypeToChannel(event.EventType)
 		eventType := mapEventTypeToProto(event.EventType)
-
-		if channel == signalmanpb.Channel_CHANNEL_SYSTEM {
-			if event.TenantID != "" {
-				grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, eventToProtoData(event.Data, logger))
-			} else {
-				grpcHub.BroadcastInfrastructure(eventType, eventToProtoData(event.Data, logger))
-			}
-		} else if event.TenantID != "" {
-			grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, eventToProtoData(event.Data, logger))
-		} else {
-			logger.WithFields(logging.Fields{
-				"event_type": event.EventType,
-				"channel":    channel,
-			}).Warn("Dropping event without tenant_id for non-system channel")
-		}
-
+		routeEvent(grpcHub, event.EventType, event.TenantID, channel, eventType, eventToProtoData(event.Data, logger), logger)
 		return nil
 	}
 
@@ -245,6 +243,13 @@ func main() {
 			if k == "event_type" && event.EventType == "" {
 				event.EventType = v
 			}
+			if k == "event_id" && event.EventID == "" {
+				event.EventID = v
+			}
+		}
+		if recentEvents.seen(event.EventID) {
+			serviceMetrics.RecordDuplicateEvent(msg.Topic)
+			return nil
 		}
 
 		// Service-plane events that should never hit real-time channels.
@@ -263,40 +268,22 @@ func main() {
 			return fmt.Errorf("service event payload missing required data")
 		}
 
-		if channel == signalmanpb.Channel_CHANNEL_SYSTEM {
-			if event.TenantID != "" {
-				grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, data)
-			} else {
-				grpcHub.BroadcastInfrastructure(eventType, data)
-			}
-		} else if event.TenantID != "" {
-			grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, data)
-		} else {
-			logger.WithFields(logging.Fields{
-				"event_type": event.EventType,
-				"channel":    channel,
-			}).Warn("Dropping service event without tenant_id for non-system channel")
-		}
-
+		routeEvent(grpcHub, event.EventType, event.TenantID, channel, eventType, data, logger)
 		return nil
 	}
 
 	consumer.AddHandler(analyticsTopic, wrapWithDLQ("signalman-analytics", analyticsHandler))
 	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("signalman-service", serviceHandler))
 
-	// Mirrored topics from MM2 carry the source-region prefix (default MM2
-	// behaviour: source-cluster alias added as topic-prefix). Subscribe so a
-	// stream-origin Signalman in another region can still deliver events to
-	// viewers attached to this regional Signalman.
-	if mirrorPrefixes := strings.TrimSpace(config.GetEnv("MIRROR_REGION_PREFIXES", "")); mirrorPrefixes != "" {
-		for prefix := range strings.SplitSeq(mirrorPrefixes, ",") {
-			prefix = strings.TrimSpace(prefix)
-			if prefix == "" {
-				continue
-			}
-			consumer.AddHandler(prefix+"."+analyticsTopic, wrapWithDLQ("signalman-analytics-mirror", analyticsHandler))
-			consumer.AddHandler(prefix+"."+serviceEventsTopic, wrapWithDLQ("signalman-service-mirror", serviceHandler))
+	// MIRROR_REGION_PREFIXES lists the MirrorMaker2 source aliases whose realtime
+	// topic copies land in this region's Kafka cluster, so subscribers attached
+	// here also receive events produced in other regions.
+	for prefix := range strings.SplitSeq(config.GetEnv("MIRROR_REGION_PREFIXES", ""), ",") {
+		if prefix = strings.TrimSpace(prefix); prefix == "" {
+			continue
 		}
+		consumer.AddHandler(topology.MirroredTopicName(prefix, analyticsTopic), wrapWithDLQ("signalman-analytics-mirror:"+prefix, analyticsHandler))
+		consumer.AddHandler(topology.MirroredTopicName(prefix, serviceEventsTopic), wrapWithDLQ("signalman-service-mirror:"+prefix, serviceHandler))
 	}
 
 	// Add health checks
@@ -449,13 +436,43 @@ func main() {
 	}
 }
 
+// eventHub is the part of the gRPC hub that delivers routed events.
+type eventHub interface {
+	BroadcastToTenant(tenantID string, eventType signalmanpb.EventType, channel signalmanpb.Channel, data *signalmanpb.EventData)
+	BroadcastInfrastructure(eventType signalmanpb.EventType, data *signalmanpb.EventData)
+	BroadcastPlatform(eventType signalmanpb.EventType, data *signalmanpb.EventData)
+}
+
+// routeEvent delivers one consumed event to its audience. Platform channel
+// events go to the operator audience whether or not they name a tenant; a
+// tenantless event is otherwise delivered only on the system channel, and
+// dropped on every other channel. A tenantless incident change on the system
+// channel is dropped too: a system broadcast reaches every tenant subscriber.
+func routeEvent(hub eventHub, rawType, tenantID string, channel signalmanpb.Channel, eventType signalmanpb.EventType, data *signalmanpb.EventData, logger logging.Logger) {
+	switch {
+	case channel == signalmanpb.Channel_CHANNEL_PLATFORM:
+		hub.BroadcastPlatform(eventType, data)
+	case tenantID != "":
+		hub.BroadcastToTenant(tenantID, eventType, channel, data)
+	case channel == signalmanpb.Channel_CHANNEL_SYSTEM && eventType != signalmanpb.EventType_EVENT_TYPE_INCIDENT_UPDATED:
+		hub.BroadcastInfrastructure(eventType, data)
+	default:
+		logger.WithFields(logging.Fields{
+			"event_type": rawType,
+			"channel":    channel,
+		}).Warn("Dropping event without tenant_id that has no tenantless audience")
+	}
+}
+
 // mapEventTypeToChannel maps Kafka event types to gRPC channels
 func mapEventTypeToChannel(eventType string) signalmanpb.Channel {
 	switch eventType {
+	case serviceevents.PlatformIncidentUpdated:
+		return signalmanpb.Channel_CHANNEL_PLATFORM
 	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite", "push_rewrite",
 		"stream_created", "stream_updated", "stream_deleted":
 		return signalmanpb.Channel_CHANNEL_STREAMS
-	case "node_lifecycle_update", "load_balancing":
+	case "node_lifecycle_update", "load_balancing", "incident_updated":
 		return signalmanpb.Channel_CHANNEL_SYSTEM
 	case "storage_lifecycle", "storage_snapshot", "process_billing":
 		return signalmanpb.Channel_CHANNEL_ANALYTICS
@@ -491,6 +508,8 @@ func mapEventTypeToProto(eventType string) signalmanpb.EventType {
 		return signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE
 	case "load_balancing":
 		return signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING
+	case "incident_updated", serviceevents.PlatformIncidentUpdated:
+		return signalmanpb.EventType_EVENT_TYPE_INCIDENT_UPDATED
 	// Analytics events
 	case "viewer_connect":
 		return signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT
@@ -712,6 +731,25 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *s
 		return eventData
 	case "skipper_investigation":
 		return eventData
+	case "incident_updated", serviceevents.PlatformIncidentUpdated:
+		incidentID := getString(event.Data, "incident_id")
+		if incidentID == "" {
+			return nil
+		}
+		incident := &ipcpb.IncidentEvent{
+			IncidentId: incidentID,
+			TenantId:   getString(event.Data, "tenant_id"),
+			ClusterId:  getString(event.Data, "cluster_id"),
+			Status:     getString(event.Data, "status"),
+			Severity:   getString(event.Data, "severity"),
+			Title:      getString(event.Data, "title"),
+			Change:     getString(event.Data, "change"),
+		}
+		if updatedAt, ok := getInt64(event.Data, "updated_at_ms"); ok {
+			incident.UpdatedAtMs = updatedAt
+		}
+		eventData.Payload = &signalmanpb.EventData_IncidentUpdated{IncidentUpdated: incident}
+		return eventData
 	default:
 		return nil
 	}
@@ -777,6 +815,13 @@ func getInt64(data map[string]interface{}, key string) (int64, bool) {
 		return int64(v), true
 	case json.Number:
 		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case string:
+		// protojson renders int64 fields as JSON strings.
+		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return 0, false
 		}

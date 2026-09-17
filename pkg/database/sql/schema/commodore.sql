@@ -1179,14 +1179,6 @@ ALTER TABLE commodore.dvr_recordings
     ADD COLUMN IF NOT EXISTS playback_webhook_secret_enc TEXT,
     ADD COLUMN IF NOT EXISTS playback_authority_ready BOOLEAN NOT NULL DEFAULT FALSE;
 
-UPDATE commodore.dvr_recordings AS dvr
-SET requires_auth = stream.requires_auth,
-    playback_policy = stream.playback_policy,
-    playback_webhook_secret_enc = stream.playback_webhook_secret_enc,
-    playback_authority_ready = TRUE
-FROM commodore.streams AS stream
-WHERE stream.id = dvr.stream_id;
-
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_requires_auth
     ON commodore.streams(requires_auth) WHERE requires_auth;
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_assets_requires_auth

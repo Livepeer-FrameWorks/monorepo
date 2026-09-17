@@ -28,10 +28,13 @@ var ServicePorts = map[string]int{
 	"foghorn":            18008,
 	"signalman":          18009,
 	"navigator":          18010,
+	"lookout":            18022,
 	"prometheus":         9090,
 	"victoriametrics":    8428,
 	"vmauth":             8427,
 	"vmagent":            8429,
+	"vmalert":            8880,
+	"alertmanager":       9093,
 	"grafana":            3000,
 	"metabase":           3001,
 	"chartroom":          18030,
@@ -78,9 +81,16 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			"frameworks.infra.kafka", "playbooks/kafka.yml",
 			kafkaRoleVarsFor("controller"), kafkaRoleDetectFor("controller"))
 	case "kafka-mirrormaker":
-		return NewRolePlaybookProvisioner("kafka-mirrormaker", pool,
+		prov, err := NewRolePlaybookProvisioner("kafka-mirrormaker", pool,
 			"frameworks.infra.kafka_mirrormaker", "playbooks/kafka_mirrormaker.yml",
 			kafkaMirrorMakerRoleVars, kafkaMirrorMakerRoleDetect)
+		if err != nil {
+			return nil, err
+		}
+		if rolePlaybook, ok := prov.(*RolePlaybookProvisioner); ok {
+			rolePlaybook.PlaybookSelector = kafkaMirrorMakerPlaybookSelector
+		}
+		return prov, nil
 	case "clickhouse":
 		return NewRolePlaybookProvisioner("clickhouse", pool,
 			"frameworks.infra.clickhouse", "playbooks/clickhouse.yml",
@@ -102,8 +112,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	case "nginx":
 		return NewReverseProxyProvisioner("nginx", port, pool)
 
-	// Observability stack — all four components route through prometheus_stack.
-	case "prometheus", "victoriametrics", "vmagent", "vmauth":
+	// Observability stack — every metrics and alerting component routes through prometheus_stack.
+	case "prometheus", "victoriametrics", "vmagent", "vmauth", "vmalert", "alertmanager":
 		return NewRolePlaybookProvisioner(serviceName, pool,
 			"frameworks.infra.prometheus_stack", "playbooks/prometheus_stack.yml",
 			prometheusStackRoleVars, prometheusStackRoleDetect)
@@ -121,7 +131,7 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 	// Generic FrameWorks Go microservices — dispatch on ServiceConfig.Mode.
 	case "quartermaster", "commodore", "bridge", "foghorn", "decklog", "helmsman",
 		"periscope-ingest", "periscope-query", "periscope-metering", "signalman", "purser", "steward",
-		"navigator", "chartroom", "foredeck", "logbook", "skipper", "chandler",
+		"navigator", "lookout", "chartroom", "foredeck", "logbook", "skipper", "chandler",
 		"deckhand", "metabase", "grafana",
 		"livepeer-gateway", "livepeer-signer":
 		cfg := ServiceRoleConfig{

@@ -1,0 +1,13 @@
+# Incidents on clusters the current tenant owns, newest first
+query GetIncidents($first: Int = 50, $after: String, $filter: IncidentFilterInput) {
+  incidentsConnection(page: { first: $first, after: $after }, filter: $filter) {
+    nodes {
+      ...IncidentFields
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

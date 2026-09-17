@@ -28,6 +28,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	lookoutclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/lookout"
 	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -36,6 +37,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -47,6 +49,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/gin-gonic/gin"
@@ -496,6 +499,47 @@ func main() {
 		},
 	})
 	go heartbeatAgent.Start(context.Background())
+
+	// Lookout-triggered investigations need both the aggregator Kafka topic and
+	// Lookout's gRPC API to attach the resulting report to the incident.
+	lookoutGRPCAddr := strings.TrimSpace(config.GetEnv("LOOKOUT_GRPC_ADDR", ""))
+	if lookoutGRPCAddr != "" && len(cfg.KafkaBrokers) > 0 {
+		lookoutClient, lookoutErr := lookoutclient.NewGRPCClient(lookoutclient.GRPCConfig{
+			GRPCAddr:      lookoutGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  serviceToken,
+			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			ServerName:    config.GetServiceGRPCTLSServerName("lookout"),
+		})
+		if lookoutErr != nil {
+			logger.WithError(lookoutErr).Warn("Failed to create Lookout gRPC client - Lookout investigations disabled")
+		} else {
+			defer func() { _ = lookoutClient.Close() }()
+			lookoutConsumer, consumerErr := kafka.NewConsumer(cfg.KafkaBrokers, "skipper-lookout", cfg.KafkaClusterID, "skipper", logger)
+			if consumerErr != nil {
+				logger.WithError(consumerErr).Warn("Failed to create Lookout Kafka consumer - Lookout investigations disabled")
+			} else {
+				defer func() { _ = lookoutConsumer.Close() }()
+				lookoutTrigger := &heartbeat.LookoutTrigger{
+					Consumer: lookoutConsumer,
+					Agent:    heartbeatAgent,
+					Lookout:  lookoutClient,
+					Logger:   logger,
+					Topic:    topology.TopicLookoutIncidents,
+				}
+				go func() {
+					// Start returns when group membership is lost; restarting the
+					// process rejoins the consumer group from committed offsets.
+					if startErr := lookoutTrigger.Start(context.Background()); startErr != nil {
+						logger.WithError(startErr).Fatal("Lookout incident consumer exited")
+					}
+				}()
+				logger.WithField("topic", topology.TopicLookoutIncidents).Info("Lookout incident trigger started")
+			}
+		}
+	}
 
 	// Start social posting agent (optional, off by default)
 	if cfg.SocialEnabled && cfg.SocialNotifyEmail != "" {

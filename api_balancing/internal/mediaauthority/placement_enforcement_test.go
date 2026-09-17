@@ -3,6 +3,7 @@ package mediaauthority
 import (
 	"context"
 	"regexp"
+	"slices"
 	"testing"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -47,12 +48,14 @@ func TestCellPlacementCapabilityRequiresEveryLiveReplicaAndLocalEnforcement(t *t
 		allEnforced bool
 		local       bool
 		want        bool
+		nodeReady   bool
 	}{
-		{"no live replicas", 0, 0, false, true, false},
-		{"replica below schema 2", 2, 1, true, true, false},
-		{"replica not enforcing", 2, 2, false, true, false},
-		{"local process not enforcing", 2, 2, true, false, false},
-		{"all live replicas enforcing", 2, 2, true, true, true},
+		{"no live replicas", 0, 0, false, true, false, false},
+		{"replica below schema 2", 2, 1, true, true, false, false},
+		{"replica not enforcing", 2, 2, false, true, false, false},
+		{"local process not enforcing", 2, 2, true, false, false, false},
+		{"mixed-release cell withholds node placement", 2, 2, true, true, true, false},
+		{"every live replica supports node placement", 2, 3, true, true, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			withPlacementEnforced(t, test.local)
@@ -64,8 +67,11 @@ func TestCellPlacementCapabilityRequiresEveryLiveReplicaAndLocalEnforcement(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The listed versions never exceed 2: releases without node
+			// placement reject a higher version as a malformed attestation.
 			if capability.EnforcementReady != test.want || capability.LiveReplicas != test.live ||
-				len(capability.SupportedSchemaVersions) != 2 || capability.SupportedSchemaVersions[1] != sharedauthority.PlacementSchemaVersion {
+				capability.NodePlacementReady != test.nodeReady ||
+				!slices.Equal(capability.SupportedSchemaVersions, []uint32{1, 2}) {
 				t.Fatalf("capability = %+v, want ready=%t", capability, test.want)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
@@ -84,7 +90,7 @@ func TestRecordReplicaHeartbeatWritesCurrentEnforcementState(t *testing.T) {
 		withPlacementEnforced(t, enforced)
 		store, mock, closeDB := newFixtureStore(t, "cell-a")
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.control_replicas")).
-			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.PlacementSchemaVersion), enforced).WillReturnResult(sqlmock.NewResult(1, 1))
+			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.NodePlacementSchemaVersion), enforced).WillReturnResult(sqlmock.NewResult(1, 1))
 		if err := store.RecordReplicaHeartbeat(context.Background(), " replica-1 ", "v0.3.0"); err != nil {
 			t.Fatal(err)
 		}
@@ -111,6 +117,9 @@ func TestPromotePlacementReadinessOnlyForSchema2OnEnforcingReplica(t *testing.T)
 		{"schema-2 tenant on legacy replica", false, 2, true, 0},
 		{"schema-2 tenant on enforcing replica", true, 2, true, 3},
 		{"schema-2 object on enforcing replica", true, 2, false, 3},
+		{"schema-3 tenant on legacy replica", false, 3, true, 0},
+		{"schema-3 tenant on enforcing replica", true, 3, true, 3},
+		{"schema-3 object on enforcing replica", true, 3, false, 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			withPlacementEnforced(t, test.enforced)

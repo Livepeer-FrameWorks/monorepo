@@ -40,7 +40,7 @@ func (s *CommodoreServer) prepareMediaObjectCommercial(ctx context.Context, obje
 	if !slices.Equal(sortedUnique(targets), sortedUnique(currentTargets)) {
 		return nil, errors.New("commercial authority recipients changed")
 	}
-	if tenant.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion || tenant.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || tenant.GetBillingDecision() != mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
+	if !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || tenant.GetBillingDecision() != mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
 		return nil, errors.New("commercial tenant authority is not active schema 2")
 	}
 	return collectMediaObjectCommercial(ctx, s.authorityCommercialSource, tenant, object, tenantUntil)
@@ -50,7 +50,7 @@ func collectMediaObjectCommercial(ctx context.Context, source mediaAuthorityComm
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if object.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion || object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || !tenantUntil.After(time.Now()) {
+	if !sharedauthority.IsPlacementSchema(object.GetSchemaVersion()) || object.GetSchemaVersion() != tenant.GetSchemaVersion() || object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || !tenantUntil.After(time.Now()) {
 		return nil, errors.New("commercial object authority is not issuable")
 	}
 	capturedTenant, capturedObject := proto.CloneOf(tenant), proto.CloneOf(object)

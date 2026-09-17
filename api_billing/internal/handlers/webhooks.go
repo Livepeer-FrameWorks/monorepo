@@ -21,6 +21,7 @@ import (
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -570,7 +571,7 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 		status = "failed"
 	}
 
-	updated, err := s.updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status, providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status, stripePaymentIntentEventWriter(status), providerSettlementEvidence{
 		TenantID: obj.Metadata.TenantID, AmountCents: obj.AmountReceived, Currency: obj.Currency,
 	})
 	if err != nil {
@@ -595,7 +596,7 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 		InvoiceID: invoiceID, TransactionID: sql.NullString{String: obj.ID, Valid: true},
 	})
 	if paymentErr == nil && payment.TenantID != "" {
-		paymentID, tenantID, amountCents, currency := payment.PaymentID, payment.TenantID, payment.AmountCents, payment.Currency
+		paymentID, tenantID := payment.PaymentID, payment.TenantID
 		if mapErr := s.upsertProviderPaymentObject(ctx, providerPaymentObjectInput{
 			provider:         "stripe",
 			objectType:       "payment_intent",
@@ -625,21 +626,35 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 				s.logger.WithError(mapErr).WithField("charge_id", obj.LatestCharge).Warn("Failed to record Stripe charge mapping")
 			}
 		}
+	}
+
+	return nil
+}
+
+// stripePaymentIntentEventWriter enqueues payment_succeeded/payment_failed for
+// a Stripe PaymentIntent inside updateInvoicePaymentStatus's transaction. The
+// amount is the stored payment amount because a failed PaymentIntent reports
+// no amount_received.
+func stripePaymentIntentEventWriter(status string) invoicePaymentEventWriter {
+	return func(ctx context.Context, tx *sql.Tx, payment resolvedInvoicePayment) error {
+		amount, err := decimal.NewFromString(payment.Amount)
+		if err != nil {
+			return fmt.Errorf("parse payment %s amount for billing event: %w", payment.PaymentID, err)
+		}
+		amountFloat, _ := amount.Float64()
 		eventType := eventPaymentSucceeded
 		if status == "failed" {
 			eventType = eventPaymentFailed
 		}
-		emitBillingEvent(s.db, s.logger, eventType, tenantID, "payment", paymentID, &ipcpb.BillingEvent{
-			PaymentId: paymentID,
-			InvoiceId: invoiceID,
-			Amount:    float64(amountCents) / float64(intPow10(currencyMinorUnitExponent(currency))),
-			Currency:  currency,
+		return emitBillingEventTx(ctx, tx, eventType, payment.TenantID, "payment", payment.PaymentID, &ipcpb.BillingEvent{
+			PaymentId: payment.PaymentID,
+			InvoiceId: payment.InvoiceID,
+			Amount:    amountFloat,
+			Currency:  payment.Currency,
 			Provider:  "stripe",
 			Status:    status,
 		})
 	}
-
-	return nil
 }
 
 // intPow10 returns 10^n for small n. Used to derive the integer divisor
@@ -707,37 +722,62 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 		}
 	}
 
-	if ourStatus == "active" {
-		// Activation authority for an async tenant subscription: apply the
-		// purchased tier and clear staged checkout state once funds settle.
-		if _, actErr := s.activateTenantSubscriptionFromStripe(ctx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd); actErr != nil {
-			return actErr
-		}
-		if intentErr := purserdb.New(s.db).MarkStripeSubscriptionIntentSucceeded(ctx, obj.ID); intentErr != nil {
-			return fmt.Errorf("failed to mark subscription intent succeeded: %w", intentErr)
-		}
-	} else {
-		toNullTime := func(value *time.Time) sql.NullTime {
-			if value == nil {
-				return sql.NullTime{}
+	eventType := eventSubscriptionUpdated
+	if ourStatus == "cancelled" {
+		eventType = eventSubscriptionCanceled
+	}
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		if ourStatus == "active" {
+			// Activation authority for an async tenant subscription: apply the
+			// purchased tier and clear staged checkout state once funds settle.
+			if _, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd); actErr != nil {
+				return actErr
 			}
-			return sql.NullTime{Time: *value, Valid: true}
-		}
-		if _, err = purserdb.New(s.db).UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{
-			StripeStatus: sql.NullString{String: obj.Status, Valid: obj.Status != ""}, Status: ourStatus,
-			PeriodEnd: toNullTime(periodEnd), PeriodStart: toNullTime(periodStart), TenantID: tenantID,
-		}); err != nil {
-			return fmt.Errorf("failed to update subscription status: %w", err)
-		}
-		// A subscription that reached a terminal failure (incomplete_expired /
-		// unpaid / canceled all map to "cancelled") without ever activating
-		// leaves staged stripe_checkout state behind; clear it so a failed async
-		// first payment does not strand a pending tier.
-		if ourStatus == "cancelled" {
-			if clearErr := s.clearStagedStripeCheckout(ctx, tenantID, obj.ID); clearErr != nil {
-				return clearErr
+			if intentErr := queries.MarkStripeSubscriptionIntentSucceeded(ctx, obj.ID); intentErr != nil {
+				return fmt.Errorf("failed to mark subscription intent succeeded: %w", intentErr)
+			}
+		} else {
+			toNullTime := func(value *time.Time) sql.NullTime {
+				if value == nil {
+					return sql.NullTime{}
+				}
+				return sql.NullTime{Time: *value, Valid: true}
+			}
+			if _, updateErr := queries.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{
+				StripeStatus: sql.NullString{String: obj.Status, Valid: obj.Status != ""}, Status: ourStatus,
+				PeriodEnd: toNullTime(periodEnd), PeriodStart: toNullTime(periodStart), TenantID: tenantID,
+			}); updateErr != nil {
+				return fmt.Errorf("failed to update subscription status: %w", updateErr)
+			}
+			// A subscription that reached a terminal failure (incomplete_expired /
+			// unpaid / canceled all map to "cancelled") without ever activating
+			// leaves staged stripe_checkout state behind; clear it so a failed async
+			// first payment does not strand a pending tier.
+			if ourStatus == "cancelled" {
+				if clearErr := s.clearStagedStripeCheckout(ctx, tx, tenantID, obj.ID); clearErr != nil {
+					return clearErr
+				}
 			}
 		}
+
+		// The event is keyed by the internal subscription id when one exists;
+		// a tenant without a local subscription row falls back to the Stripe id.
+		subscriptionID, lookupErr := queries.GetInternalSubscriptionID(ctx, tenantID)
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			return fmt.Errorf("look up internal subscription id: %w", lookupErr)
+		}
+		if subscriptionID == "" {
+			subscriptionID = obj.ID
+		}
+		return emitBillingEventTx(ctx, tx, eventType, tenantID, "subscription", subscriptionID, &ipcpb.BillingEvent{
+			SubscriptionId: subscriptionID,
+			Provider:       "stripe",
+			Status:         ourStatus,
+		})
+	})
+	if txErr != nil {
+		return txErr
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -746,23 +786,6 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 		"stripe_status":   obj.Status,
 		"our_status":      ourStatus,
 	}).Info("Updated subscription status from Stripe webhook")
-
-	subscriptionID := ""
-	if subscriptionID, err = purserdb.New(s.db).GetInternalSubscriptionID(ctx, tenantID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to look up internal subscription ID, falling back to Stripe ID")
-	}
-	if subscriptionID == "" {
-		subscriptionID = obj.ID
-	}
-	eventType := eventSubscriptionUpdated
-	if ourStatus == "cancelled" {
-		eventType = eventSubscriptionCanceled
-	}
-	emitBillingEvent(s.db, s.logger, eventType, tenantID, "subscription", subscriptionID, &ipcpb.BillingEvent{
-		SubscriptionId: subscriptionID,
-		Provider:       "stripe",
-		Status:         ourStatus,
-	})
 
 	return nil
 }
@@ -785,18 +808,6 @@ func (s *Service) handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 			return nil
 		}
 	}
-
-	// Reset dunning attempts on successful payment
-	err = purserdb.New(s.db).ResetTenantDunningAttempts(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to reset dunning attempts")
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"tenant_id":   tenantID,
-		"invoice_id":  obj.ID,
-		"amount_paid": obj.AmountPaid,
-	}).Info("Processed successful Stripe invoice payment")
 
 	// If this invoice corresponds to a monthly cluster_subscription, write
 	// the operator credit ledger row so marketplace revenue is tracked from
@@ -822,13 +833,29 @@ func (s *Service) handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 	// charge owns it). So there is nothing for invoice.paid to reconcile on
 	// the base; metered overage collection lives elsewhere.
 
-	emitBillingEvent(s.db, s.logger, eventInvoicePaid, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
-		InvoiceId: obj.ID,
-		Amount:    float64(obj.AmountPaid) / 100.0,
-		Currency:  obj.Currency,
-		Provider:  "stripe",
-		Status:    "paid",
-	})
+	// The dunning reset and invoice_paid event commit together and run after
+	// the cluster steps above, so a delivery retried because one of those
+	// steps failed does not enqueue a second invoice_paid event.
+	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if resetErr := purserdb.New(tx).ResetTenantDunningAttempts(ctx, tenantID); resetErr != nil {
+			return fmt.Errorf("reset dunning attempts: %w", resetErr)
+		}
+		return emitBillingEventTx(ctx, tx, eventInvoicePaid, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
+			InvoiceId: obj.ID,
+			Amount:    float64(obj.AmountPaid) / 100.0,
+			Currency:  obj.Currency,
+			Provider:  "stripe",
+			Status:    "paid",
+		})
+	}); err != nil {
+		return err
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":   tenantID,
+		"invoice_id":  obj.ID,
+		"amount_paid": obj.AmountPaid,
+	}).Info("Processed successful Stripe invoice payment")
 
 	return nil
 }
@@ -917,10 +944,19 @@ func (s *Service) handleStripeInvoiceFailed(payload StripeWebhookPayload) error 
 		}
 	}
 
-	// Increment dunning attempts
-	err = purserdb.New(s.db).IncrementTenantDunningAttempts(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to increment dunning attempts")
+	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if incrementErr := purserdb.New(tx).IncrementTenantDunningAttempts(ctx, tenantID); incrementErr != nil {
+			return fmt.Errorf("increment dunning attempts: %w", incrementErr)
+		}
+		return emitBillingEventTx(ctx, tx, eventInvoicePaymentFailed, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
+			InvoiceId: obj.ID,
+			Amount:    float64(obj.AmountDue) / 100.0,
+			Currency:  obj.Currency,
+			Provider:  "stripe",
+			Status:    "failed",
+		})
+	}); err != nil {
+		return err
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -930,14 +966,6 @@ func (s *Service) handleStripeInvoiceFailed(payload StripeWebhookPayload) error 
 	}).Warn("Stripe invoice payment failed")
 
 	go s.sendTenantPaymentStatusEmail(tenantID, obj.ID, "stripe", "failed", float64(obj.AmountDue)/100, obj.Currency)
-
-	emitBillingEvent(s.db, s.logger, eventInvoicePaymentFailed, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
-		InvoiceId: obj.ID,
-		Amount:    float64(obj.AmountDue) / 100.0,
-		Currency:  obj.Currency,
-		Provider:  "stripe",
-		Status:    "failed",
-	})
 
 	return nil
 }
@@ -976,7 +1004,7 @@ func (s *Service) handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPa
 		if txID == "" {
 			txID = sess.ID
 		}
-		if _, err := s.updateInvoicePaymentStatus("stripe", txID, sess.Metadata.ReferenceID, "failed", providerSettlementEvidence{TenantID: sess.Metadata.TenantID}); err != nil {
+		if _, err := s.updateInvoicePaymentStatus("stripe", txID, sess.Metadata.ReferenceID, "failed", nil, providerSettlementEvidence{TenantID: sess.Metadata.TenantID}); err != nil {
 			return err
 		}
 		s.logger.WithFields(logging.Fields{
@@ -1013,7 +1041,7 @@ func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) erro
 	case PurposePrepaid:
 		return s.markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "expired")
 	case PurposeSubscription:
-		return s.clearStagedStripeCheckout(ctx, sess.Metadata.TenantID, sess.Subscription)
+		return s.clearStagedStripeCheckout(ctx, s.db, sess.Metadata.TenantID, sess.Subscription)
 	case PurposeClusterSubscription:
 		return s.clearStagedClusterSubscription(ctx, sess.ID, sess.Subscription)
 	default:
@@ -1392,42 +1420,35 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			return "", err
 		}
 	}
-	paymentUpdated, err := s.updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus, settlement)
-	if err != nil {
+	var emitPaymentEvent invoicePaymentEventWriter
+	if (newStatus == "confirmed" || newStatus == "failed") && payment.Amount != nil {
+		emitPaymentEvent = molliePaymentEventWriter(payment.ID, newStatus, settlement)
+	}
+	if _, err := s.updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus, emitPaymentEvent, settlement); err != nil {
 		return "", err
-	}
-	if !paymentUpdated {
-		return eventID, nil
-	}
-
-	if newStatus == "confirmed" || newStatus == "failed" {
-		if tenantID == "" && invoiceID != "" {
-			var lookupErr error
-			tenantID, lookupErr = purserdb.New(s.db).GetBillingInvoiceTenant(ctx, invoiceID)
-			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-				s.logger.WithError(lookupErr).WithField("invoice_id", invoiceID).Warn("Failed to resolve tenant from invoice, billing event will be skipped")
-			}
-		}
-		if tenantID != "" && payment.Amount != nil {
-			amountCents, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
-			if err == nil {
-				eventType := eventPaymentSucceeded
-				if newStatus == "failed" {
-					eventType = eventPaymentFailed
-				}
-				emitBillingEvent(s.db, s.logger, eventType, tenantID, "payment", payment.ID, &ipcpb.BillingEvent{
-					PaymentId: payment.ID,
-					InvoiceId: invoiceID,
-					Amount:    float64(amountCents) / float64(intPow10(currencyMinorUnitExponent(currency))),
-					Currency:  currency,
-					Provider:  "mollie",
-					Status:    newStatus,
-				})
-			}
-		}
 	}
 
 	return eventID, nil
+}
+
+// molliePaymentEventWriter enqueues payment_succeeded/payment_failed for a
+// Mollie payment inside updateInvoicePaymentStatus's transaction, using the
+// provider-reported amount the settlement evidence was parsed from.
+func molliePaymentEventWriter(molliePaymentID, newStatus string, settlement providerSettlementEvidence) invoicePaymentEventWriter {
+	return func(ctx context.Context, tx *sql.Tx, payment resolvedInvoicePayment) error {
+		eventType := eventPaymentSucceeded
+		if newStatus == "failed" {
+			eventType = eventPaymentFailed
+		}
+		return emitBillingEventTx(ctx, tx, eventType, payment.TenantID, "payment", molliePaymentID, &ipcpb.BillingEvent{
+			PaymentId: molliePaymentID,
+			InvoiceId: payment.InvoiceID,
+			Amount:    float64(settlement.AmountCents) / float64(intPow10(currencyMinorUnitExponent(settlement.Currency))),
+			Currency:  settlement.Currency,
+			Provider:  "mollie",
+			Status:    newStatus,
+		})
+	}
 }
 
 func mollieEventID(resource, id, status string) string {
@@ -2120,7 +2141,7 @@ func (s *Service) drainMolliePaymentObservationsForInvoice(ctx context.Context, 
 		}); insertErr != nil {
 			return fmt.Errorf("insert drained mollie payment %s: %w", observation.MolliePaymentID, insertErr)
 		}
-		if _, settleErr := s.updateInvoicePaymentStatus("mollie", observation.MolliePaymentID, invoiceID, mapped, providerSettlementEvidence{
+		if _, settleErr := s.updateInvoicePaymentStatus("mollie", observation.MolliePaymentID, invoiceID, mapped, nil, providerSettlementEvidence{
 			TenantID: invoice.TenantID, AmountCents: observation.AmountCents, Currency: observation.Currency,
 		}); settleErr != nil {
 			return fmt.Errorf("settle drained mollie payment %s: %w", observation.MolliePaymentID, settleErr)
@@ -2245,7 +2266,25 @@ type providerSettlementEvidence struct {
 	Currency    string
 }
 
-func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string, evidence providerSettlementEvidence) (bool, error) {
+// resolvedInvoicePayment is the billing_payments row updateInvoicePaymentStatus
+// matched, as seen inside its transaction.
+type resolvedInvoicePayment struct {
+	PaymentID string
+	InvoiceID string
+	TenantID  string
+	Amount    string
+	Currency  string
+}
+
+// invoicePaymentEventWriter enqueues the billing event for a payment status
+// update through tx, before updateInvoicePaymentStatus commits. An error
+// rolls the status update back.
+type invoicePaymentEventWriter func(ctx context.Context, tx *sql.Tx, payment resolvedInvoicePayment) error
+
+// updateInvoicePaymentStatus applies a provider payment status to the matching
+// billing payment and settles its invoice when covered. emitEvent, when
+// non-nil, runs on every path that commits and reports updated=true.
+func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string, emitEvent invoicePaymentEventWriter, evidence providerSettlementEvidence) (bool, error) {
 	ctx := context.Background()
 	method := invoicePaymentMethodForProvider(provider)
 
@@ -2298,6 +2337,15 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
 		return false, fmt.Errorf("provider payment %s tenant mismatch", txID)
 	}
+	writeEvent := func() error {
+		if emitEvent == nil {
+			return nil
+		}
+		return emitEvent(ctx, tx, resolvedInvoicePayment{
+			PaymentID: paymentID, InvoiceID: invoiceID, TenantID: paymentTenantID,
+			Amount: paymentAmount, Currency: paymentCurrency,
+		})
+	}
 	// Settlement below asks an aggregate question — do confirmed payments now
 	// cover the invoice? — over sibling rows that concurrent webhook handlers
 	// are confirming in their own transactions. At READ COMMITTED, and with no
@@ -2339,6 +2387,9 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 				return false, settleErr
 			}
 		}
+		if err = writeEvent(); err != nil {
+			return false, err
+		}
 		if err = tx.Commit(); err != nil {
 			return false, fmt.Errorf("commit idempotent invoice payment status transaction: %w", err)
 		}
@@ -2376,6 +2427,9 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	}
 
 	if invoiceID == "" {
+		if err = writeEvent(); err != nil {
+			return false, err
+		}
 		if err = tx.Commit(); err != nil {
 			return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
 		}
@@ -2389,6 +2443,9 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		}
 	}
 
+	if err = writeEvent(); err != nil {
+		return false, err
+	}
 	if err = tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
 	}

@@ -66,3 +66,16 @@ CREATE TABLE IF NOT EXISTS periscope.metering_reservation_keys (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (source_id, tenant_id, cluster_id)
 );
+
+-- Schema baseline identity marker. Records that this database was created from the
+-- consolidated baseline at this floor, so the migration min-version guard treats
+-- below-floor migrations as folded into the baseline (not missing). An existing
+-- cluster upgraded in place has no marker and is checked for ledger completeness
+-- instead. The floor value is kept in sync with provisioner.schemaMigrationBaselineFloor
+-- by TestBaselineMarkerFloorMatchesConst. See docs/standards/schema-migrations.md.
+CREATE TABLE IF NOT EXISTS public._schema_baseline (
+    floor TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO public._schema_baseline (floor)
+    SELECT 'v0.3.0' WHERE NOT EXISTS (SELECT 1 FROM public._schema_baseline);

@@ -180,6 +180,56 @@ func TestEdgeTemplateParity(t *testing.T) {
 	}
 }
 
+// TestEdgeVMAgentExternalLabelsParity pins the region/cluster external labels
+// both edge vmagent surfaces stamp on every scraped series: same block under
+// global, keys sorted, empty values omitted.
+func TestEdgeVMAgentExternalLabelsParity(t *testing.T) {
+	t.Parallel()
+
+	render := func(clusterID, region string) string {
+		vars := fixedEdgeVars()
+		vars.ClusterID = clusterID
+		vars.Region = region
+		files, err := RenderEdgeTemplates(vars)
+		if err != nil {
+			t.Fatalf("RenderEdgeTemplates: %v", err)
+		}
+		file, ok := fileByPath(files, "vmagent-edge.yml")
+		if !ok {
+			t.Fatal("vmagent-edge.yml not rendered")
+		}
+		return string(file.Content)
+	}
+
+	both := render("media-eu-1", "eu-west")
+	if !strings.Contains(both, "global:\n  scrape_interval: 30s\n  external_labels:\n    cluster: \"media-eu-1\"\n    region: \"eu-west\"\nscrape_configs:") {
+		t.Fatalf("go vmagent config must stamp cluster and region under global:\n%s", both)
+	}
+	regionOnly := render("", "us-east")
+	if !strings.Contains(regionOnly, "  external_labels:\n    region: \"us-east\"\nscrape_configs:") || strings.Contains(regionOnly, "cluster:") {
+		t.Fatalf("go vmagent config must omit an empty cluster label:\n%s", regionOnly)
+	}
+	if neither := render("", ""); strings.Contains(neither, "external_labels") {
+		t.Fatalf("go vmagent config must omit external_labels when both are empty:\n%s", neither)
+	}
+
+	jinja := readFile(t, ansibleTemplatePath(t, "vmagent-edge.yml.j2"))
+	for _, needle := range []string{
+		"{% set edge_label_cluster = edge_cluster_id | default('') | trim %}",
+		"{% set edge_label_region = edge_region | default('') | trim %}",
+		"global:\n  scrape_interval: 30s\n{% if edge_label_cluster | length > 0 or edge_label_region | length > 0 %}\n  external_labels:\n",
+		"    cluster: {{ edge_label_cluster | to_json }}\n",
+		"    region: {{ edge_label_region | to_json }}\n",
+	} {
+		if !strings.Contains(jinja, needle) {
+			t.Errorf("jinja vmagent-edge.yml.j2 missing %q", needle)
+		}
+	}
+	if strings.Index(jinja, "cluster: {{") > strings.Index(jinja, "region: {{") {
+		t.Error("jinja vmagent-edge.yml.j2 must emit cluster before region, matching the go renderer")
+	}
+}
+
 func TestContainerCredentialScrubberRunsAsNarrowRootHelper(t *testing.T) {
 	t.Parallel()
 	runPath := repositoryPath(t, "edge/rootfs/etc/s6-overlay/s6-rc.d/credential-scrubber/run")

@@ -26,15 +26,18 @@ import (
 const (
 	SchemaVersion          = 1
 	PlacementSchemaVersion = 2
-	SignatureDomain        = "frameworks-media-authority-v1\x00"
-	maxClockSkewFuture     = 30 * time.Second
-	maxTenantValidity      = 24 * time.Hour
-	maxLiveValidity        = 24 * time.Hour
-	maxArtifactValidity    = 7 * 24 * time.Hour
-	maxPayloadBytes        = 1 << 20
-	maxIdentifierBytes     = 255
-	maxSignerKeyIDBytes    = 255
-	maxAudienceCellIDBytes = 255
+	// NodePlacementSchemaVersion is placement schema 2 plus selectors that name
+	// nodes. Commodore issues it only to cells whose every replica attests it.
+	NodePlacementSchemaVersion = 3
+	SignatureDomain            = "frameworks-media-authority-v1\x00"
+	maxClockSkewFuture         = 30 * time.Second
+	maxTenantValidity          = 24 * time.Hour
+	maxLiveValidity            = 24 * time.Hour
+	maxArtifactValidity        = 7 * 24 * time.Hour
+	maxPayloadBytes            = 1 << 20
+	maxIdentifierBytes         = 255
+	maxSignerKeyIDBytes        = 255
+	maxAudienceCellIDBytes     = 255
 )
 
 func LiveStreamAuthorityID(streamID string) string {

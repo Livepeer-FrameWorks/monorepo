@@ -25,12 +25,12 @@ func validPullStream() PullStream {
 
 func validMistNativeStream() MistNativeStream {
 	return MistNativeStream{
-		PlaybackID:        "mp1",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Mist One",
-		Source:            "ts-exec:ffmpeg -i x",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"cluster-1"},
+		PlaybackID:     "mp1",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Mist One",
+		Source:         "ts-exec:ffmpeg -i x",
+		SourceKind:     "exec",
+		SourceLocation: &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "cluster-1"}}},
 	}
 }
 

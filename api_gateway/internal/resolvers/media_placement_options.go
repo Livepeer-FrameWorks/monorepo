@@ -34,8 +34,8 @@ func (r *Resolver) DoMediaPlacementOptions(ctx context.Context, scope model.Medi
 		return placementInvalidInput(fmt.Errorf("options cursor exceeds bounds")), nil
 	}
 	if filter != nil {
-		request.Filter = &placementpb.OptionsFilter{Query: placementString(filter.Query)}
-		if len(request.Filter.Query) > 128 || len(filter.Classes) > 3 {
+		request.Filter = &placementpb.OptionsFilter{Query: placementString(filter.Query), ClusterId: strings.TrimSpace(placementString(filter.ClusterID))}
+		if len(request.Filter.Query) > 128 || len(request.Filter.ClusterId) > 255 || len(filter.Classes) > 3 {
 			return placementInvalidInput(fmt.Errorf("options filter exceeds bounds")), nil
 		}
 		if filter.Kind != nil {
@@ -104,6 +104,9 @@ func (r *Resolver) DoMediaPlacementOptions(ctx context.Context, scope model.Medi
 		}
 		if option.GetReason() != "" {
 			node.Reason = strPtr(option.GetReason())
+		}
+		if option.GetClusterId() != "" {
+			node.ClusterID = strPtr(option.GetClusterId())
 		}
 		out.Nodes = append(out.Nodes, node)
 	}

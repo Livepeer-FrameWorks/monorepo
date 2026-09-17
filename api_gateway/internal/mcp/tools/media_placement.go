@@ -28,10 +28,6 @@ func RegisterMediaPlacementTools(server *mcp.Server, resolver *resolvers.Resolve
 		func(ctx context.Context, input placementChangeArgs) (model.MediaPlacementChangeResult, error) {
 			return resolver.DoMediaPlacementChange(ctx, input.Scope, input.IdempotencyKey)
 		})
-	addPlacementTool(server, &mcp.Tool{Name: "get_media_placement_legacy_pins", Description: "Read existing stream placement pins and migration restrictions before editing policy."},
-		func(ctx context.Context, input placementStreamArgs) (model.MediaPlacementLegacyPinsResult, error) {
-			return resolver.DoMediaPlacementLegacyPins(ctx, input.StreamID)
-		})
 	addPlacementTool(server, &mcp.Tool{Name: "get_cluster_media_consent", Description: "Read cluster-owner consent for ingest, serving and external media sources."},
 		func(ctx context.Context, input placementClusterArgs) (model.MediaCapacityConsentResult, error) {
 			return resolver.DoClusterMediaConsent(ctx, input.ClusterID)
@@ -58,10 +54,6 @@ type placementOptionsArgs struct {
 type placementChangeArgs struct {
 	Scope          model.MediaPlacementScopeInput `json:"scope"`
 	IdempotencyKey string                         `json:"idempotencyKey"`
-}
-
-type placementStreamArgs struct {
-	StreamID string `json:"streamId"`
 }
 
 type placementClusterArgs struct {
@@ -109,8 +101,6 @@ func placementToolOutput(value any) (*mcp.CallToolResult, any, error) {
 		out.Type = "MediaPlacementReview"
 	case *model.MediaPlacementChange:
 		out.Type = "MediaPlacementChange"
-	case *model.MediaPlacementLegacyPins:
-		out.Type = "MediaPlacementLegacyPins"
 	case *model.MediaCapacityConsent:
 		out.Type = "MediaCapacityConsent"
 	case *model.MediaCapacityConsentChange:

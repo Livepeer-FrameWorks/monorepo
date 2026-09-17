@@ -41,20 +41,20 @@ https://chandler.example.com/assets/abc123def456/sprite.jpg
 https://chandler.example.com/assets/abc123def456/sprite.vtt
 ```
 
-The Chandler hostname for your environment is returned by the GraphQL playback resolver — you don't need to hardcode it.
-
-For grid or library views, fetch the Chandler host once from `streamingConfig`, then combine it with the asset IDs returned by your list queries:
+You don't build these URLs yourself. Stream and artifact queries return them already resolved against the regional Chandler in `thumbnailAssets`. For grid or library views, request `thumbnailAssets` on the list query:
 
 ```graphql
-query LibraryPreviewInputs {
-  streamingConfig {
-    chandlerDomain
-  }
+query LibraryPreviews {
   streamsConnection(page: { first: 50 }) {
     nodes {
       streamId
       playbackId
       name
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   clips: storageArtifactsConnection(input: { kinds: [CLIP], first: 50, offset: 0 }) {
@@ -62,6 +62,11 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   recordings: storageArtifactsConnection(input: { kinds: [DVR], first: 50, offset: 0 }) {
@@ -69,6 +74,11 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   vod: storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 50, offset: 0 }) {
@@ -76,24 +86,29 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
 }
 ```
 
-Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams and the artifact `hash` for clips, DVR recordings, and VOD.
+`thumbnailAssets` is null for a live stream that has never been live, and for an artifact until its thumbnail upload is confirmed.
 
 ## In the FrameWorks Player
 
 Sprite hover-scrub is **automatic**. When the stream has thumbnail processing enabled, the player auto-detects the sprite track from MistServer metadata and shows tiles on the seek bar during hover. No configuration needed for live or VOD content.
 
-To set the click-to-play poster overlay, pass `thumbnailUrl`:
+To set the click-to-play poster overlay, pass the `posterUrl` your query returned as `thumbnailUrl`:
 
 ```tsx
 <Player
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
-  thumbnailUrl="https://chandler.example.com/assets/<assetId>/poster.jpg"
+  thumbnailUrl={stream.thumbnailAssets?.posterUrl}
 />
 ```
 

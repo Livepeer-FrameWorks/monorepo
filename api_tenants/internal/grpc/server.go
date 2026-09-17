@@ -1627,22 +1627,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	}
 
 	userID := middleware.GetUserID(ctx)
-
-	// Check tenant's cluster ownership limit
 	queries := quartermasterdb.New(s.db)
-	ownership, err := queries.GetTenantClusterOwnershipLimit(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !ownership.MaxOwnedClusters.Valid || !ownership.IsProvider.Valid {
-		return nil, status.Error(codes.Internal, "database error: required tenant ownership field is NULL")
-	}
-	if !ownership.IsProvider.Bool && ownership.CurrentOwnedClusters >= int64(ownership.MaxOwnedClusters.Int32) {
-		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", ownership.MaxOwnedClusters.Int32)
-	}
 
 	// Generate cluster ID from name
 	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
@@ -1671,43 +1656,6 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	if err != nil {
 		return nil, err
 	}
-	regionForRow := strings.TrimSpace(controlCell.regionID)
-
-	// One transaction wraps every write that makes up a self-hosted cluster:
-	// the cluster row, the owner's tenant_cluster_access grant, the Foghorn
-	// service_cluster_assignments junction, the bootstrap token, and the
-	// service-event outbox emits. A failure on any of these rolls the whole
-	// thing back so we never publish a tenant_private cluster without owner
-	// access or without a Foghorn assignment.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	txQueries := quartermasterdb.New(tx)
-	if err = txQueries.CreatePrivateInfrastructureCluster(ctx, quartermasterdb.CreatePrivateInfrastructureClusterParams{
-		ID: id, ClusterID: clusterID, ClusterName: clusterName, OwnerTenantID: tenantID,
-		BaseURL: strings.TrimSpace(controlCell.baseURL), ShortDescription: req.ShortDescription,
-		RegionID: regionForRow, ControlCellID: controlCell.controlCellID, CreatedAt: now,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
-	}
-
-	if err = txQueries.GrantPrivateClusterOwnerAccess(ctx, quartermasterdb.GrantPrivateClusterOwnerAccessParams{
-		TenantID: tenantID, ClusterID: clusterID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
-	}
-
-	// EnableSelfHosting attaches a tenant's Foghorn to a cluster. New rows
-	// are runtime-owned; ON CONFLICT preserves source (a GitOps default for
-	// this Foghorn would not be silently demoted to runtime here).
-	if err = txQueries.AssignRuntimeFoghornToPrivateCluster(ctx, quartermasterdb.AssignRuntimeFoghornToPrivateClusterParams{
-		ClusterID: clusterID, ServiceInstanceID: controlCell.instanceID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
-	}
 
 	// Create bootstrap token
 	tokenID := uuid.New().String()
@@ -1717,29 +1665,12 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	}
 	expiresAt := now.Add(30 * 24 * time.Hour)
 
-	if err = txQueries.CreateEdgeBootstrapTokenRecord(ctx, quartermasterdb.CreateEdgeBootstrapTokenRecordParams{
-		ID: tokenID, TokenHash: hashBootstrapToken(token), TokenPrefix: tokenPrefix(token),
-		Name: fmt.Sprintf("Bootstrap token for %s", clusterName), TenantID: tenantID,
-		ClusterID: validString(clusterID), ExpiresAt: expiresAt,
+	if err = s.createOwnedPrivateCluster(ctx, ownedPrivateClusterCreate{
+		operation: "self-hosting enable", id: id, clusterID: clusterID, clusterName: clusterName,
+		tenantID: tenantID, userID: userID, shortDescription: req.ShortDescription, controlCell: controlCell,
+		createdAt: now, tokenID: tokenID, token: token, tokenExpiresAt: expiresAt,
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster_created: %v", enqErr)
-	}
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit self-hosting enable: %v", commitErr)
+		return nil, err
 	}
 
 	// The cluster now has a pooled foghorn assignment; wake foghorn.<cluster> now.
@@ -2235,12 +2166,6 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 		}
 	}
 
-	// Commit the transaction
-	if err := tx.Commit(); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
-		return nil, status.Errorf(codes.Internal, "failed to commit tenant creation: %v", err)
-	}
-
 	changedFields := []string{"name"}
 	if subdomain != "" {
 		changedFields = append(changedFields, "subdomain")
@@ -2264,9 +2189,18 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 		changedFields = append(changedFields, "deployment_model")
 	}
 
-	s.emitTenantEvent(ctx, eventTenantCreated, tenantID, userID, changedFields, req.GetAttribution())
+	if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantCreated, tenantID, userID, changedFields, req.GetAttribution()); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant_created: %v", enqErr)
+	}
 	if defaultClusterID.Valid {
-		s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", ""); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
+		return nil, status.Errorf(codes.Internal, "failed to commit tenant creation: %v", err)
 	}
 
 	tenant := &quartermasterpb.Tenant{
@@ -3508,54 +3442,59 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 		publicTopology = *req.PublicTopology
 	}
 
-	// At most one cluster can be the default — clear existing before setting.
-	if isDefaultCluster {
-		if err := queries.ClearDefaultCluster(ctx); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", err)
-		}
-	}
-
 	baseURL := dns.NormalizeDomainScope(req.GetBaseUrl())
-	err := queries.CreateInfrastructureCluster(ctx, quartermasterdb.CreateInfrastructureClusterParams{
-		ID: id, ClusterID: clusterID, ClusterName: req.GetClusterName(), ClusterType: clusterType,
-		DeploymentModel: validString(deploymentModel), OwnerTenantID: ownerTenantID, BaseUrl: baseURL,
-		DatabaseUrl: optionalString(req.DatabaseUrl), PeriscopeUrl: optionalString(req.PeriscopeUrl),
-		KafkaBrokers: req.GetKafkaBrokers(), MaxConcurrentStreams: validInt32(req.GetMaxConcurrentStreams()),
-		MaxConcurrentViewers: validInt32(req.GetMaxConcurrentViewers()), MaxBandwidthMbps: validInt32(req.GetMaxBandwidthMbps()),
-		IsPlatformOfficial: validBool(isPlatformOfficial), IsDefaultCluster: validBool(isDefaultCluster),
-		PublicTopology: publicTopology, AllowPrivatePullSources: allowPrivatePullSources, CreatedAt: now,
+	foghornCount := req.GetFoghornCount()
+	var claimed int64
+	// The cluster row, its idle-Foghorn claim, and cluster_created commit
+	// together. A cluster without an owner emits a platform-scoped event.
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		// At most one cluster can be the default — clear existing before setting.
+		if isDefaultCluster {
+			if clearErr := txQueries.ClearDefaultCluster(ctx); clearErr != nil {
+				return fmt.Errorf("clear existing default cluster: %w", clearErr)
+			}
+		}
+		if createErr := txQueries.CreateInfrastructureCluster(ctx, quartermasterdb.CreateInfrastructureClusterParams{
+			ID: id, ClusterID: clusterID, ClusterName: req.GetClusterName(), ClusterType: clusterType,
+			DeploymentModel: validString(deploymentModel), OwnerTenantID: ownerTenantID, BaseUrl: baseURL,
+			DatabaseUrl: optionalString(req.DatabaseUrl), PeriscopeUrl: optionalString(req.PeriscopeUrl),
+			KafkaBrokers: req.GetKafkaBrokers(), MaxConcurrentStreams: validInt32(req.GetMaxConcurrentStreams()),
+			MaxConcurrentViewers: validInt32(req.GetMaxConcurrentViewers()), MaxBandwidthMbps: validInt32(req.GetMaxBandwidthMbps()),
+			IsPlatformOfficial: validBool(isPlatformOfficial), IsDefaultCluster: validBool(isDefaultCluster),
+			PublicTopology: publicTopology, AllowPrivatePullSources: allowPrivatePullSources, CreatedAt: now,
+		}); createErr != nil {
+			return fmt.Errorf("create cluster: %w", createErr)
+		}
+		claimed = 0
+		// Assign idle Foghorn instances ("idle" = zero active assignments). A
+		// short claim leaves the cluster provisioning until the pool grows.
+		if foghornCount > 0 {
+			var claimErr error
+			claimed, claimErr = txQueries.ClaimIdleFoghornsForCluster(ctx, quartermasterdb.ClaimIdleFoghornsForClusterParams{
+				ClusterID: clusterID, FoghornCount: foghornCount,
+			})
+			if claimErr != nil {
+				return fmt.Errorf("assign Foghorn instances: %w", claimErr)
+			}
+			if claimed < int64(foghornCount) {
+				if hsErr := txQueries.MarkClusterProvisioning(ctx, clusterID); hsErr != nil {
+					return fmt.Errorf("mark cluster provisioning: %w", hsErr)
+				}
+			}
+		}
+		return s.emitClusterEventTx(ctx, tx, eventClusterCreated, ownerTenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 	})
-
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
 	}
 
-	// Assign idle Foghorn instances to this cluster via service_cluster_assignments.
-	// "Idle" = Foghorn with zero active assignments in the junction table.
-	if foghornCount := req.GetFoghornCount(); foghornCount > 0 {
-		claimed, claimErr := queries.ClaimIdleFoghornsForCluster(ctx, quartermasterdb.ClaimIdleFoghornsForClusterParams{
-			ClusterID: clusterID, FoghornCount: foghornCount,
-		})
-		if claimErr != nil {
-			s.logger.WithError(claimErr).Warn("Failed to assign Foghorn instances to cluster")
-			if hsErr := queries.MarkClusterProvisioning(ctx, clusterID); hsErr != nil {
-				s.logger.WithError(hsErr).WithField("cluster_id", clusterID).Warn("Failed to update cluster health_status to provisioning")
-			}
-		} else if claimed < int64(foghornCount) {
-			s.logger.WithFields(logging.Fields{
-				"cluster_id": clusterID,
-				"requested":  foghornCount,
-				"claimed":    claimed,
-			}).Warn("Assigned fewer Foghorn instances than requested")
-			if hsErr := queries.MarkClusterProvisioning(ctx, clusterID); hsErr != nil {
-				s.logger.WithError(hsErr).WithField("cluster_id", clusterID).Warn("Failed to update cluster health_status to provisioning")
-			}
+	if foghornCount > 0 {
+		fields := logging.Fields{"cluster_id": clusterID, "requested": foghornCount, "claimed": claimed}
+		if claimed < int64(foghornCount) {
+			s.logger.WithFields(fields).Warn("Assigned fewer Foghorn instances than requested")
 		} else {
-			s.logger.WithFields(logging.Fields{
-				"cluster_id": clusterID,
-				"requested":  foghornCount,
-				"claimed":    claimed,
-			}).Info("Assigned Foghorn instances to cluster")
+			s.logger.WithFields(fields).Info("Assigned Foghorn instances to cluster")
 		}
 		// New cluster gained pooled foghorn members; wake foghorn.<cluster> now.
 		s.fireNavigatorSyncForPoolClusters("foghorn", []string{clusterID})
@@ -3565,12 +3504,6 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 	if err != nil {
 		return nil, err
 	}
-
-	tenantID := ownerTenantID
-	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
-		tenantID = *cluster.OwnerTenantId
-	}
-	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -3687,6 +3620,16 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 			}
 		}
 	}
+	// cluster_updated names the owner after this update. Clearing the owner
+	// keeps the previous owner on the event; a cluster that never had one
+	// emits a platform-scoped event.
+	eventTenantID := ownerTenantID.String
+	if req.OwnerTenantId != nil && *req.OwnerTenantId != "" {
+		eventTenantID = *req.OwnerTenantId
+	}
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, eventTenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue cluster_updated: %v", enqErr)
+	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit cluster update: %v", commitErr)
 	}
@@ -3695,12 +3638,6 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 	if err != nil {
 		return nil, err
 	}
-
-	eventTenantID := ownerTenantID.String
-	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
-		eventTenantID = *cluster.OwnerTenantId
-	}
-	s.emitClusterEvent(ctx, eventClusterUpdated, eventTenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -3779,7 +3716,7 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *qu
 	}
 	var entries []entryWithCursor
 	for _, row := range rows {
-		entry := &quartermasterpb.ClusterAccessEntry{ClusterId: row.ClusterID, ClusterName: row.ClusterName, AccessLevel: row.AccessLevel}
+		entry := &quartermasterpb.ClusterAccessEntry{ClusterId: row.ClusterID, ClusterName: row.ClusterName, AccessLevel: row.AccessLevel, AllowPrivatePullSources: row.AllowPrivatePullSources}
 		entries = append(entries, entryWithCursor{entry: entry, createdAt: row.CreatedAt, id: row.ID})
 	}
 
@@ -4476,7 +4413,15 @@ func (s *QuartermasterServer) ListServiceClusterAssignments(ctx context.Context,
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list service cluster assignments: %v", err)
 	}
-	return &quartermasterpb.ListServiceClusterAssignmentsResponse{ClusterIds: clusterIDs}, nil
+	resp := &quartermasterpb.ListServiceClusterAssignmentsResponse{ClusterIds: clusterIDs}
+	if serviceType == "foghorn" {
+		released, releasedErr := quartermasterdb.New(s.db).ListReleasedControlCellClusters(ctx, instanceID)
+		if releasedErr != nil {
+			return nil, status.Errorf(codes.Internal, "list released control-cell clusters: %v", releasedErr)
+		}
+		resp.ReleasedClusterIds = released
+	}
+	return resp, nil
 }
 
 // SubscribeToCluster subscribes a tenant to a public/shared cluster
@@ -5451,6 +5396,26 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 			NodeIDs: upNodeIDs, ExternalIPs: upExternalIPs, RefreshHeartbeat: upRefreshHB,
 		}); execErr != nil {
 			return fmt.Errorf("failed to update node state: %w", execErr)
+		}
+
+		// The reporting cell becomes a node's control cell when this is the
+		// node's newest observation; control-cell reassignment completes on it.
+		if reporterCellID := strings.TrimSpace(req.GetReporterCellId()); reporterCellID != "" {
+			observedNodeIDs := make([]string, 0, len(nodes))
+			observedAts := make([]time.Time, 0, len(nodes))
+			for _, n := range nodes {
+				id := strings.TrimSpace(n.GetNodeId())
+				if id == "" || n.GetObservedAt() == nil {
+					continue
+				}
+				observedNodeIDs = append(observedNodeIDs, id)
+				observedAts = append(observedAts, n.GetObservedAt().AsTime())
+			}
+			if len(observedNodeIDs) > 0 {
+				if execErr := txQueries.RecordNodeControlCellObservations(ctx, reporterCellID, observedNodeIDs, observedAts); execErr != nil {
+					return fmt.Errorf("failed to record node control cell: %w", execErr)
+				}
+			}
 		}
 
 		// UPSERT derived edge service rows. We only INSERT when the derivation is true:
@@ -8841,7 +8806,6 @@ const (
 	eventTenantClusterUnassigned      = "tenant_cluster_unassigned"
 	eventClusterCreated               = "cluster_created"
 	eventClusterUpdated               = "cluster_updated"
-	eventClusterDeleted               = "cluster_deleted"
 	eventClusterInviteCreated         = "cluster_invite_created"
 	eventClusterInviteRevoked         = "cluster_invite_revoked"
 	eventClusterSubscriptionRequested = "cluster_subscription_requested"
@@ -8851,22 +8815,6 @@ const (
 	eventClusterAccessMaterialized    = "cluster_access_materialized"
 	eventClusterAccessRevoked         = "cluster_access_revoked"
 )
-
-// emitServiceEvent enqueues a service event into
-// quartermaster.service_event_outbox. The drain worker (started in
-// NewGRPCServer) dispatches pending rows to Decklog with exponential
-// backoff. Replaces the previous async fire-and-forget SendServiceEvent
-// path so Decklog outage no longer drops tenant/cluster mutation events.
-// Best-effort durability: helper uses its own short tx for the INSERT
-// (not strictly atomic with upstream state mutation). For strict
-// atomicity, callers that hold a tx can switch to
-// EnqueueServiceEventTx(ctx, tx, event).
-func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
-	if ctxkeys.IsDemoMode(ctx) {
-		return
-	}
-	s.enqueueServiceEvent(ctx, event)
-}
 
 func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) *ipcpb.ServiceEvent {
 	payload := &ipcpb.TenantEvent{
@@ -8886,24 +8834,16 @@ func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID strin
 	}
 }
 
-func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) {
-	s.emitServiceEvent(ctx, s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution))
-}
-
 // emitTenantEventTx writes the tenant-event outbox row inside the caller's
-// transaction. Use when the state mutation that justifies the event runs in
-// the same tx — guarantees the mutation and the event become durable
-// atomically. Falls back to the short-tx variant on tx==nil.
+// transaction, so the mutation and its event become durable together.
 func (s *QuartermasterServer) emitTenantEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) error {
-	event := s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution)
+	if ctxkeys.IsDemoMode(ctx) {
+		return nil
+	}
 	if tx == nil {
-		s.emitServiceEvent(ctx, event)
-		return nil
+		return errors.New("tenant event requires the mutation's transaction")
 	}
-	if ctxkeys.IsDemoMode(ctx) || event.GetTenantId() == "" {
-		return nil
-	}
-	_, err := s.EnqueueServiceEventTx(ctx, tx, event)
+	_, err := s.EnqueueServiceEventTx(ctx, tx, s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution))
 	return err
 }
 
@@ -8927,22 +8867,17 @@ func (s *QuartermasterServer) buildClusterEvent(eventType, tenantID, userID, clu
 	}
 }
 
-func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
-	s.emitServiceEvent(ctx, s.buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason))
-}
-
-// emitClusterEventTx writes the cluster-event outbox row inside the
-// caller's transaction. See emitTenantEventTx for semantics.
+// emitClusterEventTx writes the cluster-event outbox row inside the caller's
+// transaction. An empty tenantID is valid only for platform-scoped events of an
+// ownerless cluster; any other tenantless event fails the transaction.
 func (s *QuartermasterServer) emitClusterEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) error {
-	event := s.buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason)
+	if ctxkeys.IsDemoMode(ctx) {
+		return nil
+	}
 	if tx == nil {
-		s.emitServiceEvent(ctx, event)
-		return nil
+		return errors.New("cluster event requires the mutation's transaction")
 	}
-	if ctxkeys.IsDemoMode(ctx) || event.GetTenantId() == "" {
-		return nil
-	}
-	_, err := s.EnqueueServiceEventTx(ctx, tx, event)
+	_, err := s.EnqueueServiceEventTx(ctx, tx, s.buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason))
 	return err
 }
 
@@ -9319,6 +9254,127 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 	return &quartermasterpb.GetClusterMetadataBatchResponse{Clusters: clusters}, nil
 }
 
+// ownedPrivateClusterCreate carries the values resolved before the write
+// transaction, so a retried attempt writes the same identifiers and token.
+type ownedPrivateClusterCreate struct {
+	operation        string
+	id               string
+	clusterID        string
+	clusterName      string
+	tenantID         string
+	userID           string
+	shortDescription *string
+	controlCell      foghornControlCellCandidate
+	createdAt        time.Time
+	tokenID          string
+	token            string
+	tokenExpiresAt   time.Time
+}
+
+// txStatusError carries a gRPC status out of a retryable transaction body
+// while keeping the database cause reachable, so a 40001 inside the body
+// still replays the transaction.
+type txStatusError struct {
+	st    *status.Status
+	cause error
+}
+
+func (e *txStatusError) Error() string              { return e.st.Message() }
+func (e *txStatusError) Unwrap() error              { return e.cause }
+func (e *txStatusError) GRPCStatus() *status.Status { return e.st }
+
+func txStatusErrorf(code codes.Code, cause error, prefix string) error {
+	return &txStatusError{st: status.Newf(code, "%s: %v", prefix, cause), cause: cause}
+}
+
+// createOwnedPrivateCluster enforces the owner's max_owned_clusters limit and
+// writes every row that makes a private cluster usable in one retryable
+// transaction: the cluster row, the owner's tenant_cluster_access grant, the
+// control-cell Foghorn assignments, the bootstrap token, and the service-event
+// and Navigator outbox emits. Writing the tenant row is the transaction's first
+// statement, so concurrent creations for one tenant serialize and every
+// attempt, including a replay after 40001, counts owned clusters after the
+// previous writer finished. Providers are exempt from the limit.
+func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, create ownedPrivateClusterCreate) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		ownership, err := txQueries.LockTenantClusterOwnershipLimit(ctx, create.tenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "tenant not found")
+		}
+		if err != nil {
+			return txStatusErrorf(codes.Internal, err, "database error")
+		}
+		if !ownership.MaxOwnedClusters.Valid || !ownership.IsProvider.Valid {
+			return status.Error(codes.Internal, "database error: required tenant ownership field is NULL")
+		}
+		if !ownership.IsProvider.Bool {
+			owned, countErr := txQueries.CountTenantOwnedClusters(ctx, create.tenantID)
+			if countErr != nil {
+				return txStatusErrorf(codes.Internal, countErr, "database error")
+			}
+			if owned >= int64(ownership.MaxOwnedClusters.Int32) {
+				return status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", ownership.MaxOwnedClusters.Int32)
+			}
+		}
+
+		if err = txQueries.CreatePrivateInfrastructureCluster(ctx, quartermasterdb.CreatePrivateInfrastructureClusterParams{
+			ID: create.id, ClusterID: create.clusterID, ClusterName: create.clusterName, OwnerTenantID: create.tenantID,
+			BaseURL: strings.TrimSpace(create.controlCell.baseURL), ShortDescription: create.shortDescription,
+			RegionID: strings.TrimSpace(create.controlCell.regionID), ControlCellID: create.controlCell.controlCellID,
+			CreatedAt: create.createdAt,
+		}); err != nil {
+			return txStatusErrorf(codes.Internal, err, "failed to create cluster")
+		}
+
+		if err = txQueries.GrantPrivateClusterOwnerAccess(ctx, quartermasterdb.GrantPrivateClusterOwnerAccessParams{
+			TenantID: create.tenantID, ClusterID: create.clusterID,
+		}); err != nil {
+			return txStatusErrorf(codes.Internal, err, "failed to auto-subscribe owner to cluster")
+		}
+
+		// Every running Foghorn of the control cell serves the new cluster, so
+		// the loss of one replica does not strand its edges; the control-cell
+		// reconciler keeps the set current as replicas join or leave the cell.
+		assigned, err := txQueries.AssignControlCellFoghornsToPrivateCluster(ctx, create.clusterID)
+		if err != nil {
+			return txStatusErrorf(codes.Internal, err, "failed to assign Foghorn to cluster")
+		}
+		if assigned == 0 {
+			return status.Errorf(codes.Unavailable, "no running Foghorn in control cell %q", create.controlCell.controlCellID)
+		}
+
+		if err = txQueries.CreateEdgeBootstrapTokenRecord(ctx, quartermasterdb.CreateEdgeBootstrapTokenRecordParams{
+			ID: create.tokenID, TokenHash: hashBootstrapToken(create.token), TokenPrefix: tokenPrefix(create.token),
+			Name: fmt.Sprintf("Bootstrap token for %s", create.clusterName), TenantID: create.tenantID,
+			ClusterID: validString(create.clusterID), ExpiresAt: create.tokenExpiresAt,
+		}); err != nil {
+			return txStatusErrorf(codes.Internal, err, "failed to create bootstrap token")
+		}
+
+		if err = s.emitClusterEventTx(ctx, tx, eventClusterCreated, create.tenantID, create.userID, create.clusterID, "cluster", create.clusterID, "", "", ""); err != nil {
+			return txStatusErrorf(codes.Internal, err, "enqueue cluster_created")
+		}
+		if err = s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, create.tenantID, create.userID, create.clusterID, "cluster", create.clusterID, "", "", ""); err != nil {
+			return txStatusErrorf(codes.Internal, err, "enqueue tenant_cluster_assigned")
+		}
+		if err = s.enqueueTenantAliasEnsureTx(ctx, tx, create.tenantID, true); err != nil {
+			return txStatusErrorf(codes.Internal, err, "enqueue tenant-alias ensure")
+		}
+		if err = s.enqueueTenantAliasClusterEnsureTx(ctx, tx, create.tenantID, create.clusterID); err != nil {
+			return txStatusErrorf(codes.Internal, err, "enqueue tenant-alias cluster authority")
+		}
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Err()
+	}
+	return status.Errorf(codes.Internal, "commit %s: %v", create.operation, err)
+}
+
 // CreatePrivateCluster creates a private cluster for self-hosted edge
 func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *quartermasterpb.CreatePrivateClusterRequest) (*quartermasterpb.CreatePrivateClusterResponse, error) {
 	tenantID := req.GetTenantId()
@@ -9338,24 +9394,6 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *qua
 		return nil, status.Error(codes.InvalidArgument, "cluster_name required")
 	}
 
-	// Check tenant's cluster ownership limit
-	queries := quartermasterdb.New(s.db)
-	ownership, err := queries.GetTenantClusterOwnershipLimit(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !ownership.MaxOwnedClusters.Valid || !ownership.IsProvider.Valid {
-		return nil, status.Error(codes.Internal, "database error: required tenant ownership field is NULL")
-	}
-
-	// Non-providers are limited to max_owned_clusters (default 1)
-	if !ownership.IsProvider.Bool && ownership.CurrentOwnedClusters >= int64(ownership.MaxOwnedClusters.Int32) {
-		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", ownership.MaxOwnedClusters.Int32)
-	}
-
 	// Generate cluster ID from name (sanitized)
 	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
 	suffix, err := generateSecureToken(4)
@@ -9372,44 +9410,6 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *qua
 	if err != nil {
 		return nil, err
 	}
-	regionForRow := strings.TrimSpace(controlCell.regionID)
-
-	// Atomicity contract: every row that makes a private cluster usable —
-	// the cluster row itself, the owner's tenant_cluster_access grant, the
-	// Foghorn assignment, and the bootstrap token — must commit together.
-	// Otherwise a Foghorn-assignment failure leaves a tenant_private cluster
-	// the owner can't actually use, or a token failure leaves a cluster
-	// without enrollment material. The service-event outbox emits ride in
-	// the same tx so the downstream cache invalidations also can't drop.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	txQueries := quartermasterdb.New(tx)
-	if err = txQueries.CreatePrivateInfrastructureCluster(ctx, quartermasterdb.CreatePrivateInfrastructureClusterParams{
-		ID: id, ClusterID: clusterID, ClusterName: clusterName, OwnerTenantID: tenantID,
-		BaseURL: strings.TrimSpace(controlCell.baseURL), ShortDescription: req.ShortDescription,
-		RegionID: regionForRow, ControlCellID: controlCell.controlCellID, CreatedAt: now,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
-	}
-
-	if err = txQueries.GrantPrivateClusterOwnerAccess(ctx, quartermasterdb.GrantPrivateClusterOwnerAccessParams{
-		TenantID: tenantID, ClusterID: clusterID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
-	}
-
-	// Junction row binding the chosen Foghorn to this private cluster.
-	// Without it, ConfigSeed delivery has no service_instance to dial.
-	if err = txQueries.AssignFoghornToPrivateCluster(ctx, quartermasterdb.AssignFoghornToPrivateClusterParams{
-		ServiceInstanceID: controlCell.instanceID, ClusterID: clusterID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
-	}
-
 	// Create a bootstrap token for edge node registration
 	tokenID := uuid.New().String()
 	token, err := generateSecureToken(32)
@@ -9418,29 +9418,12 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *qua
 	}
 	expiresAt := now.Add(30 * 24 * time.Hour) // 30 days
 
-	if err = txQueries.CreateEdgeBootstrapTokenRecord(ctx, quartermasterdb.CreateEdgeBootstrapTokenRecordParams{
-		ID: tokenID, TokenHash: hashBootstrapToken(token), TokenPrefix: tokenPrefix(token),
-		Name: fmt.Sprintf("Bootstrap token for %s", clusterName), TenantID: tenantID,
-		ClusterID: validString(clusterID), ExpiresAt: expiresAt,
+	if err = s.createOwnedPrivateCluster(ctx, ownedPrivateClusterCreate{
+		operation: "private cluster create", id: id, clusterID: clusterID, clusterName: clusterName,
+		tenantID: tenantID, userID: userID, shortDescription: req.ShortDescription, controlCell: controlCell,
+		createdAt: now, tokenID: tokenID, token: token, tokenExpiresAt: expiresAt,
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster_created: %v", enqErr)
-	}
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit private cluster create: %v", commitErr)
+		return nil, err
 	}
 
 	// The private cluster now has its controlling foghorn assigned; wake
@@ -9551,16 +9534,19 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	if len(resourceLimitsJSON) > 0 {
 		resourceLimits = validString(string(resourceLimitsJSON))
 	}
-	err = queries.CreateClusterInviteRecord(ctx, quartermasterdb.CreateClusterInviteRecordParams{
-		ID: id, ClusterID: clusterID, InvitedTenantID: invitedTenantID, InviteToken: token,
-		AccessLevel: validString(accessLevel), ResourceLimits: resourceLimits, CreatedBy: ownerTenantID,
-		CreatedAt: sql.NullTime{Time: now, Valid: true}, ExpiresAt: sql.NullTime{Time: expiresAt, Valid: true},
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if createErr := quartermasterdb.New(tx).CreateClusterInviteRecord(ctx, quartermasterdb.CreateClusterInviteRecordParams{
+			ID: id, ClusterID: clusterID, InvitedTenantID: invitedTenantID, InviteToken: token,
+			AccessLevel: validString(accessLevel), ResourceLimits: resourceLimits, CreatedBy: ownerTenantID,
+			CreatedAt: sql.NullTime{Time: now, Valid: true}, ExpiresAt: sql.NullTime{Time: expiresAt, Valid: true},
+		}); createErr != nil {
+			return fmt.Errorf("create invite: %w", createErr)
+		}
+		return s.emitClusterEventTx(ctx, tx, eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
 	}
-
-	s.emitClusterEvent(ctx, eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
 
 	return &quartermasterpb.ClusterInvite{
 		Id:                id,
@@ -9604,12 +9590,15 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *quar
 		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 
-	err = queries.RevokeClusterInviteRecord(ctx, inviteID)
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if revokeErr := quartermasterdb.New(tx).RevokeClusterInviteRecord(ctx, inviteID); revokeErr != nil {
+			return fmt.Errorf("revoke invite: %w", revokeErr)
+		}
+		return s.emitClusterEventTx(ctx, tx, eventClusterInviteRevoked, ownerTenantID, userID, inviteOwner.ClusterID, "cluster_invite", inviteID, inviteID, "", "")
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to revoke invite: %v", err)
 	}
-
-	s.emitClusterEvent(ctx, eventClusterInviteRevoked, ownerTenantID, userID, inviteOwner.ClusterID, "cluster_invite", inviteID, inviteID, "", "")
 
 	return &emptypb.Empty{}, nil
 }
@@ -10621,6 +10610,9 @@ type ServerMetrics struct {
 	DNSBackstopRepairs      *prometheus.CounterVec
 	NavigatorOutboxFailures *prometheus.CounterVec
 	NavigatorOutboxPending  *prometheus.GaugeVec
+	// ControlCellReassignments counts tenant-private clusters by reassignment
+	// state (switching, failed).
+	ControlCellReassignments *prometheus.GaugeVec
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster
@@ -10727,6 +10719,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// Backstop: periodically reconcile tenant intent against Navigator's
 	// applied alias state and enqueue any missing/drifted transitions.
 	go qmServer.runTenantAliasBackstop(context.Background())
+	go qmServer.runPrivateClusterControlCellReconciler(context.Background())
 	// Wake peer subscribers when the census a peer set is derived from changes.
 	// It reads nothing while no cell is subscribed.
 	go qmServer.RunPeerCensusWatcher(context.Background(), cfg.Logger)

@@ -399,7 +399,7 @@ every N minutes (configurable, default 30):
 Also triggered by:
 
 - Threshold alerts (metrics in "yellow range")
-- Lookout incident events (when Lookout ships — soft dependency, not a blocker)
+- Lookout tenant incidents from the `lookout.incidents` topic (see `docs/architecture/lookout.md`)
 
 Most heartbeats should be silent (`HEARTBEAT_OK`).
 
@@ -460,7 +460,7 @@ This table is a planning artifact from before implementation. Keep it only as ro
 - Service: `api_consultant/`
 - Libraries: `pkg/llm/`, `pkg/search/`
 - pgvector extension in PostgreSQL
-- Soft dependency: Lookout (incidents) — Skipper works without it, integrates when available
+- Optional dependency: Lookout (incidents) — Skipper runs without it and investigates tenant incidents when `LOOKOUT_GRPC_ADDR` and Kafka are configured
 - Existing:
   - `pkg/clients/periscope` - QoE data access
   - `pkg/clients/deckhand` - Support history
@@ -514,4 +514,4 @@ This table is a planning artifact from before implementation. Keep it only as ro
 - [Research] ./references/qoe-and-remediation.md
 - [Research] ./references/openclaw-heartbeat.md
 - [Research] ./references/market-gap.md
-- [Related RFC] ../lookout.md — Incident/alert service, soft dependency for Skipper triggers
+- [Architecture] ../../architecture/lookout.md — Incident service; Skipper investigates tenant incidents from `lookout.incidents`

@@ -25,6 +25,7 @@ type TenantEvent struct {
 	RoutingEvent         *periscopepb.RoutingEvent          `json:"routingEvent"`
 	SystemHealthEvent    *ipcpb.NodeLifecycleUpdate         `json:"systemHealthEvent"`
 	SkipperInvestigation *SkipperInvestigationEvent         `json:"skipperInvestigation"`
+	IncidentUpdated      *IncidentUpdatedEvent              `json:"incidentUpdated"`
 }
 
 // SkipperInvestigationEvent represents a realtime Skipper investigation notification.

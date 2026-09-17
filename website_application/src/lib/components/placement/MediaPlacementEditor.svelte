@@ -46,9 +46,22 @@
   );
   const identity = $derived(account ? `${account}:${$auth.user?.role ?? ""}` : "");
   const scopeKey = $derived(`${identity}:${scope.kind}:${scope.streamId ?? ""}`);
-  const publishingAvailable = $derived(scope.kind === "TENANT" || sourceMode === "PUSH");
+  // A pull stream's ingest rules are its source location. Managed stream ingest
+  // rules belong to the deployment and are not editable here.
+  const publishingAvailable = $derived(scope.kind === "TENANT" || sourceMode !== "MANAGED");
+  const ingestLabel = $derived(
+    scope.kind === "STREAM" && sourceMode === "PULL" ? "Source" : "Publishing"
+  );
   const dirty = $derived(!!view.policy && updatesFor(view.policy, view.drafts).length > 0);
   const locked = $derived(!!view.pending || view.phase === "loading" || view.readOnly);
+
+  // Another control on the page changed this scope's rules (the stream source
+  // location). A clean editor reloads; a draft is kept and meets the normal
+  // revision-conflict flow when it is reviewed.
+  export function refreshAfterExternalChange() {
+    if (dirty || view.pending || view.phase !== "idle") return;
+    void session.load();
+  }
   const verbPolicy = $derived(view.policy?.verbs.find((item) => item.verb === verb));
   const reviewExpired = $derived(!!view.review && Date.parse(view.review.expiresAt) <= clock);
   const previewExpired = $derived(!!view.preview && Date.parse(view.preview.expiresAt) <= clock);
@@ -193,9 +206,11 @@
   </div>
   <div class="slab-body--padded space-y-4">
     <p class="text-sm text-muted-foreground">
-      {scope.kind === "STREAM" && sourceMode !== "PUSH"
-        ? "Choose which connected clusters should serve viewers. The source location is controlled separately for this stream type; viewer requests still go to the closest healthy node that satisfies this policy."
-        : "Choose which connected clusters should receive publishers and viewers. Live requests still go to the closest healthy node that satisfies this policy."}
+      {scope.kind === "STREAM" && sourceMode === "PULL"
+        ? "Choose which connected clusters should serve viewers. The Source tab holds the full rules behind the source location; viewer requests still go to the closest healthy node that satisfies this policy."
+        : scope.kind === "STREAM" && sourceMode === "MANAGED"
+          ? "Choose which connected clusters should serve viewers. The deployment controls where this source runs; viewer requests still go to the closest healthy node that satisfies this policy."
+          : "Choose which connected clusters should receive publishers and viewers. Live requests still go to the closest healthy node that satisfies this policy."}
     </p>
     {#if !identity}<p role="status">Sign in to a tenant account to manage placement.</p>
     {:else if !view.policy && view.phase === "loading"}<p role="status">Loading placement rules…</p>
@@ -292,7 +307,7 @@
           class="flex-1 rounded-none"
           variant={verb === "INGEST" ? "secondary" : "ghost"}
           aria-pressed={verb === "INGEST"}
-          onclick={() => switchVerb("INGEST")}>Publishing</Button
+          onclick={() => switchVerb("INGEST")}>{ingestLabel}</Button
         >
       {/if}
     </div>

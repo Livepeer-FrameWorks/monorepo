@@ -5,26 +5,33 @@ import (
 	"testing"
 )
 
+func clusterLocation(ids ...string) *SourceLocation {
+	return &SourceLocation{Clusters: ids}
+}
+
 func TestMistNativeStreamToRendered_AcceptsExecForSystemTenant(t *testing.T) {
 	clusters := []Cluster{
 		{ID: "edge-eu-1", Type: "edge"},
 		{ID: "control-central", Type: "central"},
 	}
 	rendered, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "frameworks-demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
-		SourceKind:        "exec",
-		AlwaysOn:          true,
-		PlacementCount:    1,
-		AllowedClusterIDs: []string{"edge-eu-1"},
-	}, clusters)
+		PlaybackID:     "frameworks-demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
+		SourceKind:     "exec",
+		AlwaysOn:       true,
+		PlacementCount: 1,
+		SourceLocation: clusterLocation("edge-eu-1"),
+	}, clusters, nil)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if rendered.SourceKind != "exec" || rendered.PlacementCount != 1 {
 		t.Fatalf("unexpected rendered shape: %+v", rendered)
+	}
+	if rendered.SourceLocation == nil || len(rendered.SourceLocation.Clusters) != 1 || rendered.SourceLocation.Clusters[0].ClusterID != "edge-eu-1" {
+		t.Fatalf("source location = %+v, want edge-eu-1", rendered.SourceLocation)
 	}
 }
 
@@ -37,7 +44,7 @@ func TestMistNativeStreamToRendered_RejectsExecForCustomerTenant(t *testing.T) {
 		Source:      "ts-exec:ffmpeg -re -i clip.mp4 -c copy -f mpegts -",
 		SourceKind:  "exec",
 		AlwaysOn:    true,
-	}, clusters)
+	}, clusters, nil)
 	if err == nil || !strings.Contains(err.Error(), "owner_tenant=frameworks") {
 		t.Fatalf("expected exec-tenant rejection, got: %v", err)
 	}
@@ -51,7 +58,7 @@ func TestMistNativeStreamToRendered_RejectsKindSourceMismatch(t *testing.T) {
 		Title:       "Demo",
 		Source:      "/var/lib/frameworks/demo/clip.mp4",
 		SourceKind:  "exec",
-	}, clusters)
+	}, clusters, nil)
 	if err == nil || !strings.Contains(err.Error(), "ts-exec:") {
 		t.Fatalf("expected source/kind mismatch error, got: %v", err)
 	}
@@ -60,22 +67,21 @@ func TestMistNativeStreamToRendered_RejectsKindSourceMismatch(t *testing.T) {
 func TestMistNativeStreamToRendered_RejectsUnknownCluster(t *testing.T) {
 	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	_, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:ffmpeg -re -i clip.mp4 -c copy -f mpegts -",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"ghost-cluster"},
-	}, clusters)
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:ffmpeg -re -i clip.mp4 -c copy -f mpegts -",
+		SourceKind:     "exec",
+		SourceLocation: clusterLocation("ghost-cluster"),
+	}, clusters, nil)
 	if err == nil || !strings.Contains(err.Error(), "ghost-cluster") {
 		t.Fatalf("expected unknown-cluster error, got: %v", err)
 	}
 }
 
-// TestMistNativeStreamToRendered_RejectsEmptyAllowedClusterIDs pins the
-// non-empty invariant: mist_native placement requires an explicit source
-// cluster, and the reconciler cannot operate on an empty set.
-func TestMistNativeStreamToRendered_RejectsEmptyAllowedClusterIDs(t *testing.T) {
+// Mist-native placement requires an explicit source cluster; the reconciler
+// cannot operate on an unrestricted location.
+func TestMistNativeStreamToRendered_RejectsMissingSourceLocation(t *testing.T) {
 	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	_, err := mistNativeStreamToRendered(MistNativeStream{
 		PlaybackID:  "demo",
@@ -83,46 +89,65 @@ func TestMistNativeStreamToRendered_RejectsEmptyAllowedClusterIDs(t *testing.T) 
 		Title:       "Demo",
 		Source:      "ts-exec:cat /dev/null",
 		SourceKind:  "exec",
-	}, clusters)
-	if err == nil || !strings.Contains(err.Error(), "at least one media cluster") {
+	}, clusters, nil)
+	if err == nil || !strings.Contains(err.Error(), "source_location.clusters must contain at least one media cluster") {
 		t.Fatalf("expected at-least-one-cluster rejection, got: %v", err)
 	}
 }
 
-// TestMistNativeStreamToRendered_RejectsMultipleSourceClusters pins the
-// current contract: mist_native source election is cluster-local, so
-// cross-cluster source failover is rejected instead of guessed.
+// Mist-native source election is cluster-local, so cross-cluster source
+// failover is rejected instead of guessed.
 func TestMistNativeStreamToRendered_RejectsMultipleSourceClusters(t *testing.T) {
 	clusters := []Cluster{
 		{ID: "edge-eu-1", Type: "edge"},
 		{ID: "edge-us-1", Type: "edge"},
 	}
-	_, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"edge-eu-1", "edge-us-1"},
-	}, clusters)
-	if err == nil {
-		t.Fatalf("multi-cluster source set must be rejected")
+	for _, count := range []int{0, 2} {
+		_, err := mistNativeStreamToRendered(MistNativeStream{
+			PlaybackID:     "demo",
+			OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+			Title:          "Demo",
+			Source:         "ts-exec:cat /dev/null",
+			SourceKind:     "exec",
+			PlacementCount: count,
+			SourceLocation: clusterLocation("edge-eu-1", "edge-us-1"),
+		}, clusters, nil)
+		if err == nil || !strings.Contains(err.Error(), "exactly one source cluster") {
+			t.Fatalf("placement_count=%d across two clusters: unexpected error %v", count, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "exactly one source cluster") {
-		t.Fatalf("unexpected error: %v", err)
+}
+
+func TestMistNativeStreamToRendered_AcceptsNodesInItsCluster(t *testing.T) {
+	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
+	nodes := []Node{{ID: "eu-edge-a", ClusterID: "edge-eu-1"}, {ID: "eu-edge-b", ClusterID: "edge-eu-1"}}
+	rendered, err := mistNativeStreamToRendered(MistNativeStream{
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		SourceLocation: &SourceLocation{Clusters: []string{"edge-eu-1"}, Nodes: []string{"eu-edge-a"}, AvoidNodes: []string{"eu-edge-b"}},
+	}, clusters, nodes)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	got := rendered.SourceLocation
+	if got == nil || len(got.Clusters) != 1 || strings.Join(got.Clusters[0].NodeIDs, ",") != "eu-edge-a" || strings.Join(got.AvoidNodeIDs, ",") != "eu-edge-b" {
+		t.Fatalf("source location = %+v", got)
 	}
 }
 
 func TestMistNativeStreamToRendered_PlacementCountDefaultsToOne(t *testing.T) {
 	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	rendered, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"edge-eu-1"},
-	}, clusters)
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		SourceLocation: clusterLocation("edge-eu-1"),
+	}, clusters, nil)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -134,14 +159,14 @@ func TestMistNativeStreamToRendered_PlacementCountDefaultsToOne(t *testing.T) {
 func TestMistNativeStreamToRendered_ValidatesMonitoring(t *testing.T) {
 	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	rendered, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		Monitoring:        " ON ",
-		AllowedClusterIDs: []string{"edge-eu-1"},
-	}, clusters)
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		Monitoring:     " ON ",
+		SourceLocation: clusterLocation("edge-eu-1"),
+	}, clusters, nil)
 	if err != nil {
 		t.Fatalf("monitoring=ON should render: %v", err)
 	}
@@ -150,90 +175,51 @@ func TestMistNativeStreamToRendered_ValidatesMonitoring(t *testing.T) {
 	}
 
 	_, err = mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		Monitoring:        "enabled",
-		AllowedClusterIDs: []string{"edge-eu-1"},
-	}, clusters)
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		Monitoring:     "enabled",
+		SourceLocation: clusterLocation("edge-eu-1"),
+	}, clusters, nil)
 	if err == nil || !strings.Contains(err.Error(), "inherit/on/off") {
 		t.Fatalf("expected invalid monitoring rejection, got %v", err)
 	}
 }
 
-// TestMistNativeStreamToRendered_PlacementCountIsNodeCountNotClusterCount
-// locks the contract that placement_count counts elected edge NODES, not
-// clusters: a single allowed cluster legitimately supports placement_count
-// > 1 because it may contain many edges. Runtime placement clamps to the
-// eligible-node count.
+// placement_count counts elected edge nodes, not clusters: a single source
+// cluster legitimately supports placement_count > 1.
 func TestMistNativeStreamToRendered_PlacementCountIsNodeCountNotClusterCount(t *testing.T) {
-	clusters := []Cluster{
-		{ID: "edge-eu-1", Type: "edge"},
-	}
+	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	rendered, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		PlacementCount:    3,
-		AllowedClusterIDs: []string{"edge-eu-1"},
-	}, clusters)
+		PlaybackID:     "demo",
+		OwnerTenant:    TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:          "Demo",
+		Source:         "ts-exec:cat /dev/null",
+		SourceKind:     "exec",
+		PlacementCount: 3,
+		SourceLocation: clusterLocation("edge-eu-1"),
+	}, clusters, nil)
 	if err != nil {
-		t.Fatalf("placement_count=3 with one allowed cluster must render: %v", err)
+		t.Fatalf("placement_count=3 with one source cluster must render: %v", err)
 	}
 	if rendered.PlacementCount != 3 {
 		t.Fatalf("PlacementCount not preserved through render: got %d", rendered.PlacementCount)
 	}
 }
 
-// TestMistNativeStreamToRendered_RejectsMultiClusterMultiEdge keeps the
-// stricter one-source-cluster contract pinned even when placement_count asks
-// for multiple elected nodes.
-func TestMistNativeStreamToRendered_RejectsMultiClusterMultiEdge(t *testing.T) {
-	clusters := []Cluster{
-		{ID: "edge-eu-1", Type: "edge"},
-		{ID: "edge-us-1", Type: "edge"},
-	}
+func TestMistNativeStreamToRendered_RejectsLegacyAllowedClusterIDs(t *testing.T) {
+	clusters := []Cluster{{ID: "edge-eu-1", Type: "edge"}}
 	_, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		PlacementCount:    2,
-		AllowedClusterIDs: []string{"edge-eu-1", "edge-us-1"},
-	}, clusters)
-	if err == nil {
-		t.Fatalf("placement_count=2 across two clusters must be rejected")
-	}
-	if !strings.Contains(err.Error(), "exactly one source cluster") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// TestMistNativeStreamToRendered_RejectsMultiClusterSingleEdge confirms that
-// even placement_count=1 does not imply safe cross-cluster source election:
-// each cluster-local Foghorn has only its local Redis node view today.
-func TestMistNativeStreamToRendered_RejectsMultiClusterSingleEdge(t *testing.T) {
-	clusters := []Cluster{
-		{ID: "edge-eu-1", Type: "edge"},
-		{ID: "edge-us-1", Type: "edge"},
-	}
-	_, err := mistNativeStreamToRendered(MistNativeStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		Source:            "ts-exec:cat /dev/null",
-		SourceKind:        "exec",
-		AllowedClusterIDs: []string{"edge-eu-1", "edge-us-1"},
-	}, clusters)
-	if err == nil {
-		t.Fatalf("placement_count=1 across two clusters must be rejected")
-	}
-	if !strings.Contains(err.Error(), "exactly one source cluster") {
-		t.Fatalf("unexpected error: %v", err)
+		PlaybackID:              "demo",
+		OwnerTenant:             TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:                   "Demo",
+		Source:                  "ts-exec:cat /dev/null",
+		SourceKind:              "exec",
+		LegacyAllowedClusterIDs: []string{"edge-eu-1"},
+	}, clusters, nil)
+	if err == nil || !strings.Contains(err.Error(), "source_location") || !strings.Contains(err.Error(), "allowed_cluster_ids") {
+		t.Fatalf("expected legacy-key rejection naming source_location, got %v", err)
 	}
 }

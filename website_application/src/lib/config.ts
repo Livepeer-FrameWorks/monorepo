@@ -65,8 +65,6 @@ interface ResolvedEndpoints {
   playUseTls: boolean;
   edgeHostname: string;
   edgeUseTls: boolean;
-  chandlerHostname: string;
-  chandlerUseTls: boolean;
   srtPort: string;
   rtmpPort: string;
 }
@@ -87,9 +85,6 @@ function resolveEndpoints(): ResolvedEndpoints {
         edgeHostname:
           sc.tenantEdgeDomain ?? sc.globalEdgeDomain ?? sc.edgeDomain ?? config.edgeHostname,
         edgeUseTls: true,
-        chandlerHostname:
-          sc.tenantChandlerDomain ?? sc.globalChandlerDomain ?? sc.chandlerDomain ?? "",
-        chandlerUseTls: true,
         srtPort: sc.srtPort != null ? String(sc.srtPort) : config.srtPort,
         rtmpPort: sc.rtmpPort != null ? String(sc.rtmpPort) : config.rtmpPort,
       };
@@ -102,8 +97,6 @@ function resolveEndpoints(): ResolvedEndpoints {
     playUseTls: config.playUseTls,
     edgeHostname: config.edgeHostname,
     edgeUseTls: config.edgeUseTls,
-    chandlerHostname: "",
-    chandlerUseTls: false,
     srtPort: config.srtPort,
     rtmpPort: config.rtmpPort,
   };

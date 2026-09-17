@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/placementpolicy"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/sirupsen/logrus"
@@ -77,7 +80,15 @@ func startPullSourceQuartermasterFake(t *testing.T, fake *pullSourceQuartermaste
 	return client
 }
 
-func TestPullSourceValidationUsesOnlyTenantEntitledClusters(t *testing.T) {
+func restrictedLocation(clusters ...string) *commodorepb.StreamSourceLocation {
+	location := &commodorepb.StreamSourceLocation{Mode: commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_RESTRICTED}
+	for _, cluster := range clusters {
+		location.Clusters = append(location.Clusters, &commodorepb.SourceLocationCluster{ClusterId: cluster})
+	}
+	return location
+}
+
+func TestStreamPlacementUsesOnlyTenantEntitledClusters(t *testing.T) {
 	fake := &pullSourceQuartermasterFake{
 		entitlementByTenant: map[string][]*clusterpeerpb.TenantClusterPeer{
 			"tenant-1": {
@@ -90,32 +101,92 @@ func TestPullSourceValidationUsesOnlyTenantEntitledClusters(t *testing.T) {
 		logger:              logrus.New(),
 		quartermasterClient: startPullSourceQuartermasterFake(t, fake),
 	}
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	ctx := context.Background()
 
-	if _, allowed, err := server.validatePullSourceEligibility(ctx, "https://10.0.0.1/live.m3u8", []string{"entitled"}); err != nil || len(allowed) != 1 || allowed[0] != "entitled" {
-		t.Fatalf("entitled private pull = allowed %v, err %v", allowed, err)
+	plan, err := server.prepareStreamPlacement(ctx, "tenant-1", restrictedLocation("entitled"), nil, true)
+	if err != nil || !plan.write || strings.Join(plan.location.ClusterIDs(), ",") != "entitled" || !plan.consented["entitled"] || plan.consented["disabled"] {
+		t.Fatalf("entitled private source plan = %+v, err %v", plan, err)
 	}
 
-	for _, clusterID := range []string{"foreign", "disabled"} {
-		_, _, err := server.validatePullSourceEligibility(ctx, "https://10.0.0.1/live.m3u8", []string{clusterID})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Fatalf("cluster %q status = %v, want InvalidArgument", clusterID, status.Code(err))
-		}
-		message := status.Convert(err).Message()
-		if !strings.Contains(message, "not eligible for pull source placement") {
-			t.Fatalf("cluster %q denial = %q", clusterID, message)
-		}
-		if strings.Contains(message, "registered media") || strings.Contains(message, "allow_private_pull_sources") {
-			t.Fatalf("cluster %q denial leaks fleet metadata: %q", clusterID, message)
-		}
+	_, err = server.prepareStreamPlacement(ctx, "tenant-1", restrictedLocation("foreign"), nil, false)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("foreign cluster status = %v, want InvalidArgument", status.Code(err))
+	}
+	if message := status.Convert(err).Message(); !strings.Contains(message, "not eligible") || strings.Contains(message, "allow_private_pull_sources") || strings.Contains(message, "registered media") {
+		t.Fatalf("foreign cluster denial = %q", message)
 	}
 
+	legacy, err := server.prepareStreamPlacement(ctx, "tenant-1", nil, &commodorepb.PullSourceAllowedClustersInput{ClusterIds: []string{"disabled", "entitled", "entitled"}}, false)
+	if err != nil || !legacy.write || strings.Join(legacy.location.ClusterIDs(), ",") != "disabled,entitled" {
+		t.Fatalf("legacy pin input plan = %+v, err %v", legacy, err)
+	}
+	if _, bothErr := server.prepareStreamPlacement(ctx, "tenant-1", restrictedLocation("entitled"), &commodorepb.PullSourceAllowedClustersInput{}, false); status.Code(bothErr) != codes.InvalidArgument {
+		t.Fatalf("both inputs accepted: %v", bothErr)
+	}
+	custom := &commodorepb.StreamSourceLocation{Mode: commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_CUSTOM}
+	if _, customErr := server.prepareStreamPlacement(ctx, "tenant-1", custom, nil, false); status.Code(customErr) != codes.InvalidArgument {
+		t.Fatalf("CUSTOM input accepted: %v", customErr)
+	}
+
+	untouched, err := server.prepareStreamPlacement(ctx, "tenant-1", nil, nil, false)
+	if err != nil || untouched.needsApply() {
+		t.Fatalf("public source without location needs placement work: %+v %v", untouched, err)
+	}
 	if len(fake.requestedTenant) != 3 {
-		t.Fatalf("entitlement calls = %d, want one per validation", len(fake.requestedTenant))
+		t.Fatalf("entitlement calls = %d, want one per validated location", len(fake.requestedTenant))
 	}
 	for _, tenantID := range fake.requestedTenant {
 		if tenantID != "tenant-1" {
 			t.Fatalf("tenant-bound lookup used %q", tenantID)
 		}
+	}
+}
+
+func TestLegacyPinColumnIsNeverNil(t *testing.T) {
+	if pins := legacyPinColumn(placementpolicy.SourceLocation{Mode: placementpolicy.SourceLocationAny}); pins == nil || len(pins) != 0 {
+		t.Fatalf("unrestricted pin column = %#v, want empty non-nil list", pins)
+	}
+	if pins := legacyPinColumn(placementpolicy.SourceLocation{}); pins == nil {
+		t.Fatal("unwritten location produced a nil pin column")
+	}
+	restricted := placementpolicy.SourceLocation{Mode: placementpolicy.SourceLocationRestricted, Clusters: []placementpolicy.SourceLocationCluster{{ClusterID: "b"}, {ClusterID: "a"}}}
+	if pins := legacyPinColumn(restricted); strings.Join(pins, ",") != "a,b" {
+		t.Fatalf("restricted pin column = %v", pins)
+	}
+}
+
+func TestPrivateSourceRequiresConsentedBoundOverEffectivePolicy(t *testing.T) {
+	consented := map[string]bool{"lan-a": true, "lan-b": true}
+	allow := func(clusters ...string) *placementpb.Rules {
+		rules := &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{Allow: &placementpb.SelectorSet{}}}
+		for _, cluster := range clusters {
+			rules.Constraints.Allow.Any = append(rules.Constraints.Allow.Any, &placementpb.Selector{ClusterIds: []string{cluster}})
+		}
+		return rules
+	}
+	for name, tc := range map[string]struct {
+		tenant, stream *placementpb.PolicySet
+		want           bool
+	}{
+		"no rules":                         {nil, nil, false},
+		"stream bounded to consent":        {nil, &placementpb.PolicySet{Revision: 1, Ingest: allow("lan-a", "lan-b")}, true},
+		"stream names unconsented cluster": {nil, &placementpb.PolicySet{Revision: 1, Ingest: allow("lan-a", "public")}, false},
+		"tenant layer bounds the stream":   {&placementpb.PolicySet{Revision: 1, Ingest: allow("lan-b")}, &placementpb.PolicySet{Revision: 1}, true},
+		"region-only allow is unbounded": {nil, &placementpb.PolicySet{Revision: 1, Ingest: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
+			Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{Regions: []string{"eu"}}}},
+		}}}, false},
+		"node allow inside consented cluster": {nil, &placementpb.PolicySet{Revision: 1, Ingest: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
+			Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"lan-a"}, NodeIds: []string{"camera-gw"}}}},
+		}}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy, err := placement.CompilePolicySets(tc.tenant, tc.stream, placement.Ingest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := placementpolicy.PrivateSourceBounded(policy, consented); got != tc.want {
+				t.Fatalf("bounded = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

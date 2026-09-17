@@ -16,10 +16,13 @@ UPDATE quartermaster.infrastructure_clusters
 SET is_default_cluster = false,
     updated_at = NOW()
 WHERE is_default_cluster = true
+  AND cluster_id <> $1::text
 `
 
-func (q *Queries) ClearBootstrapDefaultCluster(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, clearBootstrapDefaultCluster)
+// Clears the default flag on every cluster except the one that stays default,
+// so replaying the same desired state leaves that row unchanged.
+func (q *Queries) ClearBootstrapDefaultCluster(ctx context.Context, keepClusterID string) error {
+	_, err := q.db.ExecContext(ctx, clearBootstrapDefaultCluster, keepClusterID)
 	return err
 }
 

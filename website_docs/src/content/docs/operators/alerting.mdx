@@ -1,0 +1,112 @@
+---
+title: "Alerting and Incidents"
+description: "Configure Alertmanager, Lookout incident notifications, and the Watchdog heartbeat."
+sidebar:
+  order: 8
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+vmalert evaluates the rules in `pkg/grafana/rules/frameworks.yml` and sends firing and resolved
+alerts to Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
+each group three ways:
+
+- **Lookout** receives every group. Lookout (`api_incidents`) turns groups into incidents, keeps a
+  timeline, notifies operator email, Slack, and Discord, and scopes incidents on tenant-owned
+  clusters to that tenant.
+- **Direct email** receives critical alerts as well, so a page still goes out if Lookout is down.
+- **External heartbeat** receives only the always-firing `Watchdog` alert, once a minute. Configure
+  your heartbeat provider to alarm when those pings stop; that detects a dead vmalert or
+  Alertmanager.
+
+Lookout notifies operator channels only for platform incidents. Critical incidents go to every
+configured channel; other severities go to Slack and Discord. Notifications are sent when an
+incident opens and when it resolves.
+
+## Secrets
+
+Set these in your gitops secrets. The CLI renders the Lookout webhook URL
+(`http://lookout.internal:18022/v1/alertmanager`) from the manifest, so it is not a secret.
+
+Every service receives the manifest's shared `env_files`, so each key below is set once, for
+example in `secrets/production.env`; Alertmanager needs no env file of its own.
+
+**Alertmanager:**
+
+| Key                                    | Required | Purpose                                                         |
+| -------------------------------------- | -------- | --------------------------------------------------------------- |
+| `LOOKOUT_ALERTMANAGER_TOKEN`           | Yes      | Bearer token sent to Lookout; the same key Lookout reads        |
+| `ALERTMANAGER_HEARTBEAT_URL`           | Yes      | Webhook URL of your external heartbeat monitor                  |
+| `ALERTMANAGER_EMAIL_TO`                | Yes      | Recipient for the direct critical email fallback                |
+| `SMTP_HOST`, `SMTP_PORT`, `FROM_EMAIL` | Yes      | Platform SMTP server and sender the fallback email is sent with |
+| `SMTP_USER`, `SMTP_PASSWORD`           | No       | Platform SMTP credentials, used when set                        |
+
+The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTHOST`,
+`ALERTMANAGER_SMTP_FROM`, `ALERTMANAGER_SMTP_AUTH_USERNAME`, `ALERTMANAGER_SMTP_AUTH_PASSWORD` and
+`ALERTMANAGER_WEBHOOK_URL` are not read.
+
+**Lookout:**
+
+| Key                                                    | Required  | Purpose                                                                  |
+| ------------------------------------------------------ | --------- | ------------------------------------------------------------------------ |
+| `LOOKOUT_ALERTMANAGER_TOKEN`                           | Yes       | Token Alertmanager must present; Lookout does not start without it       |
+| `LOOKOUT_NOTIFY_EMAIL_TO`                              | No        | Comma-separated operator recipients; enables email notifications         |
+| `LOOKOUT_SLACK_WEBHOOK_URL`                            | No        | Slack incoming webhook; enables Slack notifications                      |
+| `LOOKOUT_DISCORD_WEBHOOK_URL`                          | No        | Discord webhook; enables Discord notifications                           |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | For email | Shared SMTP settings                                                     |
+| `FROM_EMAIL`, `FROM_NAME`                              | No        | Sender address and display name                                          |
+| `WEBAPP_PUBLIC_URL`                                    | No        | Adds an "Open incident" link to `/admin/incidents/<id>` in notifications |
+
+Each notification channel is active only while its key is set. Lookout re-reads these keys on
+every use, so an env reload changes routing without a restart.
+
+<Aside type="caution">
+  A webhook URL is a credential. Lookout never writes it to logs or delivery errors; keep it in
+  encrypted secrets only.
+</Aside>
+
+## Database
+
+Lookout stores incidents in the `lookout` PostgreSQL/YugabyteDB database. Add it to
+`postgres.databases` in the cluster manifest. On a new cluster `frameworks cluster provision`
+creates it. On an existing cluster, `frameworks cluster release apply` (or
+`frameworks cluster migrate --phase expand`) creates the missing database with its owner and
+runtime roles and applies its baseline before Lookout deploys; `--dry-run` lists it without
+creating anything. `frameworks cluster upgrade lookout` refuses until the database exists.
+
+Delivered notification rows are deleted after 7 days. A delivery that keeps failing is abandoned
+after 20 attempts (about two hours), recorded as `lookout_deliveries_total{result="failed"}` with
+its last error, and deleted after 30 days.
+
+## Verify
+
+1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
+   Alertmanager.
+2. **Lookout ingestion.** From a host on the private network, send a test notification. Use a new
+   `groupKey` and `fingerprint` for each test run:
+
+   ```bash
+   curl -sS -X POST http://lookout.internal:18022/v1/alertmanager \
+     -H "Authorization: Bearer $LOOKOUT_ALERTMANAGER_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"version":"4","groupKey":"operator-test-1","status":"firing",
+          "groupLabels":{"alertname":"OperatorTest"},
+          "commonAnnotations":{"summary":"Lookout delivery test"},
+          "alerts":[{"status":"firing","fingerprint":"operator-test-1",
+                     "labels":{"alertname":"OperatorTest","severity":"critical"},
+                     "startsAt":"2026-01-01T00:00:00Z"}]}'
+   ```
+
+   The response is `{"outcome":"created","incident_id":"..."}`. A `401` means the token does not
+   match. Check the counter:
+
+   ```bash
+   curl -sS http://lookout.internal:18022/metrics | grep lookout_alertmanager_webhooks_total
+   ```
+
+3. **Notifications.** The test alert is critical, so every configured channel receives an
+   "[CRITICAL] Lookout delivery test" message within a few seconds. Delivery failures show in
+   `lookout_deliveries_total{result="error"}` and Lookout's logs; failed deliveries retry with
+   backoff.
+4. **Resolve the test.** Send the same request with both `status` fields set to `resolved` and an
+   `endsAt`. The response outcome is `resolved` and the channels receive a "[RESOLVED]" message.

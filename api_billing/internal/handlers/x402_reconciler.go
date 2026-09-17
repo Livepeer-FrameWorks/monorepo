@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -192,7 +193,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 				it.AmountCents, "authorization consumed without recorded tx_hash", map[string]any{
 					"payer_address": it.PayerAddress, "nonce": it.Nonce,
 				})
-			emitBillingEvent(r.db, r.logger, eventX402AccountingAnomaly, it.TenantID, "x402_nonce", it.ID, &ipcpb.BillingEvent{
+			emitBillingTelemetryEvent(ctx, r.db, r.logger, eventX402AccountingAnomaly, it.TenantID, "x402_nonce", it.ID, &ipcpb.BillingEvent{
 				Amount:   float64(it.AmountCents) / 100,
 				Currency: billing.DefaultCurrency(),
 				Status:   "authorization consumed without recorded tx_hash",
@@ -529,7 +530,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 				s.AmountCents, "missing reversal for late-settlement credit", map[string]any{
 					"tx_hash": s.TxHash,
 				})
-			emitBillingEvent(r.db, r.logger, eventX402AccountingAnomaly, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
+			emitBillingTelemetryEvent(ctx, r.db, r.logger, eventX402AccountingAnomaly, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
 				Currency: "EUR",
 				Status:   "missing reversal for late-settlement credit",
@@ -537,24 +538,12 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 			})
 			continue
 		}
-		if err := r.recoverReversedBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash); err != nil {
+		if err := r.recoverReversedBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash, s.Network); err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to re-credit balance after late settlement")
 			continue
 		}
 
-		emitBillingEvent(r.db, r.logger, eventX402LateRecovery, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
-			Amount:   float64(s.AmountCents) / 100,
-			Currency: "EUR",
-			Status:   "late settlement recovered",
-			Provider: s.Network,
-		})
-
-		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
-		emitBillingEvent(r.db, r.logger, eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
-			Amount:   float64(s.AmountCents) / 100,
-			Currency: billing.DefaultCurrency(),
-			Status:   "confirmed",
-		})
+		r.markConfirmed(ctx, s, blockNum, gasUsed)
 	}
 }
 
@@ -622,9 +611,8 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			r.markFailed(ctx, s.ID, "transaction reorged or missing")
-
 			if !creditExists {
+				r.markFailed(ctx, s.ID, "transaction reorged or missing")
 				r.logger.WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
 					"tx_hash":   s.TxHash,
@@ -632,15 +620,15 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			if r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash) {
-				r.reverseSettlementRollup(ctx, s)
-			}
-			emitBillingEvent(r.db, r.logger, eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
+			r.markFailedWithEvent(ctx, s.ID, "transaction reorged or missing", eventX402ReorgDetected, s.TenantID, s.TxHash, &ipcpb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
 				Currency: "EUR",
 				Status:   "receipt missing after reorg depth",
 				Provider: s.Network,
 			})
+			if r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash) {
+				r.reverseSettlementRollup(ctx, s)
+			}
 			continue
 		}
 
@@ -656,9 +644,8 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			r.markFailed(ctx, s.ID, "transaction reverted on-chain")
-
 			if !creditExists {
+				r.markFailed(ctx, s.ID, "transaction reverted on-chain")
 				r.logger.WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
 					"tx_hash":   s.TxHash,
@@ -666,15 +653,15 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 
-			if r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash) {
-				r.reverseSettlementRollup(ctx, s)
-			}
-			emitBillingEvent(r.db, r.logger, eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
+			r.markFailedWithEvent(ctx, s.ID, "transaction reverted on-chain", eventX402ReorgDetected, s.TenantID, s.TxHash, &ipcpb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
 				Currency: "EUR",
 				Status:   "transaction reverted on-chain",
 				Provider: s.Network,
 			})
+			if r.debitBalance(ctx, s.TenantID, s.AmountCents, s.ID, s.TxHash) {
+				r.reverseSettlementRollup(ctx, s)
+			}
 		}
 	}
 }
@@ -749,10 +736,12 @@ func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, bl
 	}
 }
 
-// recoverReversedBalance restores a credit that has an x402_failed reversal.
-// It uses a distinct unique ledger reference so the original x402_payment row
-// does not suppress recovery and concurrent/crash retries cannot double-credit.
-func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash string) error {
+// recoverReversedBalance restores a credit that has an x402_failed reversal
+// and enqueues x402_late_recovery in the same transaction. It uses a distinct
+// unique ledger reference so the original x402_payment row does not suppress
+// recovery and concurrent/crash retries cannot double-credit; an existing
+// recovery row means its event was already committed, so nothing is written.
+func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash, network string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -791,6 +780,15 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
+		return err
+	}
+
+	if err := emitBillingEventTx(ctx, tx, eventX402LateRecovery, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+		Amount:   float64(amountCents) / 100,
+		Currency: "EUR",
+		Status:   "late settlement recovered",
+		Provider: network,
+	}); err != nil {
 		return err
 	}
 
@@ -849,13 +847,23 @@ func (r *X402Reconciler) getTransactionReceipt(ctx context.Context, network Netw
 	return rpcResp.Result, nil
 }
 
-// markConfirmed updates the settlement status to confirmed
-func (r *X402Reconciler) markConfirmed(ctx context.Context, id string, blockNumber, gasUsed int64) {
-	err := purserdb.New(r.db).MarkX402SettlementConfirmed(ctx, purserdb.MarkX402SettlementConfirmedParams{
-		BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, ID: id,
+// markConfirmed moves a late-recovered settlement to confirmed and enqueues
+// x402_settlement_confirmed in the same transaction.
+func (r *X402Reconciler) markConfirmed(ctx context.Context, s PendingSettlement, blockNumber, gasUsed int64) {
+	err := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+		if err := purserdb.New(tx).MarkX402SettlementConfirmed(ctx, purserdb.MarkX402SettlementConfirmedParams{
+			BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, ID: s.ID,
+		}); err != nil {
+			return fmt.Errorf("mark settlement confirmed: %w", err)
+		}
+		return emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
+			Amount:   float64(s.AmountCents) / 100,
+			Currency: billing.DefaultCurrency(),
+			Status:   "confirmed",
+		})
 	})
 	if err != nil {
-		r.logger.WithError(err).WithField("id", id).Error("Failed to mark settlement as confirmed")
+		r.logger.WithError(err).WithField("id", s.ID).Error("Failed to mark settlement as confirmed")
 	}
 }
 
@@ -863,6 +871,24 @@ func (r *X402Reconciler) markConfirmed(ctx context.Context, id string, blockNumb
 func (r *X402Reconciler) markFailed(ctx context.Context, id, reason string) {
 	err := purserdb.New(r.db).MarkX402SettlementFailed(ctx, purserdb.MarkX402SettlementFailedParams{
 		Reason: sql.NullString{String: reason, Valid: reason != ""}, ID: id,
+	})
+	if err != nil {
+		r.logger.WithError(err).WithField("id", id).Error("Failed to mark settlement as failed")
+	}
+}
+
+// markFailedWithEvent moves a settlement to failed and enqueues the billing
+// event reporting that transition in the same transaction. A failure leaves
+// the settlement in its prior status, so the next reconciler pass detects it
+// again.
+func (r *X402Reconciler) markFailedWithEvent(ctx context.Context, id, reason, eventType, tenantID, txHash string, payload *ipcpb.BillingEvent) {
+	err := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+		if err := purserdb.New(tx).MarkX402SettlementFailed(ctx, purserdb.MarkX402SettlementFailedParams{
+			Reason: sql.NullString{String: reason, Valid: reason != ""}, ID: id,
+		}); err != nil {
+			return fmt.Errorf("mark settlement failed: %w", err)
+		}
+		return emitBillingEventTx(ctx, tx, eventType, tenantID, "x402_nonce", txHash, payload)
 	})
 	if err != nil {
 		r.logger.WithError(err).WithField("id", id).Error("Failed to mark settlement as failed")
@@ -936,6 +962,15 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		return false
 	}
 
+	if err := emitBillingEventTx(ctx, tx, eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+		Amount:   float64(amountCents) / 100,
+		Currency: billing.DefaultCurrency(),
+		Status:   "failed",
+	}); err != nil {
+		r.logger.WithError(err).Error("Failed to enqueue x402 settlement failed event")
+		return false
+	}
+
 	if err := tx.Commit(); err != nil {
 		r.logger.WithError(err).Error("Failed to commit balance debit transaction")
 		return false
@@ -948,12 +983,6 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		"tx_hash":     txHash,
 	}).Warn("Debited balance due to failed x402 settlement")
 
-	// Emit billing event for failed settlement
-	emitBillingEvent(r.db, r.logger, eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
-		Amount:   float64(amountCents) / 100,
-		Currency: billing.DefaultCurrency(),
-		Status:   "failed",
-	})
 	return true
 }
 
@@ -1025,7 +1054,7 @@ func (r *X402Reconciler) trackRPCError(network string, err error, txHash, tenant
 			"network": network,
 			"tx_hash": txHash,
 		}).Warn("X402 RPC error limit reached")
-		emitBillingEvent(r.db, r.logger, eventX402RPCError, tenantID, "x402_network", network, &ipcpb.BillingEvent{
+		emitBillingTelemetryEvent(context.Background(), r.db, r.logger, eventX402RPCError, tenantID, "x402_network", network, &ipcpb.BillingEvent{
 			Status:   "rpc error limit reached",
 			Provider: network,
 		})

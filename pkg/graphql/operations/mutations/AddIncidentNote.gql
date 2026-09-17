@@ -1,0 +1,17 @@
+mutation AddIncidentNote($id: ID!, $body: String!) {
+  addIncidentNote(id: $id, body: $body) {
+    __typename
+    ... on Incident {
+      ...IncidentFields
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

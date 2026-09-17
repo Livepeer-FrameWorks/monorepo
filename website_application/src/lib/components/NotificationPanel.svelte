@@ -3,9 +3,11 @@
   import { resolve } from "$app/paths";
   import { onMount } from "svelte";
   import { formatRelativeTime } from "$lib/utils/formatters";
+  import { incidentCounts } from "$lib/stores/incidents.svelte";
 
   const skipperPath = resolve("/skipper");
   const investigationsPath = resolve("/skipper/investigations");
+  const incidentsPath = resolve("/infrastructure/incidents");
 
   let panelEl: HTMLDivElement | undefined = $state();
 
@@ -52,6 +54,19 @@
       </span>
     {/if}
   </div>
+
+  {#if incidentCounts.firing > 0}
+    <a
+      href={incidentsPath}
+      onclick={() => notificationStore.closePanel()}
+      class="flex items-center justify-between gap-2 px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] border-l-2 border-l-[hsl(var(--tn-red))] hover:bg-[hsl(var(--tn-bg-visual))] transition-colors"
+    >
+      <span class="text-sm font-medium text-foreground">
+        {incidentCounts.firing} firing {incidentCounts.firing === 1 ? "incident" : "incidents"}
+      </span>
+      <span class="text-xs text-[hsl(var(--tn-blue))]">View</span>
+    </a>
+  {/if}
 
   <!-- Body -->
   <div class="flex-1 overflow-y-auto">

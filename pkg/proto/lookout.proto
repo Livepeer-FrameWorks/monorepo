@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package lookout;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/lookout;lookoutpb";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// LookoutService owns incidents built from Alertmanager notifications.
+//
+// Authorization: platform-scope incidents require a platform operator caller.
+// Tenant-scope incidents require the caller's tenant to match the incident's
+// tenant; platform operators may read and act on every scope.
+// AttachInvestigation accepts service-token callers only.
+service LookoutService {
+  rpc ListIncidents(ListIncidentsRequest) returns (ListIncidentsResponse);
+  rpc GetIncident(GetIncidentRequest) returns (GetIncidentResponse);
+  rpc AcknowledgeIncident(AcknowledgeIncidentRequest) returns (IncidentMutationResponse);
+  rpc AssignIncident(AssignIncidentRequest) returns (IncidentMutationResponse);
+  rpc ResolveIncident(ResolveIncidentRequest) returns (IncidentMutationResponse);
+  rpc AddIncidentNote(AddIncidentNoteRequest) returns (IncidentMutationResponse);
+  rpc AttachInvestigation(AttachInvestigationRequest) returns (IncidentMutationResponse);
+}
+
+enum IncidentScope {
+  INCIDENT_SCOPE_UNSPECIFIED = 0;
+  INCIDENT_SCOPE_PLATFORM = 1;
+  INCIDENT_SCOPE_TENANT = 2;
+}
+
+enum IncidentStatus {
+  INCIDENT_STATUS_UNSPECIFIED = 0;
+  INCIDENT_STATUS_FIRING = 1;
+  INCIDENT_STATUS_ACKNOWLEDGED = 2;
+  INCIDENT_STATUS_RESOLVED = 3;
+}
+
+enum IncidentResolution {
+  INCIDENT_RESOLUTION_UNSPECIFIED = 0;
+  INCIDENT_RESOLUTION_AUTO = 1;
+  INCIDENT_RESOLUTION_MANUAL = 2;
+}
+
+enum IncidentEventKind {
+  INCIDENT_EVENT_KIND_UNSPECIFIED = 0;
+  INCIDENT_EVENT_KIND_ALERT_FIRING = 1;
+  INCIDENT_EVENT_KIND_ALERT_RESOLVED = 2;
+  INCIDENT_EVENT_KIND_ACKNOWLEDGED = 3;
+  INCIDENT_EVENT_KIND_ASSIGNED = 4;
+  INCIDENT_EVENT_KIND_NOTE = 5;
+  INCIDENT_EVENT_KIND_RESOLVED = 6;
+  INCIDENT_EVENT_KIND_INVESTIGATION_ATTACHED = 7;
+  INCIDENT_EVENT_KIND_NOTIFIED = 8;
+  // The incident moved between platform and tenant scope, or between tenants,
+  // after its cluster owner was verified.
+  INCIDENT_EVENT_KIND_SCOPE_CHANGED = 9;
+}
+
+message Incident {
+  string id = 1;
+  IncidentScope scope = 2;
+  string tenant_id = 3;  // empty for platform scope
+  string cluster_id = 4;
+  string region = 5;
+  string group_key = 6;
+  string alertname = 7;
+  string severity = 8;
+  IncidentStatus status = 9;
+  IncidentResolution resolution = 10;
+  string title = 11;
+  string summary = 12;
+  google.protobuf.Timestamp started_at = 13;
+  google.protobuf.Timestamp last_alert_at = 14;
+  optional google.protobuf.Timestamp acknowledged_at = 15;
+  string acknowledged_by = 16;
+  string assigned_to = 17;
+  optional google.protobuf.Timestamp resolved_at = 18;
+  string resolved_by = 19;
+  google.protobuf.Timestamp created_at = 20;
+  google.protobuf.Timestamp updated_at = 21;
+  // Alerts of this incident that are still firing.
+  int32 firing_alert_count = 22;
+}
+
+message IncidentAlert {
+  string fingerprint = 1;
+  string status = 2;  // firing | resolved
+  map<string, string> labels = 3;
+  map<string, string> annotations = 4;
+  google.protobuf.Timestamp starts_at = 5;
+  optional google.protobuf.Timestamp ends_at = 6;
+  string generator_url = 7;
+}
+
+message IncidentTimelineEvent {
+  string id = 1;
+  IncidentEventKind kind = 2;
+  string actor_user_id = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // Kind-specific fields; unset for kinds that do not carry them.
+  string note = 5;               // NOTE
+  string assigned_to = 6;        // ASSIGNED (empty clears the assignment)
+  string report_id = 7;          // INVESTIGATION_ATTACHED
+  string channel = 8;            // NOTIFIED: email | slack | discord
+  IncidentResolution resolution = 9;  // RESOLVED
+  string alert_fingerprint = 10; // ALERT_FIRING, ALERT_RESOLVED
+  string alertname = 11;         // ALERT_FIRING, ALERT_RESOLVED
+}
+
+message ListIncidentsRequest {
+  // UNSPECIFIED lists every scope for platform operators and the caller's
+  // tenant incidents for everyone else.
+  IncidentScope scope = 1;
+  repeated IncidentStatus statuses = 2;
+  string cluster_id = 3;
+  // Platform operators may narrow tenant-scope results to one tenant; ignored
+  // for other callers, whose tenant always comes from the auth context.
+  string tenant_id = 4;
+  common.CursorPaginationRequest pagination = 5;
+}
+
+message ListIncidentsResponse {
+  repeated Incident incidents = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message GetIncidentRequest {
+  string incident_id = 1;
+}
+
+message GetIncidentResponse {
+  Incident incident = 1;
+  repeated IncidentAlert alerts = 2;
+  repeated IncidentTimelineEvent timeline = 3;
+}
+
+message AcknowledgeIncidentRequest {
+  string incident_id = 1;
+}
+
+message AssignIncidentRequest {
+  string incident_id = 1;
+  string assignee_user_id = 2;  // empty clears the assignment
+}
+
+message ResolveIncidentRequest {
+  string incident_id = 1;
+}
+
+message AddIncidentNoteRequest {
+  string incident_id = 1;
+  string body = 2;
+}
+
+message AttachInvestigationRequest {
+  string incident_id = 1;
+  string tenant_id = 2;
+  string report_id = 3;
+}
+
+message IncidentMutationResponse {
+  Incident incident = 1;
+}

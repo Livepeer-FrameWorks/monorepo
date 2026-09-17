@@ -135,15 +135,6 @@ func (c *Client) GetHealth(ctx context.Context) error {
 
 }
 
-// GetCertificate retrieves an existing certificate from Navigator.
-func (c *Client) GetCertificate(ctx context.Context, req *dnspb.GetCertificateRequest) (*dnspb.GetCertificateResponse, error) {
-	resp, err := c.service.GetCertificate(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get certificate: %w", err)
-	}
-	return resp, nil
-}
-
 // GetTLSBundle retrieves an existing TLS bundle from Navigator.
 func (c *Client) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error) {
 	resp, err := c.service.GetTLSBundle(ctx, req)

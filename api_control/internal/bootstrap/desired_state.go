@@ -30,13 +30,16 @@ type CommodoreSection struct {
 // subcommand encrypts via the same FieldEncryptor used by runtime CRUD before
 // inserting into commodore.stream_pull_sources.
 type PullStream struct {
-	PlaybackID        string    `yaml:"playback_id"`
-	OwnerTenant       TenantRef `yaml:"owner_tenant"`
-	Title             string    `yaml:"title"`
-	Description       string    `yaml:"description,omitempty"`
-	SourceURI         string    `yaml:"source_uri"`
-	Enabled           bool      `yaml:"enabled"`
-	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
+	PlaybackID     string          `yaml:"playback_id"`
+	OwnerTenant    TenantRef       `yaml:"owner_tenant"`
+	Title          string          `yaml:"title"`
+	Description    string          `yaml:"description,omitempty"`
+	SourceURI      string          `yaml:"source_uri"`
+	Enabled        bool            `yaml:"enabled"`
+	SourceLocation *SourceLocation `yaml:"source_location,omitempty"`
+	// LegacyAllowedClusterIDs captures the retired key so a stale rendered file
+	// fails with a message naming source_location instead of an unknown field.
+	LegacyAllowedClusterIDs *[]string `yaml:"allowed_cluster_ids,omitempty"`
 }
 
 // MistNativeStream mirrors cli/pkg/bootstrap.MistNativeStreamRendered's wire
@@ -58,8 +61,10 @@ type MistNativeStream struct {
 	Monitoring         string                  `yaml:"monitoring,omitempty"`
 	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
 	PlacementCount     int                     `yaml:"placement_count,omitempty"`
-	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`
+	SourceLocation     *SourceLocation         `yaml:"source_location,omitempty"`
 	LocalAssets        []MistNativeStreamAsset `yaml:"local_assets,omitempty"`
+	// LegacyAllowedClusterIDs captures the retired key; see PullStream.
+	LegacyAllowedClusterIDs *[]string `yaml:"allowed_cluster_ids,omitempty"`
 }
 
 // MistNativeStreamAsset declares one expected on-disk file. Bootstrap stores

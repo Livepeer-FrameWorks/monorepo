@@ -15,7 +15,18 @@
   } from "$lib/components/ui/dialog";
   import { getIconComponent } from "$lib/iconUtils";
   import { pullSourcePlacementClass } from "$lib/utils/pull-source";
-  import PullSourceClusterPicker from "./PullSourceClusterPicker.svelte";
+  import SourceLocationControl from "./SourceLocationControl.svelte";
+  import SourceLocationSummary from "./SourceLocationSummary.svelte";
+  import {
+    anySourceLocation,
+    draftFromSourceLocation,
+    sameSourceLocation,
+    sourceLocationInput,
+    sourceLocationProblem,
+    type SourceLocationClusterChoice,
+    type SourceLocationDraft,
+    type SourceLocationValue,
+  } from "$lib/source-location";
 
   interface EditableStream {
     name?: string | null;
@@ -26,8 +37,8 @@
       sourceUriRedacted?: string | null;
       enabled?: boolean | null;
       class?: string | null;
-      allowedClusterIds?: string[] | null;
     } | null;
+    sourceLocation?: SourceLocationValue | null;
     dvrChapterMode?: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE" | null;
     dvrChapterIntervalSeconds?: number | null;
     retentionOverrides?: {
@@ -42,8 +53,8 @@
     record: boolean;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
-    pullSourceAllowedClusterIds: string;
-    pullSourceAllowedClustersDirty: boolean;
+    /** Present only when the user changed the source location. */
+    sourceLocation?: SourceLocationDraft;
     dvrChapterMode: "WINDOW_SIZED" | "FIXED_INTERVAL" | null;
     dvrChapterIntervalSeconds: number | null;
     retentionOverrides?: {
@@ -56,12 +67,14 @@
     open = $bindable(false),
     stream,
     clusterOptions = [],
+    placementHref,
     loading = false,
     onSave,
   }: {
     open: boolean;
     stream: EditableStream | null;
-    clusterOptions?: Array<{ clusterId: string; clusterName: string }>;
+    clusterOptions?: SourceLocationClusterChoice[];
+    placementHref?: string;
     loading?: boolean;
     onSave?: (value: EditResult) => Promise<void> | void;
   } = $props();
@@ -77,8 +90,7 @@
     record: boolean;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
-    pullSourceAllowedClusterIds: string;
-    pullSourceAllowedClustersDirty: boolean;
+    sourceLocation: SourceLocationDraft;
     dvrChapterMode: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE";
     dvrChapterIntervalSeconds: string;
     dvrRetentionOverride: OverrideField;
@@ -89,8 +101,7 @@
     record: false,
     pullSourceUri: "",
     pullSourceEnabled: true,
-    pullSourceAllowedClusterIds: "",
-    pullSourceAllowedClustersDirty: false,
+    sourceLocation: anySourceLocation(),
     dvrChapterMode: "NONE",
     dvrChapterIntervalSeconds: "3600",
     dvrRetentionOverride: null,
@@ -107,15 +118,20 @@
         ? "private"
         : "public"
   );
-  const pullSourcePinsRequired = $derived(
-    stream?.ingestMode === "PULL" && pullSourceClass === "private"
+  // Null when the saved location is CUSTOM; only the placement editor changes it.
+  const savedSourceLocation = $derived(draftFromSourceLocation(stream?.sourceLocation));
+  const sourceLocationChanged = $derived(
+    !!savedSourceLocation && !sameSourceLocation(formData.sourceLocation, savedSourceLocation)
   );
-  const pullSourcePinsMissing = $derived(
-    pullSourcePinsRequired && formData.pullSourceAllowedClusterIds.trim() === ""
+  // A saved location is only re-validated when the user touches it or the URI,
+  // so an unrelated edit is never blocked by the server's current state.
+  const sourceLocationBlocked = $derived(
+    stream?.ingestMode === "PULL" &&
+      !!savedSourceLocation &&
+      (sourceLocationChanged || !!formData.pullSourceUri.trim()) &&
+      !!sourceLocationProblem(formData.sourceLocation, pullSourceClass, clusterOptions)
   );
 
-  // Sync form when stream changes — seed the allowed-clusters text field with
-  // the existing pin so an enabled-toggle preserves placement on save.
   $effect(() => {
     if (stream) {
       const dvrOverride: OverrideField =
@@ -128,8 +144,7 @@
         record: stream.record || false,
         pullSourceUri: "",
         pullSourceEnabled: stream.pullSource?.enabled ?? true,
-        pullSourceAllowedClusterIds: (stream.pullSource?.allowedClusterIds ?? []).join(", "),
-        pullSourceAllowedClustersDirty: false,
+        sourceLocation: draftFromSourceLocation(stream.sourceLocation) ?? anySourceLocation(),
         dvrChapterMode: (stream.dvrChapterMode ?? "NONE") as
           | "WINDOW_SIZED"
           | "FIXED_INTERVAL"
@@ -192,8 +207,9 @@
       record: formData.record,
       pullSourceUri: formData.pullSourceUri,
       pullSourceEnabled: formData.pullSourceEnabled,
-      pullSourceAllowedClusterIds: formData.pullSourceAllowedClusterIds,
-      pullSourceAllowedClustersDirty: formData.pullSourceAllowedClustersDirty,
+      sourceLocation: sourceLocationChanged
+        ? sourceLocationInput(formData.sourceLocation)
+        : undefined,
       dvrChapterMode: formData.dvrChapterMode === "NONE" ? null : formData.dvrChapterMode,
       dvrChapterIntervalSeconds: Number.isFinite(interval) && interval ? interval : null,
       retentionOverrides: retentionPayload,
@@ -340,23 +356,19 @@
           <Label for="editPullEnabled" class="text-sm text-foreground">Enable Pull Source</Label>
         </div>
 
-        <div class="space-y-2">
-          <PullSourceClusterPicker
-            bind:selectedIds={formData.pullSourceAllowedClusterIds}
-            options={clusterOptions}
-            required={pullSourcePinsRequired}
-            onchange={() => (formData.pullSourceAllowedClustersDirty = true)}
+        {#if savedSourceLocation}
+          <SourceLocationControl
+            value={formData.sourceLocation}
+            clusters={clusterOptions}
+            sourceClass={pullSourceClass}
+            onchange={(next) => (formData.sourceLocation = next)}
           />
-          <p class="text-xs text-muted-foreground">
-            {#if pullSourcePinsRequired}
-              Private and multicast sources must be pinned to clusters that can reach them and
-              explicitly allow private pull sources.
-            {:else}
-              Select the clusters that may open this source, or use automatic placement for a public
-              source.
-            {/if}
-          </p>
-        </div>
+        {:else}
+          <div class="space-y-2">
+            <p class="text-sm font-medium text-foreground">Where can this source be reached?</p>
+            <SourceLocationSummary location={stream.sourceLocation} {placementHref} />
+          </div>
+        {/if}
       {/if}
     </form>
 
@@ -372,7 +384,7 @@
       <Button
         type="submit"
         variant="ghost"
-        disabled={loading || pullSourcePinsMissing}
+        disabled={loading || sourceLocationBlocked}
         class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80 gap-2"
         form="edit-stream-form"
       >

@@ -25,6 +25,16 @@ argument_specs:
       kafka_mm_version:
         type: str
         required: true
+      kafka_mm_jmx_exporter_artifact_url:
+        type: str
+        required: true
+      kafka_mm_jmx_exporter_artifact_checksum:
+        type: str
+        required: true
+      kafka_mm_jmx_port:
+        type: int
+        required: false
+        default: 9404
       kafka_mm_heap_opts:
         type: str
         required: false

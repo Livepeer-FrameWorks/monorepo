@@ -19,6 +19,10 @@ type SchemaDatabase struct {
 	RuntimeRole string
 	SourceName  string
 	Schema      string
+	// ReapplyBaseline makes the schema role apply the baseline even when the
+	// service schema already has tables. Baselines are idempotent, so a second
+	// apply only creates the objects that are missing.
+	ReapplyBaseline bool
 }
 
 // ValidateRuntimeRoleMetadata rejects unusable runtime-role credentials before
@@ -53,6 +57,82 @@ func ValidateRuntimeRoleMetadata(databases []map[string]string, defaultOwnerPass
 	return nil
 }
 
+// ServiceDatabasesWithBaseline returns the configured databases whose embedded
+// baseline carries executable DDL, with owner, runtime role, baseline source,
+// and schema defaults applied, one entry per physical database, sorted by name.
+// These are the service-owned databases provisioning and the release database
+// bootstrap create from a baseline; databases without a baseline (for example
+// third-party application databases) are not included.
+func ServiceDatabasesWithBaseline(databases []SchemaDatabase) ([]SchemaDatabase, error) {
+	unique := make(map[string]SchemaDatabase, len(databases))
+	for _, database := range databases {
+		if normalized, ok := normalizeSchemaDatabase(database); ok {
+			unique[normalized.Name] = normalized
+		}
+	}
+	names := make([]string, 0, len(unique))
+	for db := range unique {
+		names = append(names, db)
+	}
+	sort.Strings(names)
+
+	out := make([]SchemaDatabase, 0, len(names))
+	for _, db := range names {
+		database := unique[db]
+		if _, ok, err := embeddedBaselineSQL(database.SourceName); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, database)
+		}
+	}
+	return out, nil
+}
+
+// normalizeSchemaDatabase applies the defaults the postgres and yugabyte schema
+// roles use: owner is the database name, runtime role is <owner>_runtime, the
+// baseline source is the database name, and the schema is the source name.
+func normalizeSchemaDatabase(database SchemaDatabase) (SchemaDatabase, bool) {
+	db := strings.TrimSpace(database.Name)
+	if db == "" {
+		return SchemaDatabase{}, false
+	}
+	owner := strings.TrimSpace(database.Owner)
+	if owner == "" {
+		owner = db
+	}
+	source := strings.TrimSpace(database.SourceName)
+	if source == "" {
+		source = db
+	}
+	schema := strings.TrimSpace(database.Schema)
+	if schema == "" {
+		schema = source
+	}
+	runtimeRole := strings.TrimSpace(database.RuntimeRole)
+	if runtimeRole == "" {
+		runtimeRole = owner + "_runtime"
+	}
+	return SchemaDatabase{Name: db, Owner: owner, RuntimeRole: runtimeRole, SourceName: source, Schema: schema, ReapplyBaseline: database.ReapplyBaseline}, true
+}
+
+// embeddedBaselineSQL returns the embedded baseline for a source database and
+// whether it exists with executable DDL.
+func embeddedBaselineSQL(source string) (string, bool, error) {
+	schemaPath := path.Join("schema", source+".sql")
+	data, err := dbsql.Content.ReadFile(schemaPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", schemaPath, err)
+	}
+	schemaSQL := string(data)
+	if strings.TrimSpace(schemaSQL) == "" || !hasExecutableSchemaDDL(schemaSQL) {
+		return "", false, nil
+	}
+	return schemaSQL, true, nil
+}
+
 // BuildSchemaItems materializes embedded baseline schemas matching configured
 // database names to local temp files. Returns {db, schema, owner, src} entries
 // suitable for postgres_schema_items / yugabyte_schema_items role vars; Ansible
@@ -62,68 +142,25 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 	if len(databases) == 0 {
 		return nil, func() {}, nil
 	}
-
-	unique := make(map[string]SchemaDatabase, len(databases))
-	for _, database := range databases {
-		db := strings.TrimSpace(database.Name)
-		if db != "" {
-			owner := strings.TrimSpace(database.Owner)
-			if owner == "" {
-				owner = db
-			}
-			source := strings.TrimSpace(database.SourceName)
-			if source == "" {
-				source = db
-			}
-			schema := strings.TrimSpace(database.Schema)
-			if schema == "" {
-				schema = source
-			}
-			runtimeRole := strings.TrimSpace(database.RuntimeRole)
-			if runtimeRole == "" {
-				runtimeRole = owner + "_runtime"
-			}
-			unique[db] = SchemaDatabase{Name: db, Owner: owner, RuntimeRole: runtimeRole, SourceName: source, Schema: schema}
-		}
+	withBaseline, err := ServiceDatabasesWithBaseline(databases)
+	if err != nil {
+		return nil, func() {}, err
 	}
-	names := make([]string, 0, len(unique))
-	for db := range unique {
-		names = append(names, db)
-	}
-	sort.Strings(names)
 
-	items := make([]map[string]any, 0, len(names))
+	items := make([]map[string]any, 0, len(withBaseline))
 	var cleanupPaths []string
 	cleanup := func() {
 		for _, p := range cleanupPaths {
 			_ = os.Remove(p)
 		}
 	}
-	for _, db := range names {
-		database := unique[db]
-		source := strings.TrimSpace(database.SourceName)
-		if source == "" {
-			source = db
-		}
-		schema := strings.TrimSpace(database.Schema)
-		if schema == "" {
-			schema = source
-		}
-		schemaPath := path.Join("schema", source+".sql")
-		data, err := dbsql.Content.ReadFile(schemaPath)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
+	for _, database := range withBaseline {
+		db := database.Name
+		schema := database.Schema
+		schemaSQL, _, err := embeddedBaselineSQL(database.SourceName)
 		if err != nil {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("read %s: %w", schemaPath, err)
-		}
-		if strings.TrimSpace(string(data)) == "" {
-			continue
-		}
-		schemaSQL := string(data)
-		if !hasExecutableSchemaDDL(schemaSQL) {
-			continue
+			return nil, func() {}, err
 		}
 		file, err := os.CreateTemp("", fmt.Sprintf("frameworks-schema-%s-*.sql", safeSchemaFilePrefix(db)))
 		if err != nil {
@@ -149,6 +186,7 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 			"owner":        database.Owner,
 			"runtime_role": database.RuntimeRole,
 			"src":          filepath.ToSlash(localPath),
+			"reapply":      database.ReapplyBaseline,
 		})
 	}
 	return items, cleanup, nil

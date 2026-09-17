@@ -61,6 +61,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type clientState struct {
@@ -349,7 +350,9 @@ func main() {
 	lb.SetClusterAccessAuthorizer(control.ClusterAccessibleForTenant)
 	lb.SetClusterServeAuthorizer(control.ClusterServeAccessibleForScope)
 	relayReady := false
-	haRequired := config.GetEnvBool("FOGHORN_HA_REQUIRED", false)
+	// A Sentinel topology is the HA deployment shape; a replica configured
+	// with it must run the shared-state relay rather than degrade silently.
+	haRequired := foghornCfg.Redis.Mode == pkgredis.ModeSentinel
 
 	instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", "")
 	if instanceID == "" {
@@ -360,7 +363,16 @@ func main() {
 	}
 
 	var redisClient goredis.UniversalClient
-	if foghornCfg.Redis.Mode != "" {
+	if foghornCfg.Redis.Mode == pkgredis.ModeSentinel {
+		// A Sentinel topology makes this Foghorn an HA replica: shared state,
+		// relay grants, and the command relay depend on Redis, so startup waits
+		// for the topology and exits if it never becomes reachable.
+		client, err := connectRequiredRedis(context.Background(), foghornCfg.Redis, pkgredis.NewUniversalClient, sentinelConnectAttempts, sentinelConnectMaxBackoff, logger)
+		if err != nil {
+			logger.WithError(err).Fatal("Redis Sentinel is configured but unreachable")
+		}
+		redisClient = client
+	} else if foghornCfg.Redis.Mode != "" {
 		var err error
 		redisClient, err = pkgredis.NewUniversalClient(context.Background(), foghornCfg.Redis)
 		if err != nil {
@@ -401,6 +413,10 @@ func main() {
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("foghorn", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("foghorn", version.Version, version.GitCommit)
+	if redisClient != nil {
+		redisConnected := metricsCollector.NewGauge("redis_connected", "Whether this Foghorn can reach its cell's Redis (1) or not (0)", nil).WithLabelValues()
+		go runRedisConnectivityGauge(context.Background(), redisClient, redisConnected)
+	}
 	clients := &clientState{}
 	clientStatusGauge := metricsCollector.NewGauge(
 		"control_plane_client_status",
@@ -1470,12 +1486,9 @@ func main() {
 	// instance can authorize a grant another minted), in-memory otherwise.
 	// Without Redis a grant minted on one instance is invisible to peers, so a
 	// serving edge whose AuthorizeRelayPull lands on a different instance gets a
-	// false deny (401→502). That is fatal under FOGHORN_HA_REQUIRED and a loud
-	// warning otherwise (single-instance deployments are unaffected).
+	// false deny (401→502). A Sentinel deployment cannot reach this point
+	// without Redis, so only single-instance deployments run without it.
 	if redisClient == nil {
-		if haRequired {
-			logger.Fatal("FOGHORN_HA_REQUIRED is true but Redis is not configured — peer-relay grants cannot be shared across instances")
-		}
 		logger.Warn("Redis not configured — peer-relay capability grants are in-memory only; cross-instance AuthorizeRelayPull will deny. Safe for single-instance Foghorn, broken under HA.")
 	}
 	control.SetRelayGrantRedis(redisClient)
@@ -1874,7 +1887,7 @@ func main() {
 		logger.WithFields(logging.Fields{
 			"redis_configured": redisStore != nil,
 			"advertise_addr":   relayAdvertiseAddr,
-		}).Fatal("FOGHORN_HA_REQUIRED is true but HA command relay could not be enabled")
+		}).Fatal("Redis Sentinel is configured but the HA command relay could not be enabled")
 	}
 
 	// Load the initial central projections before the external TLS listener
@@ -1947,7 +1960,7 @@ func main() {
 	//   - 60s repair sync: re-publishes the full alive set so transient losses
 	//     converge without an event.
 	if qmClient != nil {
-		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, logger)
+		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, config.GetEnv("CLUSTER_ID", ""), logger)
 	}
 
 	// Start the hourly storage snapshot scheduler
@@ -2528,7 +2541,12 @@ const (
 	edgeQMPublisherLeaseTTL  = 15 * time.Second
 )
 
-func startEdgeQuartermasterPublisher(qm *qmclient.GRPCClient, store *state.RedisStateStore, instanceID string, log logging.Logger) {
+// edgeReporterCellID is this Foghorn's CLUSTER_ID. Node liveness carries it so
+// Quartermaster knows which cell controls each edge.
+var edgeReporterCellID string
+
+func startEdgeQuartermasterPublisher(qm *qmclient.GRPCClient, store *state.RedisStateStore, instanceID, cellID string, log logging.Logger) {
+	edgeReporterCellID = cellID
 	if store == nil {
 		go startEdgeDNSDeltaCoalescer(qm, log)
 		go startEdgeHealthSync(qm, log)
@@ -2604,7 +2622,7 @@ func publishEdgeHealthSnapshot(qm *qmclient.GRPCClient, log logging.Logger) {
 		nodes = append(nodes, snapshotToProto(s))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err := qm.ReportAliveNodes(ctx, nodes)
+	err := qm.ReportAliveNodes(ctx, edgeReporterCellID, nodes)
 	cancel()
 	if err != nil {
 		log.WithError(err).WithField("count", len(nodes)).Warn("edge health sync failed")
@@ -2632,7 +2650,7 @@ func publishEdgeDNSDeltas(qm *qmclient.GRPCClient, log logging.Logger) {
 		nodes = append(nodes, snapshotToProto(d))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err := qm.ReportAliveNodes(ctx, nodes)
+	err := qm.ReportAliveNodes(ctx, edgeReporterCellID, nodes)
 	cancel()
 	if err != nil {
 		log.WithError(err).WithField("count", len(nodes)).Warn("edge DNS delta push failed")
@@ -2640,6 +2658,14 @@ func publishEdgeDNSDeltas(qm *qmclient.GRPCClient, log logging.Logger) {
 }
 
 func snapshotToProto(s state.NodeDNSSnapshot) *quartermasterpb.NodeAliveness {
+	node := nodeAlivenessFromSnapshot(s)
+	if !s.ObservedAt.IsZero() {
+		node.ObservedAt = timestamppb.New(s.ObservedAt)
+	}
+	return node
+}
+
+func nodeAlivenessFromSnapshot(s state.NodeDNSSnapshot) *quartermasterpb.NodeAliveness {
 	return &quartermasterpb.NodeAliveness{
 		NodeId:    s.NodeID,
 		IsHealthy: s.IsHealthy,

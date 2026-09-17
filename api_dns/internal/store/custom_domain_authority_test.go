@@ -9,7 +9,8 @@ func TestCustomDomainCredentialAndBundleAuthoritySets(t *testing.T) {
 		joinsTenantSANs bool
 	}{
 		{status: "pending_verification"},
-		{status: "verified", retains: true, joinsTenantSANs: true},
+		{status: "verified", retains: true},
+		{status: "pending_alias", retains: true},
 		{status: "cert_issuing", retains: true, joinsTenantSANs: true},
 		{status: "cert_issued", retains: true, joinsTenantSANs: true},
 		{status: "cert_failed", retains: true},

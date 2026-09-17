@@ -66,6 +66,10 @@ message Selector {
   repeated string regions = 3;
   repeated ClusterClass classes = 4;
   repeated Charging charging = 5;
+  // Registered node IDs. A signed authority carrying node IDs requires media
+  // authority placement schema 3; a candidate without a node identity cannot
+  // satisfy or escape a node selector.
+  repeated string node_ids = 6;
 }
 
 // Presence distinguishes an unrestricted allow list from an explicit deny-all.
@@ -357,12 +361,18 @@ enum OptionKind {
   OPTION_KIND_CLUSTER = 1;
   OPTION_KIND_OPERATOR = 2;
   OPTION_KIND_REGION = 3;
+  // Nodes of clusters the consuming tenant owns. Platform and marketplace
+  // node IDs are never offered.
+  OPTION_KIND_NODE = 4;
 }
 
 message OptionsFilter {
   string query = 1;
   OptionKind kind = 2;
   repeated ClusterClass classes = 3;
+  // Only options derived from this cluster: the cluster itself, its nodes, its
+  // owner and its region. Empty means every entitled cluster.
+  string cluster_id = 4;
 }
 
 message GetOptionsRequest {
@@ -382,6 +392,8 @@ message Option {
   string owner_id = 6;
   bool eligible = 7;
   string reason = 8;
+  // Owning cluster of a NODE option; empty for other kinds.
+  string cluster_id = 9;
 }
 
 message Options {

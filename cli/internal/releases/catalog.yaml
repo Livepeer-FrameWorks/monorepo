@@ -1,6 +1,7 @@
 service_databases:
   commodore: commodore
   foghorn: foghorn
+  lookout: lookout
   navigator: navigator
   periscope-ingest: periscope
   periscope-query: periscope
@@ -114,3 +115,10 @@ releases:
     min_cli_version: v0.3.6
   - version: v0.3.7
     min_cli_version: v0.3.7
+  - version: v0.3.8
+    min_cli_version: v0.3.8
+    required_data_migrations:
+      - id: commodore_pull_source_pins_to_stream_rules_v0_3_8
+        service: commodore
+        introduced_in: v0.3.8
+        required_before_phase: contract

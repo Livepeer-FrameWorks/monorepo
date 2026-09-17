@@ -23,6 +23,7 @@ api_balancing:./cmd/foghorn
 api_sidecar:./cmd/helmsman
 api_realtime:./cmd/signalman
 api_dns:./cmd/navigator
+api_incidents:./cmd/lookout
 api_mesh:./cmd/privateer
 api_forms:./cmd/steward
 api_ticketing:./cmd/deckhand

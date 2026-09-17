@@ -3258,6 +3258,19 @@ func (p *Processor) resolvePullSource(requestCtx context.Context, streamName str
 		p.recordPullSourceEvent(resp, internalName, "blocked_uri", detail)
 		return control.OfflineBlockedURI, false, nil
 	}
+	return p.placeResolvedPullSource(requestCtx, streamName, internalName, trigger, resp, localSnapshot, usedLocal)
+}
+
+// placeResolvedPullSource decides whether the node that fired STREAM_SOURCE may
+// dial an enabled, non-blocked pull source, and returns the balance: template
+// when it may. usedLocal marks a signed local source pair, whose ingest policy is
+// evaluated for this exact node in addition to the cluster pin and consent.
+func (p *Processor) placeResolvedPullSource(requestCtx context.Context, streamName, internalName string, trigger *ipcpb.MistTrigger, resp *commodorepb.ResolvePullSourceByInternalNameResponse, localSnapshot localauthority.SourceSnapshot, usedLocal bool) (string, bool, error) {
+	class, classErr := pullsource.Classify(resp.GetSourceUri())
+	if classErr != nil {
+		// Classify reports ClassBlocked with the error; placement below denies it.
+		p.logger.WithError(classErr).WithField("stream_name", streamName).Debug("Pull source URI classification failed")
+	}
 	// Defensive placement check: the bootstrap/CLI layer + runtime CRUD
 	// validators should have rejected misconfigured pulls upfront, but if
 	// a stale row + new cluster policy / allowed_cluster_ids collide we
@@ -3284,10 +3297,20 @@ func (p *Processor) resolvePullSource(requestCtx context.Context, streamName str
 		})
 	}
 	eligible, rejects := pullsource.FilterPlacementClusters(class, resp.GetAllowedClusterIds(), localCandidates)
-	if len(eligible) == 0 {
+	dialPlacement := control.SourceDialPermitted
+	if usedLocal {
+		dialPlacement = control.SourceDialNodePlacement(control.SourcePlacementPair(localSnapshot), triggerClusterID, trigger.GetNodeId(), time.Now())
+	}
+	if dialPlacement == control.SourceDialUnavailable {
+		p.logger.WithFields(logging.Fields{"stream_name": streamName, "cluster_id": triggerClusterID, "node_id": trigger.GetNodeId()}).Warn("Signed ingest placement for this pull-source node is unavailable")
+		return control.OfflineUnavailable, false, nil
+	}
+	if len(eligible) == 0 || dialPlacement == control.SourceDialDenied {
 		detail := triggerClusterID
 		if len(rejects) > 0 {
 			detail = formatTriggerPlacementRejects(rejects, triggerClusterID)
+		} else if dialPlacement == control.SourceDialDenied {
+			detail = "ingest placement policy denies node " + trigger.GetNodeId()
 		}
 		// This cluster can't dial the upstream itself (allowed_cluster_ids
 		// excludes it). Return "" non-abort so Mist's balance: template

@@ -54,6 +54,14 @@ func TestPrivilegedRPCsRejectTenantJWTBeforeStorage(t *testing.T) {
 			_, err := s.AddToServicePool(ctx, &quartermasterpb.AddToServicePoolRequest{})
 			return err
 		}},
+		{"ReassignClusterControlCell", func() error {
+			_, err := s.ReassignClusterControlCell(ctx, &quartermasterpb.ReassignClusterControlCellRequest{})
+			return err
+		}},
+		{"GetClusterControlCellReassignment", func() error {
+			_, err := s.GetClusterControlCellReassignment(ctx, &quartermasterpb.GetClusterControlCellReassignmentRequest{})
+			return err
+		}},
 		{"DrainServiceInstance", func() error {
 			_, err := s.DrainServiceInstance(ctx, &quartermasterpb.DrainServiceInstanceRequest{})
 			return err

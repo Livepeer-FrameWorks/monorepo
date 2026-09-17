@@ -5,5 +5,6 @@
     state: stopped
     enabled: false
   failed_when: false
-  loop: "{{ ['prometheus', 'node_exporter', 'victoriametrics', 'vmagent', 'vmauth']
+  loop:
+    "{{ ['prometheus', 'node_exporter', 'victoriametrics', 'vmagent', 'vmauth', 'vmalert', 'alertmanager']
     | intersect(prometheus_stack_components | map('regex_replace', '^prometheus$', 'prometheus')) }}"

@@ -1,0 +1,77 @@
+---
+title: "Lookout: Alerts Become Incidents"
+date: 2026-09-17
+authors:
+  - frameworks
+excerpt: "Lookout turns grouped Alertmanager notifications into tenant-aware incidents with a durable timeline, realtime updates, operator delivery, and Skipper investigations."
+description: "Lookout turns grouped Alertmanager notifications into tenant-aware incidents with a durable timeline, realtime updates, operator delivery, and Skipper investigations."
+tags:
+  - announcements
+  - operations
+  - observability
+---
+
+An alert is a signal. An incident is the work that follows: who owns it, what is still firing,
+who acknowledged it, what changed, and whether the problem is actually over. FrameWorks already
+had metrics and alert rules, but handing raw Alertmanager notifications to every tenant would have
+mixed infrastructure details, tenant boundaries, and delivery policy into one brittle interface.
+
+Lookout is the incident service between alerting and people. It receives grouped Alertmanager
+notifications, resolves the alerting cluster to its current owner, and creates either a
+platform-only incident or a tenant-visible incident. The result is available in the dashboard,
+GraphQL, MCP tools, and realtime subscriptions.
+
+## Tenant ownership is part of ingestion
+
+The difficult part is not inserting an alert into Postgres. Cluster ownership can change while
+alerts are arriving, and a control-plane outage must never make another tenant's incident visible.
+
+Lookout keeps a verified cluster-scope record from Quartermaster. Ingestion and ownership changes
+coordinate through database locks and revisions, so an open incident is either written with the
+new owner or moved to that owner after the concurrent ingest commits. When ownership cannot be
+verified, the incident stays platform-scoped. That fails closed for tenant visibility while still
+letting operators see an outage during a control-plane failure.
+
+Resolved incidents do not move when ownership changes. They remain part of the operational
+history of the tenant that owned the cluster when the incident happened.
+
+## One incident, not a stream of pages
+
+Alertmanager still does what it is good at: rule evaluation, grouping, inhibition, silences, and
+delivery retries. Lookout turns each group into a state machine:
+
+- new firing alerts open an incident;
+- repeated notifications update the existing incident;
+- acknowledgement records ownership without stopping alert ingestion;
+- assignments and notes build an operational timeline;
+- the incident auto-resolves when every alert resolves, or can be resolved manually;
+- repeated copies of the same alert do not reopen a manually resolved incident.
+
+Every state change is visible through `liveIncidentUpdates`, while GraphQL queries remain the
+durable source of truth after a reconnect.
+
+## Delivery survives the failure it reports
+
+Platform incidents can notify email, Slack, and Discord. Tenant incidents are published for
+Skipper investigation and tenant realtime delivery. Those sends use a lease-fenced transactional
+outbox: the incident and its delivery obligation commit together, multiple Lookout replicas cannot
+successfully settle the same claim, and temporary downstream failures retry with backoff.
+
+Critical alerts also have a direct Alertmanager email route. That route deliberately bypasses
+Lookout, so an outage in the incident service does not suppress the page reporting it. A permanent
+Watchdog alert goes to an external heartbeat endpoint; if Alertmanager itself stops delivering,
+the missing heartbeat becomes the signal.
+
+## One workflow for people and agents
+
+Tenants work incidents under **Infrastructure → Incidents**. Platform operators have a
+cross-tenant view under **Platform Admin → Incidents**. The same actions are available through
+GraphQL and the Gateway's MCP tools: list, inspect, acknowledge, assign, resolve, and add a note.
+
+Skipper consumes the tenant incident feed and can attach an investigation report to the incident
+timeline. It does not silently acknowledge or resolve anything; analysis and state-changing
+operator actions remain separate.
+
+Start with the [incident API guide](/builders/incidents). Operators deploying the service should
+use [Alerting and Incidents](/operators/alerting), which covers the Lookout database, Alertmanager
+token, heartbeat, notification channels, and an end-to-end delivery test.

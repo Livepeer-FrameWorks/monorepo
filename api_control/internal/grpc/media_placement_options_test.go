@@ -33,7 +33,7 @@ func placementOptionsFixture() (placementpolicy.Scope, *placementpb.GetOptionsRe
 func TestMediaPlacementOptionsProjectionAndRedaction(t *testing.T) {
 	scope, req, entitlement := placementOptionsFixture()
 	before := proto.CloneOf(entitlement)
-	response, err := projectPlacementOptions(scope, req, entitlement, time.Now())
+	response, err := projectPlacementOptions(scope, req, entitlement, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,28 +53,75 @@ func TestMediaPlacementOptionsProjectionAndRedaction(t *testing.T) {
 		t.Fatal("selector catalogue exposed internal addresses")
 	}
 	req.Filter = &placementpb.OptionsFilter{Kind: placementpb.OptionKind_OPTION_KIND_CLUSTER, Classes: []placementpb.ClusterClass{placementpb.ClusterClass_CLUSTER_CLASS_TENANT_PRIVATE}, Query: " OWNED "}
-	filtered, err := projectPlacementOptions(scope, req, entitlement, time.Now())
+	filtered, err := projectPlacementOptions(scope, req, entitlement, nil, time.Now())
 	if err != nil || len(filtered.GetNodes()) != 1 || filtered.GetNodes()[0].GetId() != "owned" {
 		t.Fatalf("tenant-relative class/search filter failed: %v", err)
 	}
 	entitlement.EffectiveAccess[1].MediaConsent = nil
-	filtered, err = projectPlacementOptions(scope, req, entitlement, time.Now())
+	filtered, err = projectPlacementOptions(scope, req, entitlement, nil, time.Now())
 	if err != nil || filtered.GetNodes()[0].GetEligible() || filtered.GetNodes()[0].GetReason() != "owner_consent_unknown" {
 		t.Fatalf("missing consent became media permission: %v", err)
+	}
+}
+
+func TestMediaPlacementOptionsOfferOnlyOwnedClusterNodes(t *testing.T) {
+	scope, req, entitlement := placementOptionsFixture()
+	// Node identities offered for the platform or marketplace cluster must be dropped.
+	nodes := map[string]string{"owned-node-1": "owned", "official-node": "official", "market-node": "market"}
+	req.Filter = &placementpb.OptionsFilter{Kind: placementpb.OptionKind_OPTION_KIND_NODE}
+	response, err := projectPlacementOptions(scope, req, entitlement, nodes, time.Now())
+	if err != nil || len(response.GetNodes()) != 1 {
+		t.Fatalf("node options: %+v %v", response.GetNodes(), err)
+	}
+	node := response.GetNodes()[0]
+	if node.GetId() != "owned-node-1" || node.GetClusterId() != "owned" || node.GetClusterClass() != placementpb.ClusterClass_CLUSTER_CLASS_TENANT_PRIVATE || node.GetOwnerId() != scope.TenantID {
+		t.Fatalf("owned node option: %+v", node)
+	}
+	req.Filter = &placementpb.OptionsFilter{Query: "owned"}
+	all, err := projectPlacementOptions(scope, req, entitlement, nodes, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[placementpb.OptionKind]int{}
+	for _, option := range all.GetNodes() {
+		kinds[option.GetKind()]++
+	}
+	if kinds[placementpb.OptionKind_OPTION_KIND_NODE] != 1 || kinds[placementpb.OptionKind_OPTION_KIND_CLUSTER] != 1 {
+		t.Fatalf("search by owning cluster: %v", kinds)
+	}
+
+	req.Filter = &placementpb.OptionsFilter{Kind: placementpb.OptionKind_OPTION_KIND_NODE, ClusterId: "official"}
+	other, err := projectPlacementOptions(scope, req, entitlement, nodes, time.Now())
+	if err != nil || len(other.GetNodes()) != 0 {
+		t.Fatalf("node options filtered to another cluster: %+v %v", other.GetNodes(), err)
+	}
+	req.Filter = &placementpb.OptionsFilter{ClusterId: "owned"}
+	scoped, err := projectPlacementOptions(scope, req, entitlement, nodes, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range scoped.GetNodes() {
+		if option.GetKind() == placementpb.OptionKind_OPTION_KIND_CLUSTER && option.GetId() != "owned" || option.GetKind() == placementpb.OptionKind_OPTION_KIND_NODE && option.GetClusterId() != "owned" {
+			t.Fatalf("cluster filter leaked option %+v", option)
+		}
+	}
+	req.Filter = &placementpb.OptionsFilter{ClusterId: " owned"}
+	if _, err := projectPlacementOptions(scope, req, entitlement, nodes, time.Now()); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid cluster filter = %v, want InvalidArgument", err)
 	}
 }
 
 func TestMediaPlacementOptionsPaginationIsScopedAndStable(t *testing.T) {
 	scope, req, entitlement := placementOptionsFixture()
 	req.First = 2
-	first, err := projectPlacementOptions(scope, req, entitlement, time.Now())
+	first, err := projectPlacementOptions(scope, req, entitlement, nil, time.Now())
 	if err != nil || !first.GetHasNextPage() || first.GetHasPreviousPage() || len(first.GetNodes()) != 2 {
 		t.Fatalf("first page failed: %v", err)
 	}
 	req.After = first.GetEndCursor()
 	slices.Reverse(entitlement.EffectiveAccess)
 	slices.Reverse(entitlement.AllowedClusterIds)
-	next, err := projectPlacementOptions(scope, req, entitlement, time.Now())
+	next, err := projectPlacementOptions(scope, req, entitlement, nil, time.Now())
 	if err != nil || !next.GetHasPreviousPage() || len(next.GetNodes()) != 2 || next.GetNodes()[0].GetId() == first.GetNodes()[0].GetId() {
 		t.Fatalf("stable second page failed: %v", err)
 	}
@@ -96,7 +143,7 @@ func TestMediaPlacementOptionsPaginationIsScopedAndStable(t *testing.T) {
 			case "malformed":
 				otherReq.After = "invalid"
 			}
-			if _, err := projectPlacementOptions(otherScope, otherReq, changed, time.Now()); status.Code(err) != want {
+			if _, err := projectPlacementOptions(otherScope, otherReq, changed, nil, time.Now()); status.Code(err) != want {
 				t.Fatalf("cursor accepted changed scope/catalogue: %v", err)
 			}
 		})
@@ -129,13 +176,13 @@ func TestMediaPlacementOptionsRejectsIncompleteEntitlement(t *testing.T) {
 			case "unknown owner":
 				entitlement.EffectiveAccess[2].OwnerTenantId = ""
 			}
-			if _, err := projectPlacementOptions(scope, req, entitlement, time.Now()); status.Code(err) != codes.Unavailable {
+			if _, err := projectPlacementOptions(scope, req, entitlement, nil, time.Now()); status.Code(err) != codes.Unavailable {
 				t.Fatalf("incomplete grant became a usable selector: %v", err)
 			}
 		})
 	}
 	scope, req, _ := placementOptionsFixture()
-	result, err := projectPlacementOptions(scope, req, &quartermasterpb.GetTenantEntitlementResponse{}, time.Now())
+	result, err := projectPlacementOptions(scope, req, &quartermasterpb.GetTenantEntitlementResponse{}, nil, time.Now())
 	if err != nil || len(result.GetNodes()) != 0 || result.GetHasNextPage() {
 		t.Fatalf("explicit empty entitlement failed: %v", err)
 	}

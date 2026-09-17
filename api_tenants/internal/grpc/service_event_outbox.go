@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
+	"frameworks/api_tenants/internal/serviceeventoutbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -37,46 +39,26 @@ func qmOutboxConfig() outbox.Config {
 }
 
 type qmOutboxRow struct {
-	id        string
-	payload   []byte
-	attempts  int
-	createdAt time.Time
+	id         string
+	payload    []byte
+	attempts   int
+	createdAt  time.Time
+	leaseToken string
 }
 
 // EnqueueServiceEventTx writes the outbox row inside the caller's
-// transaction. A failed INSERT rolls back with the caller's tx.
+// transaction, so the event becomes durable exactly when the state mutation
+// that justifies it commits. A failed INSERT rolls back with the caller's tx.
 func (s *QuartermasterServer) EnqueueServiceEventTx(
 	ctx context.Context,
 	exec quartermasterdb.DBTX,
 	event *ipcpb.ServiceEvent,
 ) (string, error) {
-	if event == nil {
-		return "", errors.New("nil service event")
-	}
-	payload, err := protojson.Marshal(event)
-	if err != nil {
-		return "", fmt.Errorf("marshal service event: %w", err)
-	}
-	id, err := quartermasterdb.New(exec).EnqueueServiceEvent(ctx, quartermasterdb.EnqueueServiceEventParams{
-		EventType: event.GetEventType(), TenantID: event.GetTenantId(), UserID: event.GetUserId(),
-		ResourceType: event.GetResourceType(), ResourceID: event.GetResourceId(), Payload: string(payload),
-	})
-	if err != nil {
-		return "", fmt.Errorf("insert service event outbox row: %w", err)
-	}
-	return id, nil
+	return serviceeventoutbox.Enqueue(ctx, exec, event)
 }
 
-// enqueueServiceEvent writes the outbox row in its own short transaction.
-// Use EnqueueServiceEventTx when the caller already holds a transaction.
-func (s *QuartermasterServer) enqueueServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
-	if s.db == nil || event == nil || event.GetTenantId() == "" {
-		return
-	}
-	if _, err := s.EnqueueServiceEventTx(ctx, s.db, event); err != nil {
-		s.logger.WithError(err).WithField("event_type", event.GetEventType()).
-			Warn("Failed to enqueue service event outbox row")
-	}
+func serviceEventScope(event *ipcpb.ServiceEvent) (string, error) {
+	return serviceeventoutbox.Scope(event)
 }
 
 type qmOutboxStore struct {
@@ -91,21 +73,33 @@ func (st *qmOutboxStore) ClaimBatch(ctx context.Context, _ int, _ time.Duration)
 	claims := make([]outbox.Claim[qmOutboxRow], 0, len(rows))
 	for _, r := range rows {
 		claims = append(claims, outbox.Claim[qmOutboxRow]{
-			ID:       r.id,
-			Attempts: r.attempts,
-			Payload:  r,
+			ID:         r.id,
+			Attempts:   r.attempts,
+			Payload:    r,
+			LeaseToken: r.leaseToken,
 		})
 	}
 	return claims, nil
 }
 
 func (st *qmOutboxStore) MarkCompleted(ctx context.Context, id string) error {
-	st.server.markQMOutboxCompleted(ctx, id)
+	return st.MarkCompletedToken(ctx, id, "")
+}
+
+func (st *qmOutboxStore) RecordFailure(ctx context.Context, id string, attempts int, failedTargets []string, cause error, backoff time.Duration) error {
+	return st.RecordFailureToken(ctx, id, attempts, failedTargets, cause, backoff, "")
+}
+
+// MarkCompletedToken and RecordFailureToken settle only while the row still
+// carries the claim's lease token, so a worker whose lease lapsed cannot settle
+// a row a peer has re-claimed.
+func (st *qmOutboxStore) MarkCompletedToken(ctx context.Context, id, leaseToken string) error {
+	st.server.markQMOutboxCompleted(ctx, id, leaseToken)
 	return nil
 }
 
-func (st *qmOutboxStore) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, _ time.Duration) error {
-	st.server.recordQMOutboxFailure(ctx, id, attempts, cause)
+func (st *qmOutboxStore) RecordFailureToken(ctx context.Context, id string, attempts int, _ []string, cause error, _ time.Duration, leaseToken string) error {
+	st.server.recordQMOutboxFailure(ctx, id, attempts, cause, leaseToken)
 	return nil
 }
 
@@ -148,10 +142,11 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 			return qerr
 		}
 
+		leaseToken := uuid.NewString()
 		batch := make([]qmOutboxRow, 0, qmOutboxBatchSize)
 		for _, row := range rows {
 			batch = append(batch, qmOutboxRow{
-				id: row.ID, payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt,
+				id: row.ID, payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt, leaseToken: leaseToken,
 			})
 		}
 		if len(batch) > 0 {
@@ -159,7 +154,9 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 			for _, r := range batch {
 				ids = append(ids, r.id)
 			}
-			if uerr := queries.MarkServiceEventOutboxClaimed(ctx, ids); uerr != nil {
+			if uerr := queries.MarkServiceEventOutboxClaimed(ctx, quartermasterdb.MarkServiceEventOutboxClaimedParams{
+				LeaseToken: leaseToken, Ids: ids,
+			}); uerr != nil {
 				return uerr
 			}
 		}
@@ -169,20 +166,22 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 	return out, err
 }
 
-func (s *QuartermasterServer) markQMOutboxCompleted(ctx context.Context, id string) {
-	if err := quartermasterdb.New(s.db).CompleteServiceEventOutbox(ctx, id); err != nil {
+func (s *QuartermasterServer) markQMOutboxCompleted(ctx context.Context, id, leaseToken string) {
+	if err := quartermasterdb.New(s.db).CompleteServiceEventOutbox(ctx, quartermasterdb.CompleteServiceEventOutboxParams{
+		ID: id, LeaseToken: leaseToken,
+	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to mark quartermaster service event outbox row completed")
 	}
 }
 
-func (s *QuartermasterServer) recordQMOutboxFailure(ctx context.Context, id string, attempts int, cause error) {
+func (s *QuartermasterServer) recordQMOutboxFailure(ctx context.Context, id string, attempts int, cause error, leaseToken string) {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
 	if err := quartermasterdb.New(s.db).FailServiceEventOutbox(ctx, quartermasterdb.FailServiceEventOutboxParams{
-		ID: id, Attempts: int32(attempts), LastError: msg,
+		ID: id, Attempts: int32(attempts), LastError: msg, LeaseToken: leaseToken,
 	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to record quartermaster service event outbox failure")

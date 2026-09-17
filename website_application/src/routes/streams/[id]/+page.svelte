@@ -53,6 +53,7 @@
     PlaybackAuthTabPanel,
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
+  import type { SourceLocationDraft } from "$lib/source-location";
   import { resolveOperationalStreamId } from "$lib/route-ids";
   import { shouldRefreshPushTargets } from "$lib/utils/push-target-events";
   import {
@@ -164,6 +165,8 @@
     ($clustersAccessStore.data?.clustersAccess ?? []).map((cluster) => ({
       clusterId: cluster.clusterId,
       clusterName: cluster.clusterName,
+      accessLevel: cluster.accessLevel,
+      allowPrivatePullSources: cluster.allowPrivatePullSources,
     }))
   );
   let pushTargets = $derived(
@@ -533,8 +536,7 @@
     record?: boolean;
     pullSourceUri?: string;
     pullSourceEnabled?: boolean;
-    pullSourceAllowedClusterIds?: string;
-    pullSourceAllowedClustersDirty?: boolean;
+    sourceLocation?: SourceLocationDraft;
     dvrChapterMode?: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE" | null;
     dvrChapterIntervalSeconds?: number | null;
     retentionOverrides?: {
@@ -548,25 +550,13 @@
       actionLoading.editStream = true;
       const pullURIChanged = !!formData.pullSourceUri?.trim();
       const pullEnabledChanged = formData.pullSourceEnabled !== stream.pullSource?.enabled;
-      const pullAllowedDirty = !!formData.pullSourceAllowedClustersDirty;
-      // Only send pullSource when something actually changed. The wrapper
-      // contract is: any field we omit is preserved; any field we set is
-      // replaced. For allowed_clusters specifically: send the wrapper only
-      // when the user edited the field (dirty flag) — otherwise omit so the
-      // server preserves the existing pin.
+      // Omitted pullSource fields and an omitted sourceLocation keep their
+      // saved values on the server.
       const pullSource =
-        stream.ingestMode === "PULL" && (pullURIChanged || pullEnabledChanged || pullAllowedDirty)
+        stream.ingestMode === "PULL" && (pullURIChanged || pullEnabledChanged)
           ? {
               sourceUri: pullURIChanged ? formData.pullSourceUri!.trim() : undefined,
               enabled: pullEnabledChanged ? (formData.pullSourceEnabled ?? true) : undefined,
-              allowedClusters: pullAllowedDirty
-                ? {
-                    clusterIds: (formData.pullSourceAllowedClusterIds ?? "")
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter((s) => s.length > 0),
-                  }
-                : undefined,
             }
           : undefined;
       const input = {
@@ -575,6 +565,7 @@
         record: formData.record,
         ingestMode: stream.ingestMode,
         pullSource,
+        sourceLocation: stream.ingestMode === "PULL" ? formData.sourceLocation : undefined,
         dvrChapterMode: formData.dvrChapterMode,
         dvrChapterIntervalSeconds: formData.dvrChapterIntervalSeconds,
       };
@@ -1038,6 +1029,8 @@
                   {stream}
                   {streamKeys}
                   {clusterOptions}
+                  placementHref={resolve("/streams/[id]/placement", { id: streamId }) +
+                    "?verb=ingest"}
                   onRefreshKey={handleRefreshStreamKey}
                   refreshingKey={actionLoading.refreshKey}
                   onCreateKey={() => (showCreateKeyModal = true)}
@@ -1095,6 +1088,7 @@
     bind:open={showEditModal}
     {stream}
     {clusterOptions}
+    placementHref={resolve("/streams/[id]/placement", { id: streamId }) + "?verb=ingest"}
     loading={actionLoading.editStream}
     onSave={handleEditStream}
   />

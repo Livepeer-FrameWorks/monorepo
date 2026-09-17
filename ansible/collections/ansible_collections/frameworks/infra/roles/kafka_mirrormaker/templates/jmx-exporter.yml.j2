@@ -1,0 +1,39 @@
+{# Prometheus JMX exporter config for the MirrorMaker2 worker. Only the
+   MirrorMaker2 connector MBeans are exported. Kafka's JmxReporter names them
+   kafka.connect.mirror:type=<connector>,<tags> with the tags in the order the
+   connector metrics declare them, which is the order these patterns match.
+   Patterns are unanchored and match "<bean><>attribute: value", so each
+   attribute group ends at ":" to keep replication-latency-ms from also
+   matching replication-latency-ms-max. Attribute names become snake_case
+   metric suffixes, and COUNTER rules gain a _total suffix. #}
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+includeObjectNames:
+  - "kafka.connect.mirror:type=MirrorSourceConnector,*"
+  - "kafka.connect.mirror:type=MirrorCheckpointConnector,*"
+rules:
+  - pattern: 'kafka.connect.mirror<type=MirrorSourceConnector, source=([^,]+), target=([^,]+), topic=([^,]+), partition=([0-9]+)><>(record-count|byte-count):'
+    name: kafka_connect_mirror_source_connector_$5
+    type: COUNTER
+    labels:
+      source: "$1"
+      target: "$2"
+      topic: "$3"
+      partition: "$4"
+  - pattern: 'kafka.connect.mirror<type=MirrorSourceConnector, source=([^,]+), target=([^,]+), topic=([^,]+), partition=([0-9]+)><>(record-rate|byte-rate|record-age-ms|record-age-ms-max|record-age-ms-avg|replication-latency-ms|replication-latency-ms-max|replication-latency-ms-avg):'
+    name: kafka_connect_mirror_source_connector_$5
+    type: GAUGE
+    labels:
+      source: "$1"
+      target: "$2"
+      topic: "$3"
+      partition: "$4"
+  - pattern: 'kafka.connect.mirror<type=MirrorCheckpointConnector, source=([^,]+), target=([^,]+), group=([^,]+), topic=([^,]+), partition=([0-9]+)><>(checkpoint-latency-ms|checkpoint-latency-ms-max|checkpoint-latency-ms-avg):'
+    name: kafka_connect_mirror_checkpoint_connector_$6
+    type: GAUGE
+    labels:
+      source: "$1"
+      target: "$2"
+      group: "$3"
+      topic: "$4"
+      partition: "$5"

@@ -86,13 +86,30 @@ func GenerateMediaPlacementOptions(req *placementpb.GetOptionsRequest) (*placeme
 	if kind == placementpb.OptionKind_OPTION_KIND_UNSPECIFIED {
 		kind = placementpb.OptionKind_OPTION_KIND_CLUSTER
 	}
-	if kind != placementpb.OptionKind_OPTION_KIND_CLUSTER && kind != placementpb.OptionKind_OPTION_KIND_REGION && kind != placementpb.OptionKind_OPTION_KIND_OPERATOR {
+	if kind != placementpb.OptionKind_OPTION_KIND_CLUSTER && kind != placementpb.OptionKind_OPTION_KIND_REGION && kind != placementpb.OptionKind_OPTION_KIND_OPERATOR && kind != placementpb.OptionKind_OPTION_KIND_NODE {
 		return nil, status.Error(codes.InvalidArgument, "invalid demo option kind")
 	}
+	query := strings.ToLower(strings.TrimSpace(filter.GetQuery()))
 	var options []*placementpb.Option
 	seen := map[string]bool{}
 	for _, cluster := range demoPlacementClusters() {
 		if len(filter.GetClasses()) != 0 && !slices.Contains(filter.GetClasses(), cluster.class) {
+			continue
+		}
+		if filter.GetClusterId() != "" && cluster.id != filter.GetClusterId() {
+			continue
+		}
+		if kind == placementpb.OptionKind_OPTION_KIND_NODE {
+			// Node options exist only for the demo tenant's own cluster, as for real tenants.
+			if cluster.class != placementpb.ClusterClass_CLUSTER_CLASS_TENANT_PRIVATE {
+				continue
+			}
+			for _, nodeID := range []string{cluster.id + "-node-1", cluster.id + "-node-2"} {
+				if query != "" && !strings.Contains(strings.ToLower(nodeID), query) {
+					continue
+				}
+				options = append(options, &placementpb.Option{Id: nodeID, Name: nodeID, Kind: kind, ClusterClass: cluster.class, Region: cluster.region, OwnerId: cluster.owner, ClusterId: cluster.id, Eligible: true, Reason: demoPlacementNotice})
+			}
 			continue
 		}
 		id, name := cluster.id, cluster.name
@@ -102,7 +119,7 @@ func GenerateMediaPlacementOptions(req *placementpb.GetOptionsRequest) (*placeme
 		case placementpb.OptionKind_OPTION_KIND_OPERATOR:
 			id, name = cluster.owner, "Simulated "+cluster.owner
 		}
-		if seen[id] || !strings.Contains(strings.ToLower(id+" "+name), strings.ToLower(strings.TrimSpace(filter.GetQuery()))) {
+		if seen[id] || !strings.Contains(strings.ToLower(id+" "+name), query) {
 			continue
 		}
 		seen[id] = true

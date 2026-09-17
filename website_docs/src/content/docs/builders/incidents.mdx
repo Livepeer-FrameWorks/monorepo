@@ -1,0 +1,114 @@
+---
+title: Incidents
+description: Read, triage, and subscribe to incidents on tenant-owned clusters through GraphQL and the dashboard.
+---
+
+FrameWorks turns platform alerts for a tenant-owned cluster into a tenant incident. An incident
+collects the active alerts, current status, assignment, notes, resolution, and a chronological
+timeline. Tenant isolation follows cluster ownership: your account can only read or change
+incidents for clusters it owns.
+
+The dashboard exposes the same API at **Infrastructure → Incidents**. Platform operators have a
+separate cross-tenant view under **Platform Admin → Incidents**.
+
+## List incidents
+
+`incidentsConnection` returns incidents newest first. Omit `statuses` to include firing,
+acknowledged, and resolved incidents.
+
+```graphql
+query TenantIncidents($after: String, $clusterId: String) {
+  incidentsConnection(
+    page: { first: 50, after: $after }
+    filter: { statuses: [FIRING, ACKNOWLEDGED], clusterId: $clusterId }
+  ) {
+    nodes {
+      id
+      clusterId
+      region
+      severity
+      status
+      title
+      firingAlertCount
+      assignedTo
+      startedAt
+      lastAlertAt
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}
+```
+
+Use `incident(id:)` for the complete record, including its alerts and oldest-first timeline.
+Unknown incidents and incidents owned by another tenant both return `null`; the API does not leak
+whether another tenant's incident exists.
+
+## Follow live changes
+
+Subscribe to `liveIncidentUpdates` to refresh incident state without polling:
+
+```graphql
+subscription IncidentUpdates {
+  liveIncidentUpdates {
+    incidentId
+    status
+    change
+    updatedAt
+  }
+}
+```
+
+The subscription is a change signal, not the durable incident record. After connecting or
+reconnecting, query `incidentsConnection` or `incident(id:)` and treat that response as current
+truth. This also covers changes that happened while the client was offline.
+
+## Triage an incident
+
+The incident mutations return an `IncidentMutationResult` union. Handle validation,
+authorization, and not-found results explicitly.
+
+```graphql
+mutation AcknowledgeIncident($id: ID!) {
+  acknowledgeIncident(id: $id) {
+    ... on Incident {
+      id
+      status
+      acknowledgedAt
+      acknowledgedBy
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Available actions:
+
+- `acknowledgeIncident(id:)` marks a firing incident as acknowledged. Alert ingestion continues,
+  and the incident still auto-resolves when every alert resolves.
+- `assignIncident(id:, assigneeUserId:)` assigns a user; pass `null` to clear the assignment.
+- `addIncidentNote(id:, body:)` adds operational context to the timeline, including after
+  resolution.
+- `resolveIncident(id:)` resolves manually. Repeats of the same firing alerts do not reopen it;
+  a genuinely new alert opens a new incident.
+
+Skipper can attach an investigation report to tenant incidents. The attachment appears in the
+same timeline and does not change the incident state automatically.
+
+## What creates incidents
+
+Lookout receives grouped notifications from the deployment's Alertmanager. Alertmanager owns
+rule evaluation, grouping, silences, and inhibition; Lookout owns incident state and tenant
+visibility. Which alert rules are enabled is an operator decision. See
+[Alerting and Incidents](/operators/alerting) for deployment and notification-channel setup.

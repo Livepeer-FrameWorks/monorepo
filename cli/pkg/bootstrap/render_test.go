@@ -1262,9 +1262,8 @@ func TestRenderPullStreamRejectsUnsupportedSourceURI(t *testing.T) {
 	}
 }
 
-// TestRenderPullStreamRejectsPrivateSourceWithoutAllowedClusters locks the
-// new architecture rule: a private URI must list explicit allowed_cluster_ids;
-// "any cluster with allow_private_pull_sources=true" is no longer a fallback.
+// A private URI must list explicit source_location.clusters; "any cluster with
+// allow_private_pull_sources=true" is not a fallback.
 func TestRenderPullStreamRejectsPrivateSourceWithoutAllowedClusters(t *testing.T) {
 	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
 	if err != nil {
@@ -1283,15 +1282,14 @@ func TestRenderPullStreamRejectsPrivateSourceWithoutAllowedClusters(t *testing.T
 	}
 	_, err = Render(d, overlay, nil)
 	if err == nil {
-		t.Fatal("private URI without allowed_cluster_ids must fail render")
+		t.Fatal("private URI without source_location.clusters must fail render")
 	}
-	if !strings.Contains(err.Error(), "allowed_cluster_ids") {
+	if !strings.Contains(err.Error(), "source_location.clusters") {
 		t.Fatalf("error %q does not name the missing field", err)
 	}
 }
 
-// TestRenderPullStreamRejectsPrivateSourceWithoutCapability covers the
-// stricter check: an explicit allowed_cluster_ids entry must point at a
+// An explicit source_location.clusters entry for a private URI must point at a
 // cluster that also carries allow_private_pull_sources=true.
 func TestRenderPullStreamRejectsPrivateSourceWithoutCapability(t *testing.T) {
 	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
@@ -1301,12 +1299,12 @@ func TestRenderPullStreamRejectsPrivateSourceWithoutCapability(t *testing.T) {
 	overlay := &Overlay{
 		Commodore: CommodoreSection{
 			PullStreams: []PullStream{{
-				PlaybackID:        "private-demo",
-				OwnerTenant:       TenantRefSystem(),
-				Title:             "Private demo",
-				SourceURI:         "tsudp://10.0.0.5:9000",
-				AllowedClusterIDs: []string{"media-edge-primary"},
-				Enabled:           true,
+				PlaybackID:     "private-demo",
+				OwnerTenant:    TenantRefSystem(),
+				Title:          "Private demo",
+				SourceURI:      "tsudp://10.0.0.5:9000",
+				SourceLocation: &SourceLocation{Clusters: []string{"media-edge-primary"}},
+				Enabled:        true,
 			}},
 		},
 	}
@@ -1319,9 +1317,8 @@ func TestRenderPullStreamRejectsPrivateSourceWithoutCapability(t *testing.T) {
 	}
 }
 
-// TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster confirms the
-// happy path: a private URI pinned to a cluster that has the capability
-// flag passes render with a normalized allowed_cluster_ids slice.
+// A private URI restricted to a cluster that has the capability flag passes
+// render with a normalized source location.
 func TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster(t *testing.T) {
 	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
 	if err != nil {
@@ -1330,12 +1327,12 @@ func TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster(t *testing.T) {
 	overlay := &Overlay{
 		Commodore: CommodoreSection{
 			PullStreams: []PullStream{{
-				PlaybackID:        "private-demo",
-				OwnerTenant:       TenantRefSystem(),
-				Title:             "Private demo",
-				SourceURI:         "tsudp://10.0.0.5:9000",
-				AllowedClusterIDs: []string{"media-edge-primary", "media-edge-primary"}, // dedup
-				Enabled:           true,
+				PlaybackID:     "private-demo",
+				OwnerTenant:    TenantRefSystem(),
+				Title:          "Private demo",
+				SourceURI:      "tsudp://10.0.0.5:9000",
+				SourceLocation: &SourceLocation{Clusters: []string{"media-edge-primary", "media-edge-primary"}},
+				Enabled:        true,
 			}},
 		},
 	}
@@ -1346,15 +1343,14 @@ func TestRenderPullStreamAcceptsPrivateSourceWithAllowedCluster(t *testing.T) {
 	if len(r.Commodore.PullStreams) != 1 {
 		t.Fatalf("pull streams = %d, want 1", len(r.Commodore.PullStreams))
 	}
-	got := r.Commodore.PullStreams[0].AllowedClusterIDs
+	got := r.Commodore.PullStreams[0].SourceLocation.clusterIDs()
 	if len(got) != 1 || got[0] != "media-edge-primary" {
-		t.Fatalf("allowed_cluster_ids = %v, want [media-edge-primary] (deduped)", got)
+		t.Fatalf("source_location clusters = %v, want [media-edge-primary] (deduped)", got)
 	}
 }
 
-// TestRenderPullStreamRejectsUnknownAllowedCluster covers the unknown-ID
-// branch: an allowed_cluster_ids entry that does not match any registered
-// edge cluster must fail render.
+// A source_location.clusters entry that does not match any registered edge
+// cluster must fail render.
 func TestRenderPullStreamRejectsUnknownAllowedCluster(t *testing.T) {
 	d, err := Derive(manifestWithMedia(true), DeriveOptions{})
 	if err != nil {
@@ -1363,27 +1359,26 @@ func TestRenderPullStreamRejectsUnknownAllowedCluster(t *testing.T) {
 	overlay := &Overlay{
 		Commodore: CommodoreSection{
 			PullStreams: []PullStream{{
-				PlaybackID:        "pinned-demo",
-				OwnerTenant:       TenantRefSystem(),
-				Title:             "Pinned demo",
-				SourceURI:         "https://example.com/stream.m3u8",
-				AllowedClusterIDs: []string{"ghost-cluster"},
-				Enabled:           true,
+				PlaybackID:     "pinned-demo",
+				OwnerTenant:    TenantRefSystem(),
+				Title:          "Pinned demo",
+				SourceURI:      "https://example.com/stream.m3u8",
+				SourceLocation: &SourceLocation{Clusters: []string{"ghost-cluster"}},
+				Enabled:        true,
 			}},
 		},
 	}
 	_, err = Render(d, overlay, nil)
 	if err == nil {
-		t.Fatal("unknown allowed_cluster_ids entry must fail render")
+		t.Fatal("unknown source_location.clusters entry must fail render")
 	}
 	if !strings.Contains(err.Error(), "ghost-cluster") {
 		t.Fatalf("error %q does not name the offending ID", err)
 	}
 }
 
-// TestRenderPullStreamPinsPublicSource covers explicit public-source pinning:
-// an HTTPS source with a non-empty allowed_cluster_ids should pass render
-// and propagate the sorted/normalized list.
+// An HTTPS source with a non-empty source_location should pass render and
+// propagate the sorted/normalized cluster list.
 func TestRenderPullStreamPinsPublicSource(t *testing.T) {
 	d, err := Derive(manifestWithMedia(false), DeriveOptions{})
 	if err != nil {
@@ -1392,12 +1387,12 @@ func TestRenderPullStreamPinsPublicSource(t *testing.T) {
 	overlay := &Overlay{
 		Commodore: CommodoreSection{
 			PullStreams: []PullStream{{
-				PlaybackID:        "public-pinned",
-				OwnerTenant:       TenantRefSystem(),
-				Title:             "Public pinned",
-				SourceURI:         "https://example.com/stream.m3u8",
-				AllowedClusterIDs: []string{"media-edge-primary"},
-				Enabled:           true,
+				PlaybackID:     "public-pinned",
+				OwnerTenant:    TenantRefSystem(),
+				Title:          "Public pinned",
+				SourceURI:      "https://example.com/stream.m3u8",
+				SourceLocation: &SourceLocation{Clusters: []string{"media-edge-primary"}},
+				Enabled:        true,
 			}},
 		},
 	}
@@ -1405,8 +1400,8 @@ func TestRenderPullStreamPinsPublicSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	got := r.Commodore.PullStreams[0].AllowedClusterIDs
+	got := r.Commodore.PullStreams[0].SourceLocation.clusterIDs()
 	if len(got) != 1 || got[0] != "media-edge-primary" {
-		t.Fatalf("allowed_cluster_ids = %v, want [media-edge-primary]", got)
+		t.Fatalf("source_location clusters = %v, want [media-edge-primary]", got)
 	}
 }

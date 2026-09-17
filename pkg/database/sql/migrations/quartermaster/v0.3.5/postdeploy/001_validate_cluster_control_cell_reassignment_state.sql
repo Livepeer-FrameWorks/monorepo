@@ -1,0 +1,2 @@
+ALTER TABLE quartermaster.infrastructure_clusters
+    VALIDATE CONSTRAINT chk_cluster_control_cell_reassignment_state;

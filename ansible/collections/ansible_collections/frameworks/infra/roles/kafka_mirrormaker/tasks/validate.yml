@@ -45,6 +45,14 @@
           {{ kafka_mm_process_args.stdout | default('(no process args)') }}
       when: not ansible_check_mode
 
+    - name: Wait for Kafka MirrorMaker JMX exporter
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ kafka_mm_jmx_port }}"
+        state: started
+        timeout: 60
+      when: not ansible_check_mode
+
     - name: Wait for Kafka MirrorMaker REST port
       ansible.builtin.wait_for:
         host: 127.0.0.1

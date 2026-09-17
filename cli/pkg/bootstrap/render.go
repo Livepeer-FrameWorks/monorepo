@@ -834,14 +834,14 @@ func Render(derived *Derived, overlay *Overlay, resolver Resolver) (*Rendered, e
 		mergedCommodore = merged
 	}
 	for i, ps := range mergedCommodore.PullStreams {
-		rps, err := pullStreamToRendered(ps, resolver, r.Quartermaster.Clusters)
+		rps, err := pullStreamToRendered(ps, resolver, r.Quartermaster.Clusters, r.Quartermaster.Nodes)
 		if err != nil {
 			return nil, fmt.Errorf("commodore.pull_streams[%d] (%s): %w", i, ps.PlaybackID, err)
 		}
 		r.Commodore.PullStreams = append(r.Commodore.PullStreams, rps)
 	}
 	for i, ms := range mergedCommodore.MistNativeStreams {
-		rms, err := mistNativeStreamToRendered(ms, r.Quartermaster.Clusters)
+		rms, err := mistNativeStreamToRendered(ms, r.Quartermaster.Clusters, r.Quartermaster.Nodes)
 		if err != nil {
 			return nil, fmt.Errorf("commodore.mist_native_streams[%d] (%s): %w", i, ms.PlaybackID, err)
 		}
@@ -1169,11 +1169,14 @@ func indexMistNativeByPlaybackID(ms []MistNativeStream, id string) int {
 // it here — eligibility runs against the same cluster definitions the
 // reconciler will apply.
 //
-// Private/multicast URI literals require explicit allowed_cluster_ids, and
+// Private/multicast URI literals require explicit source_location.clusters, and
 // every listed cluster must be a media cluster with allow_private_pull_sources.
-// Public URIs can omit allowed_cluster_ids to run on any media cluster, or set
-// it to pin placement.
-func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (PullStreamRendered, error) {
+// Public URIs can omit source_location to run on any media cluster, or set it
+// to restrict placement.
+func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster, nodes []Node) (PullStreamRendered, error) {
+	if p.LegacyAllowedClusterIDs != nil {
+		return PullStreamRendered{}, errLegacyAllowedClusterIDs
+	}
 	uri := p.SourceURI
 	hasInline := uri != ""
 	hasRef := !p.SourceURIRef.IsZero()
@@ -1208,8 +1211,11 @@ func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (
 		return PullStreamRendered{}, fmt.Errorf("no media (edge) cluster is registered to host pull streams")
 	}
 
-	allowedIDs := normalizeAllowedClusterIDs(p.AllowedClusterIDs)
-	eligible, rejects := pullsource.FilterPlacementClusters(class, allowedIDs, candidates)
+	location, err := renderSourceLocation(p.SourceLocation, clusters, nodes)
+	if err != nil {
+		return PullStreamRendered{}, fmt.Errorf("pull_stream %q: %w", p.PlaybackID, err)
+	}
+	eligible, rejects := pullsource.FilterPlacementClusters(class, location.clusterIDs(), candidates)
 	if err := formatPlacementRejects(p.PlaybackID, pullsource.Redact(uri), rejects); err != nil {
 		return PullStreamRendered{}, err
 	}
@@ -1220,14 +1226,89 @@ func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (
 	}
 
 	return PullStreamRendered{
-		PlaybackID:        p.PlaybackID,
-		OwnerTenant:       p.OwnerTenant,
-		Title:             p.Title,
-		Description:       p.Description,
-		SourceURI:         uri,
-		Enabled:           p.Enabled,
-		AllowedClusterIDs: allowedIDs,
+		PlaybackID:     p.PlaybackID,
+		OwnerTenant:    p.OwnerTenant,
+		Title:          p.Title,
+		Description:    p.Description,
+		SourceURI:      uri,
+		Enabled:        p.Enabled,
+		SourceLocation: location,
 	}, nil
+}
+
+var errLegacyAllowedClusterIDs = fmt.Errorf("allowed_cluster_ids is no longer supported; declare placement as source_location: {clusters: [...], nodes: [...], avoid_nodes: [...]}")
+
+// renderSourceLocation validates a manifest source location against the
+// rendered media clusters and nodes and returns its canonical rendered form,
+// or nil when the location imposes no restriction. Nodes map to clusters
+// through the rendered node inventory (host key → cluster), so a node can only
+// narrow a cluster the location already lists.
+func renderSourceLocation(loc *SourceLocation, clusters []Cluster, nodes []Node) (*SourceLocationRendered, error) {
+	if loc == nil {
+		return nil, nil
+	}
+	clusterIDs := normalizeAllowedClusterIDs(loc.Clusters)
+	nodeIDs := normalizeAllowedClusterIDs(loc.Nodes)
+	avoidIDs := normalizeAllowedClusterIDs(loc.AvoidNodes)
+	if len(clusterIDs) == 0 {
+		if len(nodeIDs) != 0 || len(avoidIDs) != 0 {
+			return nil, fmt.Errorf("source_location.nodes and source_location.avoid_nodes require source_location.clusters")
+		}
+		return nil, nil
+	}
+	mediaIDs := mediaClusterIDSet(clusters)
+	out := &SourceLocationRendered{}
+	index := make(map[string]int, len(clusterIDs))
+	for _, id := range clusterIDs {
+		if !mediaIDs[id] {
+			return nil, fmt.Errorf("source_location.clusters: cluster %q is not a declared media cluster", id)
+		}
+		index[id] = len(out.Clusters)
+		out.Clusters = append(out.Clusters, SourceLocationClusterRendered{ClusterID: id})
+	}
+	nodeCluster := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		nodeCluster[n.ID] = n.ClusterID
+	}
+	resolve := func(field, nodeID string) (int, error) {
+		clusterID, ok := nodeCluster[nodeID]
+		if !ok || clusterID == "" {
+			return 0, fmt.Errorf("source_location.%s: %q is not a manifest host with a node identity", field, nodeID)
+		}
+		i, listed := index[clusterID]
+		if !listed {
+			return 0, fmt.Errorf("source_location.%s: node %q belongs to cluster %q, which source_location.clusters does not list", field, nodeID, clusterID)
+		}
+		return i, nil
+	}
+	for _, nodeID := range nodeIDs {
+		i, err := resolve("nodes", nodeID)
+		if err != nil {
+			return nil, err
+		}
+		out.Clusters[i].NodeIDs = append(out.Clusters[i].NodeIDs, nodeID)
+	}
+	for _, nodeID := range avoidIDs {
+		if slices.Contains(nodeIDs, nodeID) {
+			return nil, fmt.Errorf("source_location: node %q is listed in both nodes and avoid_nodes", nodeID)
+		}
+		if _, err := resolve("avoid_nodes", nodeID); err != nil {
+			return nil, err
+		}
+		out.AvoidNodeIDs = append(out.AvoidNodeIDs, nodeID)
+	}
+	return out, nil
+}
+
+func (l *SourceLocationRendered) clusterIDs() []string {
+	if l == nil {
+		return nil
+	}
+	out := make([]string, 0, len(l.Clusters))
+	for _, c := range l.Clusters {
+		out = append(out, c.ClusterID)
+	}
+	return out
 }
 
 // mistNativeStreamToRendered validates an operator-owned Mist-native stream
@@ -1235,8 +1316,11 @@ func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (
 // PUSH_REWRITE entirely; Foghorn picks an eligible edge on its managed-stream
 // reconciler tick. Validation: source_kind must match the source prefix, every
 // Mist-native stream requires the operator/system tenant (any source_kind), and
-// AllowedClusterIDs must contain exactly one declared media cluster.
-func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNativeStreamRendered, error) {
+// source_location.clusters must contain exactly one declared media cluster.
+func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster, nodes []Node) (MistNativeStreamRendered, error) {
+	if m.LegacyAllowedClusterIDs != nil {
+		return MistNativeStreamRendered{}, errLegacyAllowedClusterIDs
+	}
 	if m.PlaybackID == "" {
 		return MistNativeStreamRendered{}, fmt.Errorf("playback_id is required")
 	}
@@ -1265,22 +1349,19 @@ func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNat
 		return MistNativeStreamRendered{}, fmt.Errorf("placement_count must be >= 1, got %d", count)
 	}
 
-	allowedIDs := normalizeAllowedClusterIDs(m.AllowedClusterIDs)
-	// allowed_cluster_ids currently names exactly one source cluster the stream
-	// may run on. Foghorn elects an edge inside that cluster; the elected
-	// edge's cluster becomes active_ingest_cluster_id. Federation handles
-	// cross-cluster viewer routing from that single active source.
-	if len(allowedIDs) == 0 {
-		return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids must contain at least one media cluster")
+	location, err := renderSourceLocation(m.SourceLocation, clusters, nodes)
+	if err != nil {
+		return MistNativeStreamRendered{}, err
 	}
-	mediaIDs := mediaClusterIDSet(clusters)
-	for _, id := range allowedIDs {
-		if !mediaIDs[id] {
-			return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids: cluster %q is not a declared media cluster", id)
-		}
+	// The source location names exactly one source cluster. Foghorn elects an
+	// edge inside that cluster; the elected edge's cluster becomes
+	// active_ingest_cluster_id. Federation handles cross-cluster viewer
+	// routing from that single active source.
+	if location == nil {
+		return MistNativeStreamRendered{}, fmt.Errorf("source_location.clusters must contain at least one media cluster")
 	}
-	if len(allowedIDs) != 1 {
-		return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids currently supports exactly one source cluster for mist_native streams (got %d); cross-cluster source election is not implemented", len(allowedIDs))
+	if len(location.Clusters) != 1 {
+		return MistNativeStreamRendered{}, fmt.Errorf("source_location.clusters currently supports exactly one source cluster for mist_native streams (got %d); cross-cluster source election is not implemented", len(location.Clusters))
 	}
 
 	monitoring := strings.ToLower(strings.TrimSpace(m.Monitoring))
@@ -1302,7 +1383,7 @@ func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNat
 		Monitoring:         monitoring,
 		ProcessPolicy:      m.ProcessPolicy,
 		PlacementCount:     count,
-		AllowedClusterIDs:  allowedIDs,
+		SourceLocation:     location,
 		LocalAssets:        m.LocalAssets,
 	}, nil
 }
@@ -1356,7 +1437,7 @@ func mediaClusterIDSet(clusters []Cluster) map[string]bool {
 }
 
 // normalizeAllowedClusterIDs dedups, drops empties, and sorts so the rendered
-// file, the persisted TEXT[], and idempotent reconcile compares are stable.
+// file and idempotent reconcile compares are stable.
 func normalizeAllowedClusterIDs(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -1387,15 +1468,15 @@ func formatPlacementRejects(playbackID, redactedURI string, rejects []pullsource
 		switch r.Reason {
 		case pullsource.PlacementRejectEmptyForPrivate:
 			parts = append(parts, fmt.Sprintf(
-				"source_uri %s is private/multicast and requires explicit allowed_cluster_ids", redactedURI))
+				"source_uri %s is private/multicast and requires explicit source_location.clusters", redactedURI))
 		case pullsource.PlacementRejectUnknownCluster:
 			parts = append(parts, fmt.Sprintf(
-				"allowed_cluster_ids entry %q is not a registered media (edge) cluster", r.ClusterID))
+				"source_location.clusters entry %q is not a registered media (edge) cluster", r.ClusterID))
 		case pullsource.PlacementRejectMissingPrivateCapability:
 			parts = append(parts, fmt.Sprintf(
-				"allowed_cluster_ids entry %q does not have allow_private_pull_sources=true", r.ClusterID))
+				"source_location.clusters entry %q does not have allow_private_pull_sources=true", r.ClusterID))
 		default:
-			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q rejected: %s", r.ClusterID, r.Reason))
+			parts = append(parts, fmt.Sprintf("source_location.clusters entry %q rejected: %s", r.ClusterID, r.Reason))
 		}
 	}
 	return fmt.Errorf("pull_stream %q: %s", playbackID, strings.Join(parts, "; "))

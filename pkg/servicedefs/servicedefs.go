@@ -55,6 +55,7 @@ var Services = map[string]Service{
 	// Infra services
 	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
+	"lookout":   {ID: "lookout", DefaultPort: 18022, HealthPath: "/health", HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
 
 	// Assets
 	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", ReadyPath: "/ready", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
@@ -81,6 +82,8 @@ var Services = map[string]Service{
 	"victoriametrics": {ID: "victoriametrics", DefaultPort: 8428, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
 	"vmauth":          {ID: "vmauth", DefaultPort: 8427, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
 	"vmagent":         {ID: "vmagent", DefaultPort: 8429, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
+	"vmalert":         {ID: "vmalert", DefaultPort: 8880, HealthPath: "/health", HealthProtocol: "http", Role: "observability"},
+	"alertmanager":    {ID: "alertmanager", DefaultPort: 9093, HealthPath: "/-/healthy", HealthProtocol: "http", Role: "observability"},
 	"grafana":         {ID: "grafana", DefaultPort: 3000, HealthPath: "/api/health", HealthProtocol: "http", Role: "observability"},
 	"metabase":        {ID: "metabase", DefaultPort: 3001, HealthPath: "/api/health", HealthProtocol: "http", Role: "observability"},
 }
@@ -105,6 +108,7 @@ var deliveryClasses = map[string]DeliveryClass{
 	"nginx": DeliveryManagedDependency, "caddy": DeliveryManagedDependency,
 	"victoriametrics": DeliveryManagedDependency, "vmagent": DeliveryManagedDependency,
 	"vmauth": DeliveryManagedDependency, "grafana": DeliveryManagedDependency,
+	"vmalert": DeliveryManagedDependency, "alertmanager": DeliveryManagedDependency,
 	"metabase": DeliveryManagedDependency, "prometheus": DeliveryManagedDependency,
 	"listmonk": DeliveryManagedDependency, "chatwoot": DeliveryManagedDependency,
 	"mistserver": DeliveryManagedDependency, "livepeer-gateway": DeliveryManagedDependency,
@@ -248,6 +252,7 @@ var grpcServices = []GRPCService{
 	{ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
 	{ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
 	{ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
+	{ServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Port: 19008},
 }
 
 // DefaultGRPCPort returns the default gRPC port for a canonical ID, if defined.
@@ -283,8 +288,19 @@ type RequiredEnvVar struct {
 }
 
 var requiredExternalEnv = map[string][]RequiredEnvVar{
+	"alertmanager": {
+		{Key: "LOOKOUT_ALERTMANAGER_TOKEN", SetupGuide: "Set the same bearer token Lookout uses: gitops/scripts/sops-env.sh set secrets/production.env LOOKOUT_ALERTMANAGER_TOKEN"},
+		{Key: "ALERTMANAGER_HEARTBEAT_URL", SetupGuide: "Set the dead-man's-switch ping URL: gitops/scripts/sops-env.sh set secrets/production.env ALERTMANAGER_HEARTBEAT_URL"},
+		{Key: "ALERTMANAGER_EMAIL_TO", SetupGuide: "Set the critical-alert email fallback recipient: gitops/scripts/sops-env.sh set secrets/production.env ALERTMANAGER_EMAIL_TO"},
+		{Key: "SMTP_HOST", SetupGuide: "Set the platform SMTP host in shared env files; the email fallback reuses it"},
+		{Key: "SMTP_PORT", SetupGuide: "Set the platform SMTP port in shared env files; the email fallback reuses it"},
+		{Key: "FROM_EMAIL", SetupGuide: "Set the platform sender address in shared env files; the email fallback reuses it"},
+	},
 	"deckhand": {
 		{Key: "CHATWOOT_API_TOKEN", SetupGuide: "Chatwoot admin > Settings > Application > Access Token"},
+	},
+	"lookout": {
+		{Key: "LOOKOUT_ALERTMANAGER_TOKEN", SetupGuide: "Generate a random bearer token (openssl rand -hex 32) and store it: gitops/scripts/sops-env.sh set secrets/production.env LOOKOUT_ALERTMANAGER_TOKEN"},
 	},
 	"navigator": {
 		{Key: "ACME_EMAIL", SetupGuide: "Set the certificate contact email in shared env files"},

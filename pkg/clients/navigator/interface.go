@@ -13,7 +13,6 @@ type Interface interface {
 	SyncDNS(ctx context.Context, req *dnspb.SyncDNSRequest) (*dnspb.SyncDNSResponse, error)
 	IssueCertificate(ctx context.Context, req *dnspb.IssueCertificateRequest) (*dnspb.IssueCertificateResponse, error)
 	GetHealth(ctx context.Context) error
-	GetCertificate(ctx context.Context, req *dnspb.GetCertificateRequest) (*dnspb.GetCertificateResponse, error)
 	GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error)
 	GetCABundle(ctx context.Context, req *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error)
 	EnsureTenantAlias(ctx context.Context, req *dnspb.EnsureTenantAliasRequest) (*dnspb.EnsureTenantAliasResponse, error)

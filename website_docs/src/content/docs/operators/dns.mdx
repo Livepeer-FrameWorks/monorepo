@@ -255,17 +255,22 @@ pushes revision-only changes so Helmsman can ACK the exact material it applied.
 
 Custom-domain removal follows the same rule: reactivation wins over stale
 cleanup, late ACME writes cannot cross the lifecycle fence, and Navigator removes
-the tenant ACME account once no custom domain in `verified`, `cert_issuing`,
-`cert_issued`, or `cert_failed` remains. Pending and teardown rows cannot preserve
-an otherwise orphaned account. On addition, `cert_issued` is published only after
-the tenant's edge-distributed multi-SAN bundle includes the custom domain; bundle
-refresh failures remain retryable.
-`cert_failed` retains the domain's retry credentials but is excluded from the
-tenant-wide SAN bundle until it returns to an issuing/issued state, preventing one
-broken custom domain from blocking renewal for the tenant alias and healthy SANs.
-Renewal re-derives the SAN set, and an issuance failure immediately rebuilds the
-aggregate bundle without the failed domain. If that rebuild fails, each
-`cert_failed` pass retries it before re-verifying the domain.
+the tenant ACME account once no custom domain in `verified`, `pending_alias`,
+`cert_issuing`, `cert_issued`, or `cert_failed` remains. Pending-verification and
+teardown rows cannot preserve an otherwise orphaned account.
+
+A custom domain is served only as a SAN of the tenant's multi-SAN bundle;
+Navigator never issues a separate per-domain certificate. After CNAME
+verification the domain waits in `pending_alias` until the tenant alias bundle is
+issued, then joins the bundle (`cert_issuing`) and becomes `cert_issued` once the
+edge-distributed bundle includes it. Only `cert_issuing` and `cert_issued` domains
+join bundle orders, so one broken custom domain cannot block issuance or renewal
+for the tenant alias and healthy SANs. A failed order marks only that domain
+`cert_failed` (check `last_error`) and retries after `next_attempt_at`, 15 minutes
+later. No bundle is rebuilt, because the serving bundle never contained the
+failed SAN. A failed renewal leaves every domain's status and SAN in place while
+the still-valid bundle keeps serving; `GetCustomDomainStatus` reports it as
+`last_renewal_error` until the next successful bundle clears it.
 During mixed-version rollouts, legacy edges may ACK without a bundle revision.
 An already-published legacy row stays in DNS for continuity, but it does not count
 as replacement readiness and an unproven edge cannot enter the pool. A legacy

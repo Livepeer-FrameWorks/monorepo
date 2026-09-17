@@ -8,6 +8,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/deckhand"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	lookoutclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/lookout"
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -25,6 +26,7 @@ type ServiceClients struct {
 	Commodore     commodore.Interface
 	Deckhand      deckhand.Interface
 	Decklog       decklog.Interface
+	Lookout       lookoutclient.Interface
 	Navigator     navclient.Interface
 	Periscope     periscope.Interface
 	Purser        purser.Interface
@@ -199,6 +201,23 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		}
 	}
 
+	// Lookout gRPC client (incidents). Optional: only when LOOKOUT_GRPC_ADDR is set.
+	var lookoutClient *lookoutclient.GRPCClient
+	if lookoutAddr := config.GetEnv("LOOKOUT_GRPC_ADDR", ""); lookoutAddr != "" {
+		lookoutClient, err = lookoutclient.NewGRPCClient(lookoutclient.GRPCConfig{
+			GRPCAddr:      lookoutAddr,
+			Timeout:       cfg.Timeout,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: grpcAllowInsecure,
+			CACertFile:    grpcCACertFile,
+			ServerName:    config.GetServiceGRPCTLSServerName("lookout"),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Lookout gRPC client: %w", err)
+		}
+	}
+
 	sc := &ServiceClients{
 		Commodore:     commodoreClient,
 		Decklog:       decklogClient,
@@ -218,6 +237,9 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	}
 	if skipperClient != nil {
 		sc.Skipper = skipperClient
+	}
+	if lookoutClient != nil {
+		sc.Lookout = lookoutClient
 	}
 	return sc, nil
 }
@@ -239,6 +261,11 @@ func (c *ServiceClients) Close() error {
 	if c.Decklog != nil {
 		if err := c.Decklog.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("decklog: %w", err))
+		}
+	}
+	if c.Lookout != nil {
+		if err := c.Lookout.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("lookout: %w", err))
 		}
 	}
 	if c.Navigator != nil {

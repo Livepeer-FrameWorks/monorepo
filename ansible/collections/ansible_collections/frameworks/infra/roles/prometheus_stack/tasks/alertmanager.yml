@@ -1,0 +1,160 @@
+---
+- name: Validate alertmanager configuration
+  ansible.builtin.assert:
+    that:
+      - alertmanager_artifact_url | length > 0
+      - alertmanager_artifact_checksum | length > 0
+      - alertmanager_lookout_url | length > 0
+      - alertmanager_lookout_token | length > 0
+      - alertmanager_heartbeat_url | length > 0
+      - alertmanager_email_to | length > 0
+      - alertmanager_smtp_smarthost | length > 0
+      - alertmanager_smtp_from | length > 0
+    fail_msg: >-
+      alertmanager requires artifact URL/checksum, a Lookout service in the
+      manifest (rendered as ALERTMANAGER_LOOKOUT_URL), plus
+      LOOKOUT_ALERTMANAGER_TOKEN, ALERTMANAGER_HEARTBEAT_URL,
+      ALERTMANAGER_EMAIL_TO, and the platform SMTP_HOST, SMTP_PORT and
+      FROM_EMAIL in the manifest env files
+
+- name: Set alertmanager extract directory
+  ansible.builtin.set_fact:
+    alertmanager_extract_dir: "/tmp/frameworks-alertmanager-{{ alertmanager_artifact_checksum | hash('sha1') }}"
+
+- name: Ensure alertmanager extract directory
+  ansible.builtin.file:
+    path: "{{ alertmanager_extract_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Stat alertmanager binary
+  ansible.builtin.stat:
+    path: "{{ alertmanager_bin }}"
+  register: alertmanager_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat alertmanager install sentinel
+  ansible.builtin.stat:
+    path: "{{ alertmanager_install_sentinel }}"
+  register: alertmanager_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether alertmanager reinstall is required
+  ansible.builtin.set_fact:
+    alertmanager_reinstall_required: >-
+      {{
+        not (alertmanager_bin_stat.stat.exists | default(false)) or
+        not (alertmanager_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending alertmanager reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      alertmanager would reinstall:
+      binary_exists={{ alertmanager_bin_stat.stat.exists | default(false) }},
+      sentinel={{ alertmanager_install_sentinel }}
+  changed_when: alertmanager_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Download alertmanager archive
+  ansible.builtin.get_url:
+    url: "{{ alertmanager_artifact_url }}"
+    dest: /tmp/alertmanager.tar.gz
+    checksum: "{{ alertmanager_artifact_checksum }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - alertmanager_reinstall_required | default(true)
+
+# The upstream archive nests binaries under alertmanager-<version>.<os>-<arch>/.
+- name: Extract alertmanager
+  ansible.builtin.unarchive:
+    src: /tmp/alertmanager.tar.gz
+    dest: "{{ alertmanager_extract_dir }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ alertmanager_extract_dir }}/alertmanager"
+  when:
+    - not ansible_check_mode
+    - alertmanager_reinstall_required | default(true)
+
+- name: Install alertmanager binaries
+  ansible.builtin.copy:
+    src: "{{ alertmanager_extract_dir }}/{{ item.name }}"
+    dest: "{{ item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { name: alertmanager, dest: "{{ alertmanager_bin }}" }
+    - { name: amtool, dest: "{{ amtool_bin }}" }
+  notify: alertmanager restart
+  when:
+    - not ansible_check_mode
+    - alertmanager_reinstall_required | default(true)
+
+- name: Record alertmanager install sentinel
+  ansible.builtin.file:
+    path: "{{ alertmanager_install_sentinel }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - alertmanager_reinstall_required | default(true)
+
+- name: Ensure alertmanager config directory
+  ansible.builtin.file:
+    path: "{{ alertmanager_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure alertmanager storage directory
+  ansible.builtin.file:
+    path: "{{ alertmanager_storage_path }}"
+    state: directory
+    owner: "{{ omit if ansible_check_mode else prometheus_stack_user }}"
+    group: "{{ omit if ansible_check_mode else prometheus_stack_group }}"
+    mode: "0750"
+
+# The config carries the Lookout bearer token, the heartbeat URL and SMTP
+# credentials, so it is readable
+# only by root and the service group and never logged.
+- name: Render alertmanager config
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ alertmanager_config_path }}"
+    owner: root
+    group: "{{ prometheus_stack_group }}"
+    mode: "0640"
+    validate: "{{ amtool_bin }} check-config %s"
+  no_log: true
+  notify: alertmanager restart
+
+- name: Render alertmanager systemd unit
+  ansible.builtin.template:
+    src: alertmanager.service.j2
+    dest: /etc/systemd/system/alertmanager.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: alertmanager restart
+
+- name: Ensure alertmanager service
+  ansible.builtin.systemd:
+    name: alertmanager
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -1,98 +1,93 @@
 # Multi-Region Kafka via MirrorMaker2
 
-The EU Kafka cluster doubles as the aggregator. Each additional region runs its own KRaft cluster. MirrorMaker2 (MM2) mirrors a small canonical set of topics from every non-aggregator regional cluster onto the aggregator.
+Every region runs its own KRaft Kafka cluster, and producers always write to the Decklog and Kafka in the region where an event happens. One cluster is the aggregator (`eu-west` in production): central Periscope-Ingest, ClickHouse and billing consume it. MirrorMaker2 (MM2) replicates between every pair of regions in both directions, with a different topic set per direction, so each region sees a complete realtime view and the aggregator sees a complete durable view.
+
+This is the standard active-active Kafka shape: regional clusters take local writes, and remote regions receive source-prefixed copies (`{source_region}.{topic}`) that consumers subscribe to alongside the bare local topic.
 
 ## Topology
 
 ```
-[ regional-eu Kafka ]  ◄──────── mirror eu.* topics ──── consumed by central Periscope-Ingest
-   (also = aggregator)
-       ▲                                                    ▲
-       │ MirrorMaker2                                        │ consumes both
-       │                                                     │   bare regional topics
-[ regional-us Kafka ]  ──────── mirror us.* topics ─────────┘   plus mirrored {source}.* topics
-   (Ashburn, KRaft single-broker today; scales to 3 brokers when load justifies it)
+                   durable + realtime topics
+[ us-east Kafka ] ────────────────────────────► [ eu-west Kafka (aggregator) ]
+        ▲                                                     │
+        └────────────────── realtime topics ─────────────────┘
 ```
 
-## Topics mirrored
+With more regions the rule is the same for every ordered pair: links into the aggregator carry the durable set, and every other link carries only the realtime set.
 
-The canonical set MirrorMaker2 mirrors out of each regional cluster (named without prefix on the source, prefixed `{region_id}.` on the aggregator per MM2 default):
+## Topic sets
 
-| Source name             | Aggregator name                                                          | Purpose                                                                         |
-| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `analytics_events`      | `us.analytics_events` (and `eu.analytics_events` if EU is also a source) | Stream lifecycle, viewer events, routing decisions                              |
-| `service_events`        | `{region}.service_events`                                                | Service-level events from Bridge / Commodore / Quartermaster / Purser / Foghorn |
-| `decklog_events_dlq`    | `{region}.decklog_events_dlq`                                            | Decklog DLQ for failed ingest; aggregated for cross-region replay/inspection    |
-| `billing.usage_reports` | `{region}.billing.usage_reports`                                         | Billing usage from Periscope-Query; aggregator-side consumer is Purser          |
+The canonical names and sets live in `pkg/topology/kafka_topics.go`; MM2 provisioning and every consumer read them from there.
 
-Non-mirrored topics stay regional (e.g. stream-scoped live realtime topics — Signalman regional consumes locally; no default global mirroring).
+| Direction                                        | Topics                                                                                                             | Consumed by                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| Regional to aggregator                           | `analytics_events`, `service_events`, `analytics.raw_mist_triggers`, `billing.usage_reports`, `decklog_events_dlq` | Aggregator Periscope-Ingest and Purser; aggregator Signalman |
+| Aggregator to regional, and regional to regional | `analytics_events`, `service_events`                                                                               | Regional Signalman                                           |
+
+`analytics.raw_mist_triggers` is the raw final and accounting trigger journal; final facts and metering are projected from it, so regional usage is only billed once its copy reaches the aggregator.
+
+Replication cannot loop or produce transitive names. Topic lists are full-name allowlists, so `analytics_events` never matches `us-east.analytics_events`; MM2's default replication policy skips topics that originated in the target; and every link also sets `topics.exclude` to `^(<every region>)\..*` alongside MM2's default internal-topic excludes.
 
 ## Operator manifest
 
-In `cli/pkg/inventory/types.go`, `KafkaConfig.Regional []RegionalKafkaCluster` carries the non-aggregator regions and `KafkaConfig.MirrorMaker` declares the worker. The primary `KafkaConfig` is the EU cluster + aggregator role.
+`KafkaConfig.MirrorMaker` declares one link per direction. Each link's worker hosts must be in its target region.
 
 ```yaml
 kafka:
   enabled: true
-  cluster_id: <EU KRaft UUID>
-  controllers: [...]
+  region_id: eu-west
+  role: aggregator
   brokers: [...]
-  topics: [...]
   regional:
     - region_id: us-east
       role: regional
-      cluster_id: <US KRaft UUID generated via kafka-storage.sh random-uuid>
-      controllers: [...]
-      brokers:
-        - { host: regional-us-1, id: 11, port: 9092 }
-      topics:
-        - { name: analytics_events, partitions: 6, replication_factor: 1 }
-        - { name: service_events, partitions: 3, replication_factor: 1 }
-        - { name: decklog_events_dlq, partitions: 3, replication_factor: 1 }
-        - { name: billing.usage_reports, partitions: 3, replication_factor: 1 }
-      mirror_topics: [] # empty = canonical set above
+      brokers: [...]
   mirrormaker:
     enabled: true
-    host: regional-eu-1
     heap_opts: "-Xmx1G -Xms1G"
-    replicas: 3
     task_count: 2
+    links:
+      - source: us-east
+        target: eu-west
+        hosts: [regional-eu-1, regional-eu-2, regional-eu-3]
+      - source: eu-west
+        target: us-east
+        hosts: [regional-us-1, regional-us-2, regional-us-3]
 ```
+
+The planner rejects a manifest that is missing a link for any ordered pair of Kafka regions, declares a link twice, names an unknown region, or places a worker outside the link's target region. A link may set `topics` or `task_count` to override the direction defaults.
 
 ## MirrorMaker2 workers
 
-The CLI provisions MM2 as `kafka-mirrormaker` infrastructure tasks (Ansible role `frameworks.infra.kafka_mirrormaker`). The role installs Kafka's standard tarball alongside the broker/controller install, renders `mm2.properties`, and runs `connect-mirror-maker.sh` under systemd as `frameworks-kafka-mirrormaker`. The source clusters and aggregator target come from `KafkaConfig.Regional` plus `KafkaConfig.MirrorMaker.Hosts` (`Host` remains accepted for single-worker manifests). MM2 workers must run in the aggregator Kafka region; the planner rejects worker hosts in other regions. MM2's dedicated mode supports multiple worker processes using the same config. MM2's default replication policy adds the source-cluster alias (the region_id) as the topic prefix.
+The CLI provisions MM2 as `kafka-mirrormaker` infrastructure tasks through the `frameworks.infra.kafka_mirrormaker` Ansible role, which runs `connect-mirror-maker.sh` under systemd as `frameworks-kafka-mirrormaker`. There is one worker process per host, started with `--clusters <host region>`, so it drives every link into its own region and nothing else. Workers serving the same target coordinate task ownership through MM2's Connect internals, and replicated writes stay local to the cluster they land in. Consumer-group checkpoints are emitted only on links into the aggregator, where durable consumer groups live.
 
-## Periscope-Ingest and Signalman consumption
+## Consumers
 
-Periscope-Ingest is pinned to the aggregator Kafka cluster while ClickHouse is central. Every Periscope-Ingest replica, even when the process is placed on a non-aggregator host for failure tolerance, consumes the same bare aggregator topics and source-prefixed mirror topics:
+The CLI renders `MIRROR_REGION_PREFIXES` for Periscope-Ingest and Signalman from the links whose target is the Kafka cluster the service binds.
 
-- Bare topics: `analytics_events`, `service_events`, `decklog_events_dlq`, `billing.usage_reports` — events written directly to the aggregator-region Kafka.
-- Mirror topics: `us.analytics_events`, `us.service_events`, etc. — MM2-mirrored events from non-aggregator regions.
+- **Periscope-Ingest** binds the aggregator. It consumes the bare and every prefixed copy of `analytics_events`, `service_events` and `analytics.raw_mist_triggers`. Raw triggers use a retry-only handler so a ClickHouse outage never commits past an unprojected final. Handlers are idempotent on event and source-request identity, so mirrored duplicates converge.
+- **Signalman** binds its own region's cluster and consumes the bare and every prefixed copy of `analytics_events` and `service_events`. Each replica uses its own consumer group with `latest` reset. A bounded event-ID window suppresses common duplicates; delivery to subscribers is at-least-once, not exactly-once, because the window does not survive restarts or eviction.
 
-The CLI emits `MIRROR_REGION_PREFIXES` automatically for every Periscope-Ingest instance, listing every non-aggregator `region_id`. Each consumer registers an additional handler per prefix. Signalman stays region-local and does not consume mirrored topics; Gateway routes stream-scoped subscriptions to the stream origin region.
+Gateway routes every GraphQL subscription to the Signalman replicas of its own region; each regional Signalman already holds local events and every other region's realtime events.
 
-Idempotency: the envelope v2 fields (`event_id` UUIDv7, `source_region`, `source_cluster_id`) on every event allow `ReplacingMergeTree(event_id)` in ClickHouse and ingest-side duplicate checks. Mirroring is at-least-once; dedup at consume time makes it effectively-once.
+## Volume envelope
 
-## Decklog locality contract
+Each Signalman replica parses its region's realtime events plus every other region's, so its consumed rate grows with `regions x replicas`. Cross-region replication egress on a link equals the source region's realtime event rate. When a third region lands or that rate becomes a measured cost, move to subscriber-aware forwarding (replicate a stream's events only to regions with live subscribers) or partition-aligned stream ownership instead of adding regions to the mesh.
 
-Decklog reads `KAFKA_BROKERS` env at startup. Regional Decklog (on `regional-us-1`) points at the US Kafka brokers; the aggregator-region Decklog (on `regional-eu-*`) points at EU brokers. Producers (Foghorn, Bridge, Commodore, etc.) dial the **regional** Decklog via `DECKLOG_GRPC_ADDR` set in their gitops env per cell.
+## Decklog locality
 
-No new code in Decklog itself. The `KAFKA_BROKERS` env scopes the broker list naturally.
+Decklog reads `KAFKA_BROKERS` at startup, and the CLI renders it from the Decklog host's region. Media-plane producers (Foghorn, Bridge, Livepeer Gateway) resolve `decklog.internal` to their own region's Decklog pool, so their events enter local Kafka.
 
-## Verification on Decklog outage
+Central control writers (Commodore, Purser, Quartermaster, Deckhand, Skipper) declare their Decklog dependency with the `aggregator_region` DNS scope in `pkg/topology/dependencies.go`. The CLI renders `DECKLOG_GRPC_ADDR=decklog.<aggregator region>.internal` for them, and Privateer publishes that record with only the aggregator region's Decklog replicas, so their events enter the aggregator Kafka directly instead of crossing to another region and returning through MirrorMaker2. Decklog clients dial with `round_robin`, spreading writers across the pool.
 
-The shared `pkg/outbox` plus the per-producer outbox migration ensure state-coupled events (Commodore stream/policy invalidation, Purser billing/plan changes, Quartermaster cluster events, Foghorn artifact lifecycle) sit in their service-side outbox tables, not in-flight to Decklog. A regional Decklog outage means the outbox grows; the drain worker catches up after Decklog returns. Loss-tolerant telemetry (Bridge API usage, Foghorn load-balancing telemetry) stays fire-and-forget and accepts loss during outage windows.
+Services that bind the aggregator Kafka (Periscope-Ingest, Periscope-Metering, Periscope-Query, Purser, Commodore) must be placed in the aggregator region; the CLI rejects any other placement.
 
-Verification runbook:
+## Decklog outage verification
 
-1. Confirm the US KRaft cluster and MM2 worker are up.
-2. Confirm regional US Decklog points at the US Kafka.
-3. Stop the US Decklog process.
-4. Drive ingest traffic; observe Foghorn outbox grows.
-5. Restart US Decklog.
-6. Observe outbox drains; Periscope-Ingest receives the mirrored events from aggregator Kafka with `event_id` dedup (no duplicates in ClickHouse).
+State-coupled events wait in their producer's service-side outbox while Decklog is unavailable, then drain when it returns; loss-tolerant telemetry is fire-and-forget. To verify a regional outage:
 
-## EU as aggregator
-
-EU Kafka serves a dual role: EU regional events land here directly; US-region mirror lands here under the `us-east.` prefix. Periscope-Ingest consumes both bare EU topics and prefixed US mirror topics from aggregator Kafka. When a third region is added, the operator either keeps the aggregator on EU or moves it to a dedicated cluster by marking that cluster's `role: aggregator` in `KafkaConfig.Regional`.
+1. Confirm both regional KRaft clusters and the MM2 workers for each link are running.
+2. Confirm the US Decklog points at US Kafka.
+3. Stop the US Decklog process and drive ingest traffic; confirm producer outboxes grow.
+4. Restart the US Decklog and confirm the outboxes drain.
+5. Confirm aggregator Periscope-Ingest receives the `us-east.` copies with no duplicate rows in ClickHouse, and that EU and US Signalman subscribers each see the events once.

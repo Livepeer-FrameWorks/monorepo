@@ -607,12 +607,9 @@ features:
     description: Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback.
     status: partial
     gap_reason: >
-      Apps can read Chandler poster, sprite JPG, and sprite VTT URLs through resolveViewerEndpoint metadata and the
-      resolve_playback_endpoint MCP tool. The webapp builds bulk library thumbnails by combining streamingConfig.chandlerDomain
-      with stream IDs and artifact hashes from list queries. The remaining gap is a first-class bulk asset URL surface for
-      external apps and agents: streams/clips/DVR/VOD list queries should return ready-to-use preview asset URLs or a shared
-      helper contract, without requiring one resolveViewerEndpoint call per asset. Generation status, regeneration, and
-      troubleshooting remain follow-on operational controls.
+      Stream, clip, DVR, VOD, and storage-artifact queries return server-resolved thumbnailAssets (poster, sprite JPG,
+      sprite VTT) on list and detail results, and the resolve_playback_endpoint MCP tool returns the same URLs.
+      Generation status, regeneration, and troubleshooting remain follow-on operational controls.
     required_surfaces:
       docs: { required: true }
       graphql:
@@ -652,11 +649,18 @@ features:
               }
             }
           }
-      - title: "Fetch the Chandler host for a library grid"
+      - title: "Fetch thumbnail URLs for a library grid"
         query: |
-          query LibraryPreviewHost {
-            streamingConfig {
-              chandlerDomain
+          query LibraryPreviews {
+            streamsConnection(page: { first: 50 }) {
+              nodes {
+                streamId
+                thumbnailAssets {
+                  posterUrl
+                  spriteJpgUrl
+                  spriteVttUrl
+                }
+              }
             }
           }
 
@@ -817,16 +821,39 @@ features:
   - slug: incidents-and-alerts
     name: Incidents and alerts
     area: analytics
-    description: Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery.
-    status: roadmap
-    gap_reason: |
-      Not shipped. Prometheus and Grafana cover internal monitoring. The customer-facing gap is a tenant incident feed — Alertmanager webhook ingestion, dedup/fingerprinting, an incident store, GraphQL queries + acknowledge/resolve mutations, realtime delivery via Signalman, and MCP tools so agents can triage. Self-hosted operators get visibility into their own clusters (cert expiry, port reachability, DNS resolution, CPU/memory thresholds) without standing up a separate monitoring stack.
+    description: Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents.
+    status: shipped
     related: [analytics]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
       webapp: { required: true }
       docs: { required: true }
+    surfaces:
+      graphql:
+        queries: [incidentsConnection, incident]
+        mutations: [acknowledgeIncident, assignIncident, resolveIncident, addIncidentNote]
+        subscriptions: [liveIncidentUpdates]
+      mcp:
+        tools:
+          [
+            list_incidents,
+            get_incident,
+            acknowledge_incident,
+            assign_incident,
+            resolve_incident,
+            add_incident_note,
+          ]
+      webapp:
+        routes:
+          [
+            "/infrastructure/incidents",
+            "/infrastructure/incidents/:id",
+            "/admin/incidents",
+            "/admin/incidents/:id",
+          ]
+      docs:
+        pages: [builders/incidents.mdx, operators/alerting.mdx]
 
   # ───────────────── Infrastructure & BYOC ─────────────────
 
@@ -1026,6 +1053,40 @@ features:
             routes: ["/network", "/infrastructure/federation", "/infrastructure/network"]
           docs:
             pages: [operators/multi-cluster.mdx]
+
+      - slug: cluster-protocol-allowlist
+        name: Cluster ingest protocol allowlist
+        kind: foundation
+        description: Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission.
+        status: roadmap
+        gap_reason: |
+          Not built. A cluster accepts every ingest protocol its edges support; placement and admission have no
+          per-cluster protocol policy.
+        related: [nodes, federation-network]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+
+      - slug: edge-region-redundancy
+        name: Regional edge redundancy
+        kind: foundation
+        description: More than one edge node per region per cluster, so a single node failure does not take a region's media offline.
+        status: roadmap
+        gap_reason: |
+          Not built as a platform guarantee. A region whose cluster has one edge node has no media redundancy until
+          more edges enroll; provisioning does not require or report per-region edge counts.
+        related: [nodes, node-mode]
+        required_surfaces:
+          graphql:
+            {
+              required: false,
+              reason: "Capacity planning and provisioning concern; no API workflow.",
+            }
+          mcp: { required: false, reason: "No agent workflow." }
+          webapp: { required: false, reason: "Node counts already surface through node views." }
+          docs: { required: true }
 
       - slug: edge-auto-update
         name: Edge auto-update
@@ -1259,11 +1320,9 @@ features:
                 StreamingConfig.ingestDomain,
                 StreamingConfig.edgeDomain,
                 StreamingConfig.playDomain,
-                StreamingConfig.chandlerDomain,
                 StreamingConfig.officialIngestDomain,
                 StreamingConfig.officialEdgeDomain,
                 StreamingConfig.officialPlayDomain,
-                StreamingConfig.officialChandlerDomain,
               ]
           docs:
             pages: [operators/dns.mdx, operators/deployment.mdx]
@@ -1378,7 +1437,6 @@ features:
         queries:
           - mediaPlacementPolicy
           - mediaPlacementOptions
-          - mediaPlacementLegacyPins
           - previewMediaPlacement
           - reviewMediaPlacementChange
           - mediaPlacementChange
@@ -1394,13 +1452,18 @@ features:
           - review_media_placement_change
           - apply_media_placement_change
           - get_media_placement_change
-          - get_media_placement_legacy_pins
           - get_cluster_media_consent
           - review_cluster_media_consent_change
           - apply_cluster_media_consent_change
           - get_cluster_media_consent_change
       webapp:
-        routes: ["/account/placement", "/streams/:id", "/infrastructure/:clusterId"]
+        routes:
+          [
+            "/account/placement",
+            "/streams/:id",
+            "/streams/:id/placement",
+            "/infrastructure/:clusterId",
+          ]
       docs:
         pages: [builders/media-placement.mdx, operators/media-placement.mdx]
 

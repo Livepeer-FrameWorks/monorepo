@@ -41,7 +41,7 @@ func (f *managedPlacementFixture) OpenLiveStreamSecret(snapshot localauthority.M
 }
 
 func TestManagedPlacementChecksSignedConstraintsAndSource(t *testing.T) {
-	for _, scenario := range []string{"allow", "short tenant lease", "deny", "no consent", "billing denied", "object revoked", "foreign context", "source changed", "wrong source cluster", "multiple source clusters", "not source ready", "expired", "mixed parent", "lookup error", "canceled", "schema one", "preference elsewhere", "empty preferences"} {
+	for _, scenario := range []string{"allow", "short tenant lease", "deny", "no consent", "billing denied", "object revoked", "foreign context", "source changed", "wrong source cluster", "multiple source clusters", "not source ready", "expired", "mixed parent", "lookup error", "canceled", "schema one", "preference elsewhere", "empty preferences", "elected node denied", "other node denied"} {
 		t.Run(scenario, func(t *testing.T) {
 			now := time.Now()
 			f := &managedPlacementFixture{t: t, secret: &mediapb.LiveStreamSecret{NativeSourceSpec: "file:/media/input.ts", NativeSourceKind: "file", NativeAllowedClusterIds: []string{"source"}, NativePlacementCount: 1}}
@@ -108,9 +108,17 @@ func TestManagedPlacementChecksSignedConstraintsAndSource(t *testing.T) {
 			case "empty preferences":
 				f.pair.Tenant.Authority.MediaPlacement.Ingest = &pb.Rules{SchemaVersion: 1, Preferences: &pb.Preferences{}}
 				want = materializeDenied
+			case "elected node denied":
+				f.pair.Tenant.Authority.SchemaVersion, f.pair.Object.Authority.SchemaVersion = 3, 3
+				f.pair.Tenant.Authority.MediaPlacement.Ingest = &pb.Rules{SchemaVersion: 1, Constraints: &pb.Constraints{Deny: []*pb.Selector{{NodeIds: []string{"node-1"}}}}}
+				want = materializeDenied
+			case "other node denied":
+				f.pair.Tenant.Authority.SchemaVersion, f.pair.Object.Authority.SchemaVersion = 3, 3
+				f.pair.Tenant.Authority.MediaPlacement.Ingest = &pb.Rules{SchemaVersion: 1, Constraints: &pb.Constraints{Deny: []*pb.Selector{{NodeIds: []string{"node-2"}}}}}
+				want = materializeOK
 			}
 			var admission *ipcpb.ManagedStreamAdmission
-			if got := checkManagedPlacementAdmission(ctx, f, "source", row, streamCtx, &admission); got != want {
+			if got := checkManagedPlacementAdmission(ctx, f, "source", "node-1", row, streamCtx, &admission); got != want {
 				t.Fatalf("managed admission = %v, want %v", got, want)
 			}
 			if want == materializeOK && scenario != "schema one" {

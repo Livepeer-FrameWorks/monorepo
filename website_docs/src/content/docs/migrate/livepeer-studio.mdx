@@ -33,15 +33,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Streams
 
-| Studio                                        | FrameWorks                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /stream`                                | `createStream(input)` mutation                                                                                                             |
-| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                         |
-| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                         |
-| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                                |
-| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                  |
-| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                              |
-| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` — see [Pull-input streams](/builders/pull-streams) |
+| Studio                                        | FrameWorks                                                                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /stream`                                | `createStream(input)` mutation                                                                                                            |
+| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                        |
+| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                        |
+| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                               |
+| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                 |
+| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                             |
+| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri }, sourceLocation })` — see [Pull-input streams](/builders/pull-streams) |
 
 ### Recordings, clips, and VOD
 

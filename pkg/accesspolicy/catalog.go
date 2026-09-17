@@ -116,6 +116,10 @@ var graphqlMutationClasses = map[string]Class{
 	"setStreamRetentionOverrides":    Control,
 	"applyMediaPlacementChange":      Control,
 	"applyClusterMediaConsentChange": Control,
+	"acknowledgeIncident":            Control,
+	"assignIncident":                 Control,
+	"resolveIncident":                Control,
+	"addIncidentNote":                Control,
 }
 
 var mcpToolClasses = map[string]Class{
@@ -125,7 +129,6 @@ var mcpToolClasses = map[string]Class{
 	"review_media_placement_change":       Read,
 	"apply_media_placement_change":        Control,
 	"get_media_placement_change":          Read,
-	"get_media_placement_legacy_pins":     Read,
 	"get_cluster_media_consent":           Read,
 	"review_cluster_media_consent_change": Read,
 	"apply_cluster_media_consent_change":  Control,
@@ -186,6 +189,12 @@ var mcpToolClasses = map[string]Class{
 	"browse_marketplace":                  Read,
 	"get_node_health":                     Read,
 	"get_node_info":                       Read,
+	"list_incidents":                      Read,
+	"get_incident":                        Read,
+	"acknowledge_incident":                Control,
+	"assign_incident":                     Control,
+	"resolve_incident":                    Control,
+	"add_incident_note":                   Control,
 	"accept_cluster_invite":               Control,
 	"approve_subscription_request":        Control,
 	"create_cluster_invite":               Control,

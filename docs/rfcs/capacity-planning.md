@@ -38,11 +38,11 @@ The weighted scorer in `api_balancing/internal/balancer` remains for stored-medi
 node-bound source lookup, and candidate answers returned to peers. Changing only that scorer would
 not protect live traffic.
 
-Prometheus loads the existing `infrastructure/prometheus/rules/frameworks.yml`, which now covers a
-broad set of host, service, authority, metering, and settlement failures. Capacity/topology gaps
-remain: there is no dedicated edge-bandwidth saturation rule, federation peer-loss rule, replication
-shortfall rule, TLS-expiry rule, or Foghorn leadership-churn rule. The default Prometheus
-configuration also has no Alertmanager target, so rule evaluation alone does not page an operator.
+vmalert evaluates the rules embedded from `pkg/grafana/rules/frameworks.yml`, which cover a broad set
+of service, authority, metering, settlement, and multi-region replication failures, and notifies
+Alertmanager, which routes by severity and region. Capacity/topology gaps remain: there is no
+dedicated edge-bandwidth saturation rule, federation peer-loss rule, replication shortfall rule,
+TLS-expiry rule, or Foghorn leadership-churn rule.
 
 No `frameworks_cluster_*_utilization_ratio` or failure-domain reserve gauges exist. Per-node facts
 and cluster-load summaries do not answer whether a cluster can lose its largest node, facility, or
@@ -56,8 +56,8 @@ Evidence:
 - `api_balancing/internal/federation/placement_policy_gate.go`
 - `docs/architecture/media-placement-policy.md`
 - `docs/architecture/viewer-routing.md`
-- `infrastructure/prometheus/rules/frameworks.yml`
-- `infrastructure/prometheus/prometheus.yml`
+- `pkg/grafana/rules/frameworks.yml`
+- `ansible/collections/ansible_collections/frameworks/infra/roles/prometheus_stack/templates/alertmanager.yml.j2`
 
 ## Problem / Motivation
 
@@ -148,7 +148,7 @@ not assume that threshold proves resilience across unequal nodes or correlated s
 
 ### 4. Add capacity and topology alerts
 
-Add rules only after stable source metrics exist and an Alertmanager owner is configured:
+Add rules to `pkg/grafana/rules/frameworks.yml` only after stable source metrics exist:
 
 - sustained directional bandwidth reserve breach;
 - cluster post-failure headroom below policy;
@@ -171,7 +171,7 @@ must continue to distinguish those consumers from live placement until the legac
 - Quartermaster: capacity-owner intent and failure-domain inventory.
 - Foghorn: observation, reservation, exact-destination revalidation, and fleet metrics.
 - `pkg/placement`: deterministic capacity eligibility and explainable spillover semantics.
-- Prometheus/Alertmanager: alert evaluation, routing, and paging policy.
+- vmalert/Alertmanager: alert evaluation, routing, and paging policy.
 - Chartroom/Grafana: operator-visible capacity and failure-domain reporting.
 
 ## Risks and Mitigations
@@ -204,6 +204,6 @@ must continue to distinguish those consumers from live placement until the legac
 - [Evidence] `api_balancing/internal/balancer/placement_observation.go` (current exhaustion boundary)
 - [Evidence] `docs/architecture/media-placement-policy.md` (live placement and preparation contract)
 - [Evidence] `docs/architecture/viewer-routing.md` (legacy scorer scope)
-- [Evidence] `infrastructure/prometheus/rules/frameworks.yml` (current alert rules)
+- [Evidence] `pkg/grafana/rules/frameworks.yml` (current alert rules)
 - [Reference] `docs/rfcs/workload-cost-model.md`
 - [Reference] `docs/rfcs/network-egress-peering.md`

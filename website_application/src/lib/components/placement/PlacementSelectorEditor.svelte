@@ -21,7 +21,14 @@
     GetMediaPlacementOptions$result["mediaPlacementOptions"],
     { __typename: "MediaPlacementOptionsConnection" }
   >;
-  let kind = $state<"CLUSTER" | "OPERATOR" | "REGION">("CLUSTER");
+  type ListField = "clusterIds" | "nodeIds" | "ownerIds" | "regions";
+  const listFields: { field: ListField; label: string }[] = [
+    { field: "clusterIds", label: "Cluster" },
+    { field: "nodeIds", label: "Node" },
+    { field: "ownerIds", label: "Operator" },
+    { field: "regions", label: "Region" },
+  ];
+  let kind = $state<"CLUSTER" | "NODE" | "OPERATOR" | "REGION">("CLUSTER");
   let query = $state("");
   let options = $state<Connection["nodes"]>([]);
   let cursor = $state<string | null>(null);
@@ -35,8 +42,14 @@
     { value: "THIRD_PARTY_MARKETPLACE" as const, label: "Connected marketplace" },
     { value: "PLATFORM_OFFICIAL" as const, label: "Official clusters" },
   ];
-  const selectedField = $derived(
-    kind === "CLUSTER" ? "clusterIds" : kind === "OPERATOR" ? "ownerIds" : "regions"
+  const selectedField = $derived<ListField>(
+    kind === "CLUSTER"
+      ? "clusterIds"
+      : kind === "NODE"
+        ? "nodeIds"
+        : kind === "OPERATOR"
+          ? "ownerIds"
+          : "regions"
   );
   onDestroy(() => {
     sequence++;
@@ -65,7 +78,7 @@
     onchange(next);
   }
 
-  function remove(field: "clusterIds" | "ownerIds" | "regions", id: string | number) {
+  function remove(field: ListField, id: string | number) {
     const next = copySelector(value);
     next[field] = (next[field] ?? []).filter((item) => item !== id) as string[];
     onchange(next);
@@ -168,25 +181,23 @@
     Values within one field match any; different fields must all match. Empty fields add no
     restriction. Included or temporarily waived usage is not permanently free.
   </p>
-  {#each ["clusterIds", "ownerIds", "regions"] as field (field)}
-    {#each value[field as "clusterIds" | "ownerIds" | "regions"] ?? [] as id (id)}
+  {#each listFields as { field, label } (field)}
+    {#each value[field] ?? [] as id (id)}
       <div class="flex items-center justify-between gap-2 text-xs">
-        <span class="break-all"
-          >{field === "clusterIds" ? "Cluster" : field === "ownerIds" ? "Operator" : "Region"}: {options.find(
-            (item) => item.id === id
-          )?.name ?? id}</span
-        >
+        <span class="break-all">{label}: {options.find((item) => item.id === id)?.name ?? id}</span>
         <Button
           size="sm"
           variant="ghost"
-          onclick={() => remove(field as "clusterIds" | "ownerIds" | "regions", id)}
+          onclick={() => remove(field, id)}
           aria-label={`Remove ${id}`}>Remove</Button
         >
       </div>
     {/each}
   {/each}
   <details>
-    <summary class="text-sm cursor-pointer">Choose specific clusters, operators or regions</summary>
+    <summary class="text-sm cursor-pointer"
+      >Choose specific clusters, nodes, operators or regions</summary
+    >
     <div class="space-y-2 pt-3">
       <label class="block text-sm"
         >Option type
@@ -195,10 +206,16 @@
           bind:value={kind}
           onchange={invalidateSearch}
         >
-          <option value="CLUSTER">Clusters</option><option value="OPERATOR">Operators</option
-          ><option value="REGION">Regions</option>
+          <option value="CLUSTER">Clusters</option><option value="NODE">Nodes of my clusters</option
+          ><option value="OPERATOR">Operators</option><option value="REGION">Regions</option>
         </select>
       </label>
+      {#if kind === "NODE"}
+        <p class="text-xs text-muted-foreground">
+          Only nodes of clusters you own can be named. A node rule matches nothing on other
+          clusters.
+        </p>
+      {/if}
       <Input
         aria-label="Search authorized capacity"
         bind:value={query}
@@ -218,6 +235,7 @@
           <div>
             {option.name}
             <p class="text-xs text-muted-foreground">
+              {option.kind === "NODE" && option.clusterId ? `Cluster ${option.clusterId}` : ""}
               {option.region ?? ""}
               {optionStatus(option)}
             </p>

@@ -7,7 +7,7 @@ semantic change descriptions and signed review bindings for `ingest` and `serve`
 Commodore implements scoped persistence and gRPC read/review/apply/change-recovery operations.
 Foghorn has an unranked observation adapter, shared routing coordinator, federation transport
 contracts, a destination discovery pipeline, and destination-keyed pull tracking. Signed-authority
-readers accept placement schema 2.
+readers accept placement schemas 2 and 3; schema 3 is schema 2 plus selectors that name nodes.
 Legacy connected/shadow comparison cannot promote schema-2 readiness. Matching credentials,
 billing, grants, playback access or source descriptors does not prove placement enforcement.
 Playback, push-ingest, pull-source, managed-input and artifact-source promotion reject mixed-schema
@@ -46,6 +46,18 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
   and pending recipients from the same evidence, and a stored `effective` is demoted to
   pending/blocked while a newly targeted cell has not acknowledged, so "effective" never widens
   silently. Saved intent alone never sets these fields.
+- Node selectors (schema 3) follow the same chain. Replicas heartbeat placement schema 3, and the
+  acknowledging replica sets `MediaCellPlacementCapability.node_placement_ready` only when every
+  live replica in the ledger reports at least schema 3; a replica on an older release would reject
+  node selectors as unknown fields. The attestation is a separate flag rather than a listed
+  version: `supported_schema_versions` stays `[1, 2]`, because a Commodore without node placement
+  treats any listed version above 2 as a malformed attestation and would mark the cell not ready.
+  Commodore records a cell at schema 3 only when it is enforcement-ready and flagged, and still
+  rejects a listed 3. The issued tenant schema is the highest schema every target cell attests, so
+  once every target cell attests node placement, tenants move to schema 3; a cell that starts
+  attesting enqueues refreshes for tenants still below it. Schema 3 is monotonic like schema 2.
+  Commodore refuses to issue a tenant or stream authority whose policy names nodes below schema 3,
+  and signed-authority readers reject node selectors in a schema-2 payload.
 
 Edge-node component versions are not part of the attestation: the barrier covers control
 replicas. The node-level input placement ingest admission depends on, MistServer's own
@@ -74,8 +86,8 @@ inventory to unfiltered telemetry without treating missing nodes as an empty pre
 Quartermaster also persists capacity-owner consent and includes its observed revision and
 permissions in the service-only entitlement RPC. Tenant-owner management gRPC read/review/apply/
 recovery operations are implemented. Bridge connects tenant/stream and capacity-owner GraphQL
-read/review/apply/recovery to those services, and exposes tenant-scoped legacy pull-source pins.
-Authorized cluster/operator/region selector options are connected through Bridge and Commodore
+read/review/apply/recovery to those services.
+Authorized cluster/operator/region/node selector options are connected through Bridge and Commodore
 to Quartermaster entitlement. Read-only capacity preview is connected through Bridge and
 Commodore to every entitled media cell and conditional fresh Purser quotes. Owned push-stream
 serving previews additionally observe the current registered publisher. Managed and artifact
@@ -85,7 +97,7 @@ same-key save recovery through generated frontend GraphQL operations.
 Owned media-cluster detail pages also expose capacity consent read/review/apply/recovery controls.
 
 Bridge's MCP tools call the same placement and consent resolvers as GraphQL, including authorized
-options, legacy-pin inspection, preview, exact-revision review/apply and same-key recovery. Inputs
+options, preview, exact-revision review/apply and same-key recovery. Inputs
 share the GraphQL model's camelCase fields and decimal-string revisions. Results use an explicit
 `type` discriminator and `value`; typed errors retain recovery fields in structured content and
 the JSON text fallback with `isError` set. Tool scope and tenant-action checks are enforced at
@@ -286,10 +298,9 @@ implicit successful or active defaults.
 The four `clusterMediaConsent` management fields use Quartermaster's owner boundary separately
 from consuming-tenant placement. Service/wallet identities cannot act as capacity owners, and
 platform-operator status does not bypass tenant ownership or role checks. Source permission
-booleans, exact revisions and review identity are preserved. Legacy-pin reads use Commodore's
-tenant-scoped redacted stream view; they expose only cluster IDs, never stream keys or source
-URIs. The current legacy pull-source restrictions are still enforced; activation must coordinate
-their retirement rather than silently declaring them inactive.
+booleans, exact revisions and review identity are preserved. Where a stream's source may run is
+part of its own ingest rules, read and written through the stream's source location (see
+[Source location](#source-location)); there is no separate pin surface in GraphQL or MCP.
 
 GraphQL integration tests execute serialized read/review/apply/recovery operations for both
 policy and consent, exercising non-null lists, typed unions, exact revisions, explicit false
@@ -335,14 +346,19 @@ prepares a source.
 
 The allowed-cluster list must exactly match effective-access rows. Missing, duplicate, expired,
 inactive or unclassified grants are unavailable, not a confident empty result. Only media-edge
-clusters become selector options. Ownership is relative to the consuming tenant: an owner's own
+clusters become selector options. NODE options list the registered nodes of edge clusters the
+tenant owns (tenant-private class), read from Quartermaster's placement inventory per control
+cell, each carrying its `clusterId`; the `clusterId` filter limits NODE options to one cluster.
+An incomplete or mismatched inventory makes the page unavailable rather than listing fewer nodes.
+Platform-official and marketplace node IDs are never offered. Ownership is relative to the consuming tenant: an owner's own
 marketplace cluster is private for that owner, while official identity remains official. Region
 IDs come from the owning cluster's SQL-to-entitlement projection; unknown regions are omitted,
 not inferred from the resolving Foghorn. Region edits enqueue subscriber authority refreshes so
 signed region constraints do not wait for an unrelated metadata change.
 
 Projection exposes authorized IDs and labels, optional class/region/operator, and coarse owner
-permission status. It omits node inventory, addresses, source URLs and commercial details. Mixed
+permission status. It omits nodes of clusters the tenant does not own, addresses, source URLs and
+commercial details. Mixed
 operator/region classes are null rather than arbitrarily choosing a class. `eligible` means an
 entitled target has observed owner permission for at least one of ingest or serve; it is **not**
 current node availability, both-verb consent or a successful policy evaluation. Missing consent
@@ -1130,15 +1146,21 @@ its cell's attestation; that is the mechanism, not a permission, that keeps sche
 
 Mist-native sources retain their explicit single-source-cluster election and placement count.
 The managed reconciler does not use publisher geography or move a source to a different cluster
-because a preference changes. `placement.CheckConstraints` applies entitlement, ownership and
-intersected hard ingest constraints to that elected cluster; it does not manufacture telemetry
-or run a new preference election. An explicit empty preference list still denies all placement.
-Preference ordering, geo spill and price ordering are not a managed-source migration mechanism.
+because a preference changes. Hard ingest constraints are evaluated per node: before the
+deterministic stable-hash election, the reconciler drops every node of the source cluster that
+the signed ingest policy denies, so a stream is never elected onto a node its admission would
+refuse while a permitted node exists. Every Foghorn reads the same signed pair, so the filtered
+election stays identical across peers. A node whose verdict needs facts that are unavailable
+makes the tick transient for that stream rather than shrinking the pool. Admission then checks
+entitlement, ownership and intersected hard ingest constraints for the exact elected cluster and
+node; it does not manufacture telemetry or run a new preference election. An explicit empty
+preference list still denies all placement. Preference ordering, geo spill and price ordering are
+not a managed-source migration mechanism.
 
 When the local authority store is configured, both local-context and connected-context
 materialization read the exact tenant/object/internal-name pair before populating caches or
-starting DVR. For schema 2, the check requires ingest and source readiness, active unexpired
-authority, matching parent policy revision, ingest consent and hard constraints. It then opens
+starting DVR. For schema 2 and 3, the check requires ingest and source readiness, active unexpired
+authority, matching parent policy revision, ingest consent and hard constraints for the exact node. It then opens
 the same object snapshot's sealed source definition and compares source spec, kind, always-on,
 placement count and the single allowed source cluster against the reconciler row. The source
 definition is never included in failure logs. The read/check has a one-second context budget.
@@ -1303,6 +1325,24 @@ deny. Within a selector, fields combine with AND and values with OR. A selector 
 fields matches everything. An omitted allow set is unrestricted; an explicit empty allow
 set permits nothing. Missing facts needed by a hard selector fail closed.
 
+Selectors name `cluster_ids`, `node_ids`, `owner_ids`, `regions`, `classes` and `charging`, each
+bounded to 128 values. A `node_ids` selector matches only a candidate that carries a node identity
+in that list; a cluster-level candidate with no node identity is `PolicyFactsUnavailable` against
+it, so it can neither satisfy an allow nor escape a deny that names nodes. Node IDs are sorted and
+deduplicated like other selector values, compare last in canonical selector ordering, and are
+omitted from the canonical encoding when empty, so policies without node selectors keep their
+digests. A tenant may name only nodes of edge clusters it owns (Commodore checks them against
+Quartermaster's placement inventory at review, apply and stream source-location writes). Because
+selector fields intersect, a node in an allow alternative or preference group match that also
+names `cluster_ids` must belong to one of those clusters; nodes in deny selectors (avoided nodes)
+need ownership only. The system tenant, which owns bootstrap and managed streams, may name any
+node; the bootstrap renderer already maps each declared node to a listed manifest cluster. Node selectors are
+refused with `FailedPrecondition` carrying a `google.rpc.ErrorInfo` (domain
+`placement.frameworks.network`, reason `NODE_PLACEMENT_NOT_READY`) until every media cell serving
+the tenant attests node placement (schema 3, see [Activation barrier](#activation-barrier)); the
+Gateway reports it as `UNSUPPORTED`, not as a stale review. `commodore bootstrap` applies the same
+gate to declared source locations before writing them.
+
 Preferences are ordered groups. The first matching group owns a candidate, so overlapping
 groups cannot manufacture a fallback from the same capacity. A stream can inherit the
 tenant group list or replace it as a whole. An explicit empty list denies all placement;
@@ -1332,6 +1372,109 @@ These comparison amounts are not invoices, exchange rates, or billing decisions.
 an included allowance, waiver, or promotional credit must not be reported as permanently
 free capacity by the facts adapter. Unknown or expired charging facts cannot pass that
 restriction.
+
+## Configured-source dialing
+
+Every node choice for a stream is evaluated against its signed ingest policy with a node
+candidate. Push ingest, viewer, DVR and artifact routing evaluate per node through the router.
+The paths where a node dials a configured source (a pull input or a managed Mist-native input)
+use `control.SourceDialNodePlacement` or the same verdict mapping: `Eligible` permits; a policy,
+lifecycle or billing denial denies; unready or inconsistent authority and missing facts
+(including an unknown node against a node selector) are unavailable, never a permission. A
+schema-1 pair carries no policy and passes this check.
+
+| Path                                                                                          | Behaviour                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STREAM_SOURCE` (`triggers/processor.go`)                                                     | Evaluates the triggering node. Unavailable returns the offline-unavailable source; denied returns an empty source so Mist asks `/source`, which relays from a permitted origin instead of dialing.           |
+| `/source` (`handlers/handlers.go`)                                                            | Evaluates the calling node. Denied falls through to the cross-cluster remote-source fallback, which vets every advertised origin node with the same check; when every origin is refused, its relays are too. |
+| Federation `SourceFeasible` (`federation/placement_configured_paths.go`)                      | A destination node may originate a configured input only with the input's cluster grant, ingest consent, private-source consent for a private upstream, and an `Eligible` node verdict.                      |
+| Managed election and admission (`control/managed_streams.go`, `control/managed_placement.go`) | Denied nodes are removed before election; materialization and `ApplyManagedStream` dispatch check the exact elected node.                                                                                    |
+
+`STREAM_SOURCE` and `/source` run the node check on the signed local authority. A request that
+falls back to the connected Commodore lookup (a projection not yet marked ready) is checked
+against the source's cluster pin and private-source consent only. Until the pins are retired, the
+cluster pin carried in the signed source definition is enforced in addition to policy on every
+path above.
+
+## Source location
+
+A stream's source location is the simple view of its own ingest constraints
+(`api_control/internal/placementpolicy/source_location.go`):
+
+- **ANY**: the stream has no own ingest constraints.
+- **RESTRICTED**: one allow alternative per listed cluster, each optionally narrowed to node IDs of
+  that cluster, plus one deny selector listing avoided nodes. At most 32 clusters and 128 nodes per
+  list; a node cannot be both allowed and avoided.
+- **CUSTOM**: own ingest constraints the two shapes above cannot express (other selector fields,
+  several clusters in one alternative, a deny that names clusters, an explicit deny-all). CUSTOM
+  is reported, never accepted as input; such rules are edited through placement review/apply.
+
+Commodore's `CreateStream` and `UpdateStream` accept `source_location` for push and pull streams
+and every stream read returns it. `UpdateStream` rejects it for managed streams, whose location is
+declared by bootstrap. A write replaces only the ingest constraints: ingest preferences and the
+serve verb are preserved, and writing over a CUSTOM location is refused with `FailedPrecondition`.
+Before opening the stream transaction, Commodore checks listed clusters against the tenant's
+eligible edge clusters and, when nodes are named, applies the node ownership and attestation rules
+from [Policy semantics](#policy-semantics). A stream read fails rather than reporting ANY when the
+stream's policy cannot be read.
+
+The write runs `placementpolicy.ApplySystem` inside the stream's transaction. It takes the same
+tenant-then-stream locks, revision CAS, immutable receipt and authority-refresh obligation as a
+reviewed apply. The review digest is computed from the command, and the idempotency key from scope,
+base revisions and resulting payload, so a retried transaction converges on one receipt. The
+receipt actor is the calling user for API writes, `system:bootstrap` for bootstrap and
+`system:data-migration` for the pin conversion.
+
+A private or multicast pull source (`pkg/pullsource.Classify`) requires that the effective ingest
+policy confines it to clusters with `allow_private_pull_sources` consent: the tenant rules or the
+stream's own rules must hold a non-empty allow whose every alternative names only consented
+clusters. Layers intersect, so one such layer bounds the whole policy. The rule is evaluated under
+the placement locks against the locked tenant policy and the stream's resulting rules, so a
+concurrent tenant change cannot slip between validation and commit. The refusal is
+`InvalidArgument`; Bridge returns Commodore's `InvalidArgument` and `FailedPrecondition` refusals
+as a `ValidationError` carrying the reason.
+
+Until the pin columns are dropped, Commodore mirrors a location's cluster list into the pull
+source's `allowed_cluster_ids` (an empty list for ANY) so replicas that still read pins enforce
+the same cluster set. Commodore's gRPC `pull_source.allowed_clusters` input is translated into the
+equivalent source location and cannot be combined with `source_location`; GraphQL and MCP expose
+only the source location.
+
+## Pull-source pin conversion and retirement
+
+Data migration `commodore_pull_source_pins_to_stream_rules_v0_3_5`
+(`api_control/internal/placementpolicy/pull_source_pins_migration.go`, required before the contract
+phase) converts every non-empty `stream_pull_sources.allowed_cluster_ids` and
+`stream_mist_sources.allowed_cluster_ids` of a non-deleted stream into the stream's own ingest
+allow:
+
+- Without an own ingest allow, it writes one alternative per pinned cluster, which reads back as a
+  RESTRICTED location.
+- With an existing allow, it restricts every alternative's clusters to the pins, drops
+  alternatives left with no cluster, and gives an alternative that named no cluster the pin list.
+- When no alternative survives (the own allow and the pins share no cluster), the pins win: the
+  own allow is replaced by one alternative per pinned cluster, keeping deny selectors and
+  preferences. The conversion never writes an empty allow.
+
+Each stream converts in its own retryable transaction through `ApplySystem` (actor
+`system:data-migration`) behind a stream-ID checkpoint. The update is derived from the pins
+re-read under a row lock after the placement locks, the order a stream update takes them, so a
+source-location edit committed after the batch was listed is converted from its current pins; a
+stream whose pins are now empty is skipped. A stream that already expresses its pins writes
+nothing, so reruns converge. A dry run performs the same read without row locks in a read-only
+transaction and counts the streams whose rules would change. Verify fails while any pinned stream
+lacks an own ingest allow with at least one alternative, every alternative naming only pinned
+clusters.
+
+The pin columns, `commodore.stream_cluster_pins`, Foghorn's legacy pin readers and the proto pin
+fields are removed in the release after the one that introduces source locations, not in that
+release's own contract phase: its Foghorn still enforces pins while cells attest, the conversion
+runs after its deploy, and its Commodore mirrors locations into the pin columns for mixed-version
+replicas. Retirement requires:
+
+1. `commodore_pull_source_pins_to_stream_rules_v0_3_5` completed and verified.
+2. Every media cell attesting node placement (`node_placement_ready`), so tenant authorities are
+   issued at schema 3 and no replica depends on pins.
 
 ## Outputs and replay
 

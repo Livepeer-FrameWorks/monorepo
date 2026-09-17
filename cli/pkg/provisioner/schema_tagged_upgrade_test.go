@@ -3,13 +3,17 @@
 package provisioner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"testing"
 
 	"frameworks/cli/internal/releases"
+
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
 const schemaVerifyFromTagEnv = "FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG"
@@ -60,6 +64,37 @@ func repositoryFileAtTag(t *testing.T, tag, file string) string {
 		t.Fatalf("read %s at %s: %v\n%s", file, tag, err, out)
 	}
 	return string(out)
+}
+
+// baselineAtTagOrRelease returns the baseline an upgraded cluster starts from
+// for one embedded schema file (relative to pkg/database/sql). A database that
+// existed at the tag starts from its tagged baseline. A database introduced
+// after the tag does not exist on an upgraded cluster; the release creates it
+// from its current baseline, so that baseline is returned, and a post-tag
+// migration for such a database fails the proof because nothing could apply it.
+func baselineAtTagOrRelease(t *testing.T, tag, file string, postTag []Migration) string {
+	t.Helper()
+	repositoryPath := "pkg/database/sql/" + file
+	err := exec.Command("git", "cat-file", "-e", tag+":"+repositoryPath).Run()
+	if err == nil {
+		return repositoryFileAtTag(t, tag, repositoryPath)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("probe %s at %s: %v", repositoryPath, tag, err)
+	}
+	database := strings.TrimSuffix(path.Base(file), ".sql")
+	for _, migration := range postTag {
+		if migration.Database == database {
+			t.Fatalf("database %s has no baseline at %s but migration %s/%s/%s targets it; a database new in this release is created from its current baseline and must not ship migrations", database, tag, migration.Version, migration.Phase, migration.Filename)
+		}
+	}
+	current, readErr := dbsql.Content.ReadFile(file)
+	if readErr != nil {
+		t.Fatalf("read current %s: %v", file, readErr)
+	}
+	t.Logf("%s is new after %s; the release creates it from the current baseline", database, tag)
+	return string(current)
 }
 
 func migrationsAfterVersion(migrations []Migration, version string) []Migration {

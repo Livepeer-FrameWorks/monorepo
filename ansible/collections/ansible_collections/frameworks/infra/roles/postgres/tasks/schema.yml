@@ -1,7 +1,10 @@
 ---
 # Baseline schema SQL delivered as a list of {db, src} items via extra-vars.
 # The CLI reads from its embedded pkg/database/sql/schema tree and filters to
-# databases the manifest defines. Empty list is a no-op.
+# databases the manifest defines. Empty list is a no-op. A baseline is applied
+# to a schema without tables, or to any item with reapply=true: the CLI sets it
+# when completing a schema whose baseline apply was interrupted and for the
+# scratch reference database that completion is verified against.
 
 - name: Validate baseline schema ownership identifiers
   ansible.builtin.assert:
@@ -59,7 +62,7 @@
   when:
     - not ansible_check_mode
     - postgres_schema_items | default([]) | length > 0
-    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
+    - (not (postgres_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
 - name: Apply baseline schemas to target databases
   become: true
@@ -76,7 +79,7 @@
   when:
     - not ansible_check_mode
     - postgres_schema_items | default([]) | length > 0
-    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
+    - (not (postgres_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
 - name: Grant baseline schema ownership to application role
   become: true
@@ -221,4 +224,4 @@
   when:
     - not ansible_check_mode
     - postgres_schema_items | default([]) | length > 0
-    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
+    - (not (postgres_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)

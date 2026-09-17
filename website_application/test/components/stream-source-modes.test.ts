@@ -31,7 +31,11 @@ describe("stream source mode setup", () => {
           sourceKind: "playlist",
           alwaysOn: true,
           placementCount: 1,
-          allowedClusterIds: ["media-eu"],
+        },
+        sourceLocation: {
+          mode: "RESTRICTED",
+          clusters: [{ clusterId: "media-eu", nodeIds: [] }],
+          avoidNodeIds: [],
         },
       },
     });

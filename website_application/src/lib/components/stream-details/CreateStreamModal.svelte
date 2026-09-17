@@ -7,7 +7,12 @@
   import { Label } from "$lib/components/ui/label";
   import { getIconComponent } from "$lib/iconUtils";
   import { pullSourcePlacementClass } from "$lib/utils/pull-source";
-  import PullSourceClusterPicker from "./PullSourceClusterPicker.svelte";
+  import SourceLocationControl from "./SourceLocationControl.svelte";
+  import {
+    sourceLocationProblem,
+    type SourceLocationClusterChoice,
+    type SourceLocationDraft,
+  } from "$lib/source-location";
   import {
     Dialog,
     DialogContent,
@@ -25,8 +30,8 @@
     ingestMode: "PUSH" | "PULL";
     pullSourceUri: string;
     pullSourceEnabled: boolean;
-    pullSourceAllowedClusterIds: string;
-    clusterOptions?: Array<{ clusterId: string; clusterName: string }>;
+    sourceLocation: SourceLocationDraft;
+    clusterOptions?: SourceLocationClusterChoice[];
     creating: boolean;
     onSubmit: () => void;
     onCancel: () => void;
@@ -40,17 +45,16 @@
     ingestMode = $bindable(),
     pullSourceUri = $bindable(),
     pullSourceEnabled = $bindable(),
-    pullSourceAllowedClusterIds = $bindable(),
+    sourceLocation = $bindable(),
     clusterOptions = [],
     creating,
     onSubmit,
     onCancel,
   }: Props = $props();
 
-  const looksPrivate = $derived(pullSourcePlacementClass(pullSourceUri) === "private");
-  const allowedListEmpty = $derived(pullSourceAllowedClusterIds.trim() === "");
-  const requiresAllowedClusters = $derived(
-    ingestMode === "PULL" && looksPrivate && allowedListEmpty
+  const sourceClass = $derived(pullSourcePlacementClass(pullSourceUri));
+  const locationBlocked = $derived(
+    ingestMode === "PULL" && !!sourceLocationProblem(sourceLocation, sourceClass, clusterOptions)
   );
 
   const RadioIcon = getIconComponent("Radio");
@@ -187,22 +191,13 @@
           </div>
         </div>
 
-        <div>
-          <PullSourceClusterPicker
-            bind:selectedIds={pullSourceAllowedClusterIds}
-            options={clusterOptions}
-            required={looksPrivate}
-            disabled={creating}
-          />
-          <p class="text-xs text-muted-foreground mt-1">
-            {#if looksPrivate}
-              Private and multicast sources must be pinned to clusters that can reach them and
-              explicitly allow private pull sources.
-            {:else}
-              Public sources can use automatic placement or a selected set of connected clusters.
-            {/if}
-          </p>
-        </div>
+        <SourceLocationControl
+          value={sourceLocation}
+          clusters={clusterOptions}
+          {sourceClass}
+          disabled={creating}
+          onchange={(next) => (sourceLocation = next)}
+        />
       {/if}
     </form>
 
@@ -223,7 +218,7 @@
         disabled={creating ||
           !title.trim() ||
           (ingestMode === "PULL" && !pullSourceUri.trim()) ||
-          requiresAllowedClusters}
+          locationBlocked}
         form="create-stream-form"
       >
         {creating ? "Creating..." : "Create Stream"}

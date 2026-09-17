@@ -51,10 +51,6 @@ func TestPlacementDemoAllSurfacesStayOfflineWithOrWithoutRealCredentials(t *test
 			if _, validConsentReview := consentReview.(*model.MediaPlacementReview); err != nil || !validConsentReview {
 				t.Fatalf("demo consent review failed: %+v, %v", consentReview, err)
 			}
-			pins, err := r.DoMediaPlacementLegacyPins(ctx, demo.DemoStreamID)
-			if _, validPins := pins.(*model.MediaPlacementLegacyPins); err != nil || !validPins {
-				t.Fatalf("demo legacy pins failed: %+v, %v", pins, err)
-			}
 			applied, err := r.DoApplyMediaPlacementChange(ctx, model.ApplyMediaPlacementChangeInput{})
 			failure, ok := applied.(*model.MediaPlacementError)
 			if err != nil || !ok || failure.Code != model.MediaPlacementErrorCodeUnsupported || !strings.Contains(failure.Message, "no changes are saved") {

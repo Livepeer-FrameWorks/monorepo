@@ -912,7 +912,10 @@ func handleListServers(c *gin.Context) {
 // available, with client IP matching only when the path identity is
 // absent. Fails closed (returns "") when the caller can't be identified
 // or the arrangement fails so the puller and registry never diverge.
-func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, callerNodeID, clientIP string) (dtscURL, remoteCluster string) {
+//
+// permitOrigin, when set, vets the remote origin node against the signed ingest
+// policy of a configured source; nil leaves candidate selection unchanged.
+func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, callerNodeID, clientIP string, permitOrigin func(clusterID, nodeID string) bool) (dtscURL, remoteCluster string) {
 	if callerNodeID == "" {
 		logger.WithFields(logging.Fields{
 			"stream":    streamName,
@@ -928,7 +931,7 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 		}).Warn("/source cross-cluster: caller media cluster is unavailable; refusing to arrange pull")
 		return "", ""
 	}
-	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, callerClusterID)
+	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, callerClusterID, permitOrigin)
 	if candidate == nil {
 		return "", ""
 	}
@@ -973,7 +976,7 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 // wrapper around resolveRemoteSourceCandidate for callers that only
 // need the URL.
 func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) (dtscURL, remoteCluster string) {
-	candidate, cluster, _ := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, clusterID)
+	candidate, cluster, _ := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, clusterID, nil)
 	if candidate == nil {
 		return "", ""
 	}
@@ -984,7 +987,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 // chosen EdgeCandidate. Needed by callers that want to arrange a
 // tracked origin-pull (NotifyOriginPull needs candidate.NodeId).
 // tenantID returned so the arrangement carries it through.
-func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64, requestingClusterID string) (*foghornfederationpb.EdgeCandidate, string, string) {
+func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64, requestingClusterID string, permitOrigin func(clusterID, nodeID string) bool) (*foghornfederationpb.EdgeCandidate, string, string) {
 	if federationClient == nil || peerManager == nil {
 		return nil, "", ""
 	}
@@ -1072,16 +1075,41 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 		return nil, "", ""
 	}
 
-	// Prefer origin node (has active input), otherwise best scored
-	best := resp.Candidates[0]
-	for _, c := range resp.Candidates {
-		if c.IsOrigin {
-			best = c
-			break
-		}
+	best := selectRemoteSourceCandidate(resp.Candidates, originClusterID, permitOrigin)
+	if best == nil {
+		logger.WithFields(logging.Fields{
+			"stream":         streamName,
+			"origin_cluster": originClusterID,
+		}).Warn("/source cross-cluster: every advertised origin is refused by ingest placement policy")
+		return nil, "", ""
 	}
-
 	return best, originClusterID, tenantID
+}
+
+// selectRemoteSourceCandidate prefers an origin (active input) over the best
+// scored relay. permitOrigin vets origin nodes: a node the ingest policy forbids
+// from dialing the source is never chosen, and when every advertised origin is
+// refused its relays are refused with it rather than served from that input.
+func selectRemoteSourceCandidate(candidates []*foghornfederationpb.EdgeCandidate, originClusterID string, permitOrigin func(clusterID, nodeID string) bool) *foghornfederationpb.EdgeCandidate {
+	refusedOrigin := false
+	for _, candidate := range candidates {
+		if candidate == nil || !candidate.GetIsOrigin() {
+			continue
+		}
+		cluster := candidate.GetClusterId()
+		if cluster == "" {
+			cluster = originClusterID
+		}
+		if permitOrigin != nil && !permitOrigin(cluster, candidate.GetNodeId()) {
+			refusedOrigin = true
+			continue
+		}
+		return candidate
+	}
+	if refusedOrigin || len(candidates) == 0 {
+		return nil
+	}
+	return candidates[0]
 }
 
 type pullSourceLookup struct {
@@ -1168,7 +1196,10 @@ func pullUpstreamScore(upstream string) uint64 {
 }
 
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, callerNodeID, clientIP string, ctx context.Context, start time.Time) {
-	lookup := resolvePullSourceForSource(ctx, streamName)
+	servePullSourceLookup(c, streamName, resolvePullSourceForSource(ctx, streamName), lat, lon, tagAdjust, callerNodeID, clientIP, ctx, start)
+}
+
+func servePullSourceLookup(c *gin.Context, streamName string, lookup pullSourceLookup, lat, lon float64, tagAdjust map[string]int, callerNodeID, clientIP string, ctx context.Context, start time.Time) {
 	src := lookup.response
 	if lookup.offline != "" {
 		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable")
@@ -1208,13 +1239,28 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		})
 	}
 	eligible, rejects := pullsource.FilterPlacementClusters(class, src.GetAllowedClusterIds(), localCandidates)
-	if len(eligible) == 0 {
-		// This cluster can't dial upstream itself (allowed_cluster_ids
-		// excludes it). Fall through to cross-cluster federation: query
-		// the origin cluster (which IS allowed and presumably pulling)
-		// for its edge DTSC URL so this cluster serves viewers via DTSC
-		// rather than 404. Arrange the pull so it's tracked end-to-end.
-		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP)
+	dialPlacement := control.SourceDialPermitted
+	var permitOrigin func(clusterID, nodeID string) bool
+	if lookup.usedLocal {
+		pair := control.SourcePlacementPair(lookup.snapshot)
+		dialPlacement = control.SourceDialNodePlacement(pair, localClusterID, callerNodeID, time.Now())
+		permitOrigin = func(clusterID, nodeID string) bool {
+			return control.SourceDialNodePlacement(pair, clusterID, nodeID, time.Now()) == control.SourceDialPermitted
+		}
+	}
+	if dialPlacement == control.SourceDialUnavailable {
+		logger.WithFields(logging.Fields{"stream": streamName, "cluster_id": localClusterID, "caller_node": callerNodeID}).Warn("Source lookup: signed ingest placement for the caller node is unavailable")
+		c.String(http.StatusOK, control.OfflineUnavailable)
+		return
+	}
+	if len(eligible) == 0 || dialPlacement == control.SourceDialDenied {
+		// This node can't dial upstream itself (allowed_cluster_ids
+		// excludes its cluster, or the ingest policy excludes the node).
+		// Fall through to cross-cluster federation: query the origin
+		// cluster (which IS allowed and presumably pulling) for its edge
+		// DTSC URL so this cluster serves viewers via DTSC rather than
+		// 404. Arrange the pull so it's tracked end-to-end.
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP, permitOrigin)
 		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {
@@ -1548,7 +1594,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		// firing /source) IS the puller, so identify it from clientIP
 		// and pass to ArrangeOriginPull as DestNodeID. Fails closed
 		// when the caller can't be identified or the arrangement fails.
-		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP)
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP, nil)
 		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {

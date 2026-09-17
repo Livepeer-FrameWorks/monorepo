@@ -2514,6 +2514,26 @@ func (r *mutationResolver) ApplyClusterMediaConsentChange(ctx context.Context, i
 	return r.DoApplyClusterMediaConsentChange(ctx, input)
 }
 
+// AcknowledgeIncident is the resolver for the acknowledgeIncident field.
+func (r *mutationResolver) AcknowledgeIncident(ctx context.Context, id string) (model.IncidentMutationResult, error) {
+	return r.DoAcknowledgeIncident(ctx, id)
+}
+
+// AssignIncident is the resolver for the assignIncident field.
+func (r *mutationResolver) AssignIncident(ctx context.Context, id string, assigneeUserID *string) (model.IncidentMutationResult, error) {
+	return r.DoAssignIncident(ctx, id, assigneeUserID)
+}
+
+// ResolveIncident is the resolver for the resolveIncident field.
+func (r *mutationResolver) ResolveIncident(ctx context.Context, id string) (model.IncidentMutationResult, error) {
+	return r.DoResolveIncident(ctx, id)
+}
+
+// AddIncidentNote is the resolver for the addIncidentNote field.
+func (r *mutationResolver) AddIncidentNote(ctx context.Context, id string, body string) (model.IncidentMutationResult, error) {
+	return r.DoAddIncidentNote(ctx, id, body)
+}
+
 // UpdateMediaRetention is the resolver for the updateMediaRetention field.
 func (r *mutationResolver) UpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error) {
 	return r.DoUpdateMediaRetention(ctx, input)
@@ -3004,6 +3024,11 @@ func (r *platformResolver) Clusters(ctx context.Context, obj *markers.Platform) 
 	return r.DoPlatformClusters(ctx)
 }
 
+// Incidents is the resolver for the incidents field.
+func (r *platformResolver) Incidents(ctx context.Context, obj *markers.Platform, page *model.ConnectionInput, filter *model.PlatformIncidentFilterInput) (*model.IncidentsConnection, error) {
+	return r.DoPlatformIncidents(ctx, page, filter)
+}
+
 // TotalBandwidth is the resolver for the totalBandwidth field.
 func (r *platformOverviewResolver) TotalBandwidth(ctx context.Context, obj *periscopepb.GetPlatformOverviewResponse) (float64, error) {
 	return obj.PeakBandwidth, nil
@@ -3368,6 +3393,16 @@ func (r *queryResolver) Analytics(ctx context.Context) (*markers.Analytics, erro
 // just a marker; every child field gates on RequirePlatformOperator.
 func (r *queryResolver) Platform(ctx context.Context) (*markers.Platform, error) {
 	return &markers.Platform{}, nil
+}
+
+// IncidentsConnection is the resolver for the incidentsConnection field.
+func (r *queryResolver) IncidentsConnection(ctx context.Context, page *model.ConnectionInput, filter *model.IncidentFilterInput) (*model.IncidentsConnection, error) {
+	return r.DoIncidentsConnection(ctx, page, filter)
+}
+
+// Incident is the resolver for the incident field.
+func (r *queryResolver) Incident(ctx context.Context, id string) (*model.IncidentDetail, error) {
+	return r.DoIncident(ctx, id)
 }
 
 // StreamsConnection is the resolver for the streamsConnection field.
@@ -4400,11 +4435,6 @@ func (r *queryResolver) MediaPlacementChange(ctx context.Context, scope model.Me
 	return r.DoMediaPlacementChange(ctx, scope, idempotencyKey)
 }
 
-// MediaPlacementLegacyPins is the resolver for the mediaPlacementLegacyPins field.
-func (r *queryResolver) MediaPlacementLegacyPins(ctx context.Context, streamID string) (model.MediaPlacementLegacyPinsResult, error) {
-	return r.DoMediaPlacementLegacyPins(ctx, streamID)
-}
-
 // ClusterMediaConsent is the resolver for the clusterMediaConsent field.
 func (r *queryResolver) ClusterMediaConsent(ctx context.Context, clusterID string) (model.MediaCapacityConsentResult, error) {
 	return r.DoClusterMediaConsent(ctx, clusterID)
@@ -4806,6 +4836,11 @@ func (r *streamResolver) IngestMode(ctx context.Context, obj *commodorepb.Stream
 	default:
 		return model.IngestModePush, nil
 	}
+}
+
+// SourceLocation is the resolver for the sourceLocation field.
+func (r *streamResolver) SourceLocation(ctx context.Context, obj *commodorepb.Stream) (*model.SourceLocation, error) {
+	return r.DoStreamSourceLocation(ctx, obj)
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -5589,6 +5624,11 @@ func (r *subscriptionResolver) LiveProcessingEvents(ctx context.Context, streamI
 // LiveSystemHealth is the resolver for the liveSystemHealth field.
 func (r *subscriptionResolver) LiveSystemHealth(ctx context.Context) (<-chan *ipcpb.NodeLifecycleUpdate, error) {
 	return r.DoSystemUpdates(ctx)
+}
+
+// LiveIncidentUpdates is the resolver for the liveIncidentUpdates field.
+func (r *subscriptionResolver) LiveIncidentUpdates(ctx context.Context) (<-chan *model.IncidentUpdatedEvent, error) {
+	return r.DoIncidentUpdates(ctx)
 }
 
 // LiveFirehose is the resolver for the liveFirehose field.

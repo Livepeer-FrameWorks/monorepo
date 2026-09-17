@@ -283,7 +283,7 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		}
 
 		service := &Service{db: db, logger: logging.NewLogger()}
-		updated, err := service.updateInvoicePaymentStatus("stripe", "pi_expected", invoiceID, "confirmed", providerSettlementEvidence{
+		updated, err := service.updateInvoicePaymentStatus("stripe", "pi_expected", invoiceID, "confirmed", nil, providerSettlementEvidence{
 			TenantID: tenantID, AmountCents: 1249, Currency: "EUR",
 		})
 		if err == nil || updated {

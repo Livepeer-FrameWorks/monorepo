@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -130,6 +131,48 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 
 	s := &Service{db: mockDB, logger: logrus.New()}
 
+	expectPrepaidTopupCreditMutations(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventTopupCredited, "tenant-a", "", "topup", "topup-789", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// The topup_credited outbox row shares the credit transaction: a failed insert
+// rolls back the balance credit and surfaces the error so the webhook retries.
+func TestHandlePrepaidCheckoutCompletedRollsBackCreditWhenOutboxInsertFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+
+	expectPrepaidTopupCreditMutations(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventTopupCredited, "tenant-a", "", "topup", "topup-789", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = s.handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true)
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func expectPrepaidTopupCreditMutations(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-789").
@@ -155,15 +198,6 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
 		WithArgs("tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectCommit()
-
-	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
 }
 
 func TestHandlePrepaidCheckoutCompletedRequiresTenantAndTopup(t *testing.T) {

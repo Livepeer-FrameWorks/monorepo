@@ -156,6 +156,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_mode":              mode,
 		"edge_node_id":           config.NodeID,
 		"edge_cluster_id":        config.ClusterID,
+		"edge_region":            config.Region,
 		"edge_domain":            config.primaryDomain(),
 		"edge_acme_email":        config.Email,
 		"edge_foghorn_grpc_addr": config.FoghornGRPCAddr,

@@ -1,0 +1,24 @@
+{# The datasource also receives vmalert's ALERTS series (-remoteWrite.url) and
+   restores alert state from it on restart (-remoteRead.url). Flags stay on one
+   line so a notifier list never leaves a dangling continuation. #}
+{% set vmalert_args = [
+  '-httpListenAddr=:' ~ vmalert_port,
+  '-rule=' ~ vmalert_rules_dir ~ '/*.yml',
+  '-datasource.url=' ~ vmalert_datasource_url,
+  '-remoteWrite.url=' ~ vmalert_datasource_url,
+  '-remoteRead.url=' ~ vmalert_datasource_url,
+] + (vmalert_notifier_urls | map('regex_replace', '^', '-notifier.url=') | list) %}
+[Unit]
+Description=VictoriaMetrics vmalert
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ prometheus_stack_user }}
+Group={{ prometheus_stack_group }}
+ExecStart={{ vmalert_bin }} {{ vmalert_args | join(' ') }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

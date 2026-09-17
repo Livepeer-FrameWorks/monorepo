@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,8 +578,14 @@ func verifyNavigatorStoreQueryPack(t *testing.T, db *sql.DB) {
 	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantID, domain.Domain, "pending_verification", "verified", ""); err != nil || !transitioned {
 		t.Fatal(err)
 	}
-	if written, err := store.SetTenantCustomDomainCertMetadata(ctx, tenantID, domain.Domain, "verified", "letsencrypt", sql.NullTime{Time: now.Add(90 * 24 * time.Hour), Valid: true}); err != nil || !written {
+	if updated, err := store.RefreshTenantCustomDomainServedCertificate(ctx, tenantID, []string{domain.Domain}, "letsencrypt", sql.NullTime{Time: now.Add(90 * 24 * time.Hour), Valid: true}); err != nil || updated != 0 {
+		t.Fatalf("verified domain outside the tenant bundle refreshed updated=%d err=%v", updated, err)
+	}
+	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantID, domain.Domain, "verified", "cert_issuing", ""); err != nil || !transitioned {
 		t.Fatal(err)
+	}
+	if updated, err := store.RefreshTenantCustomDomainServedCertificate(ctx, tenantID, []string{domain.Domain}, "letsencrypt", sql.NullTime{Time: now.Add(90 * 24 * time.Hour), Valid: true}); err != nil || updated != 1 {
+		t.Fatalf("served custom domain refresh updated=%d err=%v", updated, err)
 	}
 	domain, err = store.GetTenantCustomDomain(ctx, tenantID, domain.Domain)
 	if err != nil || !domain.LastVerifiedAt.Valid || domain.IssuerID.String != "letsencrypt" || !domain.CertExpiresAt.Valid {
@@ -587,7 +594,7 @@ func verifyNavigatorStoreQueryPack(t *testing.T, db *sql.DB) {
 	if rows, err := store.ListTenantCustomDomains(ctx, tenantID); err != nil || len(rows) != 2 {
 		t.Fatalf("tenant custom domains = %#v, err = %v", rows, err)
 	}
-	if rows, err := store.ListTenantCustomDomainsByStatus(ctx, []string{"verified"}); err != nil || len(rows) != 1 {
+	if rows, err := store.ListTenantCustomDomainsByStatus(ctx, []string{"cert_issuing"}); err != nil || len(rows) != 2 {
 		t.Fatalf("tenant custom domains by status = %#v, err = %v", rows, err)
 	}
 	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantID, domain.Domain, "", "tearing_down", ""); err != nil || !transitioned {
@@ -730,6 +737,209 @@ WHERE tenant_id=$1::uuid AND node_id='residual-node'`, tenantID); err != nil {
 	}
 	if err := store.DeleteCertificate(ctx, "", platformCert.Domain); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNavigatorCustomDomainSingleLifecycle_RealPG(t *testing.T) {
+	verifyNavigatorCustomDomainSingleLifecycle(t, startNavigatorStoreRealPG(t))
+}
+
+func TestNavigatorCustomDomainSingleLifecycle_RealYugabyte(t *testing.T) {
+	verifyNavigatorCustomDomainSingleLifecycle(t, startNavigatorStoreRealYugabyte(t))
+}
+
+// verifyNavigatorCustomDomainSingleLifecycle proves the tenant-bundle-only
+// custom-domain transitions and the v0.3.5 migrations on a real engine.
+func verifyNavigatorCustomDomainSingleLifecycle(t *testing.T, db *sql.DB) {
+	t.Helper()
+	enc, err := fieldcrypt.DeriveFieldEncryptor([]byte("navigator-real-postgres-contract-secret"), "navigator-store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db, enc)
+	ctx := context.Background()
+	const tenantA = "20000000-0000-0000-0000-000000000001"
+	const tenantB = "20000000-0000-0000-0000-000000000002"
+
+	expand, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.5/expand/001_custom_domain_single_lifecycle.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, string(expand)); err != nil {
+		t.Fatalf("replay v0.3.5 expand on current baseline: %v", err)
+	}
+
+	admit := func(tenantID, domain, status string) {
+		t.Helper()
+		row, err := store.EnsureTenantCustomDomain(ctx, tenantID, domain, strings.ReplaceAll(domain, ".", "-"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantID, domain, row.Status, status, ""); err != nil || !transitioned {
+			t.Fatalf("admit %s as %s transitioned=%v err=%v", domain, status, transitioned, err)
+		}
+	}
+	get := func(tenantID, domain string) *TenantCustomDomain {
+		t.Helper()
+		row, err := store.GetTenantCustomDomain(ctx, tenantID, domain)
+		if err != nil {
+			t.Fatalf("get %s: %v", domain, err)
+		}
+		return row
+	}
+	admit(tenantA, "served.example.test", "cert_issuing")
+	admit(tenantA, "issued.example.test", "cert_issued")
+	admit(tenantA, "waiting.example.test", "pending_alias")
+	admit(tenantB, "other.example.test", "cert_issued")
+
+	if failed, err := store.FailTenantCustomDomainIssuance(ctx, tenantA, "issued.example.test", "must not apply", 15*time.Minute); err != nil || failed {
+		t.Fatalf("issuance failure crossed cert_issued fence failed=%v err=%v", failed, err)
+	}
+	if failed, err := store.FailTenantCustomDomainIssuance(ctx, tenantA, "served.example.test", "order rejected", 15*time.Minute); err != nil || !failed {
+		t.Fatalf("cert_issuing failure failed=%v err=%v", failed, err)
+	}
+	var retryInWindow bool
+	if err := db.QueryRowContext(ctx, `
+SELECT next_attempt_at BETWEEN NOW() + INTERVAL '14 minutes' AND NOW() + INTERVAL '15 minutes'
+FROM navigator.tenant_custom_domains
+WHERE tenant_id = $1::uuid AND domain = 'served.example.test'`, tenantA).Scan(&retryInWindow); err != nil || !retryInWindow {
+		t.Fatalf("failed issuance next_attempt_at within 15 minutes=%v err=%v", retryInWindow, err)
+	}
+	if row := get(tenantA, "served.example.test"); row.Status != "cert_failed" || row.LastError.String != "order rejected" || !row.NextAttemptAt.Valid {
+		t.Fatalf("failed issuance row = %#v", row)
+	}
+	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantA, "served.example.test", "cert_failed", "verified", ""); err != nil || !transitioned {
+		t.Fatalf("re-verify failed domain transitioned=%v err=%v", transitioned, err)
+	}
+	if row := get(tenantA, "served.example.test"); row.NextAttemptAt.Valid || row.LastError.Valid {
+		t.Fatalf("re-verified domain kept retry state: %#v", row)
+	}
+	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantA, "served.example.test", "verified", "cert_issuing", ""); err != nil || !transitioned {
+		t.Fatalf("re-admit domain transitioned=%v err=%v", transitioned, err)
+	}
+
+	if recorded, err := store.RecordTenantCustomDomainRenewalFailure(ctx, tenantA, "renewal rejected"); err != nil || recorded != 2 {
+		t.Fatalf("renewal failure recorded=%d err=%v, want the tenant's two participating domains", recorded, err)
+	}
+	for _, check := range []struct {
+		tenantID, domain, status string
+		recorded                 bool
+	}{
+		{tenantA, "served.example.test", "cert_issuing", true},
+		{tenantA, "issued.example.test", "cert_issued", true},
+		{tenantA, "waiting.example.test", "pending_alias", false},
+		{tenantB, "other.example.test", "cert_issued", false},
+	} {
+		row := get(check.tenantID, check.domain)
+		if row.Status != check.status || row.LastRenewalError.Valid != check.recorded || row.LastRenewalErrorAt.Valid != check.recorded ||
+			(check.recorded && row.LastRenewalError.String != "renewal rejected") {
+			t.Fatalf("renewal failure on %s = %#v", check.domain, row)
+		}
+	}
+
+	servedExpiry := time.Now().UTC().Add(60 * 24 * time.Hour).Truncate(time.Second)
+	if completed, err := store.CompleteTenantCustomDomainIssuance(ctx, tenantA, "waiting.example.test", "google-trust", sql.NullTime{Time: servedExpiry, Valid: true}); err != nil || completed {
+		t.Fatalf("pending_alias domain completed issuance completed=%v err=%v", completed, err)
+	}
+	if completed, err := store.CompleteTenantCustomDomainIssuance(ctx, tenantA, "served.example.test", "google-trust", sql.NullTime{Time: servedExpiry, Valid: true}); err != nil || !completed {
+		t.Fatalf("cert_issuing domain completed=%v err=%v", completed, err)
+	}
+	if row := get(tenantA, "served.example.test"); row.Status != "cert_issued" || row.IssuerID.String != "google-trust" ||
+		!row.CertExpiresAt.Time.Equal(servedExpiry) || !row.CertIssuedAt.Valid || row.LastError.Valid || row.NextAttemptAt.Valid ||
+		row.LastRenewalError.Valid || row.LastRenewalErrorAt.Valid {
+		t.Fatalf("completed issuance row = %#v", row)
+	}
+
+	refreshedExpiry := time.Now().UTC().Add(80 * 24 * time.Hour).Truncate(time.Second)
+	if updated, err := store.RefreshTenantCustomDomainServedCertificate(ctx, tenantA,
+		[]string{"issued.example.test", "waiting.example.test", "other.example.test"}, "letsencrypt",
+		sql.NullTime{Time: refreshedExpiry, Valid: true}); err != nil || updated != 1 {
+		t.Fatalf("bundle refresh updated=%d err=%v, want only the tenant's participating listed domain", updated, err)
+	}
+	if row := get(tenantA, "issued.example.test"); row.IssuerID.String != "letsencrypt" || !row.CertExpiresAt.Time.Equal(refreshedExpiry) ||
+		row.LastRenewalError.Valid || row.LastRenewalErrorAt.Valid {
+		t.Fatalf("refreshed served domain = %#v", row)
+	}
+	if row := get(tenantA, "served.example.test"); row.IssuerID.String != "google-trust" {
+		t.Fatalf("refresh touched a domain absent from the bundle: %#v", row)
+	}
+	if row := get(tenantA, "waiting.example.test"); row.IssuerID.Valid {
+		t.Fatalf("refresh touched a non-participating domain: %#v", row)
+	}
+	if row := get(tenantB, "other.example.test"); row.IssuerID.Valid {
+		t.Fatalf("refresh crossed tenants: %#v", row)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at)
+VALUES (NULL, 'issued.example.test', 'platform-cert', 'platform-key', NOW() + INTERVAL '1 day'),
+       ($1::uuid, 'issued.example.test', 'exact-cert', 'exact-key', NOW() + INTERVAL '1 day'),
+       ($1::uuid, 'waiting.example.test', 'exact-cert', 'exact-key', NOW() + INTERVAL '1 day'),
+       ($2::uuid, 'other.example.test', 'exact-cert', 'exact-key', NOW() + INTERVAL '1 day'),
+       ($1::uuid, 'alias-only.example.test', 'alias-cert', 'alias-key', NOW() + INTERVAL '1 day'),
+       ($2::uuid, 'issued.example.test', 'foreign-cert', 'foreign-key', NOW() + INTERVAL '1 day')`, tenantA, tenantB); err != nil {
+		t.Fatalf("seed exact certificates: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at)
+VALUES ('tenant:' || $1::text, '["issued.example.test"]'::jsonb, 'bundle-cert', 'bundle-key', NOW() + INTERVAL '1 day')`, tenantA); err != nil {
+		t.Fatalf("seed tenant bundle: %v", err)
+	}
+	postdeploy, err := dbsql.Content.ReadFile("migrations/navigator/v0.3.5/postdeploy/001_delete_custom_domain_exact_certificates.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, string(postdeploy)); err != nil {
+		t.Fatalf("apply v0.3.5 postdeploy: %v", err)
+	}
+	certRows, err := db.QueryContext(ctx, `SELECT COALESCE(tenant_id::text, ''), domain FROM navigator.certificates ORDER BY 1, 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining []string
+	for certRows.Next() {
+		var owner, domain string
+		if err := certRows.Scan(&owner, &domain); err != nil {
+			t.Fatal(err)
+		}
+		remaining = append(remaining, owner+"|"+domain)
+	}
+	if err := certRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	_ = certRows.Close()
+	wantRemaining := []string{"|issued.example.test", tenantA + "|alias-only.example.test", tenantB + "|issued.example.test"}
+	if fmt.Sprint(remaining) != fmt.Sprint(wantRemaining) {
+		t.Fatalf("certificates after postdeploy = %v, want %v", remaining, wantRemaining)
+	}
+	var bundles int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM navigator.tls_bundles WHERE bundle_id = 'tenant:' || $1::text`, tenantA).Scan(&bundles); err != nil || bundles != 1 {
+		t.Fatalf("tenant bundle after postdeploy count=%d err=%v", bundles, err)
+	}
+
+	account := &ACMEAccount{Email: "ops@example.test", Registration: `{"uri":"account"}`, PrivateKeyPEM: "account-key", CA: "letsencrypt"}
+	if err := store.SaveACMEAccount(ctx, tenantA, account); err != nil {
+		t.Fatalf("save tenant ACME account: %v", err)
+	}
+	for _, domain := range []string{"served.example.test", "issued.example.test"} {
+		if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantA, domain, "", "tearing_down", ""); err != nil || !transitioned {
+			t.Fatalf("mark %s tearing down transitioned=%v err=%v", domain, transitioned, err)
+		}
+		if finalized, err := store.FinalizeTenantCustomDomainRemoval(ctx, tenantA, domain); err != nil || !finalized {
+			t.Fatalf("finalize %s finalized=%v err=%v", domain, finalized, err)
+		}
+	}
+	if _, err := store.GetACMEAccount(ctx, tenantA, account.Email, account.CA); err != nil {
+		t.Fatalf("pending_alias custom domain did not retain the tenant ACME account: %v", err)
+	}
+	if transitioned, err := store.SetTenantCustomDomainStatus(ctx, tenantA, "waiting.example.test", "", "tearing_down", ""); err != nil || !transitioned {
+		t.Fatalf("mark waiting domain tearing down transitioned=%v err=%v", transitioned, err)
+	}
+	if finalized, err := store.FinalizeTenantCustomDomainRemoval(ctx, tenantA, "waiting.example.test"); err != nil || !finalized {
+		t.Fatalf("finalize waiting domain finalized=%v err=%v", finalized, err)
+	}
+	if _, err := store.GetACMEAccount(ctx, tenantA, account.Email, account.CA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("tenant ACME account survived its last custom domain: %v", err)
 	}
 }
 

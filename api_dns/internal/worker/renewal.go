@@ -26,12 +26,12 @@ type renewalStore interface {
 	ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]store.Certificate, error)
 	ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]store.TLSBundle, error)
 	GetTenantAlias(ctx context.Context, tenantID string) (*store.TenantAlias, error)
-	GetTenantCustomDomain(ctx context.Context, tenantID, domain string) (*store.TenantCustomDomain, error)
+	RecordTenantCustomDomainRenewalFailure(ctx context.Context, tenantID, errMsg string) (int64, error)
 	DeleteExpiredCertificateIssuanceLeases(ctx context.Context) (int64, error)
 }
 
 type certIssuer interface {
-	RenewCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
+	IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
 	EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error)
 	EnsureTenantWildcardCertificate(ctx context.Context, tenantID, subdomain, tenantZone, rootDomain, email string) (*store.TLSBundle, error)
 }
@@ -101,33 +101,20 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 	}
 
 	for _, cert := range certs {
-		// Extract tenant context from the certificate
-		tenantID := ""
-		if cert.TenantID.Valid {
-			tenantID = cert.TenantID.String
-		}
-
 		log := w.logger.WithField("domain", cert.Domain)
-		if tenantID != "" {
-			log = log.WithField("tenant_id", tenantID)
-			authorized, authorityErr := w.tenantCertificateAuthorized(ctx, tenantID, cert.Domain)
-			if authorityErr != nil {
-				log.WithError(authorityErr).Warn("Skipping certificate renewal because tenant authority could not be read")
-				continue
-			}
-			if !authorized {
-				log.Warn("Skipping certificate renewal without active tenant authority")
-				continue
-			}
+		// Tenant TLS is served only through tenant: bundles, renewed below.
+		// A tenant-scoped certificate row has no consumer and is never renewed.
+		if cert.TenantID.Valid {
+			log.WithField("tenant_id", cert.TenantID.String).Debug("Skipping unserved tenant-scoped certificate")
+			continue
 		}
 		log.Info("Renewing certificate")
 
 		email := w.acmeEmail
 
-		// Attempt renewal with tenant context
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			_, _, _, issueErr := w.certManager.RenewCertificate(ctx, tenantID, cert.Domain, email)
+			_, _, _, issueErr := w.certManager.IssueCertificate(ctx, "", cert.Domain, email)
 			if issueErr == nil {
 				lastErr = nil
 				break
@@ -227,21 +214,18 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 				continue
 			}
 			log.WithError(lastErr).Error("Failed to renew tls bundle")
+			if tenantAlias != nil {
+				// The previous bundle is still valid and keeps serving every
+				// custom SAN, so the failure is surfaced without demoting any
+				// domain or removing it from the next bundle order.
+				if _, recordErr := w.store.RecordTenantCustomDomainRenewalFailure(ctx, tenantAlias.TenantID, lastErr.Error()); recordErr != nil {
+					log.WithError(recordErr).Warn("Failed to record tenant bundle renewal failure on custom domains")
+				}
+			}
 			continue
 		}
 		log.Info("TLS bundle renewed successfully")
 	}
-}
-
-func (w *RenewalWorker) tenantCertificateAuthorized(ctx context.Context, tenantID, domain string) (bool, error) {
-	customDomain, customDomainErr := w.store.GetTenantCustomDomain(ctx, tenantID, domain)
-	if customDomainErr != nil {
-		if errors.Is(customDomainErr, store.ErrNotFound) {
-			return false, nil
-		}
-		return false, customDomainErr
-	}
-	return store.CustomDomainHasCertificateAuthority(customDomain.Status), nil
 }
 
 func isRetryableACMEError(err error) bool {

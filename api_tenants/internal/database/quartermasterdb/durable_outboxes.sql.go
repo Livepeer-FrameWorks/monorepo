@@ -227,10 +227,16 @@ UPDATE quartermaster.service_event_outbox
 SET completed_at = NOW(),
     last_error = NULL
 WHERE id = $1::uuid
+  AND lease_token = NULLIF($2::text, '')::uuid
 `
 
-func (q *Queries) CompleteServiceEventOutbox(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, completeServiceEventOutbox, id)
+type CompleteServiceEventOutboxParams struct {
+	ID         string `db:"id" json:"id"`
+	LeaseToken string `db:"lease_token" json:"lease_token"`
+}
+
+func (q *Queries) CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error {
+	_, err := q.db.ExecContext(ctx, completeServiceEventOutbox, arg.ID, arg.LeaseToken)
 	return err
 }
 
@@ -320,14 +326,15 @@ func (q *Queries) EnqueueNavigatorTenantAlias(ctx context.Context, arg EnqueueNa
 
 const enqueueServiceEvent = `-- name: EnqueueServiceEvent :one
 INSERT INTO quartermaster.service_event_outbox (
-    event_type, tenant_id, user_id, resource_type, resource_id, payload
+    event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
 ) VALUES (
     $1::text,
-    $2::uuid,
+    NULLIF($2::text, '')::uuid,
     $3::text,
     $4::text,
     $5::text,
-    $6::text::jsonb
+    $6::text,
+    $7::text::jsonb
 )
 RETURNING id::text
 `
@@ -335,6 +342,7 @@ RETURNING id::text
 type EnqueueServiceEventParams struct {
 	EventType    string `db:"event_type" json:"event_type"`
 	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	Scope        string `db:"scope" json:"scope"`
 	UserID       string `db:"user_id" json:"user_id"`
 	ResourceType string `db:"resource_type" json:"resource_type"`
 	ResourceID   string `db:"resource_id" json:"resource_id"`
@@ -345,6 +353,7 @@ func (q *Queries) EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEve
 	row := q.db.QueryRowContext(ctx, enqueueServiceEvent,
 		arg.EventType,
 		arg.TenantID,
+		arg.Scope,
 		arg.UserID,
 		arg.ResourceType,
 		arg.ResourceID,
@@ -384,7 +393,8 @@ const failServiceEventOutbox = `-- name: FailServiceEventOutbox :exec
 WITH input AS (
     SELECT $1::uuid AS id,
            $2::integer AS attempts,
-           $3::text AS last_error
+           $3::text AS last_error,
+           NULLIF($4::text, '')::uuid AS lease_token
 )
 UPDATE quartermaster.service_event_outbox
 SET attempts = input.attempts,
@@ -392,16 +402,23 @@ SET attempts = input.attempts,
     claimed_at = NULL
 FROM input
 WHERE service_event_outbox.id = input.id
+  AND service_event_outbox.lease_token = input.lease_token
 `
 
 type FailServiceEventOutboxParams struct {
-	ID        string `db:"id" json:"id"`
-	Attempts  int32  `db:"attempts" json:"attempts"`
-	LastError string `db:"last_error" json:"last_error"`
+	ID         string `db:"id" json:"id"`
+	Attempts   int32  `db:"attempts" json:"attempts"`
+	LastError  string `db:"last_error" json:"last_error"`
+	LeaseToken string `db:"lease_token" json:"lease_token"`
 }
 
 func (q *Queries) FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error {
-	_, err := q.db.ExecContext(ctx, failServiceEventOutbox, arg.ID, arg.Attempts, arg.LastError)
+	_, err := q.db.ExecContext(ctx, failServiceEventOutbox,
+		arg.ID,
+		arg.Attempts,
+		arg.LastError,
+		arg.LeaseToken,
+	)
 	return err
 }
 
@@ -429,11 +446,17 @@ func (q *Queries) MarkNavigatorTenantAliasOutboxClaimed(ctx context.Context, ids
 
 const markServiceEventOutboxClaimed = `-- name: MarkServiceEventOutboxClaimed :exec
 UPDATE quartermaster.service_event_outbox
-SET claimed_at = NOW()
-WHERE id = ANY($1::uuid[])
+SET claimed_at = NOW(),
+    lease_token = $1::uuid
+WHERE id = ANY($2::uuid[])
 `
 
-func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error {
-	_, err := q.db.ExecContext(ctx, markServiceEventOutboxClaimed, pq.Array(ids))
+type MarkServiceEventOutboxClaimedParams struct {
+	LeaseToken string   `db:"lease_token" json:"lease_token"`
+	Ids        []string `db:"ids" json:"ids"`
+}
+
+func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkServiceEventOutboxClaimedParams) error {
+	_, err := q.db.ExecContext(ctx, markServiceEventOutboxClaimed, arg.LeaseToken, pq.Array(arg.Ids))
 	return err
 }

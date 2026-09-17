@@ -24,6 +24,26 @@ import (
 //go:embed edge/*
 var edgeFS embed.FS
 
+// edgeVMAgentExternalLabels renders the global external_labels block of the
+// edge vmagent config. It mirrors vmagent-edge.yml.j2 in the edge role: keys in
+// sorted order, empty values omitted, no block when both are empty.
+func edgeVMAgentExternalLabels(vars EdgeVars) string {
+	cluster := strings.TrimSpace(vars.ClusterID)
+	region := strings.TrimSpace(vars.Region)
+	if cluster == "" && region == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("  external_labels:\n")
+	if cluster != "" {
+		fmt.Fprintf(&b, "    cluster: %q\n", cluster)
+	}
+	if region != "" {
+		fmt.Fprintf(&b, "    region: %q\n", region)
+	}
+	return b.String()
+}
+
 type EdgeVars struct {
 	NodeID          string
 	EdgeDomain      string
@@ -55,6 +75,10 @@ type EdgeVars struct {
 	ChandlerUpstream string // localhost:18020 in both modes
 	TelemetryURL     string
 	TelemetryToken   string
+	// ClusterID and Region become the cluster and region external labels on
+	// every series the edge vmagent scrapes; empty values are omitted.
+	ClusterID string
+	Region    string
 	// RelayTrustedCIDR is the CIDR whose RemoteAddr bypasses the relay
 	// authorize gate for the local Mist→Helmsman hop. Empty in both modes
 	// (Mist reaches Helmsman on loopback — native host or inside the edge
@@ -278,7 +302,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 		}
 		vmagentConfig := fmt.Sprintf(`global:
   scrape_interval: 30s
-scrape_configs:
+%sscrape_configs:
   - job_name: edge-mist
     metrics_path: %s
     static_configs:
@@ -297,7 +321,7 @@ scrape_configs:
           frameworks_mode: "edge"
           frameworks_node: %q
           frameworks_service: "helmsman"
-`, mist.MetricsPath, scrapeHost, vars.NodeID, scrapeHost, vars.NodeID)
+`, edgeVMAgentExternalLabels(vars), mist.MetricsPath, scrapeHost, vars.NodeID, scrapeHost, vars.NodeID)
 		out = append(out, EdgeRenderedFile{
 			Path:      "vmagent-edge.yml",
 			Content:   []byte(vmagentConfig),

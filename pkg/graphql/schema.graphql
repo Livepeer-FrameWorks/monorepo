@@ -91,6 +91,27 @@ type Query {
   platform: Platform!
 
   """
+  Incidents raised by platform alerting on clusters the current tenant owns,
+  newest first.
+  """
+  incidentsConnection(
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Optional status and cluster filters.
+    """
+    filter: IncidentFilterInput
+  ): IncidentsConnection!
+
+  """
+  One incident with its alerts and timeline. Null when the incident does not
+  exist or is not visible to the caller.
+  """
+  incident(id: ID!): IncidentDetail
+
+  """
   List all streams for the current tenant with pagination.
   """
   streamsConnection(
@@ -766,10 +787,6 @@ type Query {
     scope: MediaPlacementScopeInput!
     idempotencyKey: String!
   ): MediaPlacementChangeResult!
-  """
-  Inactive legacy pins, available for an explicit reviewed import into stream rules.
-  """
-  mediaPlacementLegacyPins(streamId: ID!): MediaPlacementLegacyPinsResult!
   clusterMediaConsent(clusterId: ID!): MediaCapacityConsentResult!
   reviewClusterMediaConsentChange(
     input: ReviewMediaCapacityConsentInput!
@@ -2001,6 +2018,24 @@ type Mutation {
   ): MediaCapacityConsentChangeResult!
 
   """
+  Acknowledge an incident. The incident stays open until its alerts resolve
+  or someone resolves it.
+  """
+  acknowledgeIncident(id: ID!): IncidentMutationResult!
+  """
+  Assign an incident to a user of the incident's tenant. A null assignee
+  clears the assignment.
+  """
+  assignIncident(id: ID!, assigneeUserId: ID): IncidentMutationResult!
+  """
+  Resolve an incident manually. Repeats of the same firing alerts do not
+  reopen it; a new alert opens a new incident.
+  """
+  resolveIncident(id: ID!): IncidentMutationResult!
+  "Add a note to an incident's timeline."
+  addIncidentNote(id: ID!, body: String!): IncidentMutationResult!
+
+  """
   Apply a per-asset retention override on a finalized DVR recording, clip,
   or VOD asset (set targetType accordingly). Override beats tenant default
   beats tier entitlement. Active assets are rejected — retention applies
@@ -2230,6 +2265,12 @@ type Subscription {
   liveSystemHealth: SystemHealthEvent!
 
   """
+  Changes to incidents on clusters the current tenant owns. For platform
+  operators, changes to every incident: platform scope and every tenant.
+  """
+  liveIncidentUpdates: IncidentUpdatedEvent!
+
+  """
   Firehose subscription receiving ALL tenant events in a single stream.
   Combines stream, analytics, and system events for unified dashboards.
   Use the type and channel fields to filter/route events client-side.
@@ -2290,6 +2331,21 @@ type TenantEvent {
   routingEvent: RoutingEvent
   systemHealthEvent: SystemHealthEvent
   skipperInvestigation: SkipperInvestigationEvent
+  incidentUpdated: IncidentUpdatedEvent
+}
+
+"""
+Change to an incident the subscriber can see.
+"""
+type IncidentUpdatedEvent {
+  incidentId: ID!
+  clusterId: String
+  status: IncidentStatus!
+  severity: String!
+  title: String!
+  "Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved."
+  change: String!
+  updatedAt: Time!
 }
 
 # Skipper investigation notification event
@@ -2393,31 +2449,11 @@ enum IngestMode {
   MANAGED
 }
 
-"""
-Placement-pin wrapper for CreateStream / UpdateStream. The wrapper makes
-the field's *presence* meaningful: omitting allowedClusters on UpdateStream
-preserves the existing pin, while sending the wrapper (even with an empty
-clusterIds list) replaces it.
-"""
-input PullSourceAllowedClustersInput {
-  "Cluster IDs this pull source may run on. Empty list clears the pin (only valid for public sources)."
-  clusterIds: [String!]!
-}
-
 input PullSourceInput {
   "Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI. Required when creating or replacing a pull source."
   sourceUri: String
   "Whether the media plane may pull from the source."
   enabled: Boolean = true
-  """
-  Per-source placement pin. Omit on UpdateStream to preserve the existing
-  pin; send the wrapper to replace it (empty clusterIds clears the pin).
-  On CreateStream, omit means \"no pin\" — which is rejected for
-  private/multicast sources. Each cluster ID must be a registered
-  media-capable cluster, and for private sources must additionally have
-  allow_private_pull_sources=true.
-  """
-  allowedClusters: PullSourceAllowedClustersInput
 }
 
 """
@@ -2430,12 +2466,6 @@ type PullSourceView {
   enabled: Boolean!
   "Eligibility class: public or private."
   class: String!
-  """
-  Effective per-source placement pin. Empty list means \"any media cluster\"
-  (only valid for public sources). Surfaced so operators and admin UIs can
-  inspect placement without reading the database directly.
-  """
-  allowedClusterIds: [String!]!
 }
 
 """
@@ -2449,8 +2479,55 @@ type ManagedSourceView {
   alwaysOn: Boolean!
   "Number of source placements requested by the operator configuration."
   placementCount: Int!
-  "Clusters on which the source is allowed to materialize."
-  allowedClusterIds: [String!]!
+}
+
+"""
+Where a stream's source may be ingested. It is a summary of the stream's own
+ingest placement rules.
+"""
+enum SourceLocationMode {
+  "No stream-level restriction; FrameWorks chooses among the tenant's entitled clusters."
+  ANY
+  "Only the listed clusters, optionally narrowed to specific nodes and excluding avoided nodes."
+  RESTRICTED
+  """
+  The stream's own ingest rules contain constraints this summary cannot
+  express. Read-only here; edit them in the stream's placement rules.
+  """
+  CUSTOM
+}
+
+input SourceLocationClusterInput {
+  clusterId: ID!
+  "Nodes of this cluster the source may run on. Empty means any node of the cluster. Only nodes of clusters the tenant owns are accepted."
+  nodeIds: [ID!]! = []
+}
+
+"""
+Replaces the stream's own ingest restriction. Private and multicast pull
+sources require RESTRICTED with clusters that allow private pull sources.
+"""
+input SourceLocationInput {
+  "ANY or RESTRICTED. CUSTOM is rejected."
+  mode: SourceLocationMode!
+  "Required and non-empty for RESTRICTED; must be empty for ANY."
+  clusters: [SourceLocationClusterInput!]! = []
+  "Nodes the source must never run on. Only nodes of clusters the tenant owns are accepted."
+  avoidNodeIds: [ID!]! = []
+}
+
+type SourceLocationCluster {
+  clusterId: ID!
+  "Empty means any node of the cluster."
+  nodeIds: [ID!]!
+}
+
+type SourceLocation {
+  mode: SourceLocationMode!
+  "Empty unless mode is RESTRICTED."
+  clusters: [SourceLocationCluster!]!
+  "Empty unless mode is RESTRICTED."
+  avoidNodeIds: [ID!]!
 }
 
 """
@@ -2467,6 +2544,8 @@ input CreateStreamInput {
   ingestMode: IngestMode = PUSH
   "Pull-source configuration. Required when ingestMode is PULL."
   pullSource: PullSourceInput
+  "Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources."
+  sourceLocation: SourceLocationInput
 }
 
 """
@@ -2484,6 +2563,8 @@ input UpdateStreamInput {
   ingestMode: IngestMode
   "Update the pull-source configuration for an existing pull stream."
   pullSource: PullSourceInput
+  "Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams."
+  sourceLocation: SourceLocationInput
   """
   Historical chapter rotation mode. Snapshotted onto the DVR artifact
   at StartDVR; changes take effect on the next recording, not in-flight.
@@ -3823,8 +3904,9 @@ type CustomDomainStatus {
   "The domain Navigator is tracking (mirrors Tenant.customDomain)."
   domain: String!
   """
-  pending_verification | verified | cert_issuing | cert_issued | cert_failed |
-  tearing_down — verbatim from Navigator.
+  pending_verification | verified | pending_alias | cert_issuing | cert_issued |
+  cert_failed | tearing_down — verbatim from Navigator. pending_alias means the
+  CNAMEs are verified and the domain waits for the tenant alias certificate.
   """
   state: String!
   """
@@ -3872,6 +3954,8 @@ type Stream implements Node {
   pullSource: PullSourceView
   "Safe source summary for managed streams; null for push and pull streams."
   managedSource: ManagedSourceView
+  "Where the stream's source may be ingested, derived from the stream's own ingest placement rules."
+  sourceLocation: SourceLocation!
   "When this stream was created."
   createdAt: Time!
   "When this stream was last modified."
@@ -6323,12 +6407,10 @@ type StreamingConfig {
   ingestDomain: String
   edgeDomain: String
   playDomain: String
-  chandlerDomain: String
   officialClusterLabel: String
   officialIngestDomain: String
   officialEdgeDomain: String
   officialPlayDomain: String
-  officialChandlerDomain: String
   # Global root entrypoints. Default user-facing URL surface for free
   # and platform-official tenants. Bunny smart DNS does geo routing from
   # one record per service. Webapp/SDK should prefer these over
@@ -6336,7 +6418,6 @@ type StreamingConfig {
   globalIngestDomain: String
   globalEdgeDomain: String
   globalPlayDomain: String
-  globalChandlerDomain: String
   globalLivepeerDomain: String
   # Tenant alias entrypoints. Populated only when Navigator has
   # published at least one DNS member for the tenant alias. When
@@ -6344,7 +6425,6 @@ type StreamingConfig {
   tenantIngestDomain: String
   tenantEdgeDomain: String
   tenantPlayDomain: String
-  tenantChandlerDomain: String
   tenantLivepeerDomain: String
   srtPort: Int
   rtmpPort: Int
@@ -6794,6 +6874,8 @@ type ClusterAccess {
   clusterName: String!
   accessLevel: String!
   resourceLimits: JSON
+  "Whether the cluster may pull from private (RFC 1918) and multicast sources."
+  allowPrivatePullSources: Boolean!
 }
 
 # Available cluster entry (Quartermaster)
@@ -7936,7 +8018,155 @@ type Platform {
   Cluster pivot: each cluster with live stats and resident tenants.
   """
   clusters: [ClusterPivotRow!]!
+
+  """
+  Incidents across platform and tenant scopes, newest first.
+  """
+  incidents(
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Optional scope, status, cluster, and tenant filters.
+    """
+    filter: PlatformIncidentFilterInput
+  ): IncidentsConnection!
 }
+
+# ============================================================================
+# INCIDENTS (Lookout)
+# ============================================================================
+
+enum IncidentScope {
+  "Platform infrastructure; visible to platform operators only."
+  PLATFORM
+  "A cluster owned by one tenant; visible to that tenant and platform operators."
+  TENANT
+}
+
+enum IncidentStatus {
+  FIRING
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum IncidentResolution {
+  "Every alert of the incident resolved."
+  AUTO
+  "A user resolved the incident."
+  MANUAL
+}
+
+enum IncidentEventKind {
+  ALERT_FIRING
+  ALERT_RESOLVED
+  ACKNOWLEDGED
+  ASSIGNED
+  NOTE
+  RESOLVED
+  INVESTIGATION_ATTACHED
+  NOTIFIED
+  "The incident's visibility moved after its cluster owner was confirmed."
+  SCOPE_CHANGED
+}
+
+input IncidentFilterInput {
+  "Empty or omitted matches every status."
+  statuses: [IncidentStatus!]
+  clusterId: String
+}
+
+input PlatformIncidentFilterInput {
+  "Omitted matches both scopes."
+  scope: IncidentScope
+  "Empty or omitted matches every status."
+  statuses: [IncidentStatus!]
+  clusterId: String
+  "Narrows tenant-scope incidents to one tenant."
+  tenantId: ID
+}
+
+type Incident {
+  id: ID!
+  scope: IncidentScope!
+  "Null for platform-scope incidents."
+  tenantId: ID
+  clusterId: String
+  region: String
+  alertname: String!
+  severity: String!
+  status: IncidentStatus!
+  "Null until the incident is resolved."
+  resolution: IncidentResolution
+  title: String!
+  summary: String
+  "Alerts of this incident that are still firing."
+  firingAlertCount: Int!
+  startedAt: Time!
+  lastAlertAt: Time!
+  acknowledgedAt: Time
+  acknowledgedBy: ID
+  assignedTo: ID
+  resolvedAt: Time
+  resolvedBy: ID
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type IncidentAlert {
+  fingerprint: String!
+  "firing or resolved."
+  status: String!
+  labels: JSON!
+  annotations: JSON!
+  startsAt: Time!
+  endsAt: Time
+  generatorUrl: String
+}
+
+type IncidentTimelineEvent {
+  id: ID!
+  kind: IncidentEventKind!
+  "Null for events produced by alerting or services."
+  actorUserId: ID
+  createdAt: Time!
+  "NOTE events."
+  note: String
+  "ASSIGNED events; null clears the assignment."
+  assignedTo: ID
+  "INVESTIGATION_ATTACHED events: the Skipper report."
+  reportId: ID
+  "NOTIFIED events: email, slack, or discord."
+  channel: String
+  "RESOLVED events."
+  resolution: IncidentResolution
+  "ALERT_FIRING and ALERT_RESOLVED events."
+  alertFingerprint: String
+  "ALERT_FIRING and ALERT_RESOLVED events."
+  alertname: String
+}
+
+type IncidentDetail {
+  incident: Incident!
+  alerts: [IncidentAlert!]!
+  "Oldest first."
+  timeline: [IncidentTimelineEvent!]!
+}
+
+type IncidentEdge {
+  cursor: String!
+  node: Incident!
+}
+
+type IncidentsConnection {
+  edges: [IncidentEdge!]!
+  nodes: [Incident!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+union IncidentMutationResult = Incident | ValidationError | NotFoundError | AuthError
 
 type PlatformTenantIndex {
   rows: [PlatformTenantRow!]!
@@ -8095,6 +8325,8 @@ enum MediaPlacementOptionKind {
   CLUSTER
   OPERATOR
   REGION
+  "A node of a cluster the tenant owns."
+  NODE
 }
 
 input MediaPlacementScopeInput {
@@ -8110,6 +8342,8 @@ type MediaPlacementScope {
 "Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity."
 input MediaPlacementSelectorInput {
   clusterIds: [ID!]
+  "Nodes of clusters the tenant owns."
+  nodeIds: [ID!]
   ownerIds: [ID!]
   regions: [String!]
   classes: [MediaPlacementClass!]
@@ -8118,6 +8352,7 @@ input MediaPlacementSelectorInput {
 
 type MediaPlacementSelector {
   clusterIds: [ID!]!
+  nodeIds: [ID!]!
   ownerIds: [ID!]!
   regions: [String!]!
   classes: [MediaPlacementClass!]!
@@ -8265,6 +8500,8 @@ input MediaPlacementOptionsFilter {
   query: String
   kind: MediaPlacementOptionKind
   classes: [MediaPlacementClass!]
+  "Limits NODE options to one cluster."
+  clusterId: ID
 }
 
 type MediaPlacementOption {
@@ -8274,6 +8511,8 @@ type MediaPlacementOption {
   clusterClass: MediaPlacementClass
   region: String
   ownerId: ID
+  "Cluster of a NODE option."
+  clusterId: ID
   eligible: Boolean!
   reason: String
 }
@@ -8406,12 +8645,6 @@ type MediaPlacementChange {
   createdAt: Time!
 }
 
-type MediaPlacementLegacyPins {
-  streamId: ID!
-  clusterIds: [ID!]!
-  currentlyEnforced: Boolean!
-}
-
 type MediaCapacityConsent {
   clusterId: ID!
   revision: String!
@@ -8472,11 +8705,6 @@ union MediaPlacementReviewResult =
   | NotFoundError
 union MediaPlacementChangeResult =
   | MediaPlacementChange
-  | MediaPlacementError
-  | AuthError
-  | NotFoundError
-union MediaPlacementLegacyPinsResult =
-  | MediaPlacementLegacyPins
   | MediaPlacementError
   | AuthError
   | NotFoundError

@@ -11,7 +11,17 @@ type Metrics struct {
 	MessageDeliveryLag *prometheus.HistogramVec
 
 	// Kafka metrics
-	KafkaMessages *prometheus.CounterVec
-	KafkaDuration *prometheus.HistogramVec
-	KafkaLag      *prometheus.GaugeVec
+	KafkaMessages        *prometheus.CounterVec
+	KafkaDuration        *prometheus.HistogramVec
+	KafkaLag             *prometheus.GaugeVec
+	KafkaDuplicateEvents *prometheus.CounterVec
+}
+
+// RecordDuplicateEvent counts a Kafka event dropped because its event ID was
+// already broadcast. Labels: topic.
+func (m *Metrics) RecordDuplicateEvent(topic string) {
+	if m == nil || m.KafkaDuplicateEvents == nil {
+		return
+	}
+	m.KafkaDuplicateEvents.WithLabelValues(topic).Inc()
 }

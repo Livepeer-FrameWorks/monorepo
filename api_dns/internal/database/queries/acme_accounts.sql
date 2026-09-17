@@ -21,7 +21,7 @@ WITH custom_domain_authority AS MATERIALIZED (
     SELECT custom_domain.tenant_id
     FROM navigator.tenant_custom_domains AS custom_domain
     WHERE custom_domain.tenant_id = sqlc.arg(tenant_id)::uuid
-      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      AND custom_domain.status IN ('verified', 'pending_alias', 'cert_issuing', 'cert_issued', 'cert_failed')
     ORDER BY custom_domain.domain
     LIMIT 1
     FOR UPDATE OF custom_domain

@@ -67,11 +67,18 @@ func (s *CommodoreServer) ApplyMediaPlacementChange(ctx context.Context, req *pl
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	factsDigest, err := s.mediaPlacementReviewContext(ctx, scope.TenantID)
+	facts, err := s.mediaPlacementOwnerFacts(ctx, scope.TenantID)
 	if err != nil {
 		if recovered, found, recoverErr := recoverCommittedMediaPlacement(ctx, store, input, change); found {
 			return recovered, recoverErr
 		}
+		return nil, mediaPlacementError(err)
+	}
+	if nodeErr := s.checkMediaPlacementNodeSelectors(ctx, scope.TenantID, input.Policy, facts); nodeErr != nil {
+		return nil, nodeErr
+	}
+	factsDigest, err := mediaPlacementContextDigest(facts.authority, facts.entitlement)
+	if err != nil {
 		return nil, mediaPlacementError(err)
 	}
 	observedAt := time.Now()

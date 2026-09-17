@@ -47,7 +47,14 @@ func (s *CommodoreServer) ReviewMediaPlacementChange(ctx context.Context, req *p
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	factsDigest, err := s.mediaPlacementReviewContext(ctx, scope.TenantID)
+	facts, err := s.mediaPlacementOwnerFacts(ctx, scope.TenantID)
+	if err != nil {
+		return nil, mediaPlacementError(err)
+	}
+	if nodeErr := s.checkMediaPlacementNodeSelectors(ctx, scope.TenantID, next, facts); nodeErr != nil {
+		return nil, nodeErr
+	}
+	factsDigest, err := mediaPlacementContextDigest(facts.authority, facts.entitlement)
 	if err != nil {
 		return nil, mediaPlacementError(err)
 	}
@@ -68,29 +75,35 @@ func (s *CommodoreServer) mediaPlacementReviewReady() bool {
 	return s.mediaAuthorityEnabled() && len(s.mediaAuthorityPrivateKey) == ed25519.PrivateKeySize
 }
 
-// Owner RPCs run before the database write transaction. The apply callback bounds
-// their age and locks the local parent/scope revisions; it never holds SQL locks
-// across network calls. Final admission still consumes current signed owner facts.
-func (s *CommodoreServer) mediaPlacementReviewContext(ctx context.Context, tenantID string) (string, error) {
-	authority, entitlement, err := s.mediaPlacementOwnerContext(ctx, tenantID)
-	if err != nil {
-		return "", err
-	}
-	return mediaPlacementContextDigest(authority, entitlement)
+// mediaPlacementOwnerFacts is the owner-service view a review binds: the tenant
+// authority Commodore would compile now, the entitlement it came from, and the
+// cells that authority targets.
+type mediaPlacementOwnerFacts struct {
+	authority   *mediaauthoritypb.TenantAuthority
+	entitlement *quartermasterpb.GetTenantEntitlementResponse
+	targets     []string
 }
 
 func (s *CommodoreServer) mediaPlacementOwnerContext(ctx context.Context, tenantID string) (*mediaauthoritypb.TenantAuthority, *quartermasterpb.GetTenantEntitlementResponse, error) {
+	facts, err := s.mediaPlacementOwnerFacts(ctx, tenantID)
+	return facts.authority, facts.entitlement, err
+}
+
+// Owner RPCs run before the database write transaction. The apply callback bounds
+// their age and locks the local parent/scope revisions; it never holds SQL locks
+// across network calls. Final admission still consumes current signed owner facts.
+func (s *CommodoreServer) mediaPlacementOwnerFacts(ctx context.Context, tenantID string) (mediaPlacementOwnerFacts, error) {
 	if s.authorityTenantSource == nil || s.authorityBillingSource == nil {
-		return nil, nil, status.Error(codes.Unavailable, "placement owners are unavailable")
+		return mediaPlacementOwnerFacts{}, status.Error(codes.Unavailable, "placement owners are unavailable")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	tenant, err := s.authorityTenantSource.GetTenant(ctx, tenantID)
 	if err != nil {
-		return nil, nil, err
+		return mediaPlacementOwnerFacts{}, err
 	}
 	if tenant.GetTenant() == nil || tenant.GetTenant().GetId() != tenantID {
-		return nil, nil, placementpolicy.ErrNotFound
+		return mediaPlacementOwnerFacts{}, placementpolicy.ErrNotFound
 	}
 	var entitlement *quartermasterpb.GetTenantEntitlementResponse
 	var billing *purserpb.GetTenantBillingStatusResponse
@@ -113,17 +126,17 @@ func (s *CommodoreServer) mediaPlacementOwnerContext(ctx context.Context, tenant
 			return callErr
 		})
 		if groupErr := group.Wait(); groupErr != nil {
-			return nil, nil, groupErr
+			return mediaPlacementOwnerFacts{}, groupErr
 		}
 		if entitlement == nil || billing == nil || admission == nil {
-			return nil, nil, fmt.Errorf("placement owner returned empty authority")
+			return mediaPlacementOwnerFacts{}, fmt.Errorf("placement owner returned empty authority")
 		}
 	}
-	authority, _, _, _, err := buildTenantAuthority(tenant.GetTenant(), entitlement, billing, admission, time.Now().UTC())
+	authority, targets, _, _, err := buildTenantAuthority(tenant.GetTenant(), entitlement, billing, admission, time.Now().UTC())
 	if err != nil {
-		return nil, nil, err
+		return mediaPlacementOwnerFacts{}, err
 	}
-	return authority, entitlement, nil
+	return mediaPlacementOwnerFacts{authority: authority, entitlement: entitlement, targets: targets}, nil
 }
 
 func mediaPlacementContextDigest(authority *mediaauthoritypb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse) (string, error) {
@@ -209,7 +222,7 @@ func mediaPlacementWarnings(before, after *placementpb.PolicySet) []*placementpb
 }
 
 func placementSelectorMatchesAll(selector *placementpb.Selector) bool {
-	return len(selector.GetClusterIds()) == 0 && len(selector.GetOwnerIds()) == 0 && len(selector.GetRegions()) == 0 && len(selector.GetClasses()) == 0 && len(selector.GetCharging()) == 0
+	return len(selector.GetClusterIds()) == 0 && len(selector.GetOwnerIds()) == 0 && len(selector.GetRegions()) == 0 && len(selector.GetClasses()) == 0 && len(selector.GetCharging()) == 0 && len(selector.GetNodeIds()) == 0
 }
 
 func removedPlacementDenies(before, after []*placementpb.Selector) bool {

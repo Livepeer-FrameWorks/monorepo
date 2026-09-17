@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -67,9 +68,14 @@ func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("tenant-1", "x402_payment", "nonce-2").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE purser.x402_nonces").
 		WithArgs("transaction reorged or missing", "nonce-2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402ReorgDetected, "tenant-1", "", "x402_nonce", "0xreorg", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs("tenant-1", "x402_payment", "nonce-2").
@@ -86,6 +92,9 @@ func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO purser.credit_notes").
 		WithArgs("nonce-2", "0xreorg", "tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402SettlementFailed, "tenant-1", "", "x402_nonce", "0xreorg", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
@@ -234,10 +243,176 @@ func TestRecoverReversedBalanceUsesDistinctIdempotencyReference(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(3500), "topup",
 			sqlmock.AnyArg(), "nonce-4", "x402_recovery", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402LateRecovery, "tenant-1", "", "x402_nonce", "0xrecovered", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := reconciler.recoverReversedBalance(context.Background(), "tenant-1", 2500, "nonce-4", "0xrecovered"); err != nil {
+	if err := reconciler.recoverReversedBalance(context.Background(), "tenant-1", 2500, "nonce-4", "0xrecovered", "base"); err != nil {
 		t.Fatalf("recoverReversedBalance: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestRecoverReversedBalanceRollsBackCreditWhenOutboxInsertFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("tenant-1", "x402_recovery", "nonce-4").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
+		WithArgs("tenant-1", "EUR").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("UPDATE purser.prepaid_balances").
+		WithArgs(int64(2500), "tenant-1", "EUR").
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3500)))
+	mock.ExpectExec("INSERT INTO purser.balance_transactions").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402LateRecovery, "tenant-1", "", "x402_nonce", "0xrecovered", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = reconciler.recoverReversedBalance(context.Background(), "tenant-1", 2500, "nonce-4", "0xrecovered", "base")
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// markConfirmed runs in a transaction it opens itself, holding the status
+// update and the x402_settlement_confirmed outbox row.
+func TestMarkConfirmedWritesSettlementEventInTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		outboxErr error
+	}{
+		{name: "commit"},
+		{name: "outbox failure rolls back", outboxErr: errors.New("outbox unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create sqlmock: %v", err)
+			}
+			defer mockDB.Close()
+
+			reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
+			mock.ExpectBegin()
+			mock.ExpectExec(`UPDATE purser\.x402_nonces\s+SET status = 'confirmed'`).
+				WithArgs(int64(16), int64(21000), "nonce-5").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			outbox := mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+				WithArgs(sqlmock.AnyArg(), eventX402SettlementConfirm, "tenant-1", "", "x402_nonce", "0xlate", sqlmock.AnyArg())
+			if tc.outboxErr != nil {
+				outbox.WillReturnError(tc.outboxErr)
+				mock.ExpectRollback()
+			} else {
+				outbox.WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
+			}
+
+			reconciler.markConfirmed(context.Background(), PendingSettlement{
+				ID: "nonce-5", TenantID: "tenant-1", TxHash: "0xlate", AmountCents: 2500,
+			}, 16, 21000)
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+// A failed reorg_detected outbox insert rolls back the confirmed->failed
+// transition, leaving the settlement for the next pass to detect again.
+func TestReconcileConfirmedSettlementsReorgRollsBackStatusWhenOutboxInsertFails(t *testing.T) {
+	server := newTestRPCServer(t, nil, "0x64")
+	defer server.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	t.Setenv("X402_REORG_DEPTH_BLOCKS", "1")
+
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	reconciler := NewX402Reconciler(mockDB, logrus.New(), false)
+
+	mock.ExpectQuery("SELECT nonce.id::text AS id, nonce.network, nonce.tx_hash").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "network", "tx_hash", "tenant_id", "amount_cents", "settled_at", "block_number", "client_ip"}).
+			AddRow("nonce-2", "base", "0xreorg", "tenant-1", int64(2000), time.Now().Add(-30*time.Minute), int64(10), "127.0.0.1"))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("tenant-1", "x402_payment", "nonce-2").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE purser.x402_nonces").
+		WithArgs("transaction reorged or missing", "nonce-2").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402ReorgDetected, "tenant-1", "", "x402_nonce", "0xreorg", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+	// The debit still runs; its credit check failing ends the pass here.
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("tenant-1", "x402_payment", "nonce-2").
+		WillReturnError(errors.New("stop"))
+	mock.ExpectRollback()
+
+	reconciler.reconcileConfirmedSettlements(context.Background())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// Anomaly and RPC-error events have no mutation to share a transaction with:
+// the row is written as a standalone statement, a failed insert is only
+// logged, and an observation without a tenant writes nothing.
+func TestEmitBillingTelemetryEventWritesStandaloneRow(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402RPCError, "tenant-1", "", "x402_network", "base", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventX402AccountingAnomaly, "tenant-1", "", "x402_nonce", "0xlate", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+
+	ctx := context.Background()
+	logger := logrus.New()
+	emitBillingTelemetryEvent(ctx, mockDB, logger, eventX402RPCError, "tenant-1", "x402_network", "base", nil)
+	emitBillingTelemetryEvent(ctx, mockDB, logger, eventX402AccountingAnomaly, "tenant-1", "x402_nonce", "0xlate", nil)
+	emitBillingTelemetryEvent(ctx, mockDB, logger, eventX402RPCError, "", "x402_network", "base", nil)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestEmitBillingEventTxRequiresTenant(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	if err := emitBillingEventTx(context.Background(), mockDB, eventInvoicePaid, "", "invoice", "in_1", nil); err == nil {
+		t.Fatal("expected error for billing event without tenant")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -258,7 +433,7 @@ func TestRecoverReversedBalanceIsIdempotent(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectRollback()
 
-	if err := reconciler.recoverReversedBalance(context.Background(), "tenant-1", 2500, "nonce-4", "0xrecovered"); err != nil {
+	if err := reconciler.recoverReversedBalance(context.Background(), "tenant-1", 2500, "nonce-4", "0xrecovered", "base"); err != nil {
 		t.Fatalf("recoverReversedBalance duplicate: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

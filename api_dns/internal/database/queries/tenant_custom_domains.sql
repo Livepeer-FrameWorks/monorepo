@@ -13,22 +13,31 @@ ON CONFLICT (tenant_id, domain) DO UPDATE SET
                            THEN NULL ELSE navigator.tenant_custom_domains.cert_expires_at END,
     last_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
                       THEN NULL ELSE navigator.tenant_custom_domains.last_error END,
+    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                              THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error END,
+    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                                 THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error_at END,
+    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                           THEN NULL ELSE navigator.tenant_custom_domains.next_attempt_at END,
     updated_at = NOW()
 RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
           last_verified_at, cert_issued_at, cert_expires_at, last_error,
-          created_at, updated_at;
+          created_at, updated_at, last_renewal_error, last_renewal_error_at,
+          next_attempt_at;
 
 -- name: GetTenantCustomDomain :one
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND domain = sqlc.arg(domain);
 
 -- name: ListTenantCustomDomainsByStatus :many
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE status = ANY(sqlc.arg(statuses)::text[])
 ORDER BY updated_at ASC;
@@ -36,7 +45,8 @@ ORDER BY updated_at ASC;
 -- name: ListTenantCustomDomains :many
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
 ORDER BY domain ASC;
@@ -47,19 +57,55 @@ SET status = sqlc.arg(status),
     last_verified_at = CASE WHEN sqlc.arg(status) = 'verified' THEN NOW() ELSE last_verified_at END,
     cert_issued_at = CASE WHEN sqlc.arg(status) = 'cert_issued' THEN NOW() ELSE cert_issued_at END,
     last_error = NULLIF(sqlc.arg(err_msg)::text, ''),
+    next_attempt_at = CASE WHEN sqlc.arg(status) = 'cert_failed' THEN next_attempt_at ELSE NULL END,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND domain = sqlc.arg(domain)
   AND (sqlc.arg(status) = 'tearing_down' OR status = sqlc.arg(expected_status));
 
--- name: SetTenantCustomDomainCertMetadata :execrows
+-- name: CompleteTenantCustomDomainIssuance :execrows
 UPDATE navigator.tenant_custom_domains
-SET issuer_id = NULLIF(sqlc.arg(issuer_id)::text, ''),
+SET status = 'cert_issued',
+    cert_issued_at = NOW(),
+    issuer_id = NULLIF(sqlc.arg(issuer_id)::text, ''),
     cert_expires_at = sqlc.narg(cert_expires_at),
+    last_error = NULL,
+    next_attempt_at = NULL,
+    last_renewal_error = NULL,
+    last_renewal_error_at = NULL,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND domain = sqlc.arg(domain)
-  AND status = sqlc.arg(expected_status);
+  AND status = 'cert_issuing';
+
+-- name: FailTenantCustomDomainIssuance :execrows
+UPDATE navigator.tenant_custom_domains
+SET status = 'cert_failed',
+    last_error = NULLIF(sqlc.arg(err_msg)::text, ''),
+    next_attempt_at = NOW() + sqlc.arg(retry_after_seconds)::bigint * INTERVAL '1 second',
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND domain = sqlc.arg(domain)
+  AND status = 'cert_issuing';
+
+-- name: RefreshTenantCustomDomainServedCertificate :execrows
+UPDATE navigator.tenant_custom_domains
+SET issuer_id = NULLIF(sqlc.arg(issuer_id)::text, ''),
+    cert_expires_at = sqlc.narg(cert_expires_at),
+    last_renewal_error = NULL,
+    last_renewal_error_at = NULL,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND status IN ('cert_issuing', 'cert_issued')
+  AND domain = ANY(sqlc.arg(domains)::text[]);
+
+-- name: RecordTenantCustomDomainRenewalFailure :execrows
+UPDATE navigator.tenant_custom_domains
+SET last_renewal_error = NULLIF(sqlc.arg(err_msg)::text, ''),
+    last_renewal_error_at = NOW(),
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND status IN ('cert_issuing', 'cert_issued');
 
 -- name: FinalizeTenantCustomDomainRemoval :execrows
 WITH teardown_authority AS MATERIALIZED (
@@ -83,7 +129,7 @@ WITH teardown_authority AS MATERIALIZED (
           FROM navigator.tenant_custom_domains AS other_domain
           WHERE other_domain.tenant_id = teardown_authority.tenant_id
             AND other_domain.domain <> teardown_authority.domain
-            AND other_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+            AND other_domain.status IN ('verified', 'pending_alias', 'cert_issuing', 'cert_issued', 'cert_failed')
       )
 )
 DELETE FROM navigator.tenant_custom_domains AS custom_domain

@@ -18,6 +18,9 @@ import (
 
 const DefaultServerName = "decklog.internal"
 
+// RoundRobinServiceConfig is the gRPC service config Decklog clients dial with.
+const RoundRobinServiceConfig = `{"loadBalancingConfig":[{"round_robin":{}}]}`
+
 // envelopeSchemaVersion is the schema_version producers stamp on outbound
 // events. Bumped when an envelope-affecting proto change ships.
 const envelopeSchemaVersion = 2
@@ -63,6 +66,7 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 		return nil, fmt.Errorf("configure Decklog gRPC TLS: %w", err)
 	}
 	opts = append(opts, transport)
+	opts = append(opts, grpc.WithDefaultServiceConfig(RoundRobinServiceConfig))
 
 	// Connect to server
 	if cfg.Timeout > 0 {
@@ -171,6 +175,7 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 		return nil, fmt.Errorf("configure Decklog batched client TLS: %w", err)
 	}
 	opts = append(opts, transport)
+	opts = append(opts, grpc.WithDefaultServiceConfig(RoundRobinServiceConfig))
 
 	// Connect to server
 	if cfg.Timeout > 0 {

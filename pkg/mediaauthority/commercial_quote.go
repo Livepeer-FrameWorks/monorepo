@@ -14,8 +14,8 @@ import (
 // PlacementCommercialRequest derives the complete comparison set from one
 // effective policy. Runtime health and preference matching cannot narrow grants.
 func PlacementCommercialRequest(tenant *mediapb.TenantAuthority, object *mediapb.MediaObjectAuthority, verb placement.Verb) (*pb.CommercialQuoteRequest, error) {
-	if tenant.GetSchemaVersion() != PlacementSchemaVersion || object.GetSchemaVersion() != PlacementSchemaVersion {
-		return nil, fmt.Errorf("%w: commercial policy requires schema 2", ErrUnknownSchema)
+	if !IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetSchemaVersion() != object.GetSchemaVersion() {
+		return nil, fmt.Errorf("%w: commercial policy requires a placement schema", ErrUnknownSchema)
 	}
 	if len(tenant.GetEffectiveClusterGrants()) == 0 || len(tenant.GetEffectiveClusterGrants()) > 4096 {
 		return nil, fmt.Errorf("%w: invalid commercial grant census", ErrMalformed)

@@ -98,16 +98,26 @@ delayed completion cannot cross a same-label reactivation or an a → b → a AB
 transition. A database-backed issuance lease serializes each certificate or TLS
 bundle order across Navigator replicas; the cache is rechecked after acquisition.
 
-Custom-domain lifecycle uses the same authority rule. Re-ensuring a
-`tearing_down` domain restores `pending_verification`; verification, issuance
-metadata, certificate persistence, and final deletion are all fenced by the
-current lifecycle row. A successful custom-domain order refreshes the tenant's
-distributed multi-SAN bundle before the domain becomes `cert_issued`; a bundle
-refresh failure leaves the domain retryable instead of publishing a false-ready
-status. Final deletion removes the domain certificate and deletes
-the tenant-scoped ACME account once no other custom domain in `verified`,
-`cert_issuing`, `cert_issued`, or `cert_failed` still uses it; pending and
-teardown rows cannot preserve an otherwise orphaned account.
+Custom-domain lifecycle uses the same authority rule. A custom domain has exactly
+one served certificate: the tenant's `tenant:{id}` multi-SAN bundle. Navigator
+never orders a per-domain certificate. After CNAME verification a domain waits in
+`pending_alias` until the tenant alias bundle is `cert_issued`, so it never joins
+the alias's own first order. It then moves to `cert_issuing`, the bundle is
+re-ordered with its SAN, and success records the bundle's issuer and expiry on the
+row and publishes `cert_issued`. A failed order moves only that domain to
+`cert_failed` with `next_attempt_at` 15 minutes out. Nothing is rebuilt: the
+last-good bundle never contained the SAN, and `cert_failed` domains are excluded
+from later orders. A failed renewal of an existing bundle is not a status change.
+The still-valid bundle keeps serving, so Navigator records `last_renewal_error`
+and `last_renewal_error_at` on the tenant's `cert_issuing`/`cert_issued` domains,
+and the next successful or confirmed bundle clears them.
+Re-ensuring a `tearing_down` domain restores `pending_verification`;
+verification, issuance metadata, and final deletion are all fenced by the current
+lifecycle row. Removal re-orders an issued alias's bundle without the SAN before
+final deletion, which deletes the tenant-scoped ACME account once no other custom
+domain in `verified`, `pending_alias`, `cert_issuing`, `cert_issued`, or
+`cert_failed` still uses it; pending-verification and teardown rows cannot preserve
+an otherwise orphaned account.
 Late issuance therefore either commits before teardown and is cleaned by it, or
 loses authority and cannot recreate credentials afterward.
 
@@ -271,13 +281,13 @@ retired credentials. Foghorn's refresh fingerprint includes the opaque revision,
 so a revision-only migration or repair still reaches Helmsman and produces an
 exact-version ACK.
 Custom-domain credential retention and tenant-bundle SAN participation are
-separate policies: `cert_failed` retains retry authority and its individual
-certificate, but is excluded from tenant-wide bundle orders so one broken domain
-cannot block renewal of the alias and every healthy custom SAN. Renewal re-derives
-this SAN set instead of replaying the stored bundle, and a transition to
-`cert_failed` immediately rebuilds the aggregate bundle without that domain. If
-the rebuild fails, every `cert_failed` pass retries it before re-verifying and
-re-admitting the domain. Immediately
+separate policies: `verified`, `pending_alias`, and `cert_failed` retain the
+tenant's ACME authority, but only `cert_issuing` and `cert_issued` domains join
+tenant bundle orders. A domain waiting for the alias or a broken domain therefore
+cannot block issuance or renewal of the alias and every healthy custom SAN.
+Renewal re-derives this SAN set instead of replaying the stored bundle, and a
+`cert_failed` domain is re-verified for re-admission only after its
+`next_attempt_at`. Immediately
 before publishing newly issued material, Navigator renews the exact durable
 issuance lease owner; an expired or replaced owner cannot publish even if its
 external ACME call eventually succeeds. The renewal worker reclaims expired lease

@@ -46,6 +46,11 @@ func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCap
 	}
 	replicas = int32(capability.GetLiveReplicas())
 	ready = capability.GetEnforcementReady() && replicas > 0 && maxSchema >= int32(sharedauthority.PlacementSchemaVersion)
+	// Node placement is a flag on top of schema 2, not a listed version, so a
+	// Foghorn that upgrades before Commodore never looks malformed to it.
+	if ready && capability.GetNodePlacementReady() {
+		maxSchema = int32(sharedauthority.NodePlacementSchemaVersion)
+	}
 	return maxSchema, ready, replicas
 }
 
@@ -70,8 +75,15 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		if !row.EnforcementReady || !row.FirstReadyAt.Valid {
 			return nil
 		}
+		// A cell that attests node placement also refreshes tenants still below
+		// schema 3. first_ready_at does not move when an already ready cell starts
+		// attesting schema 3, so that readiness carries its own inbox key.
+		listSchema, keySuffix := int32(sharedauthority.PlacementSchemaVersion), ""
+		if maxSchema >= int32(sharedauthority.NodePlacementSchemaVersion) {
+			listSchema, keySuffix = int32(sharedauthority.NodePlacementSchemaVersion), ":schema-3"
+		}
 		tenants, err := queries.ListLegacySchemaTenantsTargetingCell(ctx, commodoredb.ListLegacySchemaTenantsTargetingCellParams{
-			CellID: cellID, SchemaVersion: int32(sharedauthority.PlacementSchemaVersion),
+			CellID: cellID, SchemaVersion: listSchema,
 		})
 		if err != nil {
 			return fmt.Errorf("list legacy-schema tenants for cell %q: %w", cellID, err)
@@ -79,7 +91,7 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		readiness := strconv.FormatInt(row.FirstReadyAt.Time.UTC().Unix(), 10)
 		for _, tenantID := range tenants {
 			if _, err := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-				SourceService: "commodore", SourceEventID: "cell-capability:" + cellID + ":" + tenantID + ":" + readiness,
+				SourceService: "commodore", SourceEventID: "cell-capability:" + cellID + ":" + tenantID + ":" + readiness + keySuffix,
 				TenantID: tenantID, Reason: cellPlacementCapabilityRefreshReason,
 			}); err != nil {
 				return fmt.Errorf("enqueue placement activation refresh for tenant %q: %w", tenantID, err)
@@ -116,11 +128,24 @@ func (s *CommodoreServer) refreshPlacementCellCapabilities(ctx context.Context, 
 	return group.Wait()
 }
 
-// placementCellsReady reports whether every listed cell has attested schema-2
-// enforcement. An empty cell list is vacuously ready: a tenant with nobody to
-// notify has nobody who could reject the schema, and any later target is
-// checked again at publication.
-func placementCellsReady(ctx context.Context, queries *commodoredb.Queries, cells []string) (bool, error) {
+// cellPlacementSchema is the highest placement schema a stored attestation lets
+// Commodore issue to that cell, zero when it attests none.
+func cellPlacementSchema(maxSchemaVersion int32, enforcementReady bool) uint32 {
+	switch {
+	case !cellPlacementCapabilityReady(maxSchemaVersion, enforcementReady):
+		return 0
+	case maxSchemaVersion >= int32(sharedauthority.NodePlacementSchemaVersion):
+		return sharedauthority.NodePlacementSchemaVersion
+	default:
+		return sharedauthority.PlacementSchemaVersion
+	}
+}
+
+// placementTargetSchema returns the highest placement schema every listed cell
+// attests, zero when any cell attests none. An empty cell list is vacuously
+// ready: a tenant with nobody to notify has nobody who could reject the schema,
+// and any later target is checked again at publication.
+func placementTargetSchema(ctx context.Context, queries *commodoredb.Queries, cells []string) (uint32, error) {
 	wanted := make([]string, 0, len(cells))
 	for _, cell := range cells {
 		if cell = strings.TrimSpace(cell); cell != "" && !slices.Contains(wanted, cell) {
@@ -128,20 +153,34 @@ func placementCellsReady(ctx context.Context, queries *commodoredb.Queries, cell
 		}
 	}
 	if len(wanted) == 0 {
-		return true, nil
+		return sharedauthority.NodePlacementSchemaVersion, nil
 	}
 	rows, err := queries.ListMediaCellPlacementCapabilities(ctx, wanted)
 	if err != nil {
-		return false, fmt.Errorf("read cell placement capabilities: %w", err)
+		return 0, fmt.Errorf("read cell placement capabilities: %w", err)
 	}
-	ready := make(map[string]bool, len(rows))
+	schemas := make(map[string]uint32, len(rows))
 	for _, row := range rows {
-		ready[row.CellID] = cellPlacementCapabilityReady(row.MaxSchemaVersion, row.EnforcementReady)
+		schemas[row.CellID] = cellPlacementSchema(row.MaxSchemaVersion, row.EnforcementReady)
 	}
+	result := uint32(sharedauthority.NodePlacementSchemaVersion)
 	for _, cell := range wanted {
-		if !ready[cell] {
-			return false, nil
-		}
+		result = min(result, schemas[cell])
 	}
-	return true, nil
+	return result, nil
+}
+
+// placementCellsReady reports whether every listed cell has attested schema-2
+// enforcement.
+func placementCellsReady(ctx context.Context, queries *commodoredb.Queries, cells []string) (bool, error) {
+	return placementCellsReadyFor(ctx, queries, cells, sharedauthority.PlacementSchemaVersion)
+}
+
+// placementCellsReadyFor reports whether every listed cell attests at least schema.
+func placementCellsReadyFor(ctx context.Context, queries *commodoredb.Queries, cells []string, schema uint32) (bool, error) {
+	attested, err := placementTargetSchema(ctx, queries, cells)
+	if err != nil {
+		return false, err
+	}
+	return attested >= schema, nil
 }

@@ -34,6 +34,43 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND id = sqlc.arg(stream_id)::uuid
   AND deleted_at IS NULL
 FOR SHARE;
 
+-- name: GetStreamPullSourcePins :one
+SELECT COALESCE(pull.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_pull_sources AS pull
+JOIN commodore.streams AS stream ON stream.id = pull.stream_id
+WHERE stream.tenant_id = sqlc.arg(tenant_id)::uuid AND stream.id = sqlc.arg(stream_id)::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'pull';
+
+-- name: LockStreamPullSourcePins :one
+SELECT COALESCE(pull.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_pull_sources AS pull
+JOIN commodore.streams AS stream ON stream.id = pull.stream_id
+WHERE stream.tenant_id = sqlc.arg(tenant_id)::uuid AND stream.id = sqlc.arg(stream_id)::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'pull'
+FOR UPDATE OF pull;
+
+-- name: GetStreamMistSourcePins :one
+SELECT COALESCE(mist.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_mist_sources AS mist
+JOIN commodore.streams AS stream ON stream.id = mist.stream_id
+WHERE stream.tenant_id = sqlc.arg(tenant_id)::uuid AND stream.id = sqlc.arg(stream_id)::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'mist_native';
+
+-- name: LockStreamMistSourcePins :one
+SELECT COALESCE(mist.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_mist_sources AS mist
+JOIN commodore.streams AS stream ON stream.id = mist.stream_id
+WHERE stream.tenant_id = sqlc.arg(tenant_id)::uuid AND stream.id = sqlc.arg(stream_id)::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'mist_native'
+FOR UPDATE OF mist;
+
+-- name: ListStreamMediaPlacementPolicies :many
+SELECT scope_id::text AS stream_id, revision, policy_payload
+FROM commodore.media_placement_policies
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND scope_kind = 'stream'
+  AND scope_id = ANY(sqlc.arg(stream_ids)::uuid[]);
+
 -- name: GetMediaPlacementChange :one
 SELECT * FROM commodore.media_placement_changes
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid

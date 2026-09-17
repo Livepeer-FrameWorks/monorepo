@@ -129,11 +129,6 @@ service InternalService {
   // include_webhook_secret when they need the plaintext HMAC secret.
   rpc ResolvePlaybackPolicy(ResolvePlaybackPolicyRequest) returns (ResolvePlaybackPolicyResponse);
 
-  // Legacy policy-bundle prototype retained for wire compatibility. The
-  // active v0.3 media path uses Ed25519 media-authority envelopes delivered
-  // into each Foghorn cell; no Foghorn request path consumes this RPC.
-  rpc GetSignedPolicyBundle(GetSignedPolicyBundleRequest) returns (GetSignedPolicyBundleResponse);
-
   // Called by Foghorn after a JWT policy successfully verifies.
   rpc RecordSigningKeyUse(RecordSigningKeyUseRequest) returns (google.protobuf.Empty);
 
@@ -749,31 +744,6 @@ message ResolvePlaybackPolicyRequest {
   string playback_id = 1;
   string internal_name = 2; // MistServer internal stream name (USER_NEW trigger has this, not playback_id)
   bool include_webhook_secret = 3; // enforcement-only; public reads leave false
-}
-
-// Retired HMAC policy-bundle prototype. Messages remain for wire compatibility;
-// GetSignedPolicyBundle returns Unimplemented and performs no producer work.
-message GetSignedPolicyBundleRequest {
-  string tenant_id = 1;
-  string stream_id = 2; // Public stream UUID
-}
-
-message SignedPolicyBundle {
-  string bundle_jwt = 1;
-  int64 bundle_version = 2;
-  google.protobuf.Timestamp issued_at = 3;
-  // soft_expires_at: after this point Foghorn should background-refresh
-  // but may continue serving the cached bundle.
-  google.protobuf.Timestamp soft_expires_at = 4;
-  // expires_at: hard ceiling. Foghorn must not use the bundle past this
-  // point even under central outage.
-  google.protobuf.Timestamp expires_at = 5;
-  string tenant_id = 6;
-  string stream_id = 7;
-}
-
-message GetSignedPolicyBundleResponse {
-  SignedPolicyBundle bundle = 1;
 }
 
 message RecordSigningKeyUseRequest {
@@ -1656,6 +1626,38 @@ message CreateStreamRequest {
   bool is_recording = 4;                // json:"is_recording"
   string ingest_mode = 5;               // "push" (default) or "pull"
   PullSourceInput pull_source = 6;       // required when ingest_mode="pull"
+  // Where the stream's source may be reached, written as the stream's own
+  // ingest placement constraints. Absent = no stream ingest restriction.
+  // CUSTOM is not accepted as input.
+  StreamSourceLocation source_location = 7;
+}
+
+enum SourceLocationMode {
+  SOURCE_LOCATION_MODE_UNSPECIFIED = 0;
+  // The stream carries no ingest constraints of its own.
+  SOURCE_LOCATION_MODE_ANY = 1;
+  // Ingest is allowed only on the listed clusters (optionally specific nodes),
+  // excluding avoided nodes.
+  SOURCE_LOCATION_MODE_RESTRICTED = 2;
+  // The stream's own ingest constraints hold rules this shape cannot express;
+  // they are edited through the media placement API.
+  SOURCE_LOCATION_MODE_CUSTOM = 3;
+}
+
+message SourceLocationCluster {
+  string cluster_id = 1;
+  // Empty = any node of this cluster.
+  repeated string node_ids = 2;
+}
+
+// Stream source location. RESTRICTED compiles to one ingest allow alternative
+// per cluster ({cluster_ids:[c]} or {cluster_ids:[c], node_ids:[...]}) and one
+// deny selector {node_ids: avoid_node_ids}. Node IDs are limited to clusters
+// the tenant owns.
+message StreamSourceLocation {
+  SourceLocationMode mode = 1;
+  repeated SourceLocationCluster clusters = 2;
+  repeated string avoid_node_ids = 3;
 }
 
 // Matches pkg/api/commodore/types.go:CreateStreamResponse (lines 178-185)
@@ -1694,7 +1696,6 @@ message CreateStreamResponse {
   optional string global_ingest_domain   = 17;
   optional string global_edge_domain     = 18;
   optional string global_play_domain     = 19;
-  optional string global_chandler_domain = 20;
   optional string global_livepeer_domain = 21;
 
   // Tenant alias entrypoints. Populated only when Navigator has
@@ -1704,8 +1705,14 @@ message CreateStreamResponse {
   optional string tenant_ingest_domain   = 22;
   optional string tenant_edge_domain     = 23;
   optional string tenant_play_domain     = 24;
-  optional string tenant_chandler_domain = 25;
   optional string tenant_livepeer_domain = 26;
+
+  // Thumbnail URLs are served per stream and artifact through thumbnailAssets.
+  reserved 20, 25;
+  reserved "global_chandler_domain", "tenant_chandler_domain";
+  StreamSourceLocation source_location = 27;
+  // Consequence warnings of the source-location write this response reports.
+  repeated media_placement.Warning source_location_warnings = 28;
 }
 
 message GetStreamRequest {
@@ -1769,6 +1776,11 @@ message Stream {
   // the column is NULL. See MonitoringToggle.
   MonitoringToggle monitoring = 29;
   ManagedSourceView managed_source = 30; // set only for mist_native streams
+  // Source location derived from the stream's own ingest placement rules.
+  StreamSourceLocation source_location = 31;
+  // Consequence warnings of the source-location write in the UpdateStream
+  // call that returned this stream; empty on reads.
+  repeated media_placement.Warning source_location_warnings = 32;
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -1834,6 +1846,10 @@ message UpdateStreamRequest {
   // Per-stream Skipper monitoring override. Unset = leave unchanged; set to
   // INHERIT/ON/OFF to write NULL/true/false on the column.
   optional MonitoringToggle monitoring = 9;
+  // Present = replace the stream's source location; absent = keep it.
+  // CUSTOM is not accepted as input, and a stream whose own ingest rules are
+  // CUSTOM rejects source-location writes.
+  StreamSourceLocation source_location = 10;
 }
 
 message DeleteStreamRequest {

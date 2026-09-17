@@ -224,15 +224,24 @@ func TestEdgeRoleVarsNativeToleratesManifestWithoutEdgeImage(t *testing.T) {
 	defer func() { fetchEdgeManifestFn = prev }()
 
 	vars, err := edgeRoleVars(&EdgeProvisionConfig{
-		Mode:    "native",
-		Version: "vtest",
-		NodeID:  "edge-native-1",
+		Mode:      "native",
+		Version:   "vtest",
+		NodeID:    "edge-native-1",
+		ClusterID: "media-eu-1",
+		Region:    "eu-west",
 	}, "linux", "amd64")
 	if err != nil {
 		t.Fatalf("edgeRoleVars returned error: %v", err)
 	}
 	if img, ok := vars["edge_image"]; ok && img != "livepeerframeworks/frameworks-edge:latest" {
 		t.Fatalf("native mode must not resolve a manifest edge image; got %#v", img)
+	}
+	// vmagent-edge.yml.j2 stamps these as the cluster and region labels.
+	if got := vars["edge_cluster_id"]; got != "media-eu-1" {
+		t.Fatalf("edge_cluster_id = %#v, want media-eu-1", got)
+	}
+	if got := vars["edge_region"]; got != "eu-west" {
+		t.Fatalf("edge_region = %#v, want eu-west", got)
 	}
 }
 

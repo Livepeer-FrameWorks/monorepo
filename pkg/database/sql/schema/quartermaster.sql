@@ -254,17 +254,23 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     -- to ARRAY[control_cell_id]; populated explicitly when multi-cell serving
     -- is opted-in per cluster.
     eligible_serving_cell_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-    -- NULL during steady state; 'draining' while an operator-initiated
-    -- ReassignClusterControlCell drains the old cell and waits for the new
-    -- cell's GetEdgeApplyState ACK. Navigator filters tenant alias publication
-    -- against this.
+    -- Control cell before the latest ReassignClusterControlCell. Foghorns of
+    -- that cell release and refuse this cluster's edges so they reconnect to
+    -- control_cell_id.
+    previous_control_cell_id VARCHAR(100),
+    -- NULL when no reassignment is open; 'switching' while edges move to
+    -- control_cell_id; 'failed' when edges were still observed by another cell
+    -- at reassignment_deadline_at.
     reassignment_state VARCHAR(20),
+    reassignment_started_at TIMESTAMPTZ,
+    reassignment_deadline_at TIMESTAMPTZ,
+    reassignment_error TEXT,
 
     -- ===== CONSTRAINTS =====
     CONSTRAINT chk_cluster_visibility CHECK (visibility IN ('public', 'unlisted', 'private')),
     CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit')),
     CONSTRAINT chk_cluster_class CHECK (cluster_class IS NULL OR cluster_class IN ('platform_official', 'tenant_private', 'third_party_marketplace')),
-    CONSTRAINT chk_cluster_reassignment_state CHECK (reassignment_state IS NULL OR reassignment_state IN ('draining'))
+    CONSTRAINT chk_cluster_control_cell_reassignment_state CHECK (reassignment_state IS NULL OR reassignment_state IN ('switching', 'failed'))
 );
 
 -- ============================================================================
@@ -334,6 +340,12 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     -- reported a revision (older clients, fresh rows, or agents stuck
     -- before their first managed apply).
     applied_mesh_revision TEXT,
+
+    -- Foghorn cell that made the newest observation of this node, and when.
+    -- Control-cell reassignment completes once no live node is observed by a
+    -- cell other than its cluster's control cell.
+    control_cell_id VARCHAR(100),
+    control_cell_observed_at TIMESTAMPTZ,
 
     -- ===== METADATA & CONFIGURATION =====
     tags JSONB DEFAULT '{}',
@@ -753,9 +765,6 @@ CREATE TABLE IF NOT EXISTS quartermaster.cluster_release_targets (
     CONSTRAINT chk_qm_cluster_release_rollout_plan_object CHECK (jsonb_typeof(rollout_plan) = 'object')
 );
 
-DELETE FROM quartermaster.cluster_release_targets WHERE channel = 'edge';
-DELETE FROM quartermaster.edge_releases WHERE channel = 'edge';
-
 ALTER TABLE quartermaster.edge_releases
     DROP COLUMN IF EXISTS metadata,
     DROP CONSTRAINT IF EXISTS chk_qm_edge_release_channel,
@@ -915,16 +924,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_wireguard_ip_uniqu
 CREATE TABLE IF NOT EXISTS quartermaster.service_event_outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type    TEXT NOT NULL,
-    tenant_id     UUID NOT NULL,
+    tenant_id     UUID,
+    -- 'tenant' events belong to tenant_id; 'platform' events describe
+    -- infrastructure with no owning tenant, such as an ownerless cluster.
+    scope         TEXT NOT NULL DEFAULT 'tenant',
     user_id       TEXT NOT NULL DEFAULT '',
     resource_type TEXT NOT NULL DEFAULT '',
     resource_id   TEXT NOT NULL DEFAULT '',
     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at   TIMESTAMPTZ,
+    -- Issued per claim; settlement only applies while the token still matches,
+    -- so a worker whose lease lapsed cannot settle a row a peer re-claimed.
+    lease_token  UUID,
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
-    completed_at TIMESTAMPTZ
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT chk_qm_service_event_outbox_scope CHECK (scope IN ('tenant', 'platform')),
+    CONSTRAINT chk_qm_service_event_outbox_scope_tenant CHECK (scope = 'platform' OR tenant_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_pending

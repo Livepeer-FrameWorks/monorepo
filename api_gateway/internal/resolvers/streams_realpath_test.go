@@ -102,8 +102,9 @@ func TestDoCreateStream_CreatesThenFetches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.StreamId != "new-id" {
-		t.Fatalf("returned stream id = %q, want new-id (fetched post-create)", out.StreamId)
+	stream, ok := out.(*commodorepb.Stream)
+	if !ok || stream.StreamId != "new-id" {
+		t.Fatalf("returned %T %+v, want stream new-id (fetched post-create)", out, out)
 	}
 	// Optional fields are threaded into the create request.
 	if created.Title != "My Stream" || created.Description != "a desc" || !created.IsRecording {

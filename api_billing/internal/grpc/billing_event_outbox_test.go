@@ -114,31 +114,6 @@ func TestEnqueueBillingEventTxScanErrorWrapped(t *testing.T) {
 	}
 }
 
-func TestEnqueueBillingEventShortCircuits(t *testing.T) {
-	// nil db: returns silently, never touches the database.
-	nilDB := &PurserServer{db: nil, logger: logging.NewLogger()}
-	nilDB.enqueueBillingEvent(context.Background(), "evt", "tenant-1", "", "r", "rid", &ipcpb.BillingEvent{})
-
-	// empty tenant: also short-circuits before issuing any query.
-	s, mock := newReadServer(t, true)
-	s.enqueueBillingEvent(context.Background(), "evt", "", "", "r", "rid", &ipcpb.BillingEvent{})
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("empty-tenant path should issue no query: %v", err)
-	}
-}
-
-func TestEnqueueBillingEventHappyPath(t *testing.T) {
-	s, mock := newReadServer(t, true)
-	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs(sqlmock.AnyArg(), "evt", "tenant-1", "u", "r", "rid", jsonContains{"tenant-1"}).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID1))
-
-	s.enqueueBillingEvent(context.Background(), "evt", "tenant-1", "u", "r", "rid", &ipcpb.BillingEvent{})
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
 func TestClaimBillingOutboxBatchMapsRowsAndClaims(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()

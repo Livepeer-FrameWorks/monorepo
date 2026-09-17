@@ -75,7 +75,7 @@ func placementRolloutFor(ctx context.Context, queries *commodoredb.Queries, kind
 	default:
 		return nil, fmt.Errorf("unsupported placement rollout authority kind %q", kind)
 	}
-	placementIssued := view.Schema == int32(sharedauthority.PlacementSchemaVersion)
+	placementIssued := view.Schema > 0 && sharedauthority.IsPlacementSchema(uint32(view.Schema))
 	applied := 0
 	for _, row := range rows {
 		acknowledged := row.DeliveryStatus == "acknowledged"
@@ -131,7 +131,7 @@ func (s *CommodoreServer) reconcilePlacementActivation(ctx context.Context, quer
 		return fmt.Errorf("lock placement activation: %w", err)
 	}
 	view, err := placementRolloutFor(ctx, queries, kind, authorityID)
-	if err != nil || view == nil || view.Schema != int32(sharedauthority.PlacementSchemaVersion) {
+	if err != nil || view == nil || view.Schema <= 0 || !sharedauthority.IsPlacementSchema(uint32(view.Schema)) {
 		return err
 	}
 	var tenantID, scopeKind, scopeID string

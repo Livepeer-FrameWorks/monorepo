@@ -208,8 +208,8 @@ func TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG(t *te
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 180 {
-		t.Fatalf("found %d generated Quartermaster queries, want 180", len(queries))
+	if len(queries) != 181 {
+		t.Fatalf("found %d generated Quartermaster queries, want 181", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -733,11 +733,46 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 		t.Fatalf("grant private cluster access: %v", err)
 	}
 	foghornID := "5eedf0e1-0001-da7a-f0e1-0001da7a0001"
-	if err := queries.AssignRuntimeFoghornToPrivateCluster(ctx, AssignRuntimeFoghornToPrivateClusterParams{ServiceInstanceID: foghornID, ClusterID: privateClusterID}); err != nil {
-		t.Fatalf("assign runtime foghorn: %v", err)
+	if assigned, err := queries.AssignControlCellFoghornsToPrivateCluster(ctx, privateClusterID); err != nil || assigned == 0 {
+		t.Fatalf("assign control-cell foghorns: %d, %v", assigned, err)
 	}
-	if err := queries.AssignFoghornToPrivateCluster(ctx, AssignFoghornToPrivateClusterParams{ServiceInstanceID: foghornID, ClusterID: privateClusterID}); err != nil {
-		t.Fatalf("assign foghorn: %v", err)
+	if _, err := queries.ReconcilePrivateClusterControlCellFoghorns(ctx, privateClusterID); err != nil {
+		t.Fatalf("reconcile private cluster control-cell foghorns: %v", err)
+	}
+	if _, err := queries.ControlCellHasRunningFoghorn(ctx, "demo-media"); err != nil {
+		t.Fatalf("control cell has running foghorn: %v", err)
+	}
+	if err := queries.RecordNodeControlCellObservations(ctx, "central-primary", []string{"central-node-1"}, []time.Time{now}); err != nil {
+		t.Fatalf("record node control cell observations: %v", err)
+	}
+	for _, target := range []string{"demo-media", "central-primary"} {
+		reassignment, err := queries.StartClusterControlCellReassignment(ctx, StartClusterControlCellReassignmentParams{
+			ClusterID: privateClusterID, TargetCellID: target, DeadlineAt: now.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("start control-cell reassignment to %s: %v", target, err)
+		}
+		if _, err := queries.ListSwitchingClusterControlCellReassignments(ctx); err != nil {
+			t.Fatalf("list switching control-cell reassignments: %v", err)
+		}
+		if _, err := queries.ListControlCellPendingNodes(ctx, privateClusterID, target, 3*time.Minute); err != nil {
+			t.Fatalf("list control-cell pending nodes: %v", err)
+		}
+		if _, err := queries.ListReleasedControlCellClusters(ctx, "foghorn-1"); err != nil {
+			t.Fatalf("list released control-cell clusters: %v", err)
+		}
+		if _, err := queries.FailClusterControlCellReassignment(ctx, privateClusterID, reassignment.StartedAt.Time.Add(-time.Second), "stale fence"); err != nil {
+			t.Fatalf("fail control-cell reassignment: %v", err)
+		}
+		if _, err := queries.CompleteClusterControlCellReassignment(ctx, privateClusterID, reassignment.StartedAt.Time); err != nil {
+			t.Fatalf("complete control-cell reassignment: %v", err)
+		}
+	}
+	if _, err := queries.GetClusterControlCellReassignment(ctx, privateClusterID); err != nil {
+		t.Fatalf("get control-cell reassignment: %v", err)
+	}
+	if _, err := queries.CountClusterControlCellReassignmentsByState(ctx); err != nil {
+		t.Fatalf("count control-cell reassignments: %v", err)
 	}
 	if err := queries.CreateEdgeBootstrapTokenRecord(ctx, CreateEdgeBootstrapTokenRecordParams{ID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
 		TokenHash: "contract-private-edge-token", TokenPrefix: "contract-p", Name: "Contract private edge", TenantID: tenantID,

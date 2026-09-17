@@ -86,7 +86,9 @@ type Interface interface {
 	GetNodeOwner(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error)
 	GetNodeByLogicalName(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error)
 	UpdateNodeHardware(ctx context.Context, req *quartermasterpb.UpdateNodeHardwareRequest) error
-	ReportAliveNodes(ctx context.Context, nodes []*quartermasterpb.NodeAliveness) error
+	ReportAliveNodes(ctx context.Context, reporterCellID string, nodes []*quartermasterpb.NodeAliveness) error
+	ReassignClusterControlCell(ctx context.Context, req *quartermasterpb.ReassignClusterControlCellRequest) (*quartermasterpb.ClusterControlCellReassignment, error)
+	GetClusterControlCellReassignment(ctx context.Context, clusterID string) (*quartermasterpb.ClusterControlCellReassignment, error)
 	BootstrapEdgeNode(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error)
 	BootstrapInfrastructureNode(ctx context.Context, req *quartermasterpb.BootstrapInfrastructureNodeRequest) (*quartermasterpb.BootstrapInfrastructureNodeResponse, error)
 	BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error)

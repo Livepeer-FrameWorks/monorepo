@@ -22,3 +22,7 @@
 - name: KafkaMirrorMaker | restart
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
+
+- name: KafkaMirrorMaker | cleanup
+  ansible.builtin.import_tasks: cleanup.yml
+  tags: [cleanup, never]

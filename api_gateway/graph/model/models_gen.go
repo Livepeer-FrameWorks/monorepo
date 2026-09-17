@@ -112,6 +112,10 @@ type Error interface {
 	GetCode() *string
 }
 
+type IncidentMutationResult interface {
+	IsIncidentMutationResult()
+}
+
 type LinkEmailResult interface {
 	IsLinkEmailResult()
 }
@@ -130,10 +134,6 @@ type MediaCapacityConsentResult interface {
 
 type MediaPlacementChangeResult interface {
 	IsMediaPlacementChangeResult()
-}
-
-type MediaPlacementLegacyPinsResult interface {
-	IsMediaPlacementLegacyPinsResult()
 }
 
 type MediaPlacementOptionsResult interface {
@@ -465,6 +465,8 @@ func (AuthError) IsCreateConversationResult() {}
 
 func (AuthError) IsSendMessageResult() {}
 
+func (AuthError) IsIncidentMutationResult() {}
+
 func (AuthError) IsMediaPlacementPolicyResult() {}
 
 func (AuthError) IsMediaPlacementOptionsResult() {}
@@ -474,8 +476,6 @@ func (AuthError) IsMediaPlacementPreviewResult() {}
 func (AuthError) IsMediaPlacementReviewResult() {}
 
 func (AuthError) IsMediaPlacementChangeResult() {}
-
-func (AuthError) IsMediaPlacementLegacyPinsResult() {}
 
 func (AuthError) IsMediaCapacityConsentResult() {}
 
@@ -639,6 +639,8 @@ type ClusterAccess struct {
 	ClusterName    string `json:"clusterName"`
 	AccessLevel    string `json:"accessLevel"`
 	ResourceLimits any    `json:"resourceLimits,omitempty"`
+	// Whether the cluster may pull from private (RFC 1918) and multicast sources.
+	AllowPrivatePullSources bool `json:"allowPrivatePullSources"`
 }
 
 type ClusterAccessConnection struct {
@@ -982,6 +984,8 @@ type CreateStreamInput struct {
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Pull-source configuration. Required when ingestMode is PULL.
 	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
+	// Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.
+	SourceLocation *SourceLocationInput `json:"sourceLocation,omitempty"`
 }
 
 // Input for creating an additional stream key.
@@ -1079,8 +1083,9 @@ type CryptoTopupStatus struct {
 type CustomDomainStatus struct {
 	// The domain Navigator is tracking (mirrors Tenant.customDomain).
 	Domain string `json:"domain"`
-	// pending_verification | verified | cert_issuing | cert_issued | cert_failed |
-	// tearing_down — verbatim from Navigator.
+	// pending_verification | verified | pending_alias | cert_issuing | cert_issued |
+	// cert_failed | tearing_down — verbatim from Navigator. pending_alias means the
+	// CNAMEs are verified and the domain waits for the tenant alias certificate.
 	State string `json:"state"`
 	// CNAME the operator points their public hostname at so the platform's TLS
 	// ingress receives traffic.
@@ -1226,6 +1231,105 @@ type FederationEventsConnection struct {
 	Edges      []*FederationEventEdge `json:"edges"`
 	PageInfo   *PageInfo              `json:"pageInfo"`
 	TotalCount int                    `json:"totalCount"`
+}
+
+type Incident struct {
+	ID    string        `json:"id"`
+	Scope IncidentScope `json:"scope"`
+	// Null for platform-scope incidents.
+	TenantID  *string        `json:"tenantId,omitempty"`
+	ClusterID *string        `json:"clusterId,omitempty"`
+	Region    *string        `json:"region,omitempty"`
+	Alertname string         `json:"alertname"`
+	Severity  string         `json:"severity"`
+	Status    IncidentStatus `json:"status"`
+	// Null until the incident is resolved.
+	Resolution *IncidentResolution `json:"resolution,omitempty"`
+	Title      string              `json:"title"`
+	Summary    *string             `json:"summary,omitempty"`
+	// Alerts of this incident that are still firing.
+	FiringAlertCount int        `json:"firingAlertCount"`
+	StartedAt        time.Time  `json:"startedAt"`
+	LastAlertAt      time.Time  `json:"lastAlertAt"`
+	AcknowledgedAt   *time.Time `json:"acknowledgedAt,omitempty"`
+	AcknowledgedBy   *string    `json:"acknowledgedBy,omitempty"`
+	AssignedTo       *string    `json:"assignedTo,omitempty"`
+	ResolvedAt       *time.Time `json:"resolvedAt,omitempty"`
+	ResolvedBy       *string    `json:"resolvedBy,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+}
+
+func (Incident) IsIncidentMutationResult() {}
+
+type IncidentAlert struct {
+	Fingerprint string `json:"fingerprint"`
+	// firing or resolved.
+	Status       string     `json:"status"`
+	Labels       any        `json:"labels"`
+	Annotations  any        `json:"annotations"`
+	StartsAt     time.Time  `json:"startsAt"`
+	EndsAt       *time.Time `json:"endsAt,omitempty"`
+	GeneratorURL *string    `json:"generatorUrl,omitempty"`
+}
+
+type IncidentDetail struct {
+	Incident *Incident        `json:"incident"`
+	Alerts   []*IncidentAlert `json:"alerts"`
+	// Oldest first.
+	Timeline []*IncidentTimelineEvent `json:"timeline"`
+}
+
+type IncidentEdge struct {
+	Cursor string    `json:"cursor"`
+	Node   *Incident `json:"node"`
+}
+
+type IncidentFilterInput struct {
+	// Empty or omitted matches every status.
+	Statuses  []IncidentStatus `json:"statuses,omitempty"`
+	ClusterID *string          `json:"clusterId,omitempty"`
+}
+
+type IncidentTimelineEvent struct {
+	ID   string            `json:"id"`
+	Kind IncidentEventKind `json:"kind"`
+	// Null for events produced by alerting or services.
+	ActorUserID *string   `json:"actorUserId,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	// NOTE events.
+	Note *string `json:"note,omitempty"`
+	// ASSIGNED events; null clears the assignment.
+	AssignedTo *string `json:"assignedTo,omitempty"`
+	// INVESTIGATION_ATTACHED events: the Skipper report.
+	ReportID *string `json:"reportId,omitempty"`
+	// NOTIFIED events: email, slack, or discord.
+	Channel *string `json:"channel,omitempty"`
+	// RESOLVED events.
+	Resolution *IncidentResolution `json:"resolution,omitempty"`
+	// ALERT_FIRING and ALERT_RESOLVED events.
+	AlertFingerprint *string `json:"alertFingerprint,omitempty"`
+	// ALERT_FIRING and ALERT_RESOLVED events.
+	Alertname *string `json:"alertname,omitempty"`
+}
+
+// Change to an incident the subscriber can see.
+type IncidentUpdatedEvent struct {
+	IncidentID string         `json:"incidentId"`
+	ClusterID  *string        `json:"clusterId,omitempty"`
+	Status     IncidentStatus `json:"status"`
+	Severity   string         `json:"severity"`
+	Title      string         `json:"title"`
+	// Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved.
+	Change    string    `json:"change"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type IncidentsConnection struct {
+	Edges      []*IncidentEdge `json:"edges"`
+	Nodes      []*Incident     `json:"nodes"`
+	PageInfo   *PageInfo       `json:"pageInfo"`
+	TotalCount int             `json:"totalCount"`
 }
 
 type InvoiceEdge struct {
@@ -1396,8 +1500,6 @@ func (MediaPlacementError) IsMediaPlacementReviewResult() {}
 
 func (MediaPlacementError) IsMediaPlacementChangeResult() {}
 
-func (MediaPlacementError) IsMediaPlacementLegacyPinsResult() {}
-
 func (MediaPlacementError) IsMediaCapacityConsentResult() {}
 
 func (MediaPlacementError) IsMediaCapacityConsentChangeResult() {}
@@ -1448,14 +1550,6 @@ type MediaPlacementImpact struct {
 	ExistingSessionsRetained bool `json:"existingSessionsRetained"`
 }
 
-type MediaPlacementLegacyPins struct {
-	StreamID          string   `json:"streamId"`
-	ClusterIds        []string `json:"clusterIds"`
-	CurrentlyEnforced bool     `json:"currentlyEnforced"`
-}
-
-func (MediaPlacementLegacyPins) IsMediaPlacementLegacyPinsResult() {}
-
 type MediaPlacementOption struct {
 	ID           string                   `json:"id"`
 	Name         string                   `json:"name"`
@@ -1463,8 +1557,10 @@ type MediaPlacementOption struct {
 	ClusterClass *MediaPlacementClass     `json:"clusterClass,omitempty"`
 	Region       *string                  `json:"region,omitempty"`
 	OwnerID      *string                  `json:"ownerId,omitempty"`
-	Eligible     bool                     `json:"eligible"`
-	Reason       *string                  `json:"reason,omitempty"`
+	// Cluster of a NODE option.
+	ClusterID *string `json:"clusterId,omitempty"`
+	Eligible  bool    `json:"eligible"`
+	Reason    *string `json:"reason,omitempty"`
 }
 
 type MediaPlacementOptionsConnection struct {
@@ -1478,6 +1574,8 @@ type MediaPlacementOptionsFilter struct {
 	Query   *string                   `json:"query,omitempty"`
 	Kind    *MediaPlacementOptionKind `json:"kind,omitempty"`
 	Classes []MediaPlacementClass     `json:"classes,omitempty"`
+	// Limits NODE options to one cluster.
+	ClusterID *string `json:"clusterId,omitempty"`
 }
 
 type MediaPlacementPolicyState struct {
@@ -1582,6 +1680,7 @@ type MediaPlacementScopeInput struct {
 
 type MediaPlacementSelector struct {
 	ClusterIds []string                 `json:"clusterIds"`
+	NodeIds    []string                 `json:"nodeIds"`
 	OwnerIds   []string                 `json:"ownerIds"`
 	Regions    []string                 `json:"regions"`
 	Classes    []MediaPlacementClass    `json:"classes"`
@@ -1590,11 +1689,13 @@ type MediaPlacementSelector struct {
 
 // Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity.
 type MediaPlacementSelectorInput struct {
-	ClusterIds []string                 `json:"clusterIds,omitempty"`
-	OwnerIds   []string                 `json:"ownerIds,omitempty"`
-	Regions    []string                 `json:"regions,omitempty"`
-	Classes    []MediaPlacementClass    `json:"classes,omitempty"`
-	Charging   []MediaPlacementCharging `json:"charging,omitempty"`
+	ClusterIds []string `json:"clusterIds,omitempty"`
+	// Nodes of clusters the tenant owns.
+	NodeIds  []string                 `json:"nodeIds,omitempty"`
+	OwnerIds []string                 `json:"ownerIds,omitempty"`
+	Regions  []string                 `json:"regions,omitempty"`
+	Classes  []MediaPlacementClass    `json:"classes,omitempty"`
+	Charging []MediaPlacementCharging `json:"charging,omitempty"`
 }
 
 type MediaPlacementTransition struct {
@@ -1934,6 +2035,8 @@ func (NotFoundError) IsUnlinkWalletResult() {}
 
 func (NotFoundError) IsSendMessageResult() {}
 
+func (NotFoundError) IsIncidentMutationResult() {}
+
 func (NotFoundError) IsMediaPlacementPolicyResult() {}
 
 func (NotFoundError) IsMediaPlacementOptionsResult() {}
@@ -1943,8 +2046,6 @@ func (NotFoundError) IsMediaPlacementPreviewResult() {}
 func (NotFoundError) IsMediaPlacementReviewResult() {}
 
 func (NotFoundError) IsMediaPlacementChangeResult() {}
-
-func (NotFoundError) IsMediaPlacementLegacyPinsResult() {}
 
 func (NotFoundError) IsMediaCapacityConsentResult() {}
 
@@ -1975,6 +2076,16 @@ type PageInfo struct {
 	EndCursor       *string `json:"endCursor,omitempty"`
 	HasNextPage     bool    `json:"hasNextPage"`
 	HasPreviousPage bool    `json:"hasPreviousPage"`
+}
+
+type PlatformIncidentFilterInput struct {
+	// Omitted matches both scopes.
+	Scope *IncidentScope `json:"scope,omitempty"`
+	// Empty or omitted matches every status.
+	Statuses  []IncidentStatus `json:"statuses,omitempty"`
+	ClusterID *string          `json:"clusterId,omitempty"`
+	// Narrows tenant-scope incidents to one tenant.
+	TenantID *string `json:"tenantId,omitempty"`
 }
 
 type PlatformTenantIndex struct {
@@ -2285,6 +2396,31 @@ type SkipperReportsConnection struct {
 	UnreadCount int                        `json:"unreadCount"`
 }
 
+type SourceLocation struct {
+	Mode SourceLocationMode `json:"mode"`
+	// Empty unless mode is RESTRICTED.
+	Clusters []*SourceLocationCluster `json:"clusters"`
+	// Empty unless mode is RESTRICTED.
+	AvoidNodeIds []string `json:"avoidNodeIds"`
+}
+
+type SourceLocationClusterInput struct {
+	ClusterID string `json:"clusterId"`
+	// Nodes of this cluster the source may run on. Empty means any node of the cluster. Only nodes of clusters the tenant owns are accepted.
+	NodeIds []string `json:"nodeIds"`
+}
+
+// Replaces the stream's own ingest restriction. Private and multicast pull
+// sources require RESTRICTED with clusters that allow private pull sources.
+type SourceLocationInput struct {
+	// ANY or RESTRICTED. CUSTOM is rejected.
+	Mode SourceLocationMode `json:"mode"`
+	// Required and non-empty for RESTRICTED; must be empty for ANY.
+	Clusters []*SourceLocationClusterInput `json:"clusters"`
+	// Nodes the source must never run on. Only nodes of clusters the tenant owns are accepted.
+	AvoidNodeIds []string `json:"avoidNodeIds"`
+}
+
 type StorageArtifact struct {
 	Key            string              `json:"key"`
 	Kind           StorageArtifactKind `json:"kind"`
@@ -2509,28 +2645,24 @@ type StreamValidation struct {
 }
 
 type StreamingConfig struct {
-	PreferredClusterLabel  *string `json:"preferredClusterLabel,omitempty"`
-	IngestDomain           *string `json:"ingestDomain,omitempty"`
-	EdgeDomain             *string `json:"edgeDomain,omitempty"`
-	PlayDomain             *string `json:"playDomain,omitempty"`
-	ChandlerDomain         *string `json:"chandlerDomain,omitempty"`
-	OfficialClusterLabel   *string `json:"officialClusterLabel,omitempty"`
-	OfficialIngestDomain   *string `json:"officialIngestDomain,omitempty"`
-	OfficialEdgeDomain     *string `json:"officialEdgeDomain,omitempty"`
-	OfficialPlayDomain     *string `json:"officialPlayDomain,omitempty"`
-	OfficialChandlerDomain *string `json:"officialChandlerDomain,omitempty"`
-	GlobalIngestDomain     *string `json:"globalIngestDomain,omitempty"`
-	GlobalEdgeDomain       *string `json:"globalEdgeDomain,omitempty"`
-	GlobalPlayDomain       *string `json:"globalPlayDomain,omitempty"`
-	GlobalChandlerDomain   *string `json:"globalChandlerDomain,omitempty"`
-	GlobalLivepeerDomain   *string `json:"globalLivepeerDomain,omitempty"`
-	TenantIngestDomain     *string `json:"tenantIngestDomain,omitempty"`
-	TenantEdgeDomain       *string `json:"tenantEdgeDomain,omitempty"`
-	TenantPlayDomain       *string `json:"tenantPlayDomain,omitempty"`
-	TenantChandlerDomain   *string `json:"tenantChandlerDomain,omitempty"`
-	TenantLivepeerDomain   *string `json:"tenantLivepeerDomain,omitempty"`
-	SrtPort                *int    `json:"srtPort,omitempty"`
-	RtmpPort               *int    `json:"rtmpPort,omitempty"`
+	PreferredClusterLabel *string `json:"preferredClusterLabel,omitempty"`
+	IngestDomain          *string `json:"ingestDomain,omitempty"`
+	EdgeDomain            *string `json:"edgeDomain,omitempty"`
+	PlayDomain            *string `json:"playDomain,omitempty"`
+	OfficialClusterLabel  *string `json:"officialClusterLabel,omitempty"`
+	OfficialIngestDomain  *string `json:"officialIngestDomain,omitempty"`
+	OfficialEdgeDomain    *string `json:"officialEdgeDomain,omitempty"`
+	OfficialPlayDomain    *string `json:"officialPlayDomain,omitempty"`
+	GlobalIngestDomain    *string `json:"globalIngestDomain,omitempty"`
+	GlobalEdgeDomain      *string `json:"globalEdgeDomain,omitempty"`
+	GlobalPlayDomain      *string `json:"globalPlayDomain,omitempty"`
+	GlobalLivepeerDomain  *string `json:"globalLivepeerDomain,omitempty"`
+	TenantIngestDomain    *string `json:"tenantIngestDomain,omitempty"`
+	TenantEdgeDomain      *string `json:"tenantEdgeDomain,omitempty"`
+	TenantPlayDomain      *string `json:"tenantPlayDomain,omitempty"`
+	TenantLivepeerDomain  *string `json:"tenantLivepeerDomain,omitempty"`
+	SrtPort               *int    `json:"srtPort,omitempty"`
+	RtmpPort              *int    `json:"rtmpPort,omitempty"`
 }
 
 type StreamsConnection struct {
@@ -2733,6 +2865,8 @@ type UpdateStreamInput struct {
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Update the pull-source configuration for an existing pull stream.
 	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
+	// Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
+	SourceLocation *SourceLocationInput `json:"sourceLocation,omitempty"`
 	// Historical chapter rotation mode. Snapshotted onto the DVR artifact
 	// at StartDVR; changes take effect on the next recording, not in-flight.
 	// NONE means rolling DVR playback only: recording still runs, but no
@@ -2874,6 +3008,8 @@ func (ValidationError) IsChangeBillingTierResult() {}
 func (ValidationError) IsCreateConversationResult() {}
 
 func (ValidationError) IsSendMessageResult() {}
+
+func (ValidationError) IsIncidentMutationResult() {}
 
 type ViewerCountBucketEdge struct {
 	Cursor string                         `json:"cursor"`
@@ -3488,6 +3624,247 @@ func (e DVRChapterState) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type IncidentEventKind string
+
+const (
+	IncidentEventKindAlertFiring           IncidentEventKind = "ALERT_FIRING"
+	IncidentEventKindAlertResolved         IncidentEventKind = "ALERT_RESOLVED"
+	IncidentEventKindAcknowledged          IncidentEventKind = "ACKNOWLEDGED"
+	IncidentEventKindAssigned              IncidentEventKind = "ASSIGNED"
+	IncidentEventKindNote                  IncidentEventKind = "NOTE"
+	IncidentEventKindResolved              IncidentEventKind = "RESOLVED"
+	IncidentEventKindInvestigationAttached IncidentEventKind = "INVESTIGATION_ATTACHED"
+	IncidentEventKindNotified              IncidentEventKind = "NOTIFIED"
+	// The incident's visibility moved after its cluster owner was confirmed.
+	IncidentEventKindScopeChanged IncidentEventKind = "SCOPE_CHANGED"
+)
+
+var AllIncidentEventKind = []IncidentEventKind{
+	IncidentEventKindAlertFiring,
+	IncidentEventKindAlertResolved,
+	IncidentEventKindAcknowledged,
+	IncidentEventKindAssigned,
+	IncidentEventKindNote,
+	IncidentEventKindResolved,
+	IncidentEventKindInvestigationAttached,
+	IncidentEventKindNotified,
+	IncidentEventKindScopeChanged,
+}
+
+func (e IncidentEventKind) IsValid() bool {
+	switch e {
+	case IncidentEventKindAlertFiring, IncidentEventKindAlertResolved, IncidentEventKindAcknowledged, IncidentEventKindAssigned, IncidentEventKindNote, IncidentEventKindResolved, IncidentEventKindInvestigationAttached, IncidentEventKindNotified, IncidentEventKindScopeChanged:
+		return true
+	}
+	return false
+}
+
+func (e IncidentEventKind) String() string {
+	return string(e)
+}
+
+func (e *IncidentEventKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IncidentEventKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IncidentEventKind", str)
+	}
+	return nil
+}
+
+func (e IncidentEventKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IncidentEventKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IncidentEventKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type IncidentResolution string
+
+const (
+	// Every alert of the incident resolved.
+	IncidentResolutionAuto IncidentResolution = "AUTO"
+	// A user resolved the incident.
+	IncidentResolutionManual IncidentResolution = "MANUAL"
+)
+
+var AllIncidentResolution = []IncidentResolution{
+	IncidentResolutionAuto,
+	IncidentResolutionManual,
+}
+
+func (e IncidentResolution) IsValid() bool {
+	switch e {
+	case IncidentResolutionAuto, IncidentResolutionManual:
+		return true
+	}
+	return false
+}
+
+func (e IncidentResolution) String() string {
+	return string(e)
+}
+
+func (e *IncidentResolution) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IncidentResolution(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IncidentResolution", str)
+	}
+	return nil
+}
+
+func (e IncidentResolution) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IncidentResolution) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IncidentResolution) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type IncidentScope string
+
+const (
+	// Platform infrastructure; visible to platform operators only.
+	IncidentScopePlatform IncidentScope = "PLATFORM"
+	// A cluster owned by one tenant; visible to that tenant and platform operators.
+	IncidentScopeTenant IncidentScope = "TENANT"
+)
+
+var AllIncidentScope = []IncidentScope{
+	IncidentScopePlatform,
+	IncidentScopeTenant,
+}
+
+func (e IncidentScope) IsValid() bool {
+	switch e {
+	case IncidentScopePlatform, IncidentScopeTenant:
+		return true
+	}
+	return false
+}
+
+func (e IncidentScope) String() string {
+	return string(e)
+}
+
+func (e *IncidentScope) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IncidentScope(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IncidentScope", str)
+	}
+	return nil
+}
+
+func (e IncidentScope) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IncidentScope) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IncidentScope) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type IncidentStatus string
+
+const (
+	IncidentStatusFiring       IncidentStatus = "FIRING"
+	IncidentStatusAcknowledged IncidentStatus = "ACKNOWLEDGED"
+	IncidentStatusResolved     IncidentStatus = "RESOLVED"
+)
+
+var AllIncidentStatus = []IncidentStatus{
+	IncidentStatusFiring,
+	IncidentStatusAcknowledged,
+	IncidentStatusResolved,
+}
+
+func (e IncidentStatus) IsValid() bool {
+	switch e {
+	case IncidentStatusFiring, IncidentStatusAcknowledged, IncidentStatusResolved:
+		return true
+	}
+	return false
+}
+
+func (e IncidentStatus) String() string {
+	return string(e)
+}
+
+func (e *IncidentStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = IncidentStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid IncidentStatus", str)
+	}
+	return nil
+}
+
+func (e IncidentStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *IncidentStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e IncidentStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 // How source media enters a stream.
 type IngestMode string
 
@@ -3932,17 +4309,20 @@ const (
 	MediaPlacementOptionKindCluster  MediaPlacementOptionKind = "CLUSTER"
 	MediaPlacementOptionKindOperator MediaPlacementOptionKind = "OPERATOR"
 	MediaPlacementOptionKindRegion   MediaPlacementOptionKind = "REGION"
+	// A node of a cluster the tenant owns.
+	MediaPlacementOptionKindNode MediaPlacementOptionKind = "NODE"
 )
 
 var AllMediaPlacementOptionKind = []MediaPlacementOptionKind{
 	MediaPlacementOptionKindCluster,
 	MediaPlacementOptionKindOperator,
 	MediaPlacementOptionKindRegion,
+	MediaPlacementOptionKindNode,
 }
 
 func (e MediaPlacementOptionKind) IsValid() bool {
 	switch e {
-	case MediaPlacementOptionKindCluster, MediaPlacementOptionKindOperator, MediaPlacementOptionKindRegion:
+	case MediaPlacementOptionKindCluster, MediaPlacementOptionKindOperator, MediaPlacementOptionKindRegion, MediaPlacementOptionKindNode:
 		return true
 	}
 	return false

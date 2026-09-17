@@ -113,3 +113,53 @@ func TestPlacementEnvelopePayloadSchemaMustMatch(t *testing.T) {
 		t.Fatalf("placement object downgraded: %v", err)
 	}
 }
+
+func TestNodeSelectorsRequireSchemaThree(t *testing.T) {
+	nodeRules := &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"cluster-a"}, NodeIds: []string{"node-1"}}}}}}
+	revisions := []*mediaauthoritypb.AuthoritySourceRevision{{Service: "commodore", Revision: "1"}}
+
+	tenant := placementTenant()
+	tenant.MediaPlacement.Ingest = proto.CloneOf(nodeRules)
+	if _, err := NewEnvelope(mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_TENANT, "tenant-1", 1, fixtureNow, fixtureNow.Add(time.Minute), fixtureNow.Add(time.Hour), "key", "cell-a", tenant, revisions); !errors.Is(err, ErrUnknownSchema) {
+		t.Fatalf("schema-2 tenant carried node selectors: %v", err)
+	}
+	object := placementObject()
+	object.MediaPlacement = &placementpb.PolicySet{Revision: 1, Ingest: proto.CloneOf(nodeRules)}
+	if _, err := NewEnvelope(mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT, LiveStreamAuthorityID("stream-1"), 1, fixtureNow, fixtureNow.Add(time.Minute), fixtureNow.Add(time.Hour), "key", "cell-a", object, revisions); !errors.Is(err, ErrUnknownSchema) {
+		t.Fatalf("schema-2 object carried node selectors: %v", err)
+	}
+
+	tenant.SchemaVersion, object.SchemaVersion = NodePlacementSchemaVersion, NodePlacementSchemaVersion
+	for _, payload := range []proto.Message{tenant, object} {
+		signed, trust := fixtureSigned(t, payload)
+		if signed.GetEnvelope().GetSchemaVersion() != NodePlacementSchemaVersion {
+			t.Fatal("node placement signed with the wrong envelope version")
+		}
+		if _, err := Verify(signed, trust, "cell-a", fixtureNow.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := EffectivePlacement(tenant, object, placement.Ingest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := placement.Request{TenantID: "tenant-1", Verb: placement.Ingest, Now: fixtureNow, Policy: policy}
+	candidate := placement.Candidate{TenantID: "tenant-1", ClusterID: "cluster-a", NodeID: "node-2", OwnerTenantID: "tenant-1", AllowedVerbs: []placement.Verb{placement.Ingest}}
+	if reason, checkErr := placement.CheckConstraints(request, candidate); checkErr != nil || reason != placement.PolicyDenied {
+		t.Fatalf("unlisted node admitted: %s %v", reason, checkErr)
+	}
+	candidate.NodeID = "node-1"
+	if reason, checkErr := placement.CheckConstraints(request, candidate); checkErr != nil || reason != placement.Eligible {
+		t.Fatalf("listed node refused: %s %v", reason, checkErr)
+	}
+	if !PlacementShadowComparable(tenant, object) {
+		t.Fatal("coherent schema-3 pair not comparable")
+	}
+	object.SchemaVersion = PlacementSchemaVersion
+	if PlacementShadowComparable(tenant, object) {
+		t.Fatal("mixed schema-2/3 pair comparable")
+	}
+	if _, err := EffectivePlacement(tenant, object, placement.Ingest); !errors.Is(err, ErrUnknownSchema) {
+		t.Fatalf("mixed schema-2/3 pair compiled: %v", err)
+	}
+}

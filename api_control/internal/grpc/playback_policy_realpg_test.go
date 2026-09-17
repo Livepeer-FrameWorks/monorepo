@@ -243,11 +243,4 @@ func TestPlaybackPolicyRepository_RealPG(t *testing.T) {
 	if !chapterRequiresAuth || chapterPolicyType != "jwt" {
 		t.Fatalf("parent policy rewrote tombstoned chapter: auth=%v policy=%q", chapterRequiresAuth, chapterPolicyType)
 	}
-
-	if _, err := server.GetSignedPolicyBundle(context.Background(), &commodorepb.GetSignedPolicyBundleRequest{
-		TenantId: tenantID,
-		StreamId: streamID,
-	}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("retired policy-bundle RPC code = %v, err = %v", status.Code(err), err)
-	}
 }

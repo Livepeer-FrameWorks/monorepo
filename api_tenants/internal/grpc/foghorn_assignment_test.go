@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -154,18 +155,11 @@ func TestAssignServiceToClusterInstanceIDWritesRuntimeSourceAndPreservesOnConfli
 	}
 }
 
-func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
-	}
-	defer db.Close()
+const controlCellFoghornAssignmentSQL = "(?s)INSERT INTO quartermaster\\.service_cluster_assignments \\(service_instance_id, cluster_id, source\\).*SELECT DISTINCT cell_sca\\.service_instance_id, owned\\.cluster_id, 'runtime'.*cell\\.cluster_class = 'platform_official'.*si\\.status = 'running'.*WHERE owned\\.cluster_id = \\$1"
 
-	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+const lockTenantOwnershipSQL = "(?s)UPDATE quartermaster\\.tenants\\s+SET updated_at = NOW\\(\\)\\s+WHERE id = \\$1::uuid\\s+RETURNING max_owned_clusters, is_provider"
 
-	mock.ExpectQuery("SELECT max_owned_clusters, is_provider,").
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider", "count"}).AddRow(10, true, 0))
+func expectSelfHostingClusterWrites(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("SELECT pc.region_id").
 		WithArgs("tenant-1").
 		WillReturnError(sql.ErrNoRows)
@@ -173,14 +167,28 @@ func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
 			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
 	mock.ExpectBegin()
+	mock.ExpectQuery(lockTenantOwnershipSQL).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(10, true))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.tenant_cluster_access.*VALUES").
 		WithArgs("tenant-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO quartermaster.service_cluster_assignments \\(service_instance_id, cluster_id, source\\)[\\s\\S]*SELECT si.id, \\$2, 'runtime'[\\s\\S]*ON CONFLICT \\(service_instance_id, cluster_id\\) DO UPDATE SET is_active = true, updated_at = NOW\\(\\)").
-		WithArgs("11111111-1111-1111-1111-111111111111", sqlmock.AnyArg()).
+}
+
+func TestEnableSelfHostingAssignsEveryControlCellFoghorn(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	expectSelfHostingClusterWrites(mock)
+	mock.ExpectExec(controlCellFoghornAssignmentSQL).
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnError(errors.New("assignment failed"))
 	mock.ExpectRollback()
 
@@ -197,6 +205,33 @@ func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
 	}
 }
 
+func TestEnableSelfHostingFailsWhenControlCellHasNoRunningFoghorn(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	expectSelfHostingClusterWrites(mock)
+	mock.ExpectExec(controlCellFoghornAssignmentSQL).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	_, err = server.EnableSelfHosting(tenantCtx("tenant-1", "owner"), &quartermasterpb.EnableSelfHostingRequest{
+		TenantId:    "tenant-1",
+		ClusterName: "Tenant Edge",
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -206,13 +241,13 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery("SELECT max_owned_clusters, is_provider,").
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider", "count"}).AddRow(10, true, 0))
 	mock.ExpectQuery("SELECT si.id::text AS instance_id").
 		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
 			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
 	mock.ExpectBegin()
+	mock.ExpectQuery(lockTenantOwnershipSQL).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(10, true))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnError(errors.New("stop after cluster insert"))
@@ -226,6 +261,122 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 		t.Fatalf("expected Internal, got %v", err)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreatePrivateClusterCountsOwnedClustersUnderTenantLock(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		owned int64
+		code  codes.Code
+	}{
+		{name: "at limit", owned: 1, code: codes.ResourceExhausted},
+		{name: "below limit", owned: 0, code: codes.Internal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create sqlmock: %v", err)
+			}
+			defer db.Close()
+
+			server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+			mock.ExpectQuery("SELECT si.id::text AS instance_id").
+				WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
+					AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
+			mock.ExpectBegin()
+			mock.ExpectQuery(lockTenantOwnershipSQL).
+				WithArgs("tenant-1").
+				WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(1, false))
+			mock.ExpectQuery("(?s)SELECT COUNT\\(\\*\\)::bigint\\s+FROM quartermaster\\.infrastructure_clusters\\s+WHERE owner_tenant_id = \\$1::uuid").
+				WithArgs("tenant-1").
+				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(test.owned))
+			if test.owned == 0 {
+				mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters").
+					WillReturnError(errors.New("stop after cluster insert"))
+			}
+			mock.ExpectRollback()
+
+			_, err = server.CreatePrivateCluster(tenantCtx("tenant-1", "owner"), &quartermasterpb.CreatePrivateClusterRequest{
+				TenantId:    "tenant-1",
+				ClusterName: "Tenant Edge",
+			})
+			if status.Code(err) != test.code {
+				t.Fatalf("expected %s, got %v", test.code, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet SQL expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestEnableSelfHostingReportsMissingTenantFromLock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	mock.ExpectQuery("SELECT pc.region_id").
+		WithArgs("tenant-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT si.id::text AS instance_id").
+		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
+			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockTenantOwnershipSQL).
+		WithArgs("tenant-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	_, err = server.EnableSelfHosting(tenantCtx("tenant-1", "owner"), &quartermasterpb.EnableSelfHostingRequest{
+		TenantId:    "tenant-1",
+		ClusterName: "Tenant Edge",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreatePrivateClusterReplaysOwnershipLockSerializationFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	mock.ExpectQuery("SELECT si.id::text AS instance_id").
+		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
+			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockTenantOwnershipSQL).
+		WithArgs("tenant-1").
+		WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access due to concurrent update"})
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectQuery(lockTenantOwnershipSQL).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider"}).AddRow(1, false))
+	mock.ExpectQuery("(?s)SELECT COUNT\\(\\*\\)::bigint\\s+FROM quartermaster\\.infrastructure_clusters").
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectRollback()
+
+	_, err = server.CreatePrivateCluster(tenantCtx("tenant-1", "owner"), &quartermasterpb.CreatePrivateClusterRequest{
+		TenantId:    "tenant-1",
+		ClusterName: "Tenant Edge",
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted after replay, got %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}

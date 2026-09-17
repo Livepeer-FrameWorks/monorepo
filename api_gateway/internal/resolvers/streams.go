@@ -120,7 +120,7 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*commodorepb.Str
 }
 
 // DoCreateStream creates a new stream
-func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*commodorepb.Stream, error) {
+func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (model.CreateStreamResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -171,10 +171,20 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	if input.PullSource != nil {
 		req.PullSource = input.PullSource
 	}
+	if input.SourceLocation != nil {
+		location, validationErr := SourceLocationInputToProto(input.SourceLocation)
+		if validationErr != nil {
+			return validationErr, nil
+		}
+		req.SourceLocation = location
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	createResp, err := r.Clients.Commodore.CreateStream(ctx, req)
 	if err != nil {
+		if vErr := streamPlacementValidationError(err); vErr != nil {
+			return vErr, nil
+		}
 		r.Logger.WithError(err).Error("Failed to create stream")
 		return nil, fmt.Errorf("failed to create stream: %w", err)
 	}

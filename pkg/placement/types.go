@@ -69,12 +69,15 @@ type Coordinates struct {
 
 // Selector combines fields with AND, values within a field with OR. An empty selector matches all.
 // Class is relative to the consuming tenant: an owner's marketplace cluster is private to its owner.
+// NodeIDs is omitted from the canonical encoding when empty so policies without node selectors keep
+// the digests they had before the field existed.
 type Selector struct {
 	ClusterIDs []string
 	OwnerIDs   []string
 	Regions    []string
 	Classes    []Class
 	Charging   []Charging
+	NodeIDs    []string `json:",omitempty"`
 }
 
 type SelectorSet struct {

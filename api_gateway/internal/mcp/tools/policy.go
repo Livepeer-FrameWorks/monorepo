@@ -52,7 +52,7 @@ func buildToolPolicies() map[string]ToolPolicy {
 	}
 
 	add("account:read", ToolRiskRead, "get_tenant_settings")
-	add("placement:read", ToolRiskRead, "get_media_placement_policy", "get_media_placement_options", "preview_media_placement", "get_media_placement_change", "get_media_placement_legacy_pins", "get_cluster_media_consent", "get_cluster_media_consent_change")
+	add("placement:read", ToolRiskRead, "get_media_placement_policy", "get_media_placement_options", "preview_media_placement", "get_media_placement_change", "get_cluster_media_consent", "get_cluster_media_consent_change")
 	add("placement:write", ToolRiskRead, "review_media_placement_change", "review_cluster_media_consent_change")
 	add("placement:write", ToolRiskHigh, "apply_media_placement_change", "apply_cluster_media_consent_change")
 	for _, name := range []string{"apply_media_placement_change", "apply_cluster_media_consent_change"} {
@@ -80,7 +80,8 @@ func buildToolPolicies() map[string]ToolPolicy {
 		"diagnose_buffer_health", "diagnose_packet_loss", "diagnose_rebuffering", "diagnose_routing",
 		"get_anomaly_report", "get_stream_health_summary")
 	add("support:read", ToolRiskRead, "list_support_conversations", "search_support_history")
-	add("infrastructure:read", ToolRiskRead, "browse_marketplace", "get_node_health", "get_node_info")
+	add("infrastructure:read", ToolRiskRead, "browse_marketplace", "get_node_health", "get_node_info", "list_incidents", "get_incident")
+	add("infrastructure:write", ToolRiskWrite, "acknowledge_incident", "assign_incident", "resolve_incident", "add_incident_note")
 	add("infrastructure:write", ToolRiskWrite,
 		"accept_cluster_invite", "approve_subscription_request", "create_cluster_invite", "create_edge_cluster",
 		"create_enrollment_token", "request_cluster_subscription", "set_node_mode", "subscribe_to_cluster")

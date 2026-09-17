@@ -168,10 +168,12 @@ WITH tenant_authority AS MATERIALIZED (
     UPDATE navigator.tenant_custom_domains AS custom_domain
     SET issuer_id = NULLIF(persisted_bundle.issuer_ca, ''),
         cert_expires_at = persisted_bundle.expires_at,
+        last_renewal_error = NULL,
+        last_renewal_error_at = NULL,
         updated_at = NOW()
     FROM tenant_authority, persisted_bundle
     WHERE custom_domain.tenant_id = tenant_authority.tenant_id
-      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      AND custom_domain.status IN ('cert_issuing', 'cert_issued')
       AND persisted_bundle.domains ? custom_domain.domain
     RETURNING custom_domain.tenant_id
 )

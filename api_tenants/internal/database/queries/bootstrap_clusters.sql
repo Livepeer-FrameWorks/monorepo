@@ -1,8 +1,11 @@
 -- name: ClearBootstrapDefaultCluster :exec
+-- Clears the default flag on every cluster except the one that stays default,
+-- so replaying the same desired state leaves that row unchanged.
 UPDATE quartermaster.infrastructure_clusters
 SET is_default_cluster = false,
     updated_at = NOW()
-WHERE is_default_cluster = true;
+WHERE is_default_cluster = true
+  AND cluster_id <> sqlc.arg(keep_cluster_id)::text;
 
 -- name: GetBootstrapCluster :one
 SELECT cluster_name,

@@ -135,7 +135,7 @@ func TestPostgresServiceDatabaseInitialization(t *testing.T) {
 		t.Fatalf("initialize service databases: %v\n%s", err, out)
 	}
 
-	services := []string{"quartermaster", "purser", "foghorn", "commodore", "periscope", "navigator", "skipper"}
+	services := []string{"quartermaster", "purser", "foghorn", "commodore", "periscope", "navigator", "skipper", "lookout"}
 	for _, service := range services {
 		out, err := docker(t, "", "exec", name, "psql", "-U", service, "-d", service, "-tAc",
 			"SELECT current_user || '|' || count(*) FROM information_schema.schemata WHERE schema_name = current_user")

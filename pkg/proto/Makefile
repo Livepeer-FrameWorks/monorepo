@@ -23,6 +23,7 @@ BUF := go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 # - foghorn.proto: Control plane - Foghorn clip/DVR/viewer operations
 # - deckhand.proto: Support messaging (Chatwoot integration)
 # - skipper.proto: AI consultant chat service
+# - lookout.proto: Incidents built from Alertmanager notifications (Lookout)
 # - foghorn_federation.proto: Cross-cluster federation (Foghorn ↔ Foghorn)
 # - foghorn_relay.proto: Intra-cluster HA command relay (Foghorn ↔ Foghorn)
 # Buf owns compilation and invokes versioned Go plugins from buf.gen.yaml.
@@ -45,7 +46,7 @@ proto-check: proto
 clean:
 	rm -f *.pb.go *_grpc.pb.go
 	rm -f common/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go media_authority/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
-	rm -f media_placement/*.pb.go
+	rm -f media_placement/*.pb.go lookout/*.pb.go
 
 # Warm the pinned Buf binary in the Go build cache. Kept as part of the root
 # install-tools workflow for developers who want to prefetch all tooling.

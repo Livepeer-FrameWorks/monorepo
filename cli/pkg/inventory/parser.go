@@ -694,6 +694,11 @@ func (m *Manifest) Validate() error {
 				return fmt.Errorf("observability '%s' host '%s' not found in hosts", name, h)
 			}
 		}
+		// Provisioning disables Alertmanager HA gossip, so a second instance
+		// would deduplicate nothing and send every notification twice.
+		if name == "alertmanager" && obs.Enabled && len(resolveServiceHosts(obs)) > 1 {
+			return fmt.Errorf("observability 'alertmanager' declares %d hosts; Alertmanager runs on a single host", len(resolveServiceHosts(obs)))
+		}
 	}
 
 	if err := m.validatePortCollisions(); err != nil {

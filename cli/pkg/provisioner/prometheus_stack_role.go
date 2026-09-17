@@ -2,18 +2,23 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
+	"net"
 	"strings"
 	"time"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	repografana "github.com/Livepeer-FrameWorks/monorepo/pkg/grafana"
 )
 
 // prometheusStackRoleVars maps observability.* manifest entries into the
 // prometheus_stack role vars. The CLI passes one component per call
-// (prometheus, victoriametrics, vmagent, vmauth) and the role dispatches on
-// prometheus_stack_components.
+// (prometheus, victoriametrics, vmagent, vmauth, vmalert, alertmanager) and the
+// role dispatches on prometheus_stack_components.
 func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
 	component := metaString(config.Metadata, "component")
 	if component == "" {
@@ -42,49 +47,102 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 				vars["vmagent_artifact_checksum"] = art.Checksum
 				vars["vmagent_version"] = releaseVersion(config.Version, art.Version)
 			}
-			if targets, ok := config.Metadata["scrape_targets"]; ok {
-				vars["vmagent_scrape_targets"] = targets
-			}
-			if interval := strings.TrimSpace(config.EnvVars["VMAGENT_SCRAPE_INTERVAL"]); interval != "" {
-				vars["vmagent_scrape_interval"] = interval
-			}
-			if rw := firstNonEmpty(
-				metaString(config.Metadata, "remote_write_url"),
-				config.EnvVars["VMAGENT_REMOTE_WRITE_URL"],
-			); rw != "" {
-				vars["vmagent_remote_write_url"] = rw
-			}
-			if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" {
-				vars["vmagent_remote_write_basic_auth_username"] = username
-			}
-			if password := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]); password != "" {
-				vars["vmagent_remote_write_basic_auth_password"] = password
-			}
 		case "vmauth":
 			if art, err := helpers.ResolveArtifact("vmauth", archKey, channel, config.Metadata); err == nil {
 				vars["vmauth_artifact_url"] = art.URL
 				vars["vmauth_artifact_checksum"] = art.Checksum
 				vars["vmauth_version"] = releaseVersion(config.Version, art.Version)
 			}
-			if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" {
-				vars["vmauth_username"] = username
+		case "vmalert":
+			if art, err := helpers.ResolveArtifact("vmalert", archKey, channel, config.Metadata); err == nil {
+				vars["vmalert_artifact_url"] = art.URL
+				vars["vmalert_artifact_checksum"] = art.Checksum
+				vars["vmalert_version"] = releaseVersion(config.Version, art.Version)
 			}
-			if password := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]); password != "" {
-				vars["vmauth_password"] = password
-			}
-			if upstream := vmauthUpstreamURL(config.EnvVars); upstream != "" {
-				vars["vmauth_upstream_url"] = upstream
-			}
-			if publicKey := firstNonEmpty(
-				config.EnvVars["VMAUTH_EDGE_JWT_PUBLIC_KEY_PEM_B64"],
-				config.EnvVars["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"],
-			); strings.TrimSpace(publicKey) != "" {
-				vars["vmauth_edge_jwt_public_key_pem_b64"] = strings.TrimSpace(publicKey)
+		case "alertmanager":
+			if art, err := helpers.ResolveArtifact("alertmanager", archKey, channel, config.Metadata); err == nil {
+				vars["alertmanager_artifact_url"] = art.URL
+				vars["alertmanager_artifact_checksum"] = art.Checksum
+				vars["alertmanager_version"] = releaseVersion(config.Version, art.Version)
 			}
 		case "prometheus":
 			if v := releaseVersion(config.Version, metaString(config.Metadata, "version")); v != "" {
 				vars["prometheus_version"] = v
 			}
+		}
+	}
+
+	switch component {
+	case "vmagent":
+		if targets, ok := config.Metadata["scrape_targets"]; ok {
+			vars["vmagent_scrape_targets"] = targets
+		}
+		if labels, ok := config.Metadata["external_labels"]; ok {
+			vars["vmagent_external_labels"] = labels
+		}
+		if interval := strings.TrimSpace(config.EnvVars["VMAGENT_SCRAPE_INTERVAL"]); interval != "" {
+			vars["vmagent_scrape_interval"] = interval
+		}
+		if rw := firstNonEmpty(
+			metaString(config.Metadata, "remote_write_url"),
+			config.EnvVars["VMAGENT_REMOTE_WRITE_URL"],
+		); rw != "" {
+			vars["vmagent_remote_write_url"] = rw
+		}
+		if username := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]); username != "" {
+			vars["vmagent_remote_write_basic_auth_username"] = username
+		}
+		if password := strings.TrimSpace(config.EnvVars["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]); password != "" {
+			vars["vmagent_remote_write_basic_auth_password"] = password
+		}
+	case "vmauth":
+		if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" {
+			vars["vmauth_username"] = username
+		}
+		if password := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_PASSWORD"]); password != "" {
+			vars["vmauth_password"] = password
+		}
+		if upstream := vmauthUpstreamURL(config.EnvVars); upstream != "" {
+			vars["vmauth_upstream_url"] = upstream
+		}
+		if publicKey := firstNonEmpty(
+			config.EnvVars["VMAUTH_EDGE_JWT_PUBLIC_KEY_PEM_B64"],
+			config.EnvVars["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"],
+		); strings.TrimSpace(publicKey) != "" {
+			vars["vmauth_edge_jwt_public_key_pem_b64"] = strings.TrimSpace(publicKey)
+		}
+	case "vmalert":
+		ruleFiles, err := vmalertRuleFiles(repografana.Rules)
+		if err != nil {
+			return nil, err
+		}
+		vars["vmalert_rule_files"] = ruleFiles
+		if datasource := strings.TrimRight(strings.TrimSpace(config.EnvVars["VMALERT_DATASOURCE_URL"]), "/"); datasource != "" {
+			vars["vmalert_datasource_url"] = datasource
+		}
+		if notifiers := splitURLList(config.EnvVars["VMALERT_NOTIFIER_URL"]); len(notifiers) > 0 {
+			vars["vmalert_notifier_urls"] = notifiers
+		}
+	case "alertmanager":
+		// The critical-alert email fallback sends through the platform's
+		// shared SMTP settings, the same mailbox pkg/email uses.
+		for envKey, varName := range map[string]string{
+			"ALERTMANAGER_LOOKOUT_URL":   "alertmanager_lookout_url",
+			"LOOKOUT_ALERTMANAGER_TOKEN": "alertmanager_lookout_token",
+			"ALERTMANAGER_HEARTBEAT_URL": "alertmanager_heartbeat_url",
+			"ALERTMANAGER_EMAIL_TO":      "alertmanager_email_to",
+			"FROM_EMAIL":                 "alertmanager_smtp_from",
+			"SMTP_USER":                  "alertmanager_smtp_auth_username",
+			"SMTP_PASSWORD":              "alertmanager_smtp_auth_password",
+		} {
+			if value := strings.TrimSpace(config.EnvVars[envKey]); value != "" {
+				vars[varName] = value
+			}
+		}
+		host := strings.TrimSpace(config.EnvVars["SMTP_HOST"])
+		port := strings.TrimSpace(config.EnvVars["SMTP_PORT"])
+		if host != "" && port != "" {
+			vars["alertmanager_smtp_smarthost"] = net.JoinHostPort(host, port)
 		}
 	}
 
@@ -98,9 +156,50 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 			vars["vmagent_port"] = port
 		case "vmauth":
 			vars["vmauth_port"] = port
+		case "vmalert":
+			vars["vmalert_port"] = port
+		case "alertmanager":
+			vars["alertmanager_port"] = port
 		}
 	}
 	return vars, nil
+}
+
+// vmalertRuleFiles returns the embedded rule files as {name, content} entries
+// sorted by name. The role writes exactly this set, so a rule file removed
+// from the repo is removed from the vmalert host.
+func vmalertRuleFiles(rules fs.FS) ([]map[string]any, error) {
+	entries, err := fs.ReadDir(rules, "rules")
+	if err != nil {
+		return nil, fmt.Errorf("vmalert: read embedded rules: %w", err)
+	}
+	files := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
+			continue
+		}
+		content, err := fs.ReadFile(rules, "rules/"+entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("vmalert: read embedded rule file %s: %w", entry.Name(), err)
+		}
+		files = append(files, map[string]any{"name": entry.Name(), "content": string(content)})
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("vmalert: no embedded rule files")
+	}
+	// fs.ReadDir returns entries sorted by filename, so rule files render in a
+	// stable order.
+	return files, nil
+}
+
+func splitURLList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimRight(strings.TrimSpace(part), "/"); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func vmauthUpstreamURL(env map[string]string) string {
@@ -129,7 +228,7 @@ func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, config 
 	if serviceName := prometheusStackSystemdServiceName(config); serviceName != "" {
 		return detectSystemdUnit(ctx, runner, serviceName)
 	}
-	result, runErr := runner.Run(ctx, "systemctl is-active prometheus victoriametrics vmagent vmauth node_exporter 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
+	result, runErr := runner.Run(ctx, "systemctl is-active prometheus victoriametrics vmagent vmauth vmalert alertmanager node_exporter 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
 	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 	return &detect.ServiceState{Exists: running, Running: running}, nil
 }
@@ -137,7 +236,7 @@ func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, config 
 func prometheusStackSystemdServiceName(config ServiceConfig) string {
 	component := firstNonEmpty(metaString(config.Metadata, "component"), metaString(config.Metadata, "service_name"))
 	switch component {
-	case "prometheus", "victoriametrics", "vmagent", "vmauth", "node_exporter":
+	case "prometheus", "victoriametrics", "vmagent", "vmauth", "vmalert", "alertmanager", "node_exporter":
 		return component
 	default:
 		return ""

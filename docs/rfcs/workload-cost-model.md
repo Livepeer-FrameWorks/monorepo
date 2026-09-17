@@ -114,7 +114,7 @@ A cost vector and a parametric predictor in Foghorn:
 ### Other impact
 
 - `pkg/database/sql/schema/foghorn.sql` — `processing_jobs` class + parameters columns, job actuals, correction-factor table (additive migrations per `docs/standards/schema-migrations.md`).
-- `infrastructure/prometheus/` — GPU gauges and prediction-error metrics join the capacity-planning rule set.
+- `pkg/grafana/rules/` — GPU gauges and prediction-error metrics join the capacity-planning rule set.
 - `docs/rfcs/capacity-planning.md` — its Non-Goals redirect predictive scope here; GPU dimension lands there once Phase 1 telemetry exists.
 - `docs/rfcs/processing-orchestration.md` — its GPU-aware scheduling grey area resolves by reference to this RFC.
 - `docs/platform-features.yaml` — `workload-cost-model` status advances as phases land.

@@ -1,0 +1,23 @@
+fragment IncidentFields on Incident {
+  id
+  scope
+  tenantId
+  clusterId
+  region
+  alertname
+  severity
+  status
+  resolution
+  title
+  summary
+  firingAlertCount
+  startedAt
+  lastAlertAt
+  acknowledgedAt
+  acknowledgedBy
+  assignedTo
+  resolvedAt
+  resolvedBy
+  createdAt
+  updatedAt
+}

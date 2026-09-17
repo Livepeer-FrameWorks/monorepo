@@ -11,13 +11,19 @@ fragment StreamCoreFields on Stream {
     sourceUriRedacted
     enabled
     class
-    allowedClusterIds
   }
   managedSource {
     sourceKind
     alwaysOn
     placementCount
-    allowedClusterIds
+  }
+  sourceLocation {
+    mode
+    clusters {
+      clusterId
+      nodeIds
+    }
+    avoidNodeIds
   }
   thumbnailAssets {
     posterUrl

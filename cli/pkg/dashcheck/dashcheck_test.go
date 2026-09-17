@@ -15,7 +15,87 @@ import (
 
 	gfdash "github.com/Livepeer-FrameWorks/monorepo/pkg/grafana"
 	mbspecs "github.com/Livepeer-FrameWorks/monorepo/pkg/metabase"
+	"gopkg.in/yaml.v3"
 )
+
+// TestAlertRulesReferenceKnownMetricsAndCarrySeverity holds the vmalert rules
+// to the dashboard contract: every expression references a metric the
+// platform exports, and every rule carries a severity Alertmanager routes on.
+func TestAlertRulesReferenceKnownMetricsAndCarrySeverity(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	knownMetrics := loadDeclaredMetrics(t, repoRoot)
+
+	entries, err := gfdash.Rules.ReadDir("rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failures []string
+	ruleCount := 0
+	for _, entry := range entries {
+		content, err := gfdash.Rules.ReadFile("rules/" + entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Groups []struct {
+				Name  string `yaml:"name"`
+				Rules []struct {
+					Alert  string            `yaml:"alert"`
+					Expr   string            `yaml:"expr"`
+					Labels map[string]string `yaml:"labels"`
+				} `yaml:"rules"`
+			} `yaml:"groups"`
+		}
+		if err := yaml.Unmarshal(content, &doc); err != nil {
+			t.Fatalf("parse %s: %v", entry.Name(), err)
+		}
+		for _, group := range doc.Groups {
+			for _, rule := range group.Rules {
+				ruleCount++
+				for _, unknown := range unknownPromMetrics(rule.Expr, knownMetrics) {
+					failures = append(failures, fmt.Sprintf("%s/%s: %s\n  %s", entry.Name(), rule.Alert, unknown, rule.Expr))
+				}
+				if severity := rule.Labels["severity"]; severity != "critical" && severity != "warning" {
+					failures = append(failures, fmt.Sprintf("%s/%s: severity %q, want critical or warning", entry.Name(), rule.Alert, severity))
+				}
+			}
+		}
+	}
+	if ruleCount == 0 {
+		t.Fatal("no embedded alert rules")
+	}
+	if len(failures) > 0 {
+		t.Fatalf("alert rules reference unknown metrics or lack severity:\n%s", strings.Join(failures, "\n\n"))
+	}
+}
+
+// jmxExporterMetrics derives the metric names the MirrorMaker2 JMX exporter
+// config emits: each rule's name prefix joined with its attribute alternatives
+// in snake_case, plus _total for COUNTER rules.
+func jmxExporterMetrics(t *testing.T, repoRoot string) []string {
+	t.Helper()
+	path := filepath.Join(repoRoot, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/templates/jmx-exporter.yml.j2")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	ruleRe := regexp.MustCompile(`(?m)^\s+- pattern: '.*<>\(([^)]+)\):'\n\s+name: (\S+)\$\d+\n\s+type: (\w+)`)
+	matches := ruleRe.FindAllStringSubmatch(string(content), -1)
+	if len(matches) == 0 {
+		t.Fatalf("no JMX exporter rules parsed from %s", path)
+	}
+	var names []string
+	for _, match := range matches {
+		for _, attribute := range strings.Split(match[1], "|") {
+			name := match[2] + strings.ReplaceAll(attribute, "-", "_")
+			if match[3] == "COUNTER" {
+				name += "_total"
+			}
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
 func TestGrafanaDashboardQueriesReferenceKnownMetrics(t *testing.T) {
 	repoRoot := findRepoRoot(t)
@@ -234,6 +314,13 @@ func loadDeclaredMetrics(t *testing.T, repoRoot string) map[string]bool {
 		"go_threads":                                true,
 		"circuit_breaker_state":                     true,
 		"circuit_breaker_state_transitions_total":   true,
+		// vmalert's own per-rule gauge, and the alert state series it writes
+		// to VictoriaMetrics through -remoteWrite.url.
+		"vmalert_alerts_firing": true,
+		"ALERTS":                true,
+	}
+	for _, name := range jmxExporterMetrics(t, repoRoot) {
+		metrics[name] = true
 	}
 
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
@@ -385,14 +472,15 @@ func matchesKnownMetric(pattern string, known map[string]bool) bool {
 }
 
 func looksLikeMetric(token string) bool {
-	if token == "up" {
+	if token == "up" || token == "ALERTS" {
 		return true
 	}
 	prefixes := []string{
 		"bridge_", "commodore_", "deckhand_", "decklog_", "foghorn_",
 		"helmsman_", "navigator_", "periscope_", "privateer_", "purser_",
 		"quartermaster_", "signalman_", "skipper_", "steward_", "stream_",
-		"victoriametrics_", "vm_", "vmagent_", "vm_promscrape_",
+		"victoriametrics_", "vm_", "vmagent_", "vm_promscrape_", "vmalert_",
+		"kafka_connect_mirror_",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(token, prefix) {

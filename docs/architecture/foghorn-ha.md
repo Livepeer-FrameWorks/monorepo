@@ -348,7 +348,7 @@ A **cell** is one Foghorn pool (the instances sharing a Redis, as described abov
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `control_cell_id`           | The Foghorn cell that controls this cluster. NULL until assignment runs; empty/self means the cluster controls itself (platform_official).                  |
 | `eligible_serving_cell_ids` | Foghorn cells authorized to serve content from this cluster. Defaults to `[control_cell_id]`; intended to be populated when multi-cell serving is opted in. |
-| `reassignment_state`        | NULL in steady state; CHECK-constrained to `'draining'` for an operator-initiated control-cell reassignment.                                                |
+| `reassignment_state`        | NULL when no reassignment is open; `'switching'` while edges move; `'failed'` past the deadline. See Control-cell reassignment.                             |
 
 ### How assignments are populated (enforced today)
 
@@ -357,7 +357,8 @@ A **cell** is one Foghorn pool (the instances sharing a Redis, as described abov
   explicitly declared `eligible_serving_cells`. An edge-only or storage-only cluster does not become
   a recipient merely from its cluster ID; every explicitly eligible cell must still map to an
   enabled Foghorn or production rendering fails.
-- **Runtime creation**: `CreatePrivateCluster` / `EnableSelfHosting` (`api_tenants/internal/grpc/server.go`) pick a control cell by scoring healthy `platform_official` Foghorn instances (internal-control listener, running + healthy) on load and geo, then write `control_cell_id` = chosen cell and `eligible_serving_cell_ids` = `[control cell]` in the same transaction that creates the cluster row, owner access grant, and Foghorn `service_cluster_assignments` row.
+- **Runtime creation**: `CreatePrivateCluster` / `EnableSelfHosting` (`api_tenants/internal/grpc/server.go`) pick a control cell by scoring healthy `platform_official` Foghorn instances (internal-control listener, running + healthy) on load and geo, then write `control_cell_id` = chosen cell, `eligible_serving_cell_ids` = `[control cell]`, and a `service_cluster_assignments` row for every running Foghorn of that cell, in the same transaction that creates the cluster row and owner access grant. Creation fails with `Unavailable` when the cell has no running Foghorn.
+- **Private-cluster Foghorn rows**: Quartermaster's control-cell reconciler (`api_tenants/internal/grpc/private_cluster_control_cell.go`, every 30 s on each replica) keeps each `tenant_private` cluster assigned to the running Foghorns of its control cell. A row appears when a replica joins the cell and is removed when its instance stops or holds platform assignments only on another cell. `DrainServicePoolInstance` never deletes `tenant_private` rows, so `cluster provision` leaves private clusters served. Foghorn's served-cluster set, `GetClusterInternalFoghornGRPC`, and the cluster's Foghorn DNS records all read these rows, so losing one replica leaves its siblings serving the cluster.
 
 ### What consumes the assignment (enforced today)
 
@@ -369,11 +370,16 @@ A **cell** is one Foghorn pool (the instances sharing a Redis, as described abov
   local routing may serve only from those delivered grants plus current cell-local reachability.
 - The columns are exposed on the `InfrastructureCluster` proto (`ControlCellId`, `EligibleServingCellIds`) for any reader of `GetCluster`.
 
-### Schema-only today (not enforced)
+### Control-cell reassignment
 
-Be precise about what does **not** exist yet — until v0.2.33 this model lived only in SQL comments, and parts of those comments are still aspirational:
+`ReassignClusterControlCell` (service or platform-operator auth; CLI `frameworks admin clusters reassign-control-cell`) moves a tenant-private cluster to another active platform cell with a running Foghorn. An edge holds one control stream to one Foghorn, reached through the cluster's Foghorn address, so ownership moves first and the edges follow:
 
-- **`reassignment_state` has no writer or reader.** The `ReassignClusterControlCell` RPC named in the migration comment does not exist anywhere in the codebase; nothing ever sets `'draining'`, and Navigator does not filter on it. The drain-then-ACK reassignment flow (including the `GetEdgeApplyState` ACK the comment references) is design intent only.
+1. One transaction sets `previous_control_cell_id` to the old cell, `control_cell_id` and the matching `eligible_serving_cell_ids` entry to the target, and `reassignment_state = 'switching'` with a deadline. It also assigns the target cell's Foghorns, removes the previous cell's rows, and enqueues `cluster_updated`; Navigator's Foghorn DNS sync is woken after commit.
+2. Each previous-cell Foghorn receives the cluster in `released_cluster_ids` at its next served-cluster refresh (every 5 minutes). It ends the local Helmsman streams of that cluster and refuses their registration. Helmsman redials the cluster's Foghorn address and reaches the new cell. The new cell's ConfigSeed versions order above the previous cell's because Foghorn floors its per-node counter to the applied version Helmsman reports at registration, so Navigator's seed-version fence also rejects late ACKs from the previous cell.
+3. Foghorn's node-liveness publish (`ReportAliveNodes`) carries its `CLUSTER_ID` and each node's observation time. Quartermaster keeps the newest observation per node in `infrastructure_nodes.control_cell_id` and `control_cell_observed_at`.
+4. The reconciler completes the reassignment once no node of the cluster observed in the last 3 minutes belongs to another cell. Past the deadline it marks the reassignment `failed` with the pending nodes. Both transitions are fenced on `reassignment_started_at`, and the state lives in the cluster row, so any Quartermaster replica resumes after a restart.
+
+A failed reassignment keeps control on the target while the previous cell keeps releasing edges; reassigning back to the previous cell is the rollback. `previous_control_cell_id` stays set after completion so that cell keeps refusing edges that reconnect through a stale address. `GetClusterControlCellReassignment` (CLI `frameworks admin clusters control-cell`) returns the state, deadline, error, and the edges still observed by another cell.
 
 ## Key Schema
 

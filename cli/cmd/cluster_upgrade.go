@@ -646,50 +646,15 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		return result, nil
 	}
 
-	// Build the same ServiceConfig the real provision flow uses — role vars
-	// builders depend on env + manifest-derived metadata, not just
-	// Mode/Version/Port. A synthetic orchestrator.Task feeds buildTaskConfig.
-	//
-	// The ClusterID MUST be set: buildServiceEnvVars only layers a cluster's env_files (which carry regional
-	// STORAGE_S3_* credentials + descriptor) when task.ClusterID is set. Omitting it renders shared/empty S3 config,
-	// which the storage-backend agreement gate would then skip on an empty bucket. Resolve the service's effective
-	// cluster — its explicit assignment, else the target host's cluster.
-	clusterID := ""
-	if svcCfg, ok := manifest.Services[serviceName]; ok {
-		if len(svcCfg.Clusters) > 0 {
-			clusterID = svcCfg.Clusters[0]
-		} else if svcCfg.Cluster != "" {
-			clusterID = svcCfg.Cluster
-		}
-	}
-	if clusterID == "" {
-		clusterID = host.Cluster
-	}
-	task := &orchestrator.Task{
-		Name:       serviceName,
-		Type:       deployName,
-		ServiceID:  serviceName,
-		InstanceID: "",
-		Host:       host.Name,
-		ClusterID:  clusterID,
-		Phase:      orchestrator.PhaseApplications,
-		Idempotent: true,
-	}
-	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, envErr := rc.PreparedSharedEnv()
-	if envErr != nil {
-		return result, fmt.Errorf("load manifest env_files: %w", envErr)
-	}
-	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
-	if clusterEnvsErr != nil {
-		return result, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
-	}
-	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	config, clusterID, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
 	if err != nil {
-		return result, fmt.Errorf("build upgrade config: %w", err)
+		return result, err
 	}
 	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
 		return result, fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
+	}
+	if missing := missingRequiredExternalEnv(deployName, config.EnvVars); len(missing) > 0 {
+		return result, requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", serviceName, host.Name), Missing: missing}})
 	}
 	// Foghorn's S3 descriptor env must agree with the cluster row Quartermaster persists and Chandler serves from —
 	// catch a divergent/repointed backend before deploying, not at Foghorn's crash-on-boot immutability guard.
@@ -818,6 +783,52 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
 	}
 	return upgradeResult{changed: true, installed: firstInstall}, nil
+}
+
+// buildUpgradeTaskConfig renders the ServiceConfig an upgrade deploys to one replica: the same buildTaskConfig the
+// provision flow uses, fed by a synthetic application task. It also returns the effective cluster the task renders
+// against.
+//
+// The ClusterID MUST be set: buildServiceEnvVars only layers a cluster's env_files (which carry regional
+// STORAGE_S3_* credentials + descriptor) when task.ClusterID is set. Omitting it renders shared/empty S3 config,
+// which the storage-backend agreement gate would then skip on an empty bucket. The effective cluster is the
+// service's explicit assignment, else the target host's cluster.
+func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, runtimeData map[string]any) (provisioner.ServiceConfig, string, error) {
+	clusterID := ""
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		if len(svcCfg.Clusters) > 0 {
+			clusterID = svcCfg.Clusters[0]
+		} else if svcCfg.Cluster != "" {
+			clusterID = svcCfg.Cluster
+		}
+	}
+	if clusterID == "" {
+		clusterID = host.Cluster
+	}
+	task := &orchestrator.Task{
+		Name:       serviceName,
+		Type:       deployName,
+		ServiceID:  serviceName,
+		InstanceID: "",
+		Host:       host.Name,
+		ClusterID:  clusterID,
+		Phase:      orchestrator.PhaseApplications,
+		Idempotent: true,
+	}
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.PreparedSharedEnv()
+	if envErr != nil {
+		return provisioner.ServiceConfig{}, "", fmt.Errorf("load manifest env_files: %w", envErr)
+	}
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		return provisioner.ServiceConfig{}, "", fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
+	}
+	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	if err != nil {
+		return provisioner.ServiceConfig{}, "", fmt.Errorf("build upgrade config: %w", err)
+	}
+	return config, clusterID, nil
 }
 
 func deployedArtifactMatches(state *detect.ServiceState, target *gitops.ServiceInfo) bool {

@@ -24,7 +24,6 @@ type placementAPIError interface {
 	model.MediaPlacementPreviewResult
 	model.MediaPlacementReviewResult
 	model.MediaPlacementChangeResult
-	model.MediaPlacementLegacyPinsResult
 	model.MediaCapacityConsentResult
 	model.MediaCapacityConsentChangeResult
 }
@@ -179,6 +178,8 @@ func placementInvalidInput(err error) *model.MediaPlacementError {
 
 // Service diagnostics never cross the public GraphQL boundary. The typed code
 // drives reload, re-review and idempotency recovery without parsing messages.
+const nodePlacementNotReadyMessage = "Node placement is not available until every media cell serving this tenant supports it."
+
 func placementFailure(err error) placementAPIError {
 	out := &model.MediaPlacementError{Code: model.MediaPlacementErrorCodeUnavailable, Message: "Placement state is unavailable. Recover the same change before retrying a write.", Fields: []*model.MediaPlacementFieldError{}}
 	switch status.Code(err) {
@@ -193,6 +194,10 @@ func placementFailure(err error) placementAPIError {
 	case codes.AlreadyExists:
 		out.Code, out.Message = model.MediaPlacementErrorCodeIdempotencyConflict, "This idempotency key belongs to another change."
 	case codes.FailedPrecondition:
+		if placement.IsNodePlacementNotReady(err) {
+			out.Code, out.Message = model.MediaPlacementErrorCodeUnsupported, nodePlacementNotReadyMessage
+			break
+		}
 		out.Code, out.Message = model.MediaPlacementErrorCodeStaleReview, "The review changed or expired. Review again before applying."
 	case codes.Unimplemented:
 		out.Code, out.Message = model.MediaPlacementErrorCodeUnsupported, "This placement operation is not supported."

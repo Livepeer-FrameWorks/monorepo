@@ -24,10 +24,10 @@ func decodeTenantPlacementHistory(encoded []byte, tenantID string) (*mediapb.Ten
 	if err := proto.Unmarshal(encoded, previous); err != nil {
 		return nil, fmt.Errorf("decode tenant placement history: %w", err)
 	}
-	if previous.GetTenantId() != tenantID || (previous.GetSchemaVersion() != sharedauthority.SchemaVersion && previous.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion) {
+	if previous.GetTenantId() != tenantID || (previous.GetSchemaVersion() != sharedauthority.SchemaVersion && !sharedauthority.IsPlacementSchema(previous.GetSchemaVersion())) {
 		return nil, errors.New("invalid tenant placement history identity or schema")
 	}
-	if previous.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion && previous.GetMediaPlacement() == nil {
+	if sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) && previous.GetMediaPlacement() == nil {
 		return nil, errors.New("tenant placement history lacks policy")
 	}
 	if previous.GetSchemaVersion() == sharedauthority.SchemaVersion && previous.GetMediaPlacement() != nil {
@@ -40,7 +40,7 @@ func decodeTenantPlacementHistory(encoded []byte, tenantID string) (*mediapb.Ten
 }
 
 func tenantPlacementSourceRevisions(payload *mediapb.TenantAuthority, revisions []*mediapb.AuthoritySourceRevision) ([]*mediapb.AuthoritySourceRevision, error) {
-	if payload.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion {
+	if !sharedauthority.IsPlacementSchema(payload.GetSchemaVersion()) {
 		return revisions, nil
 	}
 	revision, err := hashProtoMessages(payload.GetMediaPlacement())
@@ -53,10 +53,12 @@ func tenantPlacementSourceRevisions(payload *mediapb.TenantAuthority, revisions 
 	return out, nil
 }
 
-// Established schema-2 history is inherited. A tenant still on the legacy
-// schema, or without history, receives its first policy-bearing authority only
-// when every current target cell has attested schema-2 enforcement; otherwise
-// the refresh keeps the legacy schema, and the next attestation re-queues it.
+// Established placement history is inherited and never downgraded. A tenant
+// still on the legacy schema, or without history, receives its first
+// policy-bearing authority only when every current target cell has attested
+// schema-2 enforcement; otherwise the refresh keeps the legacy schema, and the
+// next attestation re-queues it. The issued schema is the highest one every
+// target cell attests, so schema 3 (node selectors) follows the same gate.
 func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, targets []string) error {
 	queries := commodoredb.New(s.db)
 	var previous *mediapb.TenantAuthority
@@ -70,7 +72,7 @@ func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *m
 			return err
 		}
 	}
-	established := previous.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion
+	established := sharedauthority.IsPlacementSchema(previous.GetSchemaVersion())
 	active := payload.GetLifecycle() == mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && payload.GetBillingDecision() == mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
 	if !active {
 		if established {
@@ -84,36 +86,36 @@ func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *m
 		}
 		return nil
 	}
-	ready, err := placementCellsReady(ctx, queries, targets)
+	required := max(uint32(sharedauthority.PlacementSchemaVersion), previous.GetSchemaVersion())
+	schema, err := placementTargetSchema(ctx, queries, targets)
 	if err != nil {
 		return err
 	}
 	var probeErr error
-	if !ready {
+	if schema < required {
 		probeErr = s.refreshPlacementCellCapabilities(ctx, targets)
-		ready, err = placementCellsReady(ctx, queries, targets)
-		if err != nil {
+		if schema, err = placementTargetSchema(ctx, queries, targets); err != nil {
 			return err
 		}
 	}
-	if !ready {
+	if schema < required {
 		if established {
 			if probeErr != nil {
 				return fmt.Errorf("placement enforcement capability unavailable: %w", probeErr)
 			}
-			return errors.New("tenant authority targets a cell without placement enforcement capability")
+			return fmt.Errorf("tenant authority targets a cell without placement schema %d enforcement capability", required)
 		}
 		return nil
 	}
 	if established {
-		return s.inheritTenantPlacement(ctx, payload, entitlement, previous)
+		return s.inheritTenantPlacementAt(ctx, payload, entitlement, previous, schema)
 	}
 	// First issuance is opportunistic: a tenant whose owners have not yet
 	// consented, or whose saved intent is incomplete, keeps its legacy refresh
 	// instead of losing every refresh until that is fixed. Established schema-2
 	// tenants keep the strict inheritance path above.
 	candidate := proto.CloneOf(payload)
-	if issueErr := s.issueTenantPlacement(ctx, candidate, entitlement, nil); issueErr != nil {
+	if issueErr := s.issueTenantPlacement(ctx, candidate, entitlement, nil, schema); issueErr != nil {
 		if s.logger != nil {
 			s.logger.WithError(issueErr).WithField("tenant_id", payload.GetTenantId()).Warn("Placement activation deferred; tenant keeps legacy authority schema")
 		}
@@ -124,11 +126,20 @@ func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *m
 }
 
 func (s *CommodoreServer) inheritTenantPlacement(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, previous *mediapb.TenantAuthority) error {
+	return s.inheritTenantPlacementAt(ctx, payload, entitlement, previous, previous.GetSchemaVersion())
+}
+
+// inheritTenantPlacementAt keeps an established placement schema or raises it to
+// schema, which the caller derived from every target cell's attestation.
+func (s *CommodoreServer) inheritTenantPlacementAt(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, previous *mediapb.TenantAuthority, schema uint32) error {
 	if previous.GetSchemaVersion() == sharedauthority.SchemaVersion {
 		return nil
 	}
-	if previous.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion || previous.GetTenantId() != payload.GetTenantId() || previous.GetMediaPlacement() == nil {
+	if !sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) || previous.GetTenantId() != payload.GetTenantId() || previous.GetMediaPlacement() == nil {
 		return errors.New("invalid tenant placement parent")
+	}
+	if !sharedauthority.IsPlacementSchema(schema) || schema < previous.GetSchemaVersion() {
+		return errors.New("tenant placement schema would roll back")
 	}
 	if payload.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || payload.GetBillingDecision() != mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
 		// Revocation retains the revision fence without depending on mutable policy
@@ -136,23 +147,29 @@ func (s *CommodoreServer) inheritTenantPlacement(ctx context.Context, payload *m
 		if len(payload.GetEffectiveClusterGrants()) != 0 {
 			return errors.New("denied tenant placement retained grants")
 		}
-		payload.SchemaVersion = sharedauthority.PlacementSchemaVersion
+		payload.SchemaVersion = previous.GetSchemaVersion()
 		payload.MediaPlacement = proto.CloneOf(previous.GetMediaPlacement())
 		return nil
 	}
-	return s.issueTenantPlacement(ctx, payload, entitlement, previous.GetMediaPlacement())
+	return s.issueTenantPlacement(ctx, payload, entitlement, previous.GetMediaPlacement(), schema)
 }
 
-// issueTenantPlacement compiles an active tenant's schema-2 payload from its
-// saved policy intent and the owner entitlement. previousPolicy, when present,
-// fences the saved intent against regression; nil means first issuance.
-func (s *CommodoreServer) issueTenantPlacement(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, previousPolicy *pb.PolicySet) error {
+// issueTenantPlacement compiles an active tenant's placement payload at schema
+// from its saved policy intent and the owner entitlement. previousPolicy, when
+// present, fences the saved intent against regression; nil means first issuance.
+func (s *CommodoreServer) issueTenantPlacement(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, previousPolicy *pb.PolicySet, schema uint32) error {
+	if !sharedauthority.IsPlacementSchema(schema) {
+		return errors.New("unsupported tenant placement schema")
+	}
 	snapshot, err := placementpolicy.NewStore(s.db).Read(ctx, placementpolicy.Scope{TenantID: payload.GetTenantId(), Kind: "tenant", ID: payload.GetTenantId()})
 	if err != nil {
 		return err
 	}
 	if previousPolicy != nil && (snapshot.Own.GetRevision() < previousPolicy.GetRevision() || snapshot.Own.GetRevision() == previousPolicy.GetRevision() && !proto.Equal(snapshot.Own, previousPolicy)) {
 		return errors.New("tenant placement intent regressed or changed without revision")
+	}
+	if schema != sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(snapshot.Own) {
+		return errors.New("tenant placement names nodes but a target cell has not attested node placement")
 	}
 	if entitlement == nil || len(entitlement.GetEffectiveAccess()) > 4096 || len(entitlement.GetAllowedClusterIds()) > 4096 || proto.Size(entitlement) > 16<<20 || len(entitlement.ProtoReflect().GetUnknown()) != 0 {
 		return errors.New("tenant placement entitlement is unavailable or oversized")
@@ -172,7 +189,7 @@ func (s *CommodoreServer) issueTenantPlacement(ctx context.Context, payload *med
 		peers[peer.GetClusterId()] = peer
 	}
 	compiled := proto.CloneOf(payload)
-	compiled.SchemaVersion, compiled.MediaPlacement = sharedauthority.PlacementSchemaVersion, proto.CloneOf(snapshot.Own)
+	compiled.SchemaVersion, compiled.MediaPlacement = schema, proto.CloneOf(snapshot.Own)
 	bound := make([]*clusterpb.TenantClusterPeer, 0, len(compiled.GetEffectiveClusterGrants()))
 	for _, grant := range compiled.GetEffectiveClusterGrants() {
 		peer := peers[grant.GetClusterId()]
@@ -212,7 +229,7 @@ func guardTenantPlacementPublication(ctx context.Context, queries *commodoredb.Q
 		return err
 	}
 	if previous.GetSchemaVersion() > payload.GetSchemaVersion() || previous.GetMediaPlacement().GetRevision() > payload.GetMediaPlacement().GetRevision() ||
-		previous.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion && previous.GetMediaPlacement().GetRevision() == payload.GetMediaPlacement().GetRevision() && !proto.Equal(previous.GetMediaPlacement(), payload.GetMediaPlacement()) {
+		sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) && previous.GetMediaPlacement().GetRevision() == payload.GetMediaPlacement().GetRevision() && !proto.Equal(previous.GetMediaPlacement(), payload.GetMediaPlacement()) {
 		return errors.New("tenant authority publication would roll back placement")
 	}
 	return nil

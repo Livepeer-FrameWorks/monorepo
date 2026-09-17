@@ -24,6 +24,9 @@ func validateBaselineFloor(dbName, floor string) error {
 	if strings.TrimSpace(floor) == "" {
 		return nil
 	}
+	if strings.TrimSpace(floor) == baselineVerificationPendingFloor {
+		return fmt.Errorf("database %q has a re-applied baseline that has not been verified against its reference; refusing until `frameworks cluster migrate --phase expand` verifies it", dbName)
+	}
 	if err := releases.ValidateVersion(floor); err != nil {
 		return fmt.Errorf("database %q has a corrupt _schema_baseline marker %q: %w; refusing (cannot trust baseline provenance)", dbName, floor, err)
 	}

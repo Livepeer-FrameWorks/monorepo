@@ -19,7 +19,9 @@ Each region is a full media cell: Foghorn for routing, edge nodes, a Livepeer ga
 
 The center of gravity stays in the EU: the distributed SQL cluster that backs the platform services, ClickHouse for analytics, and the control plane — provisioning, tenant management, billing, DNS. Media and events are regional; state and money are central.
 
-The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology manifest; every other region is `role: regional`. MirrorMaker2 — running in the aggregator region — mirrors a small canonical set of topics one way, from each regional cluster onto the aggregator:
+The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology
+manifest; every other region is `role: regional`. MirrorMaker2 runs as coordinated workers in each
+link's target region. Links into the aggregator carry the durable event set:
 
 - `analytics_events` — stream lifecycle, viewer events, routing decisions
 - `service_events` — service-level events from the control-plane services
@@ -27,7 +29,13 @@ The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in th
 - `billing.usage_reports` — per-tenant usage from the analytics query layer
 - `decklog_events_dlq` — the ingest dead-letter queue, aggregated so failed events can be inspected and replayed from one place
 
-MM2's replication policy prefixes mirrored topics with the source region, so US events land on the aggregator as `us-east.analytics_events` next to the EU-native `analytics_events`. Everything else stays home: stream-scoped realtime topics never cross the ocean, because the realtime layer (Signalman) only ever serves them regionally and the gateway routes subscriptions to the stream's origin region.
+MM2's replication policy prefixes mirrored topics with the source region, so US events land on the
+aggregator as `us-east.analytics_events` next to the EU-native `analytics_events`. A reverse link
+copies only `analytics_events` and `service_events` to the US cluster. Signalman therefore consumes
+its local bare topics plus the source-prefixed realtime topics from the other region. A GraphQL
+client can stay on its nearest Gateway and Signalman while still receiving changes produced in
+either region; the raw trigger journal, billing reports, and dead-letter queue are not broadcast
+back out.
 
 ```mermaid
 graph LR
@@ -35,23 +43,38 @@ graph LR
         USV["Viewers / Streams"] --> USF["Foghorn US"]
         USF --> USD["Decklog US"]
         USD --> USK["Kafka US<br/><small>KRaft · RF 3</small>"]
+        USK --> USS["Signalman US"]
     end
     subgraph "eu-west (aggregator)"
         EUD["Decklog EU"] --> EUK["Kafka EU<br/><small>role: aggregator</small>"]
-        USK -- "MirrorMaker2<br/><small>us-east.* prefix</small>" --> EUK
+        EUK --> EUS["Signalman EU"]
         EUK --> PI["Periscope-Ingest"]
         PI --> CH[("ClickHouse")]
         EUK --> PUR["Purser<br/><small>billing</small>"]
     end
+    USK -- "durable + realtime<br/><small>us-east.* prefix</small>" --> EUK
+    EUK -- "realtime only<br/><small>eu-west.* prefix</small>" --> USK
 ```
 
-## Why an aggregator instead of a mesh
+## One durable aggregator, narrow realtime links
 
-The consumers decided the shape. ClickHouse is central, the analytics ingest service is pinned to the aggregator, and billing needs every region's usage reports in one place before it can rate them. Mirroring a handful of topics to where those consumers already live is a much smaller commitment than making every consumer region-aware, and the canonical set is kept small so cross-region traffic stays proportional to events that matter globally.
+The consumers decided the shape. ClickHouse is central, the analytics ingest service is pinned to
+the aggregator, and billing needs every region's usage reports in one place before it can rate
+them. Mirroring the durable topics to where those consumers already live is a much smaller
+commitment than making every durable consumer region-aware.
 
-Each analytics ingest instance gets the list of non-aggregator region prefixes injected by the provisioning CLI and registers one extra consumer handler per prefix — the same parsing code reads `analytics_events` and `us-east.analytics_events` without knowing or caring which region produced them. Producers needed even less: Decklog (the event firehose) reads its broker list from the environment, so a regional Decklog points at regional Kafka and the services in each cell dial their regional Decklog. No new routing code, just scoped configuration.
+Periscope-Ingest gets the list of source prefixes mirrored into the aggregator and registers the
+same handlers for the bare and prefixed topics. Signalman gets the source prefixes mirrored into
+its own Kafka cluster and does the same for the two realtime topics. Producers need no topology
+logic: Decklog reads its regional broker list from the environment, and services in each cell dial
+their regional Decklog.
 
-When a third region shows up, it gets its own KRaft cluster and MM2 flow, and the aggregator either stays on the EU cluster or moves to a dedicated one by flipping the `role` in the manifest.
+The manifest declares every directed MM2 link explicitly, and the CLI rejects a missing pair,
+unknown region, duplicate link, or worker placed outside the target region. That full mesh is
+deliberate for the current two-region topology. Before adding a third region, we will measure the
+realtime rate and either retain the small mesh or replace it with subscriber-aware forwarding;
+broadcasting every realtime event to an unbounded number of regions is not the long-term scaling
+model.
 
 ## The consistency bill
 
@@ -65,6 +88,11 @@ The billing read model takes one more step. Finalized facts (a viewer session en
 
 ## What it looks like from outside
 
-Latency-sensitive paths — routing decisions, stream startup, realtime events — never wait on the ocean. Analytics dashboards aggregate both regions because the data already converged. A tenant's bill covers usage in every region because Purser only ever reads the aggregator. And [federation](/blog/federation-went-live) rides on top: the regions' Foghorns peer with each other, so cross-region viewers get the same origin-pull-or-redirect treatment as any cross-cluster viewer.
+Media startup and routing decisions never wait on the ocean. Cross-region realtime dashboard
+updates traverse the narrow MM2 link asynchronously, while local updates remain local. Analytics
+dashboards aggregate both regions because the durable data converges on the aggregator. A tenant's
+bill covers usage in every region because Purser reads the aggregate path. And
+[federation](/blog/federation-went-live) rides on top: the regions' Foghorns peer with each other,
+so cross-region viewers get the same origin-pull-or-redirect treatment as any cross-cluster viewer.
 
 The topology, as always, is in the [public manifest](https://github.com/Livepeer-FrameWorks/gitops) — see [multi-cluster operations](/operators/multi-cluster) and the [cluster manifest reference](/operators/cluster-manifest) for the operator's view.

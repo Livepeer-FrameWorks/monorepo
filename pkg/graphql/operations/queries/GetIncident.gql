@@ -1,0 +1,30 @@
+# One incident with its alerts and timeline
+query GetIncident($id: ID!) {
+  incident(id: $id) {
+    incident {
+      ...IncidentFields
+    }
+    alerts {
+      fingerprint
+      status
+      labels
+      annotations
+      startsAt
+      endsAt
+      generatorUrl
+    }
+    timeline {
+      id
+      kind
+      actorUserId
+      createdAt
+      note
+      assignedTo
+      reportId
+      channel
+      resolution
+      alertFingerprint
+      alertname
+    }
+  }
+}

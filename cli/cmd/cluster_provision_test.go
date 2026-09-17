@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -337,7 +338,7 @@ func TestFreezeProvisionReleaseManifestResolvesChannelOnce(t *testing.T) {
 	}
 
 	manifest := &inventory.Manifest{Channel: "stable"}
-	frozen, selector, version, err := freezeProvisionReleaseManifestWithFetchOptions(manifest, []string{repo}, gitops.FetchOptions{CacheDir: t.TempDir()})
+	frozen, selector, version, err := freezeProvisionReleaseManifestWithFetchOptions(manifest, manifest.ResolvedChannel(), []string{repo}, gitops.FetchOptions{CacheDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("freezeProvisionReleaseManifest: %v", err)
 	}
@@ -352,6 +353,65 @@ func TestFreezeProvisionReleaseManifestResolvesChannelOnce(t *testing.T) {
 	}
 	if manifest.Channel != "stable" {
 		t.Fatalf("original manifest channel mutated to %q", manifest.Channel)
+	}
+}
+
+// `provision --version` and `release apply --version` share one selector
+// resolver: a concrete version pins the manifest without consulting the
+// channel, and a channel selector other than the manifest's resolves through
+// that channel's release manifest.
+func TestFreezeProvisionReleaseManifestHonorsVersionSelector(t *testing.T) {
+	repo := t.TempDir()
+	for _, dir := range []string{"channels", "releases"} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"channels/stable.yaml":     "platform_version: v9.8.7\nmanifest: releases/v9.8.7.yaml\n",
+		"channels/rc.yaml":         "platform_version: v9.9.0-rc1\nmanifest: releases/v9.9.0-rc1.yaml\n",
+		"releases/v9.8.7.yaml":     "platform_version: v9.8.7\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n",
+		"releases/v9.9.0-rc1.yaml": "platform_version: v9.9.0-rc1\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := &inventory.Manifest{Channel: "stable"}
+
+	frozen, selector, version, err := freezeProvisionReleaseManifestWithFetchOptions(manifest, "v9.8.8", nil, gitops.FetchOptions{CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("concrete selector: %v", err)
+	}
+	if selector != "v9.8.8" || version != "v9.8.8" || frozen.Channel != "v9.8.8" {
+		t.Fatalf("concrete selector froze selector=%q version=%q channel=%q, want v9.8.8", selector, version, frozen.Channel)
+	}
+
+	opts := gitops.FetchOptions{CacheDir: t.TempDir()}
+	frozen, _, version, err = freezeProvisionReleaseManifestWithFetchOptions(manifest, "rc", []string{repo}, opts)
+	if err != nil {
+		t.Fatalf("rc selector: %v", err)
+	}
+	if version != "v9.9.0-rc1" || frozen.Channel != "v9.9.0-rc1" {
+		t.Fatalf("rc selector froze version=%q channel=%q, want v9.9.0-rc1", version, frozen.Channel)
+	}
+	released, err := resolveConcretePlatformVersion([]string{repo}, "rc", opts)
+	if err != nil || released != version {
+		t.Fatalf("release resolver for rc = %q, %v; want the provision result %q", released, err, version)
+	}
+	if manifest.Channel != "stable" {
+		t.Fatalf("original manifest channel mutated to %q", manifest.Channel)
+	}
+}
+
+func TestClusterProvisionExposesVersionFlag(t *testing.T) {
+	flag := newClusterProvisionCmd().Flags().Lookup("version")
+	if flag == nil {
+		t.Fatal("cluster provision must accept --version")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("--version default = %q, want empty so the manifest channel applies", flag.DefValue)
 	}
 }
 
@@ -3018,6 +3078,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			"decklog":          {Enabled: true, Host: "central-eu-1"},
 			"signalman":        {Enabled: true, Host: "central-eu-1"},
 			"navigator":        {Enabled: true, Host: "central-eu-1"},
+			"lookout":          {Enabled: true, Host: "central-eu-1"},
 			"chandler":         {Enabled: true, Host: "central-eu-1"},
 			"foghorn":          {Enabled: true, Host: "central-eu-1"},
 			"livepeer-gateway": {Enabled: true, Host: "central-eu-1", Cluster: "core-central-primary"},
@@ -3077,6 +3138,16 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			serviceID: "navigator",
 			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "NAVIGATOR_GRPC_PORT": "18011", "NAVIGATOR_PORT": "18010"},
 			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "FIELD_ENCRYPTION_KEY", "BRAND_DOMAIN", "ACME_EMAIL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID", "CLOUDFLARE_ACCOUNT_ID"},
+		},
+		{
+			serviceID: "lookout",
+			want: map[string]string{
+				"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002",
+				"DECKLOG_GRPC_ADDR":       "decklog.internal:18006",
+				"LOOKOUT_PORT":            "18022",
+				"LOOKOUT_GRPC_PORT":       "19008",
+			},
+			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},
 		{
 			serviceID: "periscope-query",
@@ -3379,7 +3450,7 @@ func TestKafkaBrokerRegistrationLagDetection(t *testing.T) {
 	}
 }
 
-func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {
+func TestBuildTaskConfigKafkaMirrorMakerRendersLinksIntoWorkerRegion(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {WireguardIP: "10.88.0.11", Labels: map[string]string{"region": "eu-west"}},
@@ -3406,107 +3477,154 @@ func TestBuildTaskConfigKafkaMirrorMakerRendersHubAndSpokeLinks(t *testing.T) {
 							{Host: "regional-us-2", ID: 12, Port: 9092},
 							{Host: "regional-us-3", ID: 13, Port: 9092},
 						},
-						MirrorTopics: []string{"analytics_events", "service_events"},
 					},
 				},
 				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
 					Enabled:   true,
-					Host:      "regional-eu-1",
 					TaskCount: 2,
+					Links: []inventory.KafkaMirrorLink{
+						{Source: "us-east", Target: "eu-west", Hosts: []string{"regional-eu-1", "regional-eu-2"}},
+						{Source: "eu-west", Target: "us-east", Hosts: []string{"regional-us-1", "regional-us-2", "regional-us-3"}, TaskCount: 3},
+					},
 				},
 			},
 		},
 	}
-	task := &orchestrator.Task{
-		Name:      "kafka-mirrormaker",
-		Type:      "kafka-mirrormaker",
-		ServiceID: "kafka-mirrormaker",
-		Host:      "regional-eu-1",
-		Phase:     orchestrator.PhaseInfrastructure,
+	buildFor := func(host string) (map[string]any, error) {
+		task := &orchestrator.Task{
+			Name:      "kafka-mirrormaker-" + host,
+			Type:      "kafka-mirrormaker",
+			ServiceID: "kafka-mirrormaker",
+			Host:      host,
+			Phase:     orchestrator.PhaseInfrastructure,
+		}
+		config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+		return config.Metadata, err
 	}
 
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	eu, err := buildFor("regional-eu-1")
 	if err != nil {
-		t.Fatalf("buildTaskConfig returned error: %v", err)
+		t.Fatalf("buildTaskConfig eu worker: %v", err)
+	}
+	if eu["target"].(map[string]any)["alias"] != "eu-west" || eu["local_cluster_alias"] != "eu-west" {
+		t.Fatalf("eu worker target = %v local = %v, want eu-west", eu["target"], eu["local_cluster_alias"])
+	}
+	euSources := eu["sources"].([]map[string]any)
+	if len(euSources) != 1 || euSources[0]["alias"] != "us-east" {
+		t.Fatalf("eu worker sources = %#v, want one us-east source", euSources)
+	}
+	if euSources[0]["bootstrap_servers"] != "10.88.1.11:9092,10.88.1.12:9092,10.88.1.13:9092" {
+		t.Fatalf("eu worker source bootstrap_servers = %v", euSources[0]["bootstrap_servers"])
+	}
+	if euSources[0]["topics"] != strings.Join(topology.RegionalToAggregatorTopics(), ",") {
+		t.Fatalf("link into aggregator topics = %v, want durable set", euSources[0]["topics"])
+	}
+	if euSources[0]["emit_checkpoints"] != true || euSources[0]["tasks_max"] != 2 {
+		t.Fatalf("link into aggregator checkpoints = %v tasks_max = %v, want true/2", euSources[0]["emit_checkpoints"], euSources[0]["tasks_max"])
+	}
+	if eu["exclude_pattern"] != `^(eu-west|us-east)\..*` {
+		t.Fatalf("exclude_pattern = %v", eu["exclude_pattern"])
 	}
 
-	target := config.Metadata["target"].(map[string]any)
-	if target["alias"] != "eu-west" {
-		t.Fatalf("target alias = %v, want eu-west", target["alias"])
+	us, err := buildFor("regional-us-2")
+	if err != nil {
+		t.Fatalf("buildTaskConfig us worker: %v", err)
+	}
+	if us["local_cluster_alias"] != "us-east" {
+		t.Fatalf("us worker local_cluster_alias = %v, want us-east", us["local_cluster_alias"])
+	}
+	usSources := us["sources"].([]map[string]any)
+	if len(usSources) != 1 || usSources[0]["alias"] != "eu-west" {
+		t.Fatalf("us worker sources = %#v, want one eu-west source", usSources)
+	}
+	if usSources[0]["topics"] != strings.Join(topology.AggregatorToRegionalTopics(), ",") {
+		t.Fatalf("link out of aggregator topics = %v, want realtime set", usSources[0]["topics"])
+	}
+	if usSources[0]["emit_checkpoints"] != false || usSources[0]["tasks_max"] != 3 {
+		t.Fatalf("link out of aggregator checkpoints = %v tasks_max = %v, want false/3", usSources[0]["emit_checkpoints"], usSources[0]["tasks_max"])
 	}
 
-	sources := config.Metadata["sources"].([]map[string]any)
-	if len(sources) != 1 || sources[0]["alias"] != "us-east" {
-		t.Fatalf("sources = %#v, want one us-east source", sources)
-	}
-	if sources[0]["bootstrap_servers"] != "10.88.1.11:9092,10.88.1.12:9092,10.88.1.13:9092" {
-		t.Fatalf("source bootstrap_servers = %v", sources[0]["bootstrap_servers"])
-	}
-	if config.Metadata["local_cluster_alias"] != "eu-west" {
-		t.Fatalf("local_cluster_alias = %v, want eu-west", config.Metadata["local_cluster_alias"])
-	}
-
-	if _, ok := config.Metadata["fanout_targets"]; ok {
-		t.Fatalf("MM2 config must not mirror aggregate analytics back to regional Signalman")
+	if _, err := buildFor("regional-eu-3"); err == nil || !strings.Contains(err.Error(), "not a worker for any link") {
+		t.Fatalf("host outside every link error = %v, want not-a-worker error", err)
 	}
 }
 
-// TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology verifies one
-// aggregator plus N regional sources: one fan-in source per regional Kafka and
-// no aggregator-to-regional fanout.
+// threeRegionMirrorLinks is the full mesh MirrorMaker2 requires for the
+// EU (aggregator) + US + AP-south topology, with workers in each target region.
+func threeRegionMirrorLinks() []inventory.KafkaMirrorLink {
+	workers := map[string][]string{
+		"eu-west":  {"regional-eu-1", "regional-eu-2"},
+		"us-east":  {"regional-us-1"},
+		"ap-south": {"regional-ap-1"},
+	}
+	regions := []string{"eu-west", "us-east", "ap-south"}
+	var links []inventory.KafkaMirrorLink
+	for _, source := range regions {
+		for _, target := range regions {
+			if source != target {
+				links = append(links, inventory.KafkaMirrorLink{Source: source, Target: target, Hosts: workers[target]})
+			}
+		}
+	}
+	return links
+}
+
+// TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology verifies each worker
+// replicates every other region into its own: durable topics into the
+// aggregator, realtime topics into regional clusters, and one exclude rule that
+// keeps mirrored copies from being re-replicated.
 func TestBuildTaskConfigKafkaMirrorMakerThreeRegionTopology(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 	manifest.Infrastructure.Kafka.MirrorMaker = &inventory.KafkaMirrorMakerConfig{
 		Enabled:   true,
-		Host:      "regional-eu-1",
 		TaskCount: 2,
+		Links:     threeRegionMirrorLinks(),
 	}
 
-	task := &orchestrator.Task{
-		Name:      "kafka-mirrormaker",
-		Type:      "kafka-mirrormaker",
-		ServiceID: "kafka-mirrormaker",
-		Host:      "regional-eu-1",
-		Phase:     orchestrator.PhaseInfrastructure,
-	}
-
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
-	if err != nil {
-		t.Fatalf("buildTaskConfig: %v", err)
-	}
-
-	target := config.Metadata["target"].(map[string]any)
-	if target["alias"] != "eu-west" {
-		t.Fatalf("target = %v, want eu-west aggregator", target["alias"])
-	}
-
-	sources := config.Metadata["sources"].([]map[string]any)
-	wantSourceAliases := map[string]bool{"us-east": false, "ap-south": false}
-	for _, src := range sources {
-		alias := src["alias"].(string)
-		if _, ok := wantSourceAliases[alias]; !ok {
-			t.Fatalf("unexpected source alias %q (regional↔regional link?)", alias)
+	sourcesFor := func(host string) (map[string]any, map[string]map[string]any) {
+		task := &orchestrator.Task{
+			Name:      "kafka-mirrormaker-" + host,
+			Type:      "kafka-mirrormaker",
+			ServiceID: "kafka-mirrormaker",
+			Host:      host,
+			Phase:     orchestrator.PhaseInfrastructure,
 		}
-		wantSourceAliases[alias] = true
-		if !strings.Contains(src["topics"].(string), "analytics_events") {
-			t.Errorf("source %s topics missing analytics_events: %v", alias, src["topics"])
+		config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+		if err != nil {
+			t.Fatalf("buildTaskConfig %s: %v", host, err)
 		}
-		if !strings.Contains(src["topics"].(string), "decklog_events_dlq") {
-			t.Errorf("source %s topics missing DLQ: %v", alias, src["topics"])
+		byAlias := map[string]map[string]any{}
+		for _, src := range config.Metadata["sources"].([]map[string]any) {
+			byAlias[src["alias"].(string)] = src
 		}
+		return config.Metadata, byAlias
 	}
-	for alias, seen := range wantSourceAliases {
-		if !seen {
-			t.Errorf("missing source for region %s", alias)
+
+	eu, euSources := sourcesFor("regional-eu-1")
+	if eu["local_cluster_alias"] != "eu-west" || len(euSources) != 2 || euSources["us-east"] == nil || euSources["ap-south"] == nil {
+		t.Fatalf("eu worker local = %v sources = %#v, want us-east and ap-south into eu-west", eu["local_cluster_alias"], euSources)
+	}
+	for alias, src := range euSources {
+		if src["topics"] != strings.Join(topology.RegionalToAggregatorTopics(), ",") || src["emit_checkpoints"] != true {
+			t.Fatalf("link %s->eu-west topics = %v checkpoints = %v, want durable set with checkpoints", alias, src["topics"], src["emit_checkpoints"])
 		}
 	}
 
-	if _, ok := config.Metadata["fanout_targets"]; ok {
-		t.Fatalf("MM2 config must not include aggregator-to-regional fanout: %#v", config.Metadata["fanout_targets"])
+	ap, apSources := sourcesFor("regional-ap-1")
+	if ap["local_cluster_alias"] != "ap-south" || len(apSources) != 2 || apSources["eu-west"] == nil || apSources["us-east"] == nil {
+		t.Fatalf("ap worker local = %v sources = %#v, want eu-west and us-east into ap-south", ap["local_cluster_alias"], apSources)
+	}
+	for alias, src := range apSources {
+		if src["topics"] != strings.Join(topology.AggregatorToRegionalTopics(), ",") || src["emit_checkpoints"] != false {
+			t.Fatalf("link %s->ap-south topics = %v checkpoints = %v, want realtime set without checkpoints", alias, src["topics"], src["emit_checkpoints"])
+		}
+	}
+	if ap["exclude_pattern"] != `^(ap-south|eu-west|us-east)\..*` {
+		t.Fatalf("exclude_pattern = %v", ap["exclude_pattern"])
 	}
 }
 
-func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testing.T) {
+func TestBuildServiceEnvVarsDerivesMirrorPrefixesFromLinksIntoBoundKafka(t *testing.T) {
 	manifest := &inventory.Manifest{
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
@@ -3529,35 +3647,42 @@ func TestBuildServiceEnvVarsSetsMirrorPrefixesForEveryPeriscopeReplica(t *testin
 						Brokers:   []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11, Port: 9092}},
 					},
 				},
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled: true,
+					Links: []inventory.KafkaMirrorLink{
+						{Source: "us-east", Target: "eu-west", Hosts: []string{"regional-eu-1"}},
+						{Source: "eu-west", Target: "us-east", Hosts: []string{"regional-us-1"}},
+					},
+				},
 			},
 		},
 	}
-
-	euPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-eu-1", ClusterID: "media-eu-1"}
-	euEnv, err := buildServiceEnvVars(euPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
-	if err != nil {
-		t.Fatalf("buildServiceEnvVars eu periscope: %v", err)
-	}
-	if euEnv["MIRROR_REGION_PREFIXES"] != "us-east" {
-		t.Fatalf("eu periscope MIRROR_REGION_PREFIXES = %q, want us-east", euEnv["MIRROR_REGION_PREFIXES"])
-	}
-
-	usSignalman := &orchestrator.Task{Type: "signalman", ServiceID: "signalman", Host: "regional-us-1", ClusterID: "media-us-1"}
-	usEnv, err := buildServiceEnvVars(usSignalman, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
-	if err != nil {
-		t.Fatalf("buildServiceEnvVars us signalman: %v", err)
-	}
-	if usEnv["MIRROR_REGION_PREFIXES"] != "" {
-		t.Fatalf("us signalman MIRROR_REGION_PREFIXES = %q, want empty", usEnv["MIRROR_REGION_PREFIXES"])
+	prefixesFor := func(serviceType, host, cluster string) string {
+		t.Helper()
+		task := &orchestrator.Task{Type: serviceType, ServiceID: serviceType, Host: host, ClusterID: cluster}
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+		if err != nil {
+			t.Fatalf("buildServiceEnvVars %s on %s: %v", serviceType, host, err)
+		}
+		return env["MIRROR_REGION_PREFIXES"]
 	}
 
-	usPeriscope := &orchestrator.Task{Type: "periscope-ingest", ServiceID: "periscope-ingest", Host: "regional-us-1", ClusterID: "media-us-1"}
-	periscopeEnv, err := buildServiceEnvVars(usPeriscope, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
-	if err != nil {
-		t.Fatalf("buildServiceEnvVars us periscope: %v", err)
+	for _, tc := range []struct {
+		service, host, cluster, want string
+	}{
+		{"periscope-ingest", "regional-eu-1", "media-eu-1", "us-east"},
+		{"signalman", "regional-eu-1", "media-eu-1", "us-east"},
+		{"signalman", "regional-us-1", "media-us-1", "eu-west"},
+		{"decklog", "regional-us-1", "media-us-1", ""},
+	} {
+		if got := prefixesFor(tc.service, tc.host, tc.cluster); got != tc.want {
+			t.Fatalf("%s on %s MIRROR_REGION_PREFIXES = %q, want %q", tc.service, tc.host, got, tc.want)
+		}
 	}
-	if periscopeEnv["MIRROR_REGION_PREFIXES"] != "us-east" {
-		t.Fatalf("regional periscope MIRROR_REGION_PREFIXES = %q, want us-east", periscopeEnv["MIRROR_REGION_PREFIXES"])
+
+	manifest.Infrastructure.Kafka.MirrorMaker.Enabled = false
+	if got := prefixesFor("signalman", "regional-us-1", "media-us-1"); got != "" {
+		t.Fatalf("signalman prefixes with MirrorMaker disabled = %q, want empty", got)
 	}
 }
 
@@ -3711,6 +3836,177 @@ func TestBuildVMAgentScrapeTargetsIncludesVMAUTH(t *testing.T) {
 	labels := scrapeTargetLabels(t, target)
 	if got := labels["frameworks_source"]; got != "observability" {
 		t.Fatalf("frameworks_source = %q, want observability", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesKafkaMirrorMakerJMXExporter(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10", Labels: map[string]string{"region": "eu-west"}},
+			"regional-us-1": {ExternalIP: "10.0.1.10", Labels: map[string]string{"region": "us-east"}},
+			"central-eu-1":  {ExternalIP: "10.0.0.20", Labels: map[string]string{"region": "eu-west"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled: true,
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled: true,
+					Links: []inventory.KafkaMirrorLink{
+						{Source: "us-east", Target: "eu-west", Hosts: []string{"regional-eu-1"}},
+						{Source: "eu-west", Target: "us-east", Hosts: []string{"regional-us-1"}},
+					},
+				},
+			},
+		},
+	}
+
+	for _, worker := range []string{"regional-eu-1", "regional-us-1"} {
+		targets := buildVMAgentScrapeTargets(manifest, worker)
+		target := findScrapeTarget(t, targets, "kafka-mirrormaker", "127.0.0.1:9404")
+		labels := scrapeTargetLabels(t, target)
+		if got := labels["frameworks_service"]; got != "kafka-mirrormaker" {
+			t.Fatalf("%s frameworks_service = %q, want kafka-mirrormaker", worker, got)
+		}
+		if got := labels["node_id"]; got != worker {
+			t.Fatalf("%s node_id = %q, want %s", worker, got, worker)
+		}
+	}
+	for _, target := range buildVMAgentScrapeTargets(manifest, "central-eu-1") {
+		if target["job_name"] == "kafka-mirrormaker" {
+			t.Fatalf("central-eu-1 is not an MM2 worker but got a kafka-mirrormaker scrape target: %#v", target)
+		}
+	}
+}
+
+func TestBuildTaskConfigVMAgentStampsRegionAndClusterExternalLabels(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-us-1": {ExternalIP: "10.0.1.10", Cluster: "regional-us-primary", Labels: map[string]string{"region": "us-east"}},
+			"central-eu-1":  {ExternalIP: "10.0.0.20", Cluster: "core-central-primary"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-us-primary":  {Name: "Regional US", Region: "us-east"},
+			"core-central-primary": {Name: "Core", Region: "eu-west"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmagent": {Enabled: true, Mode: "native", Hosts: []string{"regional-us-1", "central-eu-1"}},
+		},
+	}
+	for host, want := range map[string]map[string]string{
+		"regional-us-1": {"region": "us-east", "cluster": "regional-us-primary"},
+		// No region host label: the region comes from the host's cluster.
+		"central-eu-1": {"region": "eu-west", "cluster": "core-central-primary"},
+	} {
+		cfg, err := buildTaskConfig(&orchestrator.Task{
+			Name:       "vmagent@" + host,
+			Type:       "vmagent",
+			ServiceID:  "vmagent",
+			InstanceID: host,
+			Host:       host,
+			Phase:      orchestrator.PhaseInterfaces,
+		}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+		if err != nil {
+			t.Fatalf("buildTaskConfig %s: %v", host, err)
+		}
+		if got := cfg.Metadata["external_labels"]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s external_labels = %#v, want %#v", host, got, want)
+		}
+	}
+}
+
+func TestBuildServiceEnvVarsVMAlertTargetsVictoriaMetricsAndAlertmanager(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.10"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {Enabled: true, Host: "central-1", Port: 8428},
+			"alertmanager":    {Enabled: true, Host: "central-1", Port: 19093},
+			"vmalert":         {Enabled: true, Host: "central-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Type:      "vmalert",
+		ServiceID: "vmalert",
+		Host:      "central-1",
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars vmalert: %v", err)
+	}
+	if got := env["VMALERT_DATASOURCE_URL"]; got != "http://victoriametrics.internal:8428" {
+		t.Fatalf("VMALERT_DATASOURCE_URL = %q, want the VictoriaMetrics base URL", got)
+	}
+	if got := env["VMALERT_NOTIFIER_URL"]; got != "http://alertmanager.internal:19093" {
+		t.Fatalf("VMALERT_NOTIFIER_URL = %q, want the manifest Alertmanager port", got)
+	}
+}
+
+func TestBuildServiceEnvVarsAlertmanagerTargetsLookoutWebhook(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"lookout": {Enabled: true, Host: "central-1", Port: 18022},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"alertmanager": {Enabled: true, Host: "central-1"},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Type:      "alertmanager",
+		ServiceID: "alertmanager",
+		Host:      "central-1",
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars alertmanager: %v", err)
+	}
+	if got := env["ALERTMANAGER_LOOKOUT_URL"]; got != "http://lookout.internal:18022/v1/alertmanager" {
+		t.Fatalf("ALERTMANAGER_LOOKOUT_URL = %q, want the Lookout webhook endpoint", got)
+	}
+
+	delete(manifest.Services, "lookout")
+	env, err = buildServiceEnvVars(&orchestrator.Task{
+		Type:      "alertmanager",
+		ServiceID: "alertmanager",
+		Host:      "central-1",
+	}, manifest, map[string]any{}, "", "", nil, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars alertmanager without lookout: %v", err)
+	}
+	if got, ok := env["ALERTMANAGER_LOOKOUT_URL"]; ok {
+		t.Fatalf("ALERTMANAGER_LOOKOUT_URL = %q without a Lookout service; the role assert must reject the host instead", got)
+	}
+}
+
+func TestPrivateerSeedDNSResolvesAlertingAliasesOnVMAlertHost(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1": {WireguardIP: "10.88.0.10", WireguardPublicKey: "central-key"},
+			"ops-1":     {WireguardIP: "10.88.0.30", WireguardPublicKey: "ops-key"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"privateer": {Enabled: true, Hosts: []string{"central-1", "ops-1"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {Enabled: true, Host: "central-1"},
+			"alertmanager":    {Enabled: true, Host: "central-1"},
+			"vmalert":         {Enabled: true, Host: "ops-1"},
+		},
+	}
+
+	dns := buildPrivateerSeedDNS(manifest, "ops-1")
+	if got, want := dns["victoriametrics"], []string{"10.88.0.10"}; !slices.Equal(got, want) {
+		t.Fatalf("victoriametrics DNS = %v, want %v", got, want)
+	}
+	if got, want := dns["alertmanager"], []string{"10.88.0.10"}; !slices.Equal(got, want) {
+		t.Fatalf("alertmanager DNS = %v, want %v", got, want)
 	}
 }
 
@@ -4757,11 +5053,8 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	if got := dns["chandler"]; len(got) != 1 || got[0] != "10.88.1.20" {
 		t.Fatalf("chandler DNS = %v, want logical-cluster local [10.88.1.20]", got)
 	}
-	if got := dns["signalman.eu-west"]; len(got) != 1 || got[0] != "10.88.1.20" {
-		t.Fatalf("signalman.eu-west DNS = %v, want [10.88.1.20]", got)
-	}
-	if got := dns["signalman.us-east"]; len(got) != 1 || got[0] != "10.88.2.20" {
-		t.Fatalf("signalman.us-east DNS = %v, want [10.88.2.20]", got)
+	if got := dns["signalman"]; len(got) != 1 || got[0] != "10.88.1.20" {
+		t.Fatalf("signalman DNS = %v, want regional-local [10.88.1.20]", got)
 	}
 	if got := dns["central-1"]; len(got) != 1 || got[0] != "10.88.0.10" {
 		t.Fatalf("central-1 DNS = %v, want [10.88.0.10]", got)
@@ -5008,26 +5301,31 @@ func TestBatchContainsServiceMatchesTaskType(t *testing.T) {
 }
 
 // TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion proves that
-// periscope-ingest, periscope-metering, purser, periscope-query, and commodore bind aggregator
-// Kafka regardless of which region's host they're deployed on. Pinning here
-// prevents a regional host placement from dual-writing central ClickHouse or
-// missing centralized billing rows.
-func TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion(t *testing.T) {
+// periscope-ingest, periscope-metering, purser, periscope-query, and commodore
+// bind aggregator Kafka and must run in the aggregator region: a placement in
+// another region is rejected instead of silently sending their consumer or
+// producer traffic across the WAN to central Kafka, ClickHouse, and billing.
+func TestBuildServiceEnvVarsAggregatorPinnedServicesStayInAggregatorRegion(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 
 	pinned := []string{"periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore"}
 	for _, svc := range pinned {
-		for _, host := range []string{"regional-eu-1", "regional-us-1", "regional-ap-1"} {
-			task := &orchestrator.Task{Type: svc, ServiceID: svc, Host: host}
-			env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
-			if err != nil {
-				t.Fatalf("buildServiceEnvVars(%s on %s): %v", svc, host, err)
-			}
-			if env["KAFKA_CLUSTER_ID"] != "eu-kafka" {
-				t.Fatalf("%s on %s: KAFKA_CLUSTER_ID = %q, want eu-kafka (aggregator)", svc, host, env["KAFKA_CLUSTER_ID"])
-			}
-			if !strings.Contains(env["KAFKA_BROKERS"], "regional-eu-1") {
-				t.Fatalf("%s on %s: KAFKA_BROKERS = %q, want aggregator brokers", svc, host, env["KAFKA_BROKERS"])
+		task := &orchestrator.Task{Type: svc, ServiceID: svc, Host: "regional-eu-1"}
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+		if err != nil {
+			t.Fatalf("buildServiceEnvVars(%s on regional-eu-1): %v", svc, err)
+		}
+		if env["KAFKA_CLUSTER_ID"] != "eu-kafka" {
+			t.Fatalf("%s: KAFKA_CLUSTER_ID = %q, want eu-kafka (aggregator)", svc, env["KAFKA_CLUSTER_ID"])
+		}
+		if !strings.Contains(env["KAFKA_BROKERS"], "regional-eu-1") {
+			t.Fatalf("%s: KAFKA_BROKERS = %q, want aggregator brokers", svc, env["KAFKA_BROKERS"])
+		}
+
+		for _, host := range []string{"regional-us-1", "regional-ap-1"} {
+			_, err := buildServiceEnvVars(&orchestrator.Task{Type: svc, ServiceID: svc, Host: host}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+			if err == nil || !strings.Contains(err.Error(), `binds the aggregator Kafka in region "eu-west"`) {
+				t.Fatalf("%s on %s err = %v, want aggregator-region placement rejection", svc, host, err)
 			}
 		}
 	}
@@ -5079,10 +5377,9 @@ func TestBuildServiceEnvVarsSignalmanPerInstanceKafkaIdentity(t *testing.T) {
 	}
 }
 
-// TestBuildServiceEnvVarsBridgeMultiTargetSignalman proves the bridge env
-// carries every Signalman replica in its region (SIGNALMAN_GRPC_ADDRS) plus
-// the full topology map (SIGNALMAN_GRPC_ADDRS_BY_REGION).
-func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
+// TestBuildServiceEnvVarsBridgeUsesLocalSignalman proves Bridge dials its own
+// region's Signalman through mesh DNS and carries no per-region address map.
+func TestBuildServiceEnvVarsBridgeUsesLocalSignalman(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 
 	task := &orchestrator.Task{Type: "bridge", ServiceID: "bridge", Host: "regional-eu-1"}
@@ -5094,24 +5391,10 @@ func TestBuildServiceEnvVarsBridgeMultiTargetSignalman(t *testing.T) {
 	if got := env["SIGNALMAN_GRPC_ADDR"]; got != "signalman.internal:19005" {
 		t.Fatalf("SIGNALMAN_GRPC_ADDR = %q, want service DNS", got)
 	}
-	if got := env["SIGNALMAN_GRPC_ADDRS"]; got != "" {
-		t.Fatalf("SIGNALMAN_GRPC_ADDRS = %q, want unset; local placement belongs to service DNS", got)
-	}
-
-	byRegion := env["SIGNALMAN_GRPC_ADDRS_BY_REGION"]
-	if byRegion == "" {
-		t.Fatal("SIGNALMAN_GRPC_ADDRS_BY_REGION missing")
-	}
-	for _, region := range []string{"eu-west", "us-east", "ap-south"} {
-		if !strings.Contains(byRegion, region+"=") {
-			t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing region %s: %q", region, byRegion)
+	for _, key := range []string{"SIGNALMAN_GRPC_ADDRS", "SIGNALMAN_GRPC_ADDR_BY_REGION", "SIGNALMAN_GRPC_ADDRS_BY_REGION"} {
+		if got := env[key]; got != "" {
+			t.Fatalf("%s = %q, want unset; Bridge routes every subscription to local Signalman", key, got)
 		}
-		if !strings.Contains(byRegion, "signalman."+region+".internal:19005") {
-			t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION missing service alias for %s: %q", region, byRegion)
-		}
-	}
-	if strings.Contains(byRegion, "regional-us-1") || strings.Contains(byRegion, "regional-eu-1") {
-		t.Errorf("SIGNALMAN_GRPC_ADDRS_BY_REGION should not expose concrete node names: %q", byRegion)
 	}
 }
 

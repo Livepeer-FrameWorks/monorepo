@@ -56,10 +56,22 @@ FROM quartermaster.tenant_cluster_access
 WHERE cluster_id = sqlc.arg(cluster_id)
 ORDER BY tenant_id::text;
 
--- name: GetTenantClusterOwnershipLimit :one
-SELECT max_owned_clusters, is_provider,
-       (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = sqlc.arg(tenant_id)::uuid)::bigint AS current_owned_clusters
-FROM quartermaster.tenants WHERE id = sqlc.arg(tenant_id)::uuid;
+-- name: LockTenantClusterOwnershipLimit :one
+-- Owned-cluster creation writes the tenant row rather than only locking it.
+-- Under snapshot isolation a row lock released by a committed transaction does
+-- not invalidate the waiter's older snapshot, but a committed write does: the
+-- waiter fails with 40001 and its replay counts from a fresh snapshot. Under
+-- READ COMMITTED the write blocks, and the caller's later count statement
+-- observes the previous holder's committed insert.
+UPDATE quartermaster.tenants
+SET updated_at = NOW()
+WHERE id = sqlc.arg(tenant_id)::uuid
+RETURNING max_owned_clusters, is_provider;
+
+-- name: CountTenantOwnedClusters :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.infrastructure_clusters
+WHERE owner_tenant_id = sqlc.arg(tenant_id)::uuid;
 
 -- name: GetTenantPreferredClusterRegion :one
 SELECT pc.region_id

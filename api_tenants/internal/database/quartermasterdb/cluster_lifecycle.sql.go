@@ -55,6 +55,19 @@ func (q *Queries) ClearDefaultCluster(ctx context.Context) error {
 	return err
 }
 
+const countTenantOwnedClusters = `-- name: CountTenantOwnedClusters :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.infrastructure_clusters
+WHERE owner_tenant_id = $1::uuid
+`
+
+func (q *Queries) CountTenantOwnedClusters(ctx context.Context, tenantID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTenantOwnedClusters, tenantID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createInfrastructureCluster = `-- name: CreateInfrastructureCluster :exec
 INSERT INTO quartermaster.infrastructure_clusters
     (id, cluster_id, cluster_name, cluster_type, deployment_model,
@@ -116,25 +129,6 @@ func (q *Queries) CreateInfrastructureCluster(ctx context.Context, arg CreateInf
 	return err
 }
 
-const getTenantClusterOwnershipLimit = `-- name: GetTenantClusterOwnershipLimit :one
-SELECT max_owned_clusters, is_provider,
-       (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = $1::uuid)::bigint AS current_owned_clusters
-FROM quartermaster.tenants WHERE id = $1::uuid
-`
-
-type GetTenantClusterOwnershipLimitRow struct {
-	MaxOwnedClusters     sql.NullInt32 `db:"max_owned_clusters" json:"max_owned_clusters"`
-	IsProvider           sql.NullBool  `db:"is_provider" json:"is_provider"`
-	CurrentOwnedClusters int64         `db:"current_owned_clusters" json:"current_owned_clusters"`
-}
-
-func (q *Queries) GetTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (GetTenantClusterOwnershipLimitRow, error) {
-	row := q.db.QueryRowContext(ctx, getTenantClusterOwnershipLimit, tenantID)
-	var i GetTenantClusterOwnershipLimitRow
-	err := row.Scan(&i.MaxOwnedClusters, &i.IsProvider, &i.CurrentOwnedClusters)
-	return i, err
-}
-
 const getTenantPreferredClusterRegion = `-- name: GetTenantPreferredClusterRegion :one
 SELECT pc.region_id
 FROM quartermaster.tenants t
@@ -178,6 +172,31 @@ func (q *Queries) ListTenantIDsForCluster(ctx context.Context, clusterID string)
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockTenantClusterOwnershipLimit = `-- name: LockTenantClusterOwnershipLimit :one
+UPDATE quartermaster.tenants
+SET updated_at = NOW()
+WHERE id = $1::uuid
+RETURNING max_owned_clusters, is_provider
+`
+
+type LockTenantClusterOwnershipLimitRow struct {
+	MaxOwnedClusters sql.NullInt32 `db:"max_owned_clusters" json:"max_owned_clusters"`
+	IsProvider       sql.NullBool  `db:"is_provider" json:"is_provider"`
+}
+
+// Owned-cluster creation writes the tenant row rather than only locking it.
+// Under snapshot isolation a row lock released by a committed transaction does
+// not invalidate the waiter's older snapshot, but a committed write does: the
+// waiter fails with 40001 and its replay counts from a fresh snapshot. Under
+// READ COMMITTED the write blocks, and the caller's later count statement
+// observes the previous holder's committed insert.
+func (q *Queries) LockTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (LockTenantClusterOwnershipLimitRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantClusterOwnershipLimit, tenantID)
+	var i LockTenantClusterOwnershipLimitRow
+	err := row.Scan(&i.MaxOwnedClusters, &i.IsProvider)
+	return i, err
 }
 
 const markClusterProvisioning = `-- name: MarkClusterProvisioning :exec

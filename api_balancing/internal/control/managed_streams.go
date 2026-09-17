@@ -288,8 +288,11 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 		// field remains an array for pull-stream symmetry, but bootstrap + DB
 		// validation reject multiple source clusters for mist_native because
 		// there is no cross-cluster source election authority.
-		eligible, placementStatus := eligibleNodesAcrossClustersStatus(row.GetAllowedClusterIds())
-		if placementStatus == placementTransient {
+		eligible, clusterStatus := eligibleNodesAcrossClustersStatus(row.GetAllowedClusterIds())
+		if clusterStatus == placementOK {
+			eligible, clusterStatus = filterConfiguredManagedNodes(ctx, row, eligible)
+		}
+		if clusterStatus == placementTransient {
 			placementTransientStreams[row.GetStreamId()] = struct{}{}
 			continue
 		}
@@ -559,7 +562,7 @@ func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, 
 		if !streamCtx.GetAdmitted() {
 			return streamCtx, materializeDenied
 		}
-		if status := checkConfiguredManagedPlacement(ctx, clusterID, row, streamCtx); status != materializeOK {
+		if status := checkConfiguredManagedPlacement(ctx, clusterID, nodeID, row, streamCtx); status != materializeOK {
 			return streamCtx, status
 		}
 		materializeManagedStreamEffects(ctx, streamCtx, nodeID)
@@ -596,7 +599,7 @@ func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, 
 			log.WithField("stream_id", row.GetStreamId()).Warn("Signed managed-stream shadow mismatched connected authority")
 		}
 	}
-	if status := checkConfiguredManagedPlacement(ctx, clusterID, row, streamCtx); status != materializeOK {
+	if status := checkConfiguredManagedPlacement(ctx, clusterID, nodeID, row, streamCtx); status != materializeOK {
 		return streamCtx, status
 	}
 	materializeManagedStreamEffects(ctx, streamCtx, nodeID)
@@ -649,7 +652,7 @@ func sendApplyManagedStreamWithAdmission(ctx context.Context, log logging.Logger
 		TenantId:     streamCtx.GetTenantId(),
 	}
 	if store := LocalMediaAuthorityStore(); store != nil {
-		if checkManagedPlacementAdmission(ctx, store, clusterID, row, streamCtx, &req.PlacementAdmission) != materializeOK {
+		if checkManagedPlacementAdmission(ctx, store, clusterID, nodeID, row, streamCtx, &req.PlacementAdmission) != materializeOK {
 			return nil, errors.New("managed-stream placement does not permit apply")
 		}
 		if req.PlacementAdmission != nil {

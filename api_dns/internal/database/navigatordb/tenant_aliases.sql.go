@@ -29,7 +29,7 @@ WITH teardown_authority AS MATERIALIZED (
           FROM navigator.tenant_custom_domains AS custom_domain
           WHERE custom_domain.tenant_id = certificate.tenant_id
             AND custom_domain.domain = certificate.domain
-            AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+            AND custom_domain.status IN ('verified', 'pending_alias', 'cert_issuing', 'cert_issued', 'cert_failed')
       )
 ), deleted_alias_bundle AS (
     DELETE FROM navigator.tls_bundles
@@ -43,7 +43,7 @@ WITH teardown_authority AS MATERIALIZED (
           SELECT 1
           FROM navigator.tenant_custom_domains AS custom_domain
           WHERE custom_domain.tenant_id = teardown_authority.tenant_id
-            AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+            AND custom_domain.status IN ('verified', 'pending_alias', 'cert_issuing', 'cert_issued', 'cert_failed')
       )
 )
 DELETE FROM navigator.tenant_aliases AS alias

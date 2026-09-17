@@ -23,6 +23,20 @@
     timeout: 30
   when: "'victoriametrics' in prometheus_stack_components"
 
+- name: Validate alertmanager listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ alertmanager_port }}"
+    timeout: 30
+  when: "'alertmanager' in prometheus_stack_components"
+
+- name: Validate vmalert listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ vmalert_port }}"
+    timeout: 30
+  when: "'vmalert' in prometheus_stack_components"
+
 - name: Validate vmagent listener
   when: "'vmagent' in prometheus_stack_components"
   block:

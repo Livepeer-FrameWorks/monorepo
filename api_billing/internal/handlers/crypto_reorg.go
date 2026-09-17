@@ -117,6 +117,11 @@ func (cm *CryptoMonitor) reverseAllocatedDeposit(ctx context.Context, eventID, o
 	}); err != nil {
 		return err
 	}
+	if err := emitBillingEventTx(ctx, tx, eventCryptoDepositReorg, reversal.tenantID, "crypto_deposit_event", eventID, &ipcpb.BillingEvent{
+		Status: "allocated deposit reorged and reversed", Provider: "crypto", TxHash: reversal.txHash.String,
+	}); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -129,9 +134,6 @@ func (cm *CryptoMonitor) reverseAllocatedDeposit(ctx context.Context, eventID, o
 	if cm.metrics != nil && cm.metrics.CryptoDepositReorgs != nil {
 		cm.metrics.CryptoDepositReorgs.WithLabelValues(reversal.network, reversal.purpose).Inc()
 	}
-	emitBillingEvent(cm.db, cm.logger, eventCryptoDepositReorg, reversal.tenantID, "crypto_deposit_event", eventID, &ipcpb.BillingEvent{
-		Status: "allocated deposit reorged and reversed", Provider: "crypto", TxHash: reversal.txHash.String,
-	})
 	return nil
 }
 

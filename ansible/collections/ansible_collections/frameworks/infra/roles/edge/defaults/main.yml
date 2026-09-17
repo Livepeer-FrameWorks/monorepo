@@ -11,6 +11,8 @@
 edge_mode: container # container | native ("docker" is a deprecated alias for container)
 edge_node_id: ""
 edge_cluster_id: ""
+# Region label stamped with edge_cluster_id on every series edge vmagent scrapes.
+edge_region: ""
 edge_domain: ""
 edge_acme_email: ""
 edge_foghorn_grpc_addr: ""

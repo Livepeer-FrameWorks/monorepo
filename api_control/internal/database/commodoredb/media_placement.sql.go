@@ -7,6 +7,8 @@ package commodoredb
 
 import (
 	"context"
+
+	"github.com/lib/pq"
 )
 
 const activateMediaPlacementPolicy = `-- name: ActivateMediaPlacementPolicy :execrows
@@ -182,6 +184,46 @@ func (q *Queries) GetMediaPlacementRevision(ctx context.Context, arg GetMediaPla
 	return i, err
 }
 
+const getStreamMistSourcePins = `-- name: GetStreamMistSourcePins :one
+SELECT COALESCE(mist.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_mist_sources AS mist
+JOIN commodore.streams AS stream ON stream.id = mist.stream_id
+WHERE stream.tenant_id = $1::uuid AND stream.id = $2::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'mist_native'
+`
+
+type GetStreamMistSourcePinsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) GetStreamMistSourcePins(ctx context.Context, arg GetStreamMistSourcePinsParams) ([]string, error) {
+	row := q.db.QueryRowContext(ctx, getStreamMistSourcePins, arg.TenantID, arg.StreamID)
+	var allowed_cluster_ids []string
+	err := row.Scan(pq.Array(&allowed_cluster_ids))
+	return allowed_cluster_ids, err
+}
+
+const getStreamPullSourcePins = `-- name: GetStreamPullSourcePins :one
+SELECT COALESCE(pull.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_pull_sources AS pull
+JOIN commodore.streams AS stream ON stream.id = pull.stream_id
+WHERE stream.tenant_id = $1::uuid AND stream.id = $2::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'pull'
+`
+
+type GetStreamPullSourcePinsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) GetStreamPullSourcePins(ctx context.Context, arg GetStreamPullSourcePinsParams) ([]string, error) {
+	row := q.db.QueryRowContext(ctx, getStreamPullSourcePins, arg.TenantID, arg.StreamID)
+	var allowed_cluster_ids []string
+	err := row.Scan(pq.Array(&allowed_cluster_ids))
+	return allowed_cluster_ids, err
+}
+
 const insertMediaPlacementChange = `-- name: InsertMediaPlacementChange :one
 INSERT INTO commodore.media_placement_changes
     (tenant_id, scope_kind, scope_id, idempotency_key, request_sha256, revision,
@@ -245,6 +287,48 @@ func (q *Queries) InsertMediaPlacementChange(ctx context.Context, arg InsertMedi
 	return i, err
 }
 
+const listStreamMediaPlacementPolicies = `-- name: ListStreamMediaPlacementPolicies :many
+SELECT scope_id::text AS stream_id, revision, policy_payload
+FROM commodore.media_placement_policies
+WHERE tenant_id = $1::uuid
+  AND scope_kind = 'stream'
+  AND scope_id = ANY($2::uuid[])
+`
+
+type ListStreamMediaPlacementPoliciesParams struct {
+	TenantID  string   `db:"tenant_id" json:"tenant_id"`
+	StreamIds []string `db:"stream_ids" json:"stream_ids"`
+}
+
+type ListStreamMediaPlacementPoliciesRow struct {
+	StreamID      string `db:"stream_id" json:"stream_id"`
+	Revision      int64  `db:"revision" json:"revision"`
+	PolicyPayload []byte `db:"policy_payload" json:"policy_payload"`
+}
+
+func (q *Queries) ListStreamMediaPlacementPolicies(ctx context.Context, arg ListStreamMediaPlacementPoliciesParams) ([]ListStreamMediaPlacementPoliciesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStreamMediaPlacementPolicies, arg.TenantID, pq.Array(arg.StreamIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStreamMediaPlacementPoliciesRow{}
+	for rows.Next() {
+		var i ListStreamMediaPlacementPoliciesRow
+		if err := rows.Scan(&i.StreamID, &i.Revision, &i.PolicyPayload); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockMediaPlacementPolicy = `-- name: LockMediaPlacementPolicy :one
 SELECT tenant_id, scope_kind, scope_id, revision, parent_revision, policy_payload, active_revision, active_parent_revision, active_policy_payload, updated_at FROM commodore.media_placement_policies
 WHERE tenant_id = $1::uuid
@@ -294,6 +378,48 @@ func (q *Queries) LockMediaPlacementStream(ctx context.Context, arg LockMediaPla
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const lockStreamMistSourcePins = `-- name: LockStreamMistSourcePins :one
+SELECT COALESCE(mist.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_mist_sources AS mist
+JOIN commodore.streams AS stream ON stream.id = mist.stream_id
+WHERE stream.tenant_id = $1::uuid AND stream.id = $2::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'mist_native'
+FOR UPDATE OF mist
+`
+
+type LockStreamMistSourcePinsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) LockStreamMistSourcePins(ctx context.Context, arg LockStreamMistSourcePinsParams) ([]string, error) {
+	row := q.db.QueryRowContext(ctx, lockStreamMistSourcePins, arg.TenantID, arg.StreamID)
+	var allowed_cluster_ids []string
+	err := row.Scan(pq.Array(&allowed_cluster_ids))
+	return allowed_cluster_ids, err
+}
+
+const lockStreamPullSourcePins = `-- name: LockStreamPullSourcePins :one
+SELECT COALESCE(pull.allowed_cluster_ids, '{}')::text[] AS allowed_cluster_ids
+FROM commodore.stream_pull_sources AS pull
+JOIN commodore.streams AS stream ON stream.id = pull.stream_id
+WHERE stream.tenant_id = $1::uuid AND stream.id = $2::uuid
+  AND stream.deleted_at IS NULL AND stream.ingest_mode = 'pull'
+FOR UPDATE OF pull
+`
+
+type LockStreamPullSourcePinsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) LockStreamPullSourcePins(ctx context.Context, arg LockStreamPullSourcePinsParams) ([]string, error) {
+	row := q.db.QueryRowContext(ctx, lockStreamPullSourcePins, arg.TenantID, arg.StreamID)
+	var allowed_cluster_ids []string
+	err := row.Scan(pq.Array(&allowed_cluster_ids))
+	return allowed_cluster_ids, err
 }
 
 const markMediaPlacementChangesEffective = `-- name: MarkMediaPlacementChangesEffective :execrows

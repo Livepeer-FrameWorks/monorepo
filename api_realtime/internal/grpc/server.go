@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -44,10 +45,13 @@ type Client struct {
 	channels []signalmanpb.Channel
 	userID   string
 	tenantID string
-	send     chan *signalmanpb.ServerMessage
-	done     chan struct{}
-	logger   logging.Logger
-	mutex    sync.RWMutex
+	// platformAudience is set for a service-token stream without a tenant,
+	// the only kind of stream that may subscribe to CHANNEL_PLATFORM.
+	platformAudience bool
+	send             chan *signalmanpb.ServerMessage
+	done             chan struct{}
+	logger           logging.Logger
+	mutex            sync.RWMutex
 }
 
 // NewSignalmanServer creates a new gRPC server for Signalman
@@ -251,10 +255,31 @@ func (h *Hub) BroadcastInfrastructure(eventType signalmanpb.EventType, data *sig
 	h.broadcast <- event
 }
 
+// BroadcastPlatform broadcasts an event to platform operator audience streams.
+// The event carries no tenant: it may describe any tenant's resources.
+func (h *Hub) BroadcastPlatform(eventType signalmanpb.EventType, data *signalmanpb.EventData) {
+	event := &signalmanpb.SignalmanEvent{
+		EventType: eventType,
+		Channel:   signalmanpb.Channel_CHANNEL_PLATFORM,
+		Data:      data,
+		Timestamp: timestamppb.Now(),
+	}
+	if h.metrics != nil && h.metrics.EventsPublished != nil {
+		h.metrics.EventsPublished.WithLabelValues(eventType.String(), channelToString(signalmanpb.Channel_CHANNEL_PLATFORM)).Inc()
+	}
+	h.broadcast <- event
+}
+
 // shouldReceive determines if a client should receive an event
 func (c *Client) shouldReceive(event *signalmanpb.SignalmanEvent) bool {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
+
+	// Platform events go only to platform audience streams that subscribed to
+	// the channel by name, whatever tenant the event names.
+	if event.Channel == signalmanpb.Channel_CHANNEL_PLATFORM {
+		return c.platformAudience && slices.Contains(c.channels, signalmanpb.Channel_CHANNEL_PLATFORM)
+	}
 
 	// Check channel subscription
 	subscribed := false
@@ -291,13 +316,14 @@ func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_Subscrib
 	tenantID := ctxkeys.GetTenantID(ctx)
 
 	client := &Client{
-		stream:   stream,
-		channels: []signalmanpb.Channel{},
-		userID:   userID,
-		tenantID: tenantID,
-		send:     make(chan *signalmanpb.ServerMessage, 256),
-		done:     make(chan struct{}),
-		logger:   s.logger,
+		stream:           stream,
+		channels:         []signalmanpb.Channel{},
+		userID:           userID,
+		tenantID:         tenantID,
+		platformAudience: ctxkeys.GetAuthType(ctx) == "service" && tenantID == "",
+		send:             make(chan *signalmanpb.ServerMessage, 256),
+		done:             make(chan struct{}),
+		logger:           s.logger,
 	}
 
 	// Enforce tenant limit atomically with registration.
@@ -392,14 +418,21 @@ func (c *Client) sendLoop() {
 	}
 }
 
-// handleSubscribe processes a subscribe request
+// handleSubscribe processes a subscribe request. A CHANNEL_PLATFORM request
+// from a stream outside the platform audience is refused with an error message
+// and left out of the confirmation.
 func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 	c.mutex.Lock()
 	existing := make(map[signalmanpb.Channel]struct{}, len(c.channels))
 	for _, ch := range c.channels {
 		existing[ch] = struct{}{}
 	}
+	refusedPlatform := false
 	for _, ch := range req.Channels {
+		if ch == signalmanpb.Channel_CHANNEL_PLATFORM && !c.platformAudience {
+			refusedPlatform = true
+			continue
+		}
 		if _, ok := existing[ch]; ok {
 			continue
 		}
@@ -409,6 +442,26 @@ func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 	currentChannels := make([]signalmanpb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
 	c.mutex.Unlock()
+
+	if refusedPlatform {
+		c.logger.WithFields(logging.Fields{
+			"user_id":   c.userID,
+			"tenant_id": c.tenantID,
+		}).Warn("Refused platform channel subscription outside the platform audience")
+		refusal := &signalmanpb.ServerMessage{
+			Message: &signalmanpb.ServerMessage_Error{
+				Error: &signalmanpb.SignalmanError{
+					Code:    "permission_denied",
+					Message: "platform channel requires a tenantless service stream",
+				},
+			},
+		}
+		select {
+		case c.send <- refusal:
+		default:
+			c.logger.Warn("Failed to send platform channel refusal - buffer full")
+		}
+	}
 
 	c.logger.WithFields(logging.Fields{
 		"channels":  req.Channels,
@@ -524,6 +577,8 @@ func channelToString(ch signalmanpb.Channel) string {
 		return "messaging"
 	case signalmanpb.Channel_CHANNEL_AI:
 		return "ai"
+	case signalmanpb.Channel_CHANNEL_PLATFORM:
+		return "platform"
 	default:
 		return "unknown"
 	}
@@ -549,6 +604,8 @@ func eventTypeToString(et signalmanpb.EventType) string {
 		return "node_lifecycle_update"
 	case signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING:
 		return "load_balancing"
+	case signalmanpb.EventType_EVENT_TYPE_INCIDENT_UPDATED:
+		return "incident_updated"
 	// Analytics events
 	case signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT:
 		return "viewer_connect"

@@ -6,13 +6,19 @@ query GetStreamPlacementContext($id: ID!) {
     pullSource {
       enabled
       class
-      allowedClusterIds
     }
     managedSource {
       sourceKind
       alwaysOn
       placementCount
-      allowedClusterIds
+    }
+    sourceLocation {
+      mode
+      clusters {
+        clusterId
+        nodeIds
+      }
+      avoidNodeIds
     }
   }
 }

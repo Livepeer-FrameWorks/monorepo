@@ -18,7 +18,7 @@ That prerequisite does not implement this RFC's proactive replication or hop top
   audience arrives), an **explicit hop topology** (origin/hub/edge roles per stream, multi-hop
   distribution between regions), and a **per-stream replication policy**
   (`max_replicas_total`, `max_replicas_per_region`, `allowed_regions`).
-- Policy intent is homed in Commodore (the stream owner — `stream_cluster_pins` is the seed),
+- Policy intent is homed in Commodore (the stream owner, alongside its media placement rules),
   entitlement in Quartermaster, enactment in Foghorn against `StreamRegistry.Locations`.
 - Replication policy is a consumer of the placement policy engine's `replicate` verb
   (`docs/rfcs/placement-policy-engine.md`); this RFC defines the replication-specific inputs and
@@ -50,12 +50,12 @@ The shipped mechanics are canonical in `docs/architecture/stream-replication-top
 - **Loop prevention exists.** Three layers: the pre-arrangement `RemoteReplicationEntry` check
   (skip arranging a pull from a cluster already replicating from us), `ReplicationEvent`
   broadcast on completion, and the `StreamAdvertisement` directory.
-- **No policy surface.** The only per-stream replication controls are the `federated` flag
-  (cross-cluster visibility on/off). `commodore.stream_cluster_pins` is a schema primitive with
-  no current runtime enforcement; placement integration requires explicit validated import,
-  not an assumption that existing pins were enforced. There is no replica-count cap, no
-  region policy, no role assignment, and no way to express "have this stream in region X by
-  time T".
+- **No replication policy surface.** The only per-stream replication control is the `federated`
+  flag (cross-cluster visibility on/off). Media placement rules constrain where a stream is
+  ingested and served, per cluster and per node, including where a configured source may be
+  dialed ([media placement](../architecture/media-placement-policy.md)); they do not cap or
+  direct replication. There is no replica-count cap, no region replication policy, no role
+  assignment, and no way to express "have this stream in region X by time T".
 
 ## Problem / Motivation
 
@@ -65,7 +65,7 @@ segment is served. For predictable events (a scheduled broadcast with a known au
 this is avoidable latency. The star/single-hop shape also concentrates load: a globally popular
 stream makes every cluster pull the origin cluster independently, spending the origin's egress
 N times instead of cascading through a regional hub. Finally, tenants and operators have no
-lever to bound or direct replication — no replica caps, no region allowlists beyond cluster pins,
+lever to bound or direct replication — no replica caps, no replication region allowlists,
 no way to pre-position a stream — so capacity planning for large events is guesswork.
 
 ## Goals
@@ -137,15 +137,15 @@ Policy fields per stream, with tenant-level defaults:
 
 - `max_replicas_total` — cap on concurrent replicas across the federation.
 - `max_replicas_per_region` — cap per region.
-- `allowed_regions` — regions the stream may replicate into (complementing
-  `stream_cluster_pins`' cluster-level allowlist).
+- `allowed_regions` — regions the stream may replicate into (complementing the cluster and node
+  selectors of the stream's placement rules).
 
 Ownership follows the service-boundary split already established for placement policy:
 
 - **Commodore homes the intent.** Per-stream replication policy is stream-owner data, alongside
-  the stream record. `commodore.stream_cluster_pins` is the seed — it already expresses
-  "constrain this stream's placement" as a side table applied at resolve time; replication policy
-  generalizes that shape (regions and counts, not just cluster ids).
+  the stream record and its media placement rules (`commodore.media_placement_policies`), which
+  already express "constrain this stream's placement" per verb; replication policy adds a
+  `replicate` verb with regions and counts.
 - **Quartermaster homes the entitlement.** Whether a tenant may replicate into a given cluster or
   region at all is capacity-owner data (`tenant_cluster_access` and its placement-scope
   extension per the placement-policy-engine RFC), plus the region metadata for clusters/nodes.
@@ -168,11 +168,10 @@ for live streams and the orchestrator that acts on the resolved result.
   enforcement at enact time; `control.StreamRegistry` remains the live replication truth and
   gains the topology/role records.
 - **Commodore (`api_control`)** — per-stream replication policy and spread intent (stream-owner
-  side), evolving from `stream_cluster_pins`; policy compiled into the Ed25519 media-authority
+  side), stored with the stream's media placement rules; policy compiled into the Ed25519 media-authority
   envelope it already mints (`commodore.media_authority_versions`), not into
-  `policy_bundle_versions` (that producer is retired: `GetSignedPolicyBundle` in
-  `api_control/internal/grpc/policy_bundle.go` returns `Unimplemented`, and the table now carries
-  only the playback-policy bundle).
+  `policy_bundle_versions` (Commodore has no signed policy-bundle RPC, and the table carries only the
+  playback-policy bundle).
 - **Quartermaster (`api_tenants`)** — region metadata for clusters/nodes and replication
   entitlement (capacity-owner side of the two-sided policy).
 - **Helmsman/MistServer (`api_sidecar`)** — unchanged transport: DTSC pulls configured exactly as
@@ -182,7 +181,7 @@ for live streams and the orchestrator that acts on the resolved result.
 
 - Foghorn: orchestrator loop, topology records, policy resolution at arrangement time; source
   selection consults hub assignments.
-- Commodore: policy/intent schema (generalizing `stream_cluster_pins`), API surface for operator
+- Commodore: policy/intent schema (a `replicate` verb beside ingest and serve placement), API surface for operator
   spread actions and per-stream policy, bundle compilation.
 - Quartermaster: authoritative region metadata on clusters/nodes; entitlement scopes.
 - `pkg/proto`: intent/policy messages; federation protocol is expected to need no new RPCs for
@@ -269,8 +268,8 @@ Additive and phased; each phase useful on its own and behind its own flag. No da
 - [Evidence] `api_balancing/internal/federation/cache.go` — `RemoteEdgeCache` narrowed to
   federation telemetry; `RemoteReplicationEntry` peer-availability records feeding loop
   prevention.
-- [Evidence] `pkg/database/sql/schema/commodore.sql` — `commodore.stream_cluster_pins` (the
-  per-stream placement-constraint seed) and `commodore.media_authority_versions` (the Ed25519
+- [Evidence] `pkg/database/sql/schema/commodore.sql` — `commodore.media_placement_policies` (tenant
+  and stream placement rules) and `commodore.media_authority_versions` (the Ed25519
   signed-distribution channel; `commodore.policy_bundle_versions` is now the playback-policy
   bundle only).
 - [Evidence] `pkg/proto/foghorn_federation.proto` — QueryStream / NotifyOriginPull /

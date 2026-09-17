@@ -33,6 +33,23 @@ func (owner *placementOptionsOwner) GetTenantEntitlement(_ context.Context, tena
 	return proto.CloneOf(owner.entitlement), nil
 }
 
+type placementOptionsInventory struct {
+	t        *testing.T
+	tenantID string
+	calls    int
+}
+
+func (inventory *placementOptionsInventory) GetMediaPlacementInventory(_ context.Context, req *quartermasterpb.GetMediaPlacementInventoryRequest) (*quartermasterpb.MediaPlacementInventory, error) {
+	inventory.calls++
+	if req.GetTenantId() != inventory.tenantID || req.GetControlCellId() != "cell-eu" || len(req.GetClusterIds()) != 1 || req.GetClusterIds()[0] != "owned" {
+		inventory.t.Fatalf("node inventory requested outside the tenant's owned clusters: %v", req)
+	}
+	return &quartermasterpb.MediaPlacementInventory{
+		TenantId: req.GetTenantId(), ControlCellId: req.GetControlCellId(), ClusterIds: req.GetClusterIds(), Complete: true,
+		Nodes: []*quartermasterpb.MediaPlacementInventoryNode{{ClusterId: "owned", NodeId: "owned-node-1", AdmissionEnabled: true}},
+	}, nil
+}
+
 func TestMediaPlacementOptions_RealPG(t *testing.T) {
 	testMediaPlacementOptionsDatabase(t, startCommodoreRealPG(t))
 }
@@ -57,12 +74,28 @@ func testMediaPlacementOptionsDatabase(t *testing.T, db *sql.DB) {
 	scope, req, entitlement := placementOptionsFixture()
 	const actorID = "20000000-0000-4000-8000-000000000071"
 	const streamID = "30000000-0000-4000-8000-000000000071"
+	// Only the tenant's own cluster has a node inventory lookup; the platform and
+	// marketplace clusters in the fixture never reach Quartermaster.
+	entitlement.EffectiveAccess[1].ControlCellId = "cell-eu"
 	owner := &placementOptionsOwner{t: t, tenantID: scope.TenantID, entitlement: entitlement}
-	server := &CommodoreServer{db: db, authorityTenantSource: owner}
+	inventory := &placementOptionsInventory{t: t, tenantID: scope.TenantID}
+	server := &CommodoreServer{db: db, authorityTenantSource: owner, placementInventorySource: inventory}
 	ctx := context.WithValue(ctxAs(actorID, scope.TenantID, "viewer"), ctxkeys.KeyAuthType, "jwt")
 	result, err := server.GetMediaPlacementOptions(ctx, req)
-	if err != nil || len(result.GetNodes()) != 7 || owner.calls != 1 {
-		t.Fatalf("tenant options: %v", err)
+	if err != nil || len(result.GetNodes()) != 8 || owner.calls != 1 || inventory.calls != 1 {
+		t.Fatalf("tenant options: %d options, %v", len(result.GetNodes()), err)
+	}
+	nodeOptions := 0
+	for _, option := range result.GetNodes() {
+		if option.GetKind() == placementpb.OptionKind_OPTION_KIND_NODE {
+			nodeOptions++
+			if option.GetId() != "owned-node-1" || option.GetClusterId() != "owned" {
+				t.Fatalf("node option = %v", option)
+			}
+		}
+	}
+	if nodeOptions != 1 {
+		t.Fatalf("node options = %d, want 1", nodeOptions)
 	}
 	req.Scope = &placementpb.Scope{Kind: placementpb.ScopeKind_SCOPE_KIND_STREAM, StreamId: streamID}
 	if _, err := server.GetMediaPlacementOptions(ctx, req); status.Code(err) != codes.NotFound || owner.calls != 1 {
@@ -72,7 +105,7 @@ func testMediaPlacementOptionsDatabase(t *testing.T, db *sql.DB) {
 		t.Fatal(err)
 	}
 	result, err = server.GetMediaPlacementOptions(ctx, req)
-	if err != nil || len(result.GetNodes()) != 7 || owner.calls != 2 {
+	if err != nil || len(result.GetNodes()) != 8 || owner.calls != 2 {
 		t.Fatalf("owned stream options: %v", err)
 	}
 	foreign := context.WithValue(ctx, ctxkeys.KeyTenantID, "10000000-0000-4000-8000-000000000072")

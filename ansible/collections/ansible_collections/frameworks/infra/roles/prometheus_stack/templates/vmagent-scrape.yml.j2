@@ -1,5 +1,11 @@
 global:
   scrape_interval: {{ vmagent_scrape_interval }}
+{% if vmagent_external_labels | length > 0 %}
+  external_labels:
+{% for key, value in vmagent_external_labels | dictsort %}
+    {{ key }}: {{ value | string | to_json }}
+{% endfor %}
+{% endif %}
 scrape_configs:
 {% for target in vmagent_scrape_targets %}
   - job_name: {{ target.job_name | to_json }}

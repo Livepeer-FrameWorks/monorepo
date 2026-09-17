@@ -186,9 +186,14 @@ message ApplyMediaAuthorityResponse {
 // placement policy. Commodore gates the first policy-bearing (schema 2) tenant
 // authority on every target cell attesting; it is never permission by itself.
 message MediaCellPlacementCapability {
+  // Versions 1 and 2 only. Commodore releases before node placement treat any
+  // higher value as a malformed attestation, so schema 3 is reported through
+  // node_placement_ready instead.
   repeated uint32 supported_schema_versions = 1;
   bool enforcement_ready = 2;
   uint32 live_replicas = 3;
+  // Every live replica of the cell reads schema-3 authorities (node selectors).
+  bool node_placement_ready = 4;
 }
 
 message InvalidatePlaybackAuthRequest {

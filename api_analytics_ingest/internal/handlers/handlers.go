@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -4008,6 +4009,11 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 
 // processServiceEventAudit inserts service events into the api_events audit table.
 func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event kafka.ServiceEvent) error {
+	// The audit table is tenant-partitioned; platform-scoped events describe
+	// infrastructure no tenant owns and have no audit row.
+	if event.TenantID == "" && serviceevents.PlatformScoped(event.EventType) {
+		return nil
+	}
 	if !isValidUUIDString(event.TenantID) {
 		h.writeIngestError(ctx, kafka.AnalyticsEvent{
 			EventID:               event.EventID,

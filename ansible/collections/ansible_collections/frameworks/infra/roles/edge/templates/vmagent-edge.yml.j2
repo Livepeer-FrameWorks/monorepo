@@ -9,10 +9,23 @@
     container, so there is no caddy scrape in container mode.
   MistServer metrics are served by its HTTP output on 8080 (pkg/mist
   MetricsPath), not the 4242 controller API.
+  external_labels stamp cluster and region on every series, sorted by key
+  with empty values omitted, exactly like edgeVMAgentExternalLabels.
 #}
 {% set edge_scrape_host = 'edge' if (edge_mode != 'native' and edge_container_flavor | default('linux') == 'darwin') else '127.0.0.1' %}
+{% set edge_label_cluster = edge_cluster_id | default('') | trim %}
+{% set edge_label_region = edge_region | default('') | trim %}
 global:
   scrape_interval: 30s
+{% if edge_label_cluster | length > 0 or edge_label_region | length > 0 %}
+  external_labels:
+{% if edge_label_cluster | length > 0 %}
+    cluster: {{ edge_label_cluster | to_json }}
+{% endif %}
+{% if edge_label_region | length > 0 %}
+    region: {{ edge_label_region | to_json }}
+{% endif %}
+{% endif %}
 scrape_configs:
   - job_name: edge-mist
     metrics_path: /metrics

@@ -29,7 +29,7 @@ func Check(desired DesiredState) error {
 	for _, ps := range desired.Commodore.PullStreams {
 		// --check is offline; only exercise URI shape + always-blocked set.
 		// The apply path layers cluster eligibility on top via Quartermaster.
-		if _, err := validatePullStreamShape(ps); err != nil {
+		if _, _, err := validatePullStreamShape(ps); err != nil {
 			return err
 		}
 		if _, err := AliasFromRef(ps.OwnerTenant.Ref); err != nil {
@@ -37,7 +37,7 @@ func Check(desired DesiredState) error {
 		}
 	}
 	for _, ms := range desired.Commodore.MistNativeStreams {
-		if err := validateMistNativeShape(ms); err != nil {
+		if _, err := validateMistNativeShape(ms); err != nil {
 			return err
 		}
 		if _, err := AliasFromRef(ms.OwnerTenant.Ref); err != nil {

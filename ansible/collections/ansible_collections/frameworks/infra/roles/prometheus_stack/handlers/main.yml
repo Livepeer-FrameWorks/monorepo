@@ -25,3 +25,21 @@
     daemon_reload: true
   register: vmauth_restarted
   when: not ansible_check_mode
+
+- name: Restart vmalert
+  listen: vmalert restart
+  ansible.builtin.systemd:
+    name: vmalert
+    state: restarted
+    daemon_reload: true
+  register: vmalert_restarted
+  when: not ansible_check_mode
+
+- name: Restart alertmanager
+  listen: alertmanager restart
+  ansible.builtin.systemd:
+    name: alertmanager
+    state: restarted
+    daemon_reload: true
+  register: alertmanager_restarted
+  when: not ansible_check_mode

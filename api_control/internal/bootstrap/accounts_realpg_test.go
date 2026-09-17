@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/placementpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -112,12 +113,25 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 		PlaybackID:  "contract-pull",
 		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
 		Title:       "Contract pull", Description: "initial", SourceURI: "rtsp://example.test/live", Enabled: true,
-		AllowedClusterIDs: []string{"edge-b", "edge-a", "edge-a"},
+		SourceLocation: &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "edge-b"}, {ClusterID: "edge-a"}}},
 	}
 	clusters := stubClusterResolver{caps: []pullsource.ClusterCapability{{ID: "edge-a"}, {ID: "edge-b"}}}
 	result, err := ReconcilePullStreams(ctx, db, []PullStream{stream}, staticResolver(tenantID), clusters, fakeCipher{})
 	if err != nil || len(result.Created) != 1 {
 		t.Fatalf("create pull stream = %#v, err = %v", result, err)
+	}
+	section := func() CommodoreSection { return CommodoreSection{PullStreams: []PullStream{stream}} }
+	locations, err := ReconcileStreamSourceLocations(ctx, db, section(), staticResolver(tenantID))
+	if err != nil || len(locations.Updated) != 1 {
+		t.Fatalf("write source location = %#v, err = %v", locations, err)
+	}
+	readLocation := func(streamID string) placementpolicy.SourceLocation {
+		t.Helper()
+		snapshot, readErr := placementpolicy.NewStore(db).Read(ctx, placementpolicy.Scope{TenantID: tenantID, Kind: "stream", ID: streamID})
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return placementpolicy.SourceLocationOf(snapshot.Own)
 	}
 	var streamID, ingestMode, encryptedURI string
 	var enabled bool
@@ -133,18 +147,34 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	if ingestMode != "pull" || encryptedURI != "enc:"+stream.SourceURI || !enabled || fmt.Sprint(allowed) != "[edge-a edge-b]" {
 		t.Fatalf("stored pull stream = mode %q uri %q enabled %t allowed %#v", ingestMode, encryptedURI, enabled, allowed)
 	}
+	if location := readLocation(streamID); location.Mode != placementpolicy.SourceLocationRestricted || fmt.Sprint(location.ClusterIDs()) != "[edge-a edge-b]" {
+		t.Fatalf("stored source location = %+v", location)
+	}
+	var actor string
+	if err := db.QueryRowContext(ctx, `SELECT actor_id FROM commodore.media_placement_changes WHERE tenant_id = $1::uuid AND scope_kind = 'stream' AND scope_id = $2::uuid`, tenantID, streamID).Scan(&actor); err != nil || actor != placementpolicy.SystemActorBootstrap {
+		t.Fatalf("source location receipt actor = %q, err = %v", actor, err)
+	}
 
 	result, err = ReconcilePullStreams(ctx, db, []PullStream{stream}, staticResolver(tenantID), clusters, fakeCipher{})
 	if err != nil || len(result.Noop) != 1 {
 		t.Fatalf("replay pull stream = %#v, err = %v", result, err)
 	}
+	if locations, err = ReconcileStreamSourceLocations(ctx, db, section(), staticResolver(tenantID)); err != nil || len(locations.Noop) != 1 {
+		t.Fatalf("replay source location = %#v, err = %v", locations, err)
+	}
 	stream.Title = "Updated pull"
 	stream.SourceURI = "rtsp://example.test/updated"
 	stream.Enabled = false
-	stream.AllowedClusterIDs = []string{"edge-b"}
+	stream.SourceLocation = &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "edge-b", NodeIDs: []string{"edge-b-1"}}}, AvoidNodeIDs: []string{"edge-b-9"}}
 	result, err = ReconcilePullStreams(ctx, db, []PullStream{stream}, staticResolver(tenantID), clusters, fakeCipher{})
 	if err != nil || len(result.Updated) != 1 {
 		t.Fatalf("update pull stream = %#v, err = %v", result, err)
+	}
+	if locations, err = ReconcileStreamSourceLocations(ctx, db, section(), staticResolver(tenantID)); err != nil || len(locations.Updated) != 1 {
+		t.Fatalf("update source location = %#v, err = %v", locations, err)
+	}
+	if location := readLocation(streamID); fmt.Sprint(location.Clusters) != "[{edge-b [edge-b-1]}]" || fmt.Sprint(location.AvoidNodeIDs) != "[edge-b-9]" {
+		t.Fatalf("updated source location = %+v", location)
 	}
 	if err := db.QueryRowContext(ctx, `
 		SELECT s.title, p.source_uri_enc, p.enabled, p.allowed_cluster_ids
@@ -172,6 +202,24 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("repaired pull source count = %d, want 1", count)
 	}
+
+	unrestricted := PullStream{
+		PlaybackID: "contract-open-pull", OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
+		Title: "Open pull", SourceURI: "https://example.test/live.m3u8", Enabled: true,
+	}
+	if result, err = ReconcilePullStreams(ctx, db, []PullStream{unrestricted}, staticResolver(tenantID), clusters, fakeCipher{}); err != nil || len(result.Created) != 1 {
+		t.Fatalf("create unrestricted pull stream = %#v, err = %v", result, err)
+	}
+	if locations, err = ReconcileStreamSourceLocations(ctx, db, CommodoreSection{PullStreams: []PullStream{unrestricted}}, staticResolver(tenantID)); err != nil || len(locations.Noop) != 1 {
+		t.Fatalf("unrestricted source location = %#v, err = %v", locations, err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		SELECT p.allowed_cluster_ids FROM commodore.streams s
+		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+		WHERE s.tenant_id = $1::uuid AND s.playback_id = $2::citext
+	`, tenantID, unrestricted.PlaybackID).Scan(pq.Array(&allowed)); err != nil || len(allowed) != 0 {
+		t.Fatalf("unrestricted pin column = %#v, err = %v", allowed, err)
+	}
 }
 
 func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
@@ -190,7 +238,7 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 		PlaybackID: "mist-contract", OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
 		Title: "Contract loop", Description: "initial", Source: "ts-exec:cat /dev/null", SourceKind: "exec",
 		AlwaysOn: true, IsRecordingEnabled: false, Monitoring: "inherit", PlacementCount: 0,
-		AllowedClusterIDs: []string{"edge-a"},
+		SourceLocation: &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "edge-a"}}},
 		ProcessPolicy: []any{map[string]any{
 			"process": "Thumbs", "track_select": "video=lowres", "x-LSP-name": "Thumbnail Sprites",
 		}},
@@ -203,6 +251,13 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 	result, err := ReconcileMistNativeStreams(ctx, db, []MistNativeStream{primary, stale}, staticResolver(tenantID))
 	if err != nil || len(result.Created) != 2 {
 		t.Fatalf("create mist streams = %#v, err = %v", result, err)
+	}
+	section := CommodoreSection{MistNativeStreams: []MistNativeStream{primary, stale}}
+	if locations, locationErr := ReconcileStreamSourceLocations(ctx, db, section, staticResolver(tenantID)); locationErr != nil || len(locations.Updated) != 2 {
+		t.Fatalf("write managed source locations = %#v, err = %v", locations, locationErr)
+	}
+	if locations, locationErr := ReconcileStreamSourceLocations(ctx, db, section, staticResolver(tenantID)); locationErr != nil || len(locations.Noop) != 2 {
+		t.Fatalf("replay managed source locations = %#v, err = %v", locations, locationErr)
 	}
 	var streamID, sourceSpec, sourceKind, localAssets, processPolicy string
 	var placement int

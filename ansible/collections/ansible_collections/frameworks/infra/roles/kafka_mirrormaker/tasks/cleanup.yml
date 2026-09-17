@@ -1,0 +1,32 @@
+---
+# Removes the MirrorMaker2 worker only. /opt/kafka stays: brokers and
+# controllers on the same host run from that install.
+- name: Stop and disable frameworks-kafka-mirrormaker
+  ansible.builtin.systemd:
+    name: frameworks-kafka-mirrormaker
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove MirrorMaker2 worker unit, config, and JMX exporter
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/frameworks-kafka-mirrormaker.service
+    - "{{ kafka_mm_properties_path }}"
+    - "{{ kafka_mm_jmx_exporter_dir }}"
+
+- name: Reload systemd after MirrorMaker2 worker removal
+  ansible.builtin.systemd:
+    daemon_reload: true
+  changed_when: false
+
+- name: Reset removed MirrorMaker2 unit failure state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - reset-failed
+      - frameworks-kafka-mirrormaker.service
+  changed_when: false
+  failed_when: false

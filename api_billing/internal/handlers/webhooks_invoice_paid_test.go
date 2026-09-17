@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -33,6 +35,57 @@ func invoicePaidPayload(t *testing.T, invoiceID, customerID, metaTenant string) 
 	return p
 }
 
+// TestHandleStripeInvoiceFailed_IncrementsDunningWithEventAtomically pins both
+// outcomes of the shared transaction: the dunning increment commits with its
+// invoice_payment_failed outbox row, and a failed insert rolls the increment
+// back and surfaces the error so the webhook retries.
+func TestHandleStripeInvoiceFailed_IncrementsDunningWithEventAtomically(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		outboxErr error
+	}{
+		{name: "commit"},
+		{name: "outbox failure rolls back", outboxErr: errors.New("outbox unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, mock, done := newWebhookService(t)
+			defer done()
+
+			const tenant = "tenant-1"
+			mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
+				WithArgs("cus_known").
+				WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+			mock.ExpectBegin()
+			mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = dunning_attempts \+ 1`).
+				WithArgs(tenant).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			outbox := mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+				WithArgs(sqlmock.AnyArg(), "invoice_payment_failed", tenant, "", "invoice", "in_failed", sqlmock.AnyArg())
+			if tc.outboxErr != nil {
+				outbox.WillReturnError(tc.outboxErr)
+				mock.ExpectRollback()
+			} else {
+				outbox.WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectCommit()
+			}
+
+			// The payload builder's invoice.paid type is irrelevant here; the
+			// handler reads only id, customer, and metadata.
+			err := s.handleStripeInvoiceFailed(invoicePaidPayload(t, "in_failed", "cus_known", ""))
+			if tc.outboxErr != nil {
+				if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+					t.Fatalf("expected outbox insert error, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("handleStripeInvoiceFailed: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func newWebhookService(t *testing.T) (*Service, sqlmock.Sqlmock, func()) {
 	t.Helper()
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -53,15 +106,46 @@ func TestHandleStripeInvoicePaid_ResetsDunningForKnownCustomer(t *testing.T) {
 	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs("cus_known").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = 0`).
 		WithArgs(tenant).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs(sqlmock.AnyArg(), "invoice_paid", tenant, "", "invoice", "in_known", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	if err := s.handleStripeInvoicePaid(invoicePaidPayload(t, "in_known", "cus_known", "")); err != nil {
 		t.Fatalf("handleStripeInvoicePaid: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandleStripeInvoicePaid_RollsBackDunningResetWhenOutboxInsertFails pins
+// atomicity: the dunning reset and the invoice_paid outbox row share one
+// transaction, so a failed insert undoes the reset and the webhook retries.
+func TestHandleStripeInvoicePaid_RollsBackDunningResetWhenOutboxInsertFails(t *testing.T) {
+	s, mock, done := newWebhookService(t)
+	defer done()
+
+	const tenant = "tenant-1"
+	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
+		WithArgs("cus_known").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = 0`).
+		WithArgs(tenant).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), "invoice_paid", tenant, "", "invoice", "in_known", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err := s.handleStripeInvoicePaid(invoicePaidPayload(t, "in_known", "cus_known", ""))
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -79,12 +163,14 @@ func TestHandleStripeInvoicePaid_FallsBackToMetadataTenant(t *testing.T) {
 	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs("cus_unknown").
 		WillReturnError(sqlmock.ErrCancelled) // any error → fall back to metadata
+	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET dunning_attempts = 0`).
 		WithArgs(tenant).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs(sqlmock.AnyArg(), "invoice_paid", tenant, "", "invoice", "in_meta", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	if err := s.handleStripeInvoicePaid(invoicePaidPayload(t, "in_meta", "cus_unknown", tenant)); err != nil {
 		t.Fatalf("handleStripeInvoicePaid: %v", err)

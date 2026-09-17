@@ -14,6 +14,7 @@ func TestGRPCServicesIncludeRuntimeDependencyEndpoints(t *testing.T) {
 		"skipper":         {ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
 		"navigator":       {ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
 		"foghorn":         {ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
+		"lookout":         {ServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Port: 19008},
 	}
 
 	got := make(map[string]GRPCService)
@@ -91,6 +92,28 @@ func TestNavigatorRequiresExplicitACMEEmail(t *testing.T) {
 	t.Fatal("navigator must require ACME_EMAIL so certificate issuance never falls back to a platform contact")
 }
 
+// Lookout exits at startup without the webhook token, and the Alertmanager
+// role refuses to render without its routing and SMTP inputs, so both are
+// declared operator inputs that provisioning and release preflights check
+// before any host changes.
+func TestAlertingServicesRequireOperatorInputs(t *testing.T) {
+	want := map[string][]string{
+		"lookout":      {"LOOKOUT_ALERTMANAGER_TOKEN"},
+		"alertmanager": {"LOOKOUT_ALERTMANAGER_TOKEN", "ALERTMANAGER_HEARTBEAT_URL", "ALERTMANAGER_EMAIL_TO", "SMTP_HOST", "SMTP_PORT", "FROM_EMAIL"},
+	}
+	for serviceID, keys := range want {
+		declared := map[string]bool{}
+		for _, req := range RequiredExternalEnv(serviceID) {
+			declared[req.Key] = true
+		}
+		for _, key := range keys {
+			if !declared[key] {
+				t.Errorf("%s must require %s", serviceID, key)
+			}
+		}
+	}
+}
+
 func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
 	required := RequiredExternalEnv("listmonk")
 	want := map[string]bool{
@@ -110,7 +133,7 @@ func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
 }
 
 func TestDeliveryClassFor(t *testing.T) {
-	for _, dependency := range []string{"nginx", "caddy", "victoriametrics", "vmagent", "grafana", "mistserver", "livepeer-gateway"} {
+	for _, dependency := range []string{"nginx", "caddy", "victoriametrics", "vmagent", "vmalert", "alertmanager", "grafana", "mistserver", "livepeer-gateway"} {
 		if got := DeliveryClassFor(dependency); got != DeliveryManagedDependency {
 			t.Errorf("DeliveryClassFor(%s) = %s, want %s", dependency, got, DeliveryManagedDependency)
 		}

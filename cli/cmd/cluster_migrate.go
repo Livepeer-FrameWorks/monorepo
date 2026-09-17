@@ -21,6 +21,7 @@ func newClusterMigrateCmd() *cobra.Command {
 	var yes bool
 	var toVersion string
 	var skipDataMigrationCheck bool
+	var completeInterruptedBaselines bool
 
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -44,9 +45,17 @@ contract steps run only when explicitly requested with '--phase contract' (never
 during a routine expand upgrade); background data migrations and read/write flips
 are release-specific operations run by other commands, not this one.
 
+Before expand migrations, every manifest database with an embedded baseline
+that is missing on the cluster (or present with an empty service schema) is
+created with its owner and runtime roles and its current baseline. A populated
+database without a baseline marker or migration history fails closed unless
+--complete-interrupted-baselines explicitly authorizes baseline completion and
+schema verification.
+
 The underlying Ansible role filters applied vs pending on the target; in
 --dry-run mode the role runs under ansible-playbook --check --diff so
-nothing is actually written.`,
+nothing is actually written. Dry-run lists databases it would create without
+sending any database, role, or baseline SQL.`,
 		Example: `  frameworks cluster migrate --phase expand --to-version v0.5.0 --dry-run
   frameworks cluster migrate --phase expand --to-version v0.5.0`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,7 +67,7 @@ nothing is actually written.`,
 			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
 				return err
 			}
-			return runMigrate(cmd, rc, dryRun, phase, yes, toVersion, skipDataMigrationCheck)
+			return runMigrate(cmd, rc, dryRun, phase, yes, toVersion, skipDataMigrationCheck, completeInterruptedBaselines)
 		},
 	}
 
@@ -67,6 +76,7 @@ nothing is actually written.`,
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm contract migrations")
 	cmd.Flags().StringVar(&toVersion, "to-version", "", "Concrete vX.Y.Z to migrate up to (defaults to cluster's resolved platform version)")
 	cmd.Flags().BoolVar(&skipDataMigrationCheck, "skip-data-migration-check", false, "DANGEROUS: skip pre-postdeploy data migration gate")
+	cmd.Flags().BoolVar(&completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
 
 	cmd.AddCommand(newClusterMigrateValidateCmd())
 
@@ -99,7 +109,12 @@ reach an operator cluster.`,
 	}
 }
 
-func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skipDataMigrationCheck bool) error {
+// migrateTimeout bounds the data-migration gate, the floor guard, and the
+// ledger migrations of one runMigrate call. It does not include the service
+// database baselines, which ensureServiceDatabases bounds per database.
+const migrateTimeout = 10 * time.Minute
+
+func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skipDataMigrationCheck, completeInterruptedBaselines bool) error {
 	switch phase {
 	case "expand", "postdeploy":
 	case "contract":
@@ -121,7 +136,25 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// Service databases a live cluster lacks (a database introduced by this
+	// release) are created with their roles and current baseline before the
+	// floor guard and any migration read their ledgers. In dry-run nothing is
+	// created, so the planned databases are excluded from those ledger reads.
+	// Baseline work is bounded per database inside the step, not by the
+	// migrate budget: completing a large YugabyteDB database alone can outlast
+	// that budget, and cancelling it midway only leaves it unverified again.
+	var plannedDatabases map[string]struct{}
+	if phase == "expand" {
+		created, ensureErr := ensureServiceDatabasesFn(context.Background(), cmd, rc, sshPool, dryRun, completeInterruptedBaselines)
+		if ensureErr != nil {
+			return fmt.Errorf("service databases: %w", ensureErr)
+		}
+		if dryRun {
+			plannedDatabases = schemaDatabaseNameSet(created)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), migrateTimeout)
 	defer cancel()
 
 	if phase == "postdeploy" || phase == "contract" {
@@ -133,7 +166,7 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	// Minimum-upgrade-version guard: refuse if the cluster is missing any migration
 	// folded below the baseline floor (it would be silently skipped). Runs before
 	// any migration is applied. See docs/standards/schema-migrations.md.
-	if err := runBelowFloorGuard(ctx, rc, sshPool); err != nil {
+	if err := migrateBelowFloorGuardFn(ctx, rc, sshPool, plannedDatabases); err != nil {
 		return err
 	}
 
@@ -141,7 +174,7 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	branchesWithItems := []string{}
 	branchErrors := map[string]error{}
 
-	if pgErr := runMigratePostgresBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, &branchesRun, &branchesWithItems); pgErr != nil {
+	if pgErr := runMigratePostgresBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, plannedDatabases, &branchesRun, &branchesWithItems); pgErr != nil {
 		branchErrors["postgres"] = pgErr
 	}
 
@@ -183,6 +216,14 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 // existing cluster lacking them would be silently stranded. Read-only; fail-closed
 // (a ledger-read failure blocks rather than risk an unsafe upgrade).
 func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool) error {
+	return runBelowFloorGuardExcluding(ctx, rc, sshPool, nil)
+}
+
+// runBelowFloorGuardExcluding is runBelowFloorGuard without the named physical
+// Postgres databases. A dry-run excludes the service databases the release would
+// create: they do not exist yet, and they are born from the current baseline
+// whose marker folds every below-floor migration.
+func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, excluded map[string]struct{}) error {
 	manifest := rc.Manifest
 
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
@@ -198,6 +239,7 @@ func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.P
 			if pg.IsYugabyte() {
 				databases = yugabyteSchemaDatabases(pg.Databases, manifest)
 			}
+			databases = excludeSchemaDatabases(databases, excluded)
 			if len(databases) > 0 {
 				var sharedEnv map[string]string
 				if pg.IsYugabyte() && pg.Password == "" {
@@ -241,7 +283,10 @@ func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.P
 	return nil
 }
 
-func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun bool, phase, target string, branchesRun, branchesWithItems *[]string) error {
+// runMigratePostgresBranch applies one phase of Postgres migrations. plannedDatabases
+// names service databases a dry-run would create first; they do not exist yet, so
+// their ledgers are not read.
+func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun bool, phase, target string, plannedDatabases map[string]struct{}, branchesRun, branchesWithItems *[]string) error {
 	out := cmd.OutOrStdout()
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
@@ -277,6 +322,13 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 	if len(databases) == 0 {
 		fmt.Fprintln(out, "Postgres: no databases configured in manifest.")
 		return nil
+	}
+	if dryRun && len(plannedDatabases) > 0 {
+		databases = excludeSchemaDatabases(databases, plannedDatabases)
+		fmt.Fprintf(out, "Postgres: skipping migration checks for database(s) created by this release: %s\n", strings.Join(sortedKeys(plannedDatabases), ", "))
+		if len(databases) == 0 {
+			return nil
+		}
 	}
 	items, err := provisioner.BuildMigrationItemsForDatabases(databases, phase, target)
 	if err != nil {

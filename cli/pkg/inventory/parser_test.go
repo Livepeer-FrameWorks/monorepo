@@ -644,6 +644,54 @@ hosts:
 	}
 }
 
+func TestParseManifestAlertingObservability(t *testing.T) {
+	data := []byte(`version: v1
+type: cluster
+hosts:
+  central-eu-1:
+    external_ip: 10.0.0.10
+    roles: [infrastructure]
+observability:
+  victoriametrics:
+    enabled: true
+    mode: native
+    host: central-eu-1
+    port: 8428
+  vmalert:
+    enabled: true
+    mode: native
+    host: central-eu-1
+    port: 8880
+  alertmanager:
+    enabled: true
+    mode: native
+    host: central-eu-1
+    port: 9093
+    env_file: ../../secrets/alertmanager.env
+`)
+	manifest, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	vmalert := manifest.Observability["vmalert"]
+	if !vmalert.Enabled || vmalert.Mode != "native" || vmalert.Host != "central-eu-1" || vmalert.Port != 8880 {
+		t.Fatalf("vmalert = %+v", vmalert)
+	}
+	alertmanager := manifest.Observability["alertmanager"]
+	if !alertmanager.Enabled || alertmanager.Mode != "native" || alertmanager.Port != 9093 || alertmanager.EnvFile != "../../secrets/alertmanager.env" {
+		t.Fatalf("alertmanager = %+v", alertmanager)
+	}
+
+	manifest.Observability["alertmanager"] = ServiceConfig{Enabled: true, Hosts: []string{"central-eu-1", "central-eu-2"}}
+	manifest.Hosts["central-eu-2"] = Host{ExternalIP: "10.0.0.11"}
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "Alertmanager runs on a single host") {
+		t.Fatalf("Validate() with two alertmanager hosts = %v, want single-host rejection", err)
+	}
+}
+
 // TestLoadHostInventory_AcceptsAdoptedLocalFields confirms the encrypted
 // inventory parser (strictUnmarshal with KnownFields(true)) accepts the
 // adopted_local markers that `mesh reconcile` writes. Previously the

@@ -148,7 +148,7 @@ func TestApplyServedClustersRefresh_SwapsOutStaleEntriesAndPreservesLocal(t *tes
 	localClusterID = "local-primary"
 	t.Cleanup(func() { localClusterID = prevLocal })
 
-	applyServedClustersRefresh([]string{"cluster-a", "cluster-b", ""})
+	applyServedClustersRefresh([]string{"cluster-a", "cluster-b", ""}, nil)
 	if !isServedCluster("cluster-a") || !isServedCluster("cluster-b") {
 		t.Fatalf("expected both clusters after first refresh")
 	}
@@ -157,7 +157,7 @@ func TestApplyServedClustersRefresh_SwapsOutStaleEntriesAndPreservesLocal(t *tes
 	}
 
 	// cluster-a de-assigned; local-primary must survive even though it is never returned.
-	applyServedClustersRefresh([]string{"cluster-b"})
+	applyServedClustersRefresh([]string{"cluster-b"}, nil)
 
 	if isServedCluster("cluster-a") {
 		t.Fatalf("expected cluster-a to be removed after refresh")

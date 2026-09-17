@@ -73,7 +73,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Player / Studio packages (`npm_player`, `npm_studio`): embeddable playback and ingest components
 - Observability & Operations
   - VictoriaMetrics / Prometheus / Grafana / Metabase: metrics, dashboards, and BI
-  - Lookout (`api_incidents`): deferred incident aggregation service
+  - Lookout (`api_incidents`): incidents from Alertmanager, operator notifications, and tenant incident feed
 
 Principles
 
@@ -194,7 +194,7 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Observability & Operations    | Prometheus               | 9091     | Metrics (CLI deployment only)                                                                                  |
 | Observability & Operations    | Grafana                  | 3000     | Dashboards (CLI deployment only)                                                                               |
 | Observability & Operations    | Metabase                 | 3001     | BI Analytics (CLI deployment only)                                                                             |
-| Observability & Operations    | Lookout (api_incidents)  | 18013    | Deferred incident management service                                                                           |
+| Observability & Operations    | Lookout (api_incidents)  | 18022    | Incidents from Alertmanager and operator notifications (gRPC 19008)                                            |
 
 ## Documentation
 

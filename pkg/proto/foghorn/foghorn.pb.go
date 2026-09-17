@@ -392,12 +392,17 @@ func (x *ApplyMediaAuthorityResponse) GetPlacementCapability() *MediaCellPlaceme
 // placement policy. Commodore gates the first policy-bearing (schema 2) tenant
 // authority on every target cell attesting; it is never permission by itself.
 type MediaCellPlacementCapability struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	SupportedSchemaVersions []uint32               `protobuf:"varint,1,rep,packed,name=supported_schema_versions,json=supportedSchemaVersions,proto3" json:"supported_schema_versions,omitempty"`
-	EnforcementReady        bool                   `protobuf:"varint,2,opt,name=enforcement_ready,json=enforcementReady,proto3" json:"enforcement_ready,omitempty"`
-	LiveReplicas            uint32                 `protobuf:"varint,3,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Versions 1 and 2 only. Commodore releases before node placement treat any
+	// higher value as a malformed attestation, so schema 3 is reported through
+	// node_placement_ready instead.
+	SupportedSchemaVersions []uint32 `protobuf:"varint,1,rep,packed,name=supported_schema_versions,json=supportedSchemaVersions,proto3" json:"supported_schema_versions,omitempty"`
+	EnforcementReady        bool     `protobuf:"varint,2,opt,name=enforcement_ready,json=enforcementReady,proto3" json:"enforcement_ready,omitempty"`
+	LiveReplicas            uint32   `protobuf:"varint,3,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
+	// Every live replica of the cell reads schema-3 authorities (node selectors).
+	NodePlacementReady bool `protobuf:"varint,4,opt,name=node_placement_ready,json=nodePlacementReady,proto3" json:"node_placement_ready,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *MediaCellPlacementCapability) Reset() {
@@ -449,6 +454,13 @@ func (x *MediaCellPlacementCapability) GetLiveReplicas() uint32 {
 		return x.LiveReplicas
 	}
 	return 0
+}
+
+func (x *MediaCellPlacementCapability) GetNodePlacementReady() bool {
+	if x != nil {
+		return x.NodePlacementReady
+	}
+	return false
 }
 
 type InvalidatePlaybackAuthRequest struct {
@@ -794,11 +806,12 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x11authority_version\x18\x04 \x01(\x04R\x10authorityVersion\x12\x1f\n" +
 	"\vrefresh_due\x18\x05 \x01(\bR\n" +
 	"refreshDue\x12X\n" +
-	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xac\x01\n" +
+	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xde\x01\n" +
 	"\x1cMediaCellPlacementCapability\x12:\n" +
 	"\x19supported_schema_versions\x18\x01 \x03(\rR\x17supportedSchemaVersions\x12+\n" +
 	"\x11enforcement_ready\x18\x02 \x01(\bR\x10enforcementReady\x12#\n" +
-	"\rlive_replicas\x18\x03 \x01(\rR\fliveReplicas\"\xc6\x01\n" +
+	"\rlive_replicas\x18\x03 \x01(\rR\fliveReplicas\x120\n" +
+	"\x14node_placement_ready\x18\x04 \x01(\bR\x12nodePlacementReady\"\xc6\x01\n" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +

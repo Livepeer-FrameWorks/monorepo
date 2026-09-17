@@ -22,13 +22,56 @@ type managedPlacementReader interface {
 }
 
 // Managed sources retain their explicit source-cluster election. Placement hard
-// constraints restrict materialization there; they cannot initiate migration or
-// infer publisher geography from a Foghorn or source URL.
-func checkManagedPlacement(ctx context.Context, reader managedPlacementReader, clusterID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) materializeStatus {
-	return checkManagedPlacementAdmission(ctx, reader, clusterID, row, streamCtx, nil)
+// constraints restrict materialization there, per elected node; they cannot
+// initiate migration or infer publisher geography from a Foghorn or source URL.
+func checkManagedPlacement(ctx context.Context, reader managedPlacementReader, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) materializeStatus {
+	return checkManagedPlacementAdmission(ctx, reader, clusterID, nodeID, row, streamCtx, nil)
 }
 
-func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacementReader, clusterID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse, admission **ipcpb.ManagedStreamAdmission) materializeStatus {
+// filterManagedNodesByPlacement drops candidates the signed ingest policy denies
+// before the deterministic election, so a stream is never elected onto a node
+// its admission would refuse while a permitted node exists. Every Foghorn reads
+// the same signed pair, so the filtered election stays identical across peers.
+// A schema-1 pair keeps the input; missing or unreadable evidence is transient.
+func filterManagedNodesByPlacement(ctx context.Context, reader managedPlacementReader, row *commodorepb.ManagedStreamRow, nodes []eligibleNode, now time.Time) ([]eligibleNode, placementStatus) {
+	if reader == nil || len(nodes) == 0 {
+		return nodes, placementOK
+	}
+	if row.GetTenantId() == "" || row.GetStreamId() == "" || row.GetInternalName() == "" {
+		return nil, placementTransient
+	}
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if readCtx.Err() != nil {
+		return nil, placementTransient
+	}
+	pair, err := reader.Placement(readCtx, row.GetTenantId(), sharedauthority.LiveStreamAuthorityID(row.GetStreamId()), row.GetInternalName())
+	if err != nil || readCtx.Err() != nil {
+		return nil, placementTransient
+	}
+	if pair.Tenant.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion && pair.Object.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion {
+		return nodes, placementOK
+	}
+	authority, err := balancer.CompilePlacementAuthority(pair, placement.Ingest, now)
+	if errors.Is(err, balancer.ErrPlacementAuthorityDenied) {
+		return nil, placementOK
+	}
+	if err != nil {
+		return nil, placementTransient
+	}
+	permitted := make([]eligibleNode, 0, len(nodes))
+	for _, node := range nodes {
+		switch sourceDialVerdict(authority.IngestNodeReason(node.clusterID, node.nodeID, now)) {
+		case SourceDialPermitted:
+			permitted = append(permitted, node)
+		case SourceDialUnavailable:
+			return nil, placementTransient
+		}
+	}
+	return permitted, placementOK
+}
+
+func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacementReader, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse, admission **ipcpb.ManagedStreamAdmission) materializeStatus {
 	if admission != nil {
 		*admission = nil
 	}
@@ -61,18 +104,10 @@ func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacement
 	if authority.TenantID != row.GetTenantId() || authority.ObjectID != sharedauthority.LiveStreamAuthorityID(row.GetStreamId()) || authority.InternalName != row.GetInternalName() || authority.IngestMode != row.GetIngestMode() {
 		return materializeTransient
 	}
-	facts, entitled := authority.Clusters[clusterID]
-	if !entitled {
-		return materializeDenied
-	}
-	reason, err := placement.CheckConstraints(placement.Request{TenantID: authority.TenantID, Verb: placement.Ingest, Policy: authority.Policy, Now: time.Now()}, placement.Candidate{
-		TenantID: authority.TenantID, ClusterID: clusterID, OwnerTenantID: facts.OwnerTenantID, Official: facts.Official,
-		Region: facts.Region, AllowedVerbs: facts.AllowedVerbs, Charging: facts.Charging, ChargingRevision: facts.ChargingRevision, ChargingUntil: facts.ChargingUntil,
-	})
-	if err != nil || reason == placement.PolicyFactsUnavailable || reason == placement.UnknownOwnership {
+	switch sourceDialVerdict(authority.IngestNodeReason(clusterID, nodeID, time.Now())) {
+	case SourceDialUnavailable:
 		return materializeTransient
-	}
-	if reason != placement.Eligible {
+	case SourceDialDenied:
 		return materializeDenied
 	}
 	secret, err := reader.OpenLiveStreamSecret(pair.Object)
@@ -107,9 +142,16 @@ func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacement
 	return materializeOK
 }
 
-func checkConfiguredManagedPlacement(ctx context.Context, clusterID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) materializeStatus {
+func checkConfiguredManagedPlacement(ctx context.Context, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) materializeStatus {
 	if store := LocalMediaAuthorityStore(); store != nil {
-		return checkManagedPlacement(ctx, store, clusterID, row, streamCtx)
+		return checkManagedPlacement(ctx, store, clusterID, nodeID, row, streamCtx)
 	}
 	return materializeOK
+}
+
+func filterConfiguredManagedNodes(ctx context.Context, row *commodorepb.ManagedStreamRow, nodes []eligibleNode) ([]eligibleNode, placementStatus) {
+	if store := LocalMediaAuthorityStore(); store != nil {
+		return filterManagedNodesByPlacement(ctx, store, row, nodes, time.Now())
+	}
+	return nodes, placementOK
 }

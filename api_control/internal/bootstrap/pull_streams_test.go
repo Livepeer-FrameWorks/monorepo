@@ -18,29 +18,68 @@ func TestValidatePullStreamShapeChecksSourceURI(t *testing.T) {
 		SourceURI:   "https://ntv1.akamaized.net/hls/live/2014075/NASA-NTV1-HLS/master.m3u8",
 		Enabled:     true,
 	}
-	if _, err := validatePullStreamShape(ps); err != nil {
+	if _, _, err := validatePullStreamShape(ps); err != nil {
 		t.Fatalf("validatePullStreamShape: %v", err)
 	}
 
 	ps.SourceURI = "https://example.com/live"
-	if _, err := validatePullStreamShape(ps); err == nil {
+	if _, _, err := validatePullStreamShape(ps); err == nil {
 		t.Fatal("expected source_uri validation error")
 	}
 }
 
-// TestValidatePullStreamPlacement_PrivateRequiresExplicitAllowedClusters locks
-// the per-source placement invariant. A private URI:
-//   - with empty allowed_cluster_ids must fail (no implicit fallback)
-//   - pinned to a non-opted-in cluster must fail (missing capability)
-//   - pinned to an opted-in cluster must pass
-func TestValidatePullStreamPlacement_PrivateRequiresExplicitAllowedClusters(t *testing.T) {
+func TestValidatePullStreamShapeReadsSourceLocation(t *testing.T) {
+	ps := PullStream{
+		PlaybackID:  "lan-camera",
+		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:       "LAN camera",
+		SourceURI:   "rtsp://10.0.0.5/live",
+		SourceLocation: &SourceLocation{
+			Clusters:     []SourceLocationCluster{{ClusterID: "warehouse-edge", NodeIDs: []string{"gw-2", "gw-1"}}, {ClusterID: "backup-edge"}},
+			AvoidNodeIDs: []string{"gw-9"},
+		},
+	}
+	_, location, err := validatePullStreamShape(ps)
+	if err != nil {
+		t.Fatalf("shape: %v", err)
+	}
+	if strings.Join(location.ClusterIDs(), ",") != "backup-edge,warehouse-edge" || strings.Join(location.Clusters[1].NodeIDs, ",") != "gw-1,gw-2" || strings.Join(location.AvoidNodeIDs, ",") != "gw-9" {
+		t.Fatalf("canonical location = %+v", location)
+	}
+
+	ps.SourceLocation = &SourceLocation{}
+	if _, _, err := validatePullStreamShape(ps); err == nil || !strings.Contains(err.Error(), "source location") {
+		t.Fatalf("empty source_location accepted: %v", err)
+	}
+	ps.SourceLocation = &SourceLocation{Clusters: []SourceLocationCluster{{ClusterID: "warehouse-edge", NodeIDs: []string{"gw-1"}}}, AvoidNodeIDs: []string{"gw-1"}}
+	if _, _, err := validatePullStreamShape(ps); err == nil || !strings.Contains(err.Error(), "both allowed and avoided") {
+		t.Fatalf("node both allowed and avoided accepted: %v", err)
+	}
+}
+
+func TestValidatePullStreamShapeRejectsLegacyAllowedClusterIDs(t *testing.T) {
+	ps := validPullStream()
+	empty := []string{}
+	ps.LegacyAllowedClusterIDs = &empty
+	_, _, err := validatePullStreamShape(ps)
+	if err == nil || !strings.Contains(err.Error(), "allowed_cluster_ids") || !strings.Contains(err.Error(), "source_location") {
+		t.Fatalf("legacy allowed_cluster_ids error = %v", err)
+	}
+}
+
+// TestValidatePullStreamPlacement_PrivateRequiresConsentedClusters locks the
+// per-source placement invariant. A private URI:
+//   - without source_location clusters must fail (no implicit fallback)
+//   - restricted to a non-opted-in cluster must fail (missing capability)
+//   - restricted to an opted-in cluster must pass
+func TestValidatePullStreamPlacement_PrivateRequiresConsentedClusters(t *testing.T) {
 	ps := PullStream{
 		PlaybackID:  "private-demo",
 		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
 		Title:       "Private demo",
 		SourceURI:   "tsudp://10.0.0.5:9000",
 	}
-	class, err := validatePullStreamShape(ps)
+	class, _, err := validatePullStreamShape(ps)
 	if err != nil {
 		t.Fatalf("shape: %v", err)
 	}
@@ -53,27 +92,17 @@ func TestValidatePullStreamPlacement_PrivateRequiresExplicitAllowedClusters(t *t
 		{ID: "selfhost-edge", AllowPrivatePullSources: true},
 	}
 
-	// empty allowed list ⇒ private rejected
-	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
-		t.Fatal("private URI with empty allowed_cluster_ids must fail placement")
+	if err := validatePullStreamPlacement(ps, class, nil, candidates); err == nil || !strings.Contains(err.Error(), "source_location") {
+		t.Fatalf("private URI without source_location clusters must fail placement: %v", err)
 	}
-
-	// pinned to non-opted-in ⇒ rejected for missing capability
-	ps.AllowedClusterIDs = []string{"demo-media"}
-	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
-		t.Fatal("private URI pinned to cluster without capability must fail placement")
+	if err := validatePullStreamPlacement(ps, class, []string{"demo-media"}, candidates); err == nil {
+		t.Fatal("private URI restricted to cluster without capability must fail placement")
 	}
-
-	// pinned to opted-in ⇒ pass
-	ps.AllowedClusterIDs = []string{"selfhost-edge"}
-	if err := validatePullStreamPlacement(ps, class, candidates); err != nil {
-		t.Fatalf("private URI pinned to opted-in cluster should pass: %v", err)
+	if err := validatePullStreamPlacement(ps, class, []string{"selfhost-edge"}, candidates); err != nil {
+		t.Fatalf("private URI restricted to opted-in cluster should pass: %v", err)
 	}
-
-	// unknown id ⇒ rejected
-	ps.AllowedClusterIDs = []string{"ghost-cluster"}
-	if err := validatePullStreamPlacement(ps, class, candidates); err == nil {
-		t.Fatal("unknown allowed_cluster_ids entry must fail placement")
+	if err := validatePullStreamPlacement(ps, class, []string{"ghost-cluster"}, candidates); err == nil {
+		t.Fatal("unknown source_location cluster must fail placement")
 	}
 }
 
@@ -94,9 +123,9 @@ func (fakeCipher) Decrypt(stored string) (string, error) {
 	return strings.TrimPrefix(stored, "enc:"), nil
 }
 
-// TestReconcilePullStreamRefusesPushToPullConversion locks the safety check at
-// pull_streams.go:120-122 — converting an existing push stream to pull is
-// destructive (would orphan stream key, change ingest semantics) so it errors.
+// TestReconcilePullStreamRefusesPushToPullConversion locks the safety check that
+// converting an existing push stream to pull is destructive (would orphan the
+// stream key, change ingest semantics) so it errors.
 func TestReconcilePullStreamRefusesPushToPullConversion(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -117,7 +146,7 @@ func TestReconcilePullStreamRefusesPushToPullConversion(t *testing.T) {
 		SourceURI:   "rtsp://example.com/live",
 		Enabled:     true,
 	}
-	_, err = reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	_, _, err = reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, nil, fakeCipher{})
 	if err == nil {
 		t.Fatal("expected refusal error, got nil")
 	}
@@ -155,7 +184,7 @@ func TestCreatePullStreamFailsClearlyWithoutOwner(t *testing.T) {
 		SourceURI:   "rtsp://example.com/live",
 		Enabled:     true,
 	}
-	_, err = reconcilePullStream(context.Background(), db, tenantID, "acme", ps, fakeCipher{})
+	_, _, err = reconcilePullStream(context.Background(), db, tenantID, "acme", ps, nil, fakeCipher{})
 	if err == nil {
 		t.Fatal("expected missing-owner error, got nil")
 	}
@@ -197,22 +226,22 @@ func TestReconcilePullStreamEncryptsBeforeUpsert(t *testing.T) {
 		SourceURI:   plaintextURI,
 		Enabled:     true,
 	}
-	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	action, gotStreamID, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, nil, fakeCipher{})
 	if err != nil {
 		t.Fatalf("reconcilePullStream: %v", err)
 	}
-	if action != "noop" {
-		t.Fatalf("action = %q, want noop (encrypt/decrypt round-trip should match)", action)
+	if action != "noop" || gotStreamID != streamID {
+		t.Fatalf("action = %q stream %q, want noop %q (encrypt/decrypt round-trip should match)", action, gotStreamID, streamID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
 
-// TestReconcilePullStreamNoopWithSameAllowedClusters verifies the idempotent
-// compare extends to allowed_cluster_ids: same set in stored row and incoming
-// desired-state ⇒ noop, no UPDATE issued.
-func TestReconcilePullStreamNoopWithSameAllowedClusters(t *testing.T) {
+// TestReconcilePullStreamNoopWithSameSourceLocationClusters verifies the
+// idempotent compare covers the mirrored pin column: the same cluster set in
+// the stored row and the declared source location ⇒ noop, no UPDATE issued.
+func TestReconcilePullStreamNoopWithSameSourceLocationClusters(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -230,14 +259,13 @@ func TestReconcilePullStreamNoopWithSameAllowedClusters(t *testing.T) {
 			AddRow(streamID, "Demo", "", "pull", storedCiphertext, true, "{warehouse-edge}"))
 
 	ps := PullStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		SourceURI:         plaintextURI,
-		Enabled:           true,
-		AllowedClusterIDs: []string{"warehouse-edge"},
+		PlaybackID:  "demo",
+		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:       "Demo",
+		SourceURI:   plaintextURI,
+		Enabled:     true,
 	}
-	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	action, _, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, []string{"warehouse-edge"}, fakeCipher{})
 	if err != nil {
 		t.Fatalf("reconcilePullStream: %v", err)
 	}
@@ -249,9 +277,9 @@ func TestReconcilePullStreamNoopWithSameAllowedClusters(t *testing.T) {
 	}
 }
 
-// TestReconcilePullStreamUpdatesWhenAllowedClustersChange verifies a diff in
-// allowed_cluster_ids alone is enough to trigger the upsert.
-func TestReconcilePullStreamUpdatesWhenAllowedClustersChange(t *testing.T) {
+// TestReconcilePullStreamUpdatesWhenSourceLocationClustersChange verifies a
+// diff in the mirrored cluster set alone is enough to trigger the upsert.
+func TestReconcilePullStreamUpdatesWhenSourceLocationClustersChange(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -272,14 +300,13 @@ func TestReconcilePullStreamUpdatesWhenAllowedClustersChange(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	ps := PullStream{
-		PlaybackID:        "demo",
-		OwnerTenant:       TenantRef{Ref: "quartermaster.system_tenant"},
-		Title:             "Demo",
-		SourceURI:         plaintextURI,
-		Enabled:           true,
-		AllowedClusterIDs: []string{"warehouse-edge"},
+		PlaybackID:  "demo",
+		OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
+		Title:       "Demo",
+		SourceURI:   plaintextURI,
+		Enabled:     true,
 	}
-	action, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, fakeCipher{})
+	action, _, err := reconcilePullStream(context.Background(), db, tenantID, "frameworks", ps, []string{"warehouse-edge"}, fakeCipher{})
 	if err != nil {
 		t.Fatalf("reconcilePullStream: %v", err)
 	}

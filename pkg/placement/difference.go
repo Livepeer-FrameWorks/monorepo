@@ -143,6 +143,9 @@ func describeSelector(selector Selector) string {
 	if len(selector.ClusterIDs) > 0 {
 		parts = append(parts, "clusters: "+strings.Join(selector.ClusterIDs, ", "))
 	}
+	if len(selector.NodeIDs) > 0 {
+		parts = append(parts, "nodes: "+strings.Join(selector.NodeIDs, ", "))
+	}
 	if len(selector.OwnerIDs) > 0 {
 		parts = append(parts, "owners: "+strings.Join(selector.OwnerIDs, ", "))
 	}

@@ -689,8 +689,12 @@ func assertGRPCCode(t *testing.T, err error, expected codes.Code) {
 }
 
 func expectServiceEventOutbox(mock sqlmock.Sqlmock, eventType, tenantID string) {
+	scope := "tenant"
+	if tenantID == "" {
+		scope = "platform"
+	}
 	mock.ExpectQuery("INSERT INTO quartermaster.service_event_outbox").
-		WithArgs(eventType, tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(eventType, tenantID, scope, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("outbox-1"))
 }
 

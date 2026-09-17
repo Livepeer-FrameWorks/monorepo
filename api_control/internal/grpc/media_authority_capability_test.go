@@ -22,7 +22,12 @@ func TestAttestedCellPlacementCapabilityNormalizesAcknowledgements(t *testing.T)
 		{"legacy only", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1}, EnforcementReady: true, LiveReplicas: 1}, 1, false},
 		{"schema 2 not enforcing", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, LiveReplicas: 1}, 2, false},
 		{"schema 2 without replicas", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, EnforcementReady: true}, 2, false},
-		{"unknown schema", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{2, 3}, EnforcementReady: true, LiveReplicas: 1}, 1, false},
+		{"unknown schema", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{2, 4}, EnforcementReady: true, LiveReplicas: 1}, 1, false},
+		{"node placement ready", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{2, 1}, EnforcementReady: true, LiveReplicas: 2, NodePlacementReady: true}, 3, true},
+		{"node placement without enforcement", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, LiveReplicas: 2, NodePlacementReady: true}, 2, false},
+		// Schema 3 travels as NodePlacementReady; a listed 3 is malformed, exactly
+		// as releases without node placement read it.
+		{"listed schema 3", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2, 3}, EnforcementReady: true, LiveReplicas: 2}, 1, false},
 		{"implausible replicas", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{2}, EnforcementReady: true, LiveReplicas: 1 << 21}, 1, false},
 		{"ready", &foghornpb.MediaCellPlacementCapability{SupportedSchemaVersions: []uint32{2, 1}, EnforcementReady: true, LiveReplicas: 2}, 2, true},
 	} {

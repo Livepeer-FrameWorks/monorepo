@@ -21,16 +21,19 @@ type Querier interface {
 	ClaimNavigatorCustomDomainOutboxBatch(ctx context.Context, arg ClaimNavigatorCustomDomainOutboxBatchParams) ([]ClaimNavigatorCustomDomainOutboxBatchRow, error)
 	ClaimNavigatorTenantAliasOutboxBatch(ctx context.Context, arg ClaimNavigatorTenantAliasOutboxBatchParams) ([]ClaimNavigatorTenantAliasOutboxBatchRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
-	ClearBootstrapDefaultCluster(ctx context.Context) error
+	// Clears the default flag on every cluster except the one that stays default,
+	// so replaying the same desired state leaves that row unchanged.
+	ClearBootstrapDefaultCluster(ctx context.Context, keepClusterID string) error
 	ClearDefaultCluster(ctx context.Context) error
 	CompleteBillingEntitlementHandoff(ctx context.Context, arg CompleteBillingEntitlementHandoffParams) (int64, error)
 	CompleteMediaAuthorityRefresh(ctx context.Context, id string) (int64, error)
 	CompleteNavigatorCustomDomainOutbox(ctx context.Context, id string) error
 	CompleteNavigatorTenantAliasOutbox(ctx context.Context, id string) error
-	CompleteServiceEventOutbox(ctx context.Context, id string) error
+	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
 	ConsumeServiceBootstrapToken(ctx context.Context, tokenHash string) (int64, error)
 	CountPendingNavigatorCustomDomainOutbox(ctx context.Context) (int64, error)
 	CountPendingNavigatorTenantAliasOutbox(ctx context.Context) (int64, error)
+	CountTenantOwnedClusters(ctx context.Context, tenantID string) (int64, error)
 	CreateClusterInviteRecord(ctx context.Context, arg CreateClusterInviteRecordParams) error
 	CreateInfrastructureCluster(ctx context.Context, arg CreateInfrastructureClusterParams) error
 	CreateServiceCatalogEntry(ctx context.Context, arg CreateServiceCatalogEntryParams) error
@@ -90,7 +93,6 @@ type Querier interface {
 	GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerPolicyRow, error)
 	GetTenantBillingEntitlementCensus(ctx context.Context) (GetTenantBillingEntitlementCensusRow, error)
 	GetTenantClusterAccessState(ctx context.Context, arg GetTenantClusterAccessStateParams) (string, error)
-	GetTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (GetTenantClusterOwnershipLimitRow, error)
 	GetTenantClusterResourceLimits(ctx context.Context, arg GetTenantClusterResourceLimitsParams) (json.RawMessage, error)
 	GetTenantCustomDomainEligibility(ctx context.Context, tenantID string) (GetTenantCustomDomainEligibilityRow, error)
 	GetTenantName(ctx context.Context, tenantID string) (string, error)
@@ -143,13 +145,20 @@ type Querier interface {
 	LockServiceType(ctx context.Context, serviceType string) error
 	LockTenantAliasEligibility(ctx context.Context, tenantID string) (LockTenantAliasEligibilityRow, error)
 	LockTenantBillingEntitlements(ctx context.Context, tenantID string) (LockTenantBillingEntitlementsRow, error)
+	// Owned-cluster creation writes the tenant row rather than only locking it.
+	// Under snapshot isolation a row lock released by a committed transaction does
+	// not invalidate the waiter's older snapshot, but a committed write does: the
+	// waiter fails with 40001 and its replay counts from a fresh snapshot. Under
+	// READ COMMITTED the write blocks, and the caller's later count statement
+	// observes the previous holder's committed insert.
+	LockTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (LockTenantClusterOwnershipLimitRow, error)
 	LockTenantPreviousValues(ctx context.Context, tenantID string) (LockTenantPreviousValuesRow, error)
 	LockTenantProvisioningKey(ctx context.Context, provisioningKey string) error
 	MarkClusterProvisioning(ctx context.Context, clusterID string) error
 	MarkNavigatorCustomDomainOutboxClaimed(ctx context.Context, ids []string) error
 	MarkNavigatorTenantAliasOutboxClaimed(ctx context.Context, ids []string) error
 	MarkNodeEdgeInstancesOffline(ctx context.Context, nodeID sql.NullString) error
-	MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error
+	MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkServiceEventOutboxClaimedParams) error
 	MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) (int64, error)
 	MoveBootstrapNode(ctx context.Context, arg MoveBootstrapNodeParams) error
 	MoveBootstrapNodeIngressSites(ctx context.Context, arg MoveBootstrapNodeIngressSitesParams) error

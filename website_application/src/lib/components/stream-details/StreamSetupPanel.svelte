@@ -8,6 +8,8 @@
   import { toast } from "$lib/stores/toast";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import RecommendedIngest from "$lib/components/placement/RecommendedIngest.svelte";
+  import SourceLocationSummary from "./SourceLocationSummary.svelte";
+  import type { SourceLocationValue } from "$lib/source-location";
 
   interface Stream {
     streamId?: string | null;
@@ -22,8 +24,8 @@
       sourceKind: string;
       alwaysOn: boolean;
       placementCount: number;
-      allowedClusterIds: string[];
     } | null;
+    sourceLocation?: SourceLocationValue | null;
     recentPullSourceEvents?: Array<{
       id: string;
       internalName: string;
@@ -51,6 +53,7 @@
     stream: Stream;
     streamKeys?: StreamKey[];
     clusterOptions?: ClusterOption[];
+    placementHref?: string;
     onRefreshKey?: () => void;
     refreshingKey?: boolean;
     onCreateKey?: () => void;
@@ -63,6 +66,7 @@
     stream,
     streamKeys = [],
     clusterOptions = [],
+    placementHref,
     onRefreshKey: _onRefreshKey,
     refreshingKey: _refreshingKey = false,
     onCreateKey,
@@ -174,6 +178,10 @@
           </Button>
         </div>
         <div class="mt-4 border-t border-border/30 pt-4">
+          <h4 class="font-medium text-sm mb-2">Source location</h4>
+          <SourceLocationSummary location={stream.sourceLocation} {clusterName} {placementHref} />
+        </div>
+        <div class="mt-4 border-t border-border/30 pt-4">
           <div class="flex items-center gap-2 mb-2">
             <ActivityIcon class="w-4 h-4 text-info" />
             <h4 class="font-medium text-sm">Recent source resolution</h4>
@@ -227,17 +235,9 @@
         </div>
         <div>
           <p class="text-sm font-medium">Source location</p>
-          {#if stream.managedSource?.allowedClusterIds.length}
-            <div class="mt-2 flex flex-wrap gap-2">
-              {#each stream.managedSource.allowedClusterIds as clusterId (clusterId)}
-                <Badge variant="secondary" class="text-xs" title={clusterId}>
-                  {clusterName(clusterId)}
-                </Badge>
-              {/each}
-            </div>
-          {:else}
-            <p class="mt-1 text-sm text-muted-foreground">No source cluster is exposed.</p>
-          {/if}
+          <div class="mt-2">
+            <SourceLocationSummary location={stream.sourceLocation} {clusterName} />
+          </div>
         </div>
         <p class="text-sm text-muted-foreground">
           Source paths and process commands are intentionally hidden. Change this source in the

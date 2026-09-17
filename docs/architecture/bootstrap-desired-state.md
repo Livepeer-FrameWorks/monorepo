@@ -457,6 +457,67 @@ Commodore reconciler semantics for any user under `accounts[*].users`:
 
 ---
 
+## Section: `commodore`
+
+### `source_location` on `pull_streams` and `mist_native_streams`
+
+Where an operator-declared stream's source may run is declared as `source_location`:
+
+```yaml
+commodore:
+  pull_streams:
+    - playback_id: warehouse-cam
+      owner_tenant: { ref: quartermaster.tenants[northwind] }
+      title: Warehouse Camera
+      source_uri_ref: { sops: gitops/secrets/northwind.env, key: WAREHOUSE_CAM_URI }
+      enabled: true
+      source_location:
+        clusters: [northwind-private-eu] # manifest cluster keys
+        nodes: [northwind-edge-1] # optional: manifest host keys inside a listed cluster
+        avoid_nodes: [northwind-edge-3] # optional: hosts the source must never run on
+  mist_native_streams:
+    - playback_id: demo
+      owner_tenant: { ref: quartermaster.system_tenant }
+      # ...
+      source_location:
+        clusters: [media-eu-1] # exactly one cluster
+```
+
+- An absent `source_location` is ANY: a public pull source may run on any media cluster. A private
+  or multicast `source_uri` requires `clusters`, and every listed cluster must declare
+  `allow_private_pull_sources: true`.
+- `nodes` and `avoid_nodes` require `clusters`. Each entry must be a manifest host with a node
+  identity whose cluster is listed; a host cannot be in both lists. `nodes` narrows its own
+  cluster only, so a location can allow every node of one cluster and two nodes of another.
+- `mist_native_streams` require exactly one cluster.
+- The retired `allowed_cluster_ids` key is rejected at render, and by `commodore bootstrap` on a
+  stale rendered file, with a message naming `source_location`.
+
+The renderer maps each node to its cluster and emits
+`source_location: {clusters: [{cluster_id, node_ids}], avoid_node_ids}`. After the pull and
+Mist-native stream rows are reconciled in the same transaction, `commodore bootstrap` writes each
+location as that stream's own ingest placement rules through the placement store's system path
+(actor `system:bootstrap`): one allow alternative per cluster, restricted to its nodes when listed,
+and one deny selector for avoided nodes. The comparison runs under the placement locks and an
+unchanged location writes nothing; the result is printed as
+`stream source_locations: updated=N noop=N`, including under `--dry-run`. Bootstrap owns the
+placement of the streams it declares: it replaces own ingest constraints that the API would report
+as CUSTOM, and keeps ingest preferences and serve rules. The listed clusters are also mirrored into
+the source's `allowed_cluster_ids` column while the pin columns exist.
+
+Declared streams belong to the system tenant or the named customer tenant. A stream's authority is
+compiled with node selectors only once its tenant authority is at placement schema 3, which
+requires every target media cell to attest node placement. Before opening its transaction,
+`commodore bootstrap` therefore runs the API's node selector gate for every owner whose declared
+locations name nodes (`node_ids` or `avoid_node_ids`): every media cell the owner's tenant
+authority targets must attest node placement, re-asked directly when a stored attestation is
+missing, and a customer tenant may name only nodes of edge clusters it owns (the system tenant may
+name any node). A refusal exits non-zero before any write, under apply and `--dry-run` alike, and
+names the requirement: upgrade Foghorn in every cell, then rerun bootstrap. `--check` is offline;
+it lists each stream whose location names nodes as needing node placement at apply.
+
+---
+
 ## Secret references
 
 Any field carrying a secret value uses a reference, never a literal in committed files:

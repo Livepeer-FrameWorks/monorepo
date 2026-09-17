@@ -12,6 +12,42 @@ import (
 	"github.com/lib/pq"
 )
 
+const completeTenantCustomDomainIssuance = `-- name: CompleteTenantCustomDomainIssuance :execrows
+UPDATE navigator.tenant_custom_domains
+SET status = 'cert_issued',
+    cert_issued_at = NOW(),
+    issuer_id = NULLIF($1::text, ''),
+    cert_expires_at = $2,
+    last_error = NULL,
+    next_attempt_at = NULL,
+    last_renewal_error = NULL,
+    last_renewal_error_at = NULL,
+    updated_at = NOW()
+WHERE tenant_id = $3::uuid
+  AND domain = $4
+  AND status = 'cert_issuing'
+`
+
+type CompleteTenantCustomDomainIssuanceParams struct {
+	IssuerID      string       `db:"issuer_id" json:"issuer_id"`
+	CertExpiresAt sql.NullTime `db:"cert_expires_at" json:"cert_expires_at"`
+	TenantID      string       `db:"tenant_id" json:"tenant_id"`
+	Domain        string       `db:"domain" json:"domain"`
+}
+
+func (q *Queries) CompleteTenantCustomDomainIssuance(ctx context.Context, arg CompleteTenantCustomDomainIssuanceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeTenantCustomDomainIssuance,
+		arg.IssuerID,
+		arg.CertExpiresAt,
+		arg.TenantID,
+		arg.Domain,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTenantCustomDomain = `-- name: DeleteTenantCustomDomain :exec
 DELETE FROM navigator.tenant_custom_domains
 WHERE tenant_id = $1::uuid AND domain = $2
@@ -42,10 +78,17 @@ ON CONFLICT (tenant_id, domain) DO UPDATE SET
                            THEN NULL ELSE navigator.tenant_custom_domains.cert_expires_at END,
     last_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
                       THEN NULL ELSE navigator.tenant_custom_domains.last_error END,
+    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                              THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error END,
+    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                                 THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error_at END,
+    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                           THEN NULL ELSE navigator.tenant_custom_domains.next_attempt_at END,
     updated_at = NOW()
 RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
           last_verified_at, cert_issued_at, cert_expires_at, last_error,
-          created_at, updated_at
+          created_at, updated_at, last_renewal_error, last_renewal_error_at,
+          next_attempt_at
 `
 
 type EnsureTenantCustomDomainParams struct {
@@ -69,8 +112,42 @@ func (q *Queries) EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenant
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastRenewalError,
+		&i.LastRenewalErrorAt,
+		&i.NextAttemptAt,
 	)
 	return i, err
+}
+
+const failTenantCustomDomainIssuance = `-- name: FailTenantCustomDomainIssuance :execrows
+UPDATE navigator.tenant_custom_domains
+SET status = 'cert_failed',
+    last_error = NULLIF($1::text, ''),
+    next_attempt_at = NOW() + $2::bigint * INTERVAL '1 second',
+    updated_at = NOW()
+WHERE tenant_id = $3::uuid
+  AND domain = $4
+  AND status = 'cert_issuing'
+`
+
+type FailTenantCustomDomainIssuanceParams struct {
+	ErrMsg            string `db:"err_msg" json:"err_msg"`
+	RetryAfterSeconds int64  `db:"retry_after_seconds" json:"retry_after_seconds"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	Domain            string `db:"domain" json:"domain"`
+}
+
+func (q *Queries) FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failTenantCustomDomainIssuance,
+		arg.ErrMsg,
+		arg.RetryAfterSeconds,
+		arg.TenantID,
+		arg.Domain,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const finalizeTenantCustomDomainRemoval = `-- name: FinalizeTenantCustomDomainRemoval :execrows
@@ -95,7 +172,7 @@ WITH teardown_authority AS MATERIALIZED (
           FROM navigator.tenant_custom_domains AS other_domain
           WHERE other_domain.tenant_id = teardown_authority.tenant_id
             AND other_domain.domain <> teardown_authority.domain
-            AND other_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+            AND other_domain.status IN ('verified', 'pending_alias', 'cert_issuing', 'cert_issued', 'cert_failed')
       )
 )
 DELETE FROM navigator.tenant_custom_domains AS custom_domain
@@ -121,7 +198,8 @@ func (q *Queries) FinalizeTenantCustomDomainRemoval(ctx context.Context, arg Fin
 const getTenantCustomDomain = `-- name: GetTenantCustomDomain :one
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = $1::uuid AND domain = $2
 `
@@ -146,6 +224,9 @@ func (q *Queries) GetTenantCustomDomain(ctx context.Context, arg GetTenantCustom
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LastRenewalError,
+		&i.LastRenewalErrorAt,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }
@@ -153,7 +234,8 @@ func (q *Queries) GetTenantCustomDomain(ctx context.Context, arg GetTenantCustom
 const listTenantCustomDomains = `-- name: ListTenantCustomDomains :many
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = $1::uuid
 ORDER BY domain ASC
@@ -180,6 +262,9 @@ func (q *Queries) ListTenantCustomDomains(ctx context.Context, tenantID string) 
 			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LastRenewalError,
+			&i.LastRenewalErrorAt,
+			&i.NextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -197,7 +282,8 @@ func (q *Queries) ListTenantCustomDomains(ctx context.Context, tenantID string) 
 const listTenantCustomDomainsByStatus = `-- name: ListTenantCustomDomainsByStatus :many
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
-       created_at, updated_at
+       created_at, updated_at, last_renewal_error, last_renewal_error_at,
+       next_attempt_at
 FROM navigator.tenant_custom_domains
 WHERE status = ANY($1::text[])
 ORDER BY updated_at ASC
@@ -224,6 +310,9 @@ func (q *Queries) ListTenantCustomDomainsByStatus(ctx context.Context, statuses 
 			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LastRenewalError,
+			&i.LastRenewalErrorAt,
+			&i.NextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -238,31 +327,53 @@ func (q *Queries) ListTenantCustomDomainsByStatus(ctx context.Context, statuses 
 	return items, nil
 }
 
-const setTenantCustomDomainCertMetadata = `-- name: SetTenantCustomDomainCertMetadata :execrows
+const recordTenantCustomDomainRenewalFailure = `-- name: RecordTenantCustomDomainRenewalFailure :execrows
+UPDATE navigator.tenant_custom_domains
+SET last_renewal_error = NULLIF($1::text, ''),
+    last_renewal_error_at = NOW(),
+    updated_at = NOW()
+WHERE tenant_id = $2::uuid
+  AND status IN ('cert_issuing', 'cert_issued')
+`
+
+type RecordTenantCustomDomainRenewalFailureParams struct {
+	ErrMsg   string `db:"err_msg" json:"err_msg"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) RecordTenantCustomDomainRenewalFailure(ctx context.Context, arg RecordTenantCustomDomainRenewalFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordTenantCustomDomainRenewalFailure, arg.ErrMsg, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const refreshTenantCustomDomainServedCertificate = `-- name: RefreshTenantCustomDomainServedCertificate :execrows
 UPDATE navigator.tenant_custom_domains
 SET issuer_id = NULLIF($1::text, ''),
     cert_expires_at = $2,
+    last_renewal_error = NULL,
+    last_renewal_error_at = NULL,
     updated_at = NOW()
 WHERE tenant_id = $3::uuid
-  AND domain = $4
-  AND status = $5
+  AND status IN ('cert_issuing', 'cert_issued')
+  AND domain = ANY($4::text[])
 `
 
-type SetTenantCustomDomainCertMetadataParams struct {
-	IssuerID       string       `db:"issuer_id" json:"issuer_id"`
-	CertExpiresAt  sql.NullTime `db:"cert_expires_at" json:"cert_expires_at"`
-	TenantID       string       `db:"tenant_id" json:"tenant_id"`
-	Domain         string       `db:"domain" json:"domain"`
-	ExpectedStatus string       `db:"expected_status" json:"expected_status"`
+type RefreshTenantCustomDomainServedCertificateParams struct {
+	IssuerID      string       `db:"issuer_id" json:"issuer_id"`
+	CertExpiresAt sql.NullTime `db:"cert_expires_at" json:"cert_expires_at"`
+	TenantID      string       `db:"tenant_id" json:"tenant_id"`
+	Domains       []string     `db:"domains" json:"domains"`
 }
 
-func (q *Queries) SetTenantCustomDomainCertMetadata(ctx context.Context, arg SetTenantCustomDomainCertMetadataParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setTenantCustomDomainCertMetadata,
+func (q *Queries) RefreshTenantCustomDomainServedCertificate(ctx context.Context, arg RefreshTenantCustomDomainServedCertificateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, refreshTenantCustomDomainServedCertificate,
 		arg.IssuerID,
 		arg.CertExpiresAt,
 		arg.TenantID,
-		arg.Domain,
-		arg.ExpectedStatus,
+		pq.Array(arg.Domains),
 	)
 	if err != nil {
 		return 0, err
@@ -276,6 +387,7 @@ SET status = $1,
     last_verified_at = CASE WHEN $1 = 'verified' THEN NOW() ELSE last_verified_at END,
     cert_issued_at = CASE WHEN $1 = 'cert_issued' THEN NOW() ELSE cert_issued_at END,
     last_error = NULLIF($2::text, ''),
+    next_attempt_at = CASE WHEN $1 = 'cert_failed' THEN next_attempt_at ELSE NULL END,
     updated_at = NOW()
 WHERE tenant_id = $3::uuid
   AND domain = $4

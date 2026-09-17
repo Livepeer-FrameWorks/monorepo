@@ -11,9 +11,12 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-)
+	lookoutpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/lookout"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
-const defaultLookoutTopic = "lookout.incidents"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
 
 type ThresholdTrigger struct {
 	agent              *Agent
@@ -26,17 +29,38 @@ type ThresholdTrigger struct {
 	considerActiveOnly bool
 }
 
-type LookoutTrigger struct {
-	Consumer *kafka.Consumer
-	Agent    *Agent
-	Logger   logging.Logger
-	Topic    string
+// LookoutConsumer is the part of kafka.Consumer the Lookout trigger drives.
+type LookoutConsumer interface {
+	AddHandler(topic string, handler kafka.Handler)
+	Start(ctx context.Context) error
 }
 
+// IncidentAttacher links a persisted investigation report to its Lookout
+// incident. pkg/clients/lookout.GRPCClient satisfies it.
+type IncidentAttacher interface {
+	AttachInvestigation(ctx context.Context, incidentID, tenantID, reportID string) (*lookoutpb.IncidentMutationResponse, error)
+}
+
+type LookoutTrigger struct {
+	Consumer LookoutConsumer
+	Agent    *Agent
+	Lookout  IncidentAttacher
+	Logger   logging.Logger
+	// Topic defaults to topology.TopicLookoutIncidents.
+	Topic string
+	// AttachBackoff is the wait before each AttachInvestigation retry; nil uses
+	// defaultAttachBackoff.
+	AttachBackoff []time.Duration
+}
+
+var defaultAttachBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
 type lookoutIncident struct {
-	TenantID string `json:"tenant_id"`
-	Summary  string `json:"summary"`
-	Severity string `json:"severity"`
+	IncidentID string `json:"incident_id"`
+	TenantID   string `json:"tenant_id"`
+	ClusterID  string `json:"cluster_id"`
+	Severity   string `json:"severity"`
+	Summary    string `json:"summary"`
 }
 
 func NewThresholdTrigger(agent *Agent) *ThresholdTrigger {
@@ -113,7 +137,7 @@ func (t *LookoutTrigger) Start(ctx context.Context) error {
 	}
 	topic := t.Topic
 	if topic == "" {
-		topic = defaultLookoutTopic
+		topic = topology.TopicLookoutIncidents
 	}
 	t.Consumer.AddHandler(topic, t.handleIncident)
 	return t.Consumer.Start(ctx)
@@ -137,7 +161,9 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 		}
 		return nil
 	}
-	if incident.TenantID == "" {
+	// Investigations are tenant-scoped: every tool call needs the tenant, and
+	// the report is attached back to a specific incident.
+	if incident.TenantID == "" || incident.IncidentID == "" {
 		return nil
 	}
 	tm := t.Agent.resolveTenant(ctx, incident.TenantID)
@@ -156,7 +182,7 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 	if reason == "" {
 		reason = fmt.Sprintf("Lookout incident severity=%s", incident.Severity)
 	}
-	report, tokens, err := t.Agent.Investigate(ctx, incident.TenantID, "lookout", reason, snapshot, nil, nil)
+	report, reportID, tokens, err := t.Agent.Investigate(ctx, incident.TenantID, "lookout", reason, snapshot, nil, nil)
 	if logErr := t.Agent.logUsage(ctx, incident.TenantID, tokens, err != nil); logErr != nil {
 		if t.Logger != nil {
 			t.Logger.WithError(logErr).WithField("tenant_id", incident.TenantID).Warn("Lookout usage logging failed")
@@ -170,8 +196,61 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 		return nil
 	}
 	if t.Logger != nil {
-		t.Logger.WithField("tenant_id", incident.TenantID).WithField("report", report.FormatMarkdown()).Info("LOOKOUT_INVESTIGATION")
+		t.Logger.WithField("tenant_id", incident.TenantID).WithField("incident_id", incident.IncidentID).WithField("report", report.FormatMarkdown()).Info("LOOKOUT_INVESTIGATION")
 	}
-	time.Sleep(10 * time.Millisecond)
+	t.attachInvestigation(ctx, incident, reportID)
 	return nil
+}
+
+// attachInvestigation links the report to the incident. Failures are retried
+// inline and then dropped rather than returned: returning an error would
+// redeliver the message and rerun the paid LLM investigation.
+func (t *LookoutTrigger) attachInvestigation(ctx context.Context, incident lookoutIncident, reportID string) {
+	log := t.Logger
+	fields := logging.Fields{"tenant_id": incident.TenantID, "incident_id": incident.IncidentID}
+	if reportID == "" {
+		if log != nil {
+			log.WithFields(fields).Warn("Lookout investigation produced no persisted report; skipping incident attach")
+		}
+		return
+	}
+	if t.Lookout == nil {
+		if log != nil {
+			log.WithFields(fields).Warn("Lookout client unavailable; skipping incident attach")
+		}
+		return
+	}
+	backoff := t.AttachBackoff
+	if backoff == nil {
+		backoff = defaultAttachBackoff
+	}
+	var err error
+	for attempt := 0; ; attempt++ {
+		_, err = t.Lookout.AttachInvestigation(ctx, incident.IncidentID, incident.TenantID, reportID)
+		if err == nil {
+			return
+		}
+		if !retryableAttachError(err) || attempt >= len(backoff) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-time.After(backoff[attempt]):
+			continue
+		}
+		break
+	}
+	if log != nil {
+		log.WithError(err).WithFields(fields).WithField("report_id", reportID).Warn("Failed to attach investigation to Lookout incident")
+	}
+}
+
+func retryableAttachError(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.NotFound, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition:
+		return false
+	default:
+		return true
+	}
 }

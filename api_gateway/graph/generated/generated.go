@@ -681,10 +681,11 @@ type ComplexityRoot struct {
 	}
 
 	ClusterAccess struct {
-		AccessLevel    func(childComplexity int) int
-		ClusterID      func(childComplexity int) int
-		ClusterName    func(childComplexity int) int
-		ResourceLimits func(childComplexity int) int
+		AccessLevel             func(childComplexity int) int
+		AllowPrivatePullSources func(childComplexity int) int
+		ClusterID               func(childComplexity int) int
+		ClusterName             func(childComplexity int) int
+		ResourceLimits          func(childComplexity int) int
 	}
 
 	ClusterAccessConnection struct {
@@ -1168,6 +1169,82 @@ type ComplexityRoot struct {
 		ViewersByCountry func(childComplexity int) int
 	}
 
+	Incident struct {
+		AcknowledgedAt   func(childComplexity int) int
+		AcknowledgedBy   func(childComplexity int) int
+		Alertname        func(childComplexity int) int
+		AssignedTo       func(childComplexity int) int
+		ClusterID        func(childComplexity int) int
+		CreatedAt        func(childComplexity int) int
+		FiringAlertCount func(childComplexity int) int
+		ID               func(childComplexity int) int
+		LastAlertAt      func(childComplexity int) int
+		Region           func(childComplexity int) int
+		Resolution       func(childComplexity int) int
+		ResolvedAt       func(childComplexity int) int
+		ResolvedBy       func(childComplexity int) int
+		Scope            func(childComplexity int) int
+		Severity         func(childComplexity int) int
+		StartedAt        func(childComplexity int) int
+		Status           func(childComplexity int) int
+		Summary          func(childComplexity int) int
+		TenantID         func(childComplexity int) int
+		Title            func(childComplexity int) int
+		UpdatedAt        func(childComplexity int) int
+	}
+
+	IncidentAlert struct {
+		Annotations  func(childComplexity int) int
+		EndsAt       func(childComplexity int) int
+		Fingerprint  func(childComplexity int) int
+		GeneratorURL func(childComplexity int) int
+		Labels       func(childComplexity int) int
+		StartsAt     func(childComplexity int) int
+		Status       func(childComplexity int) int
+	}
+
+	IncidentDetail struct {
+		Alerts   func(childComplexity int) int
+		Incident func(childComplexity int) int
+		Timeline func(childComplexity int) int
+	}
+
+	IncidentEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	IncidentTimelineEvent struct {
+		ActorUserID      func(childComplexity int) int
+		AlertFingerprint func(childComplexity int) int
+		Alertname        func(childComplexity int) int
+		AssignedTo       func(childComplexity int) int
+		Channel          func(childComplexity int) int
+		CreatedAt        func(childComplexity int) int
+		ID               func(childComplexity int) int
+		Kind             func(childComplexity int) int
+		Note             func(childComplexity int) int
+		ReportID         func(childComplexity int) int
+		Resolution       func(childComplexity int) int
+	}
+
+	IncidentUpdatedEvent struct {
+		Change     func(childComplexity int) int
+		ClusterID  func(childComplexity int) int
+		IncidentID func(childComplexity int) int
+		Severity   func(childComplexity int) int
+		Status     func(childComplexity int) int
+		Title      func(childComplexity int) int
+		UpdatedAt  func(childComplexity int) int
+	}
+
+	IncidentsConnection struct {
+		Edges      func(childComplexity int) int
+		Nodes      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
 	InfrastructureNode struct {
 		AvailabilityZone     func(childComplexity int) int
 		ClusterId            func(childComplexity int) int
@@ -1371,10 +1448,9 @@ type ComplexityRoot struct {
 	}
 
 	ManagedSourceView struct {
-		AllowedClusterIds func(childComplexity int) int
-		AlwaysOn          func(childComplexity int) int
-		PlacementCount    func(childComplexity int) int
-		SourceKind        func(childComplexity int) int
+		AlwaysOn       func(childComplexity int) int
+		PlacementCount func(childComplexity int) int
+		SourceKind     func(childComplexity int) int
 	}
 
 	MarketplaceCluster struct {
@@ -1519,14 +1595,9 @@ type ComplexityRoot struct {
 		ExistingSessionsRetained func(childComplexity int) int
 	}
 
-	MediaPlacementLegacyPins struct {
-		ClusterIds        func(childComplexity int) int
-		CurrentlyEnforced func(childComplexity int) int
-		StreamID          func(childComplexity int) int
-	}
-
 	MediaPlacementOption struct {
 		ClusterClass func(childComplexity int) int
+		ClusterID    func(childComplexity int) int
 		Eligible     func(childComplexity int) int
 		ID           func(childComplexity int) int
 		Kind         func(childComplexity int) int
@@ -1623,6 +1694,7 @@ type ComplexityRoot struct {
 		Charging   func(childComplexity int) int
 		Classes    func(childComplexity int) int
 		ClusterIds func(childComplexity int) int
+		NodeIds    func(childComplexity int) int
 		OwnerIds   func(childComplexity int) int
 		Regions    func(childComplexity int) int
 	}
@@ -1711,9 +1783,12 @@ type ComplexityRoot struct {
 	Mutation struct {
 		AbortVodUpload                 func(childComplexity int, uploadID string) int
 		AcceptClusterInvite            func(childComplexity int, inviteToken string) int
+		AcknowledgeIncident            func(childComplexity int, id string) int
+		AddIncidentNote                func(childComplexity int, id string, body string) int
 		ApplyClusterMediaConsentChange func(childComplexity int, input model.ApplyMediaCapacityConsentInput) int
 		ApplyMediaPlacementChange      func(childComplexity int, input model.ApplyMediaPlacementChangeInput) int
 		ApproveClusterSubscription     func(childComplexity int, subscriptionID string) int
+		AssignIncident                 func(childComplexity int, id string, assigneeUserID *string) int
 		BootstrapEdge                  func(childComplexity int, input model.BootstrapEdgeInput) int
 		ChangeBillingTier              func(childComplexity int, tierID string) int
 		CompleteVodUpload              func(childComplexity int, input model.CompleteVodUploadInput) int
@@ -1753,6 +1828,7 @@ type ComplexityRoot struct {
 		RejectClusterSubscription      func(childComplexity int, subscriptionID string, reason *string) int
 		RequestClusterSubscription     func(childComplexity int, clusterID string, inviteToken *string) int
 		ResetMediaRetentionOverride    func(childComplexity int, input model.ResetMediaRetentionOverrideInput) int
+		ResolveIncident                func(childComplexity int, id string) int
 		RevokeBootstrapToken           func(childComplexity int, id string) int
 		RevokeClusterInvite            func(childComplexity int, inviteID string) int
 		RevokeDeveloperToken           func(childComplexity int, id string) int
@@ -2081,9 +2157,10 @@ type ComplexityRoot struct {
 	}
 
 	Platform struct {
-		Clusters func(childComplexity int) int
-		Tenant   func(childComplexity int, id string) int
-		Tenants  func(childComplexity int, timeRange *model.TimeRangeInput, limit *int) int
+		Clusters  func(childComplexity int) int
+		Incidents func(childComplexity int, page *model.ConnectionInput, filter *model.PlatformIncidentFilterInput) int
+		Tenant    func(childComplexity int, id string) int
+		Tenants   func(childComplexity int, timeRange *model.TimeRangeInput, limit *int) int
 	}
 
 	PlatformOverview struct {
@@ -2355,7 +2432,6 @@ type ComplexityRoot struct {
 	}
 
 	PullSourceView struct {
-		AllowedClusterIds func(childComplexity int) int
 		Class             func(childComplexity int) int
 		Enabled           func(childComplexity int) int
 		SourceUriRedacted func(childComplexity int) int
@@ -2444,13 +2520,14 @@ type ComplexityRoot struct {
 		DiscoverServicesConnection      func(childComplexity int, page *model.ConnectionInput, typeArg string, clusterID *string) int
 		DvrChapter                      func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) int
 		DvrChapters                     func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) int
+		Incident                        func(childComplexity int, id string) int
+		IncidentsConnection             func(childComplexity int, page *model.ConnectionInput, filter *model.IncidentFilterInput) int
 		Invoice                         func(childComplexity int, id string) int
 		InvoicesConnection              func(childComplexity int, page *model.ConnectionInput) int
 		MarketplaceCluster              func(childComplexity int, clusterID string) int
 		MarketplaceClusters             func(childComplexity int, first *int, after *string) int
 		MarketplaceClustersConnection   func(childComplexity int, page *model.ConnectionInput) int
 		MediaPlacementChange            func(childComplexity int, scope model.MediaPlacementScopeInput, idempotencyKey string) int
-		MediaPlacementLegacyPins        func(childComplexity int, streamID string) int
 		MediaPlacementOptions           func(childComplexity int, scope model.MediaPlacementScopeInput, filter *model.MediaPlacementOptionsFilter, after *string, first *int) int
 		MediaPlacementPolicy            func(childComplexity int, scope model.MediaPlacementScopeInput) int
 		MediaRetentionPolicy            func(childComplexity int) int
@@ -2777,6 +2854,17 @@ type ComplexityRoot struct {
 		Tool func(childComplexity int) int
 	}
 
+	SourceLocation struct {
+		AvoidNodeIds func(childComplexity int) int
+		Clusters     func(childComplexity int) int
+		Mode         func(childComplexity int) int
+	}
+
+	SourceLocationCluster struct {
+		ClusterID func(childComplexity int) int
+		NodeIds   func(childComplexity int) int
+	}
+
 	StorageArtifact struct {
 		CreatedAt          func(childComplexity int) int
 		DeleteID           func(childComplexity int) int
@@ -2924,6 +3012,7 @@ type ComplexityRoot struct {
 		RecentPullSourceEvents    func(childComplexity int, limit *int) int
 		Record                    func(childComplexity int) int
 		RetentionOverrides        func(childComplexity int) int
+		SourceLocation            func(childComplexity int) int
 		StreamId                  func(childComplexity int) int
 		StreamKey                 func(childComplexity int) int
 		ThumbnailAssets           func(childComplexity int) int
@@ -3237,28 +3326,24 @@ type ComplexityRoot struct {
 	}
 
 	StreamingConfig struct {
-		ChandlerDomain         func(childComplexity int) int
-		EdgeDomain             func(childComplexity int) int
-		GlobalChandlerDomain   func(childComplexity int) int
-		GlobalEdgeDomain       func(childComplexity int) int
-		GlobalIngestDomain     func(childComplexity int) int
-		GlobalLivepeerDomain   func(childComplexity int) int
-		GlobalPlayDomain       func(childComplexity int) int
-		IngestDomain           func(childComplexity int) int
-		OfficialChandlerDomain func(childComplexity int) int
-		OfficialClusterLabel   func(childComplexity int) int
-		OfficialEdgeDomain     func(childComplexity int) int
-		OfficialIngestDomain   func(childComplexity int) int
-		OfficialPlayDomain     func(childComplexity int) int
-		PlayDomain             func(childComplexity int) int
-		PreferredClusterLabel  func(childComplexity int) int
-		RtmpPort               func(childComplexity int) int
-		SrtPort                func(childComplexity int) int
-		TenantChandlerDomain   func(childComplexity int) int
-		TenantEdgeDomain       func(childComplexity int) int
-		TenantIngestDomain     func(childComplexity int) int
-		TenantLivepeerDomain   func(childComplexity int) int
-		TenantPlayDomain       func(childComplexity int) int
+		EdgeDomain            func(childComplexity int) int
+		GlobalEdgeDomain      func(childComplexity int) int
+		GlobalIngestDomain    func(childComplexity int) int
+		GlobalLivepeerDomain  func(childComplexity int) int
+		GlobalPlayDomain      func(childComplexity int) int
+		IngestDomain          func(childComplexity int) int
+		OfficialClusterLabel  func(childComplexity int) int
+		OfficialEdgeDomain    func(childComplexity int) int
+		OfficialIngestDomain  func(childComplexity int) int
+		OfficialPlayDomain    func(childComplexity int) int
+		PlayDomain            func(childComplexity int) int
+		PreferredClusterLabel func(childComplexity int) int
+		RtmpPort              func(childComplexity int) int
+		SrtPort               func(childComplexity int) int
+		TenantEdgeDomain      func(childComplexity int) int
+		TenantIngestDomain    func(childComplexity int) int
+		TenantLivepeerDomain  func(childComplexity int) int
+		TenantPlayDomain      func(childComplexity int) int
 	}
 
 	StreamingUsage struct {
@@ -3297,6 +3382,7 @@ type ComplexityRoot struct {
 		LiveConversationUpdates func(childComplexity int, conversationID *string) int
 		LiveDvrLifecycle        func(childComplexity int, streamID string) int
 		LiveFirehose            func(childComplexity int) int
+		LiveIncidentUpdates     func(childComplexity int) int
 		LiveMessageReceived     func(childComplexity int, conversationID string) int
 		LiveProcessingEvents    func(childComplexity int, streamID *string) int
 		LiveStorageEvents       func(childComplexity int, streamID *string) int
@@ -3424,6 +3510,7 @@ type ComplexityRoot struct {
 		ClipLifecycle        func(childComplexity int) int
 		ConnectionEvent      func(childComplexity int) int
 		DvrEvent             func(childComplexity int) int
+		IncidentUpdated      func(childComplexity int) int
 		ProcessingEvent      func(childComplexity int) int
 		RoutingEvent         func(childComplexity int) int
 		SkipperInvestigation func(childComplexity int) int
@@ -4388,6 +4475,10 @@ type MutationResolver interface {
 	SetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error)
 	ApplyMediaPlacementChange(ctx context.Context, input model.ApplyMediaPlacementChangeInput) (model.MediaPlacementChangeResult, error)
 	ApplyClusterMediaConsentChange(ctx context.Context, input model.ApplyMediaCapacityConsentInput) (model.MediaCapacityConsentChangeResult, error)
+	AcknowledgeIncident(ctx context.Context, id string) (model.IncidentMutationResult, error)
+	AssignIncident(ctx context.Context, id string, assigneeUserID *string) (model.IncidentMutationResult, error)
+	ResolveIncident(ctx context.Context, id string) (model.IncidentMutationResult, error)
+	AddIncidentNote(ctx context.Context, id string, body string) (model.IncidentMutationResult, error)
 	UpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error)
 	ResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error)
 	SetStreamRetentionOverrides(ctx context.Context, input model.SetStreamRetentionOverridesInput) (model.SetStreamRetentionOverridesResult, error)
@@ -4500,6 +4591,7 @@ type PlatformResolver interface {
 	Tenants(ctx context.Context, obj *markers.Platform, timeRange *model.TimeRangeInput, limit *int) (*model.PlatformTenantIndex, error)
 	Tenant(ctx context.Context, obj *markers.Platform, id string) (*markers.TenantAdminDetail, error)
 	Clusters(ctx context.Context, obj *markers.Platform) ([]*model.ClusterPivotRow, error)
+	Incidents(ctx context.Context, obj *markers.Platform, page *model.ConnectionInput, filter *model.PlatformIncidentFilterInput) (*model.IncidentsConnection, error)
 }
 type PlatformOverviewResolver interface {
 	TotalBandwidth(ctx context.Context, obj *periscopepb.GetPlatformOverviewResponse) (float64, error)
@@ -4598,6 +4690,8 @@ type QualityTierSummaryResolver interface {
 type QueryResolver interface {
 	Analytics(ctx context.Context) (*markers.Analytics, error)
 	Platform(ctx context.Context) (*markers.Platform, error)
+	IncidentsConnection(ctx context.Context, page *model.ConnectionInput, filter *model.IncidentFilterInput) (*model.IncidentsConnection, error)
+	Incident(ctx context.Context, id string) (*model.IncidentDetail, error)
 	StreamsConnection(ctx context.Context, page *model.ConnectionInput, search *string) (*model.StreamsConnection, error)
 	Stream(ctx context.Context, id string) (*commodorepb.Stream, error)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error)
@@ -4670,7 +4764,6 @@ type QueryResolver interface {
 	PreviewMediaPlacement(ctx context.Context, input model.PreviewMediaPlacementInput) (model.MediaPlacementPreviewResult, error)
 	ReviewMediaPlacementChange(ctx context.Context, input model.ReviewMediaPlacementChangeInput) (model.MediaPlacementReviewResult, error)
 	MediaPlacementChange(ctx context.Context, scope model.MediaPlacementScopeInput, idempotencyKey string) (model.MediaPlacementChangeResult, error)
-	MediaPlacementLegacyPins(ctx context.Context, streamID string) (model.MediaPlacementLegacyPinsResult, error)
 	ClusterMediaConsent(ctx context.Context, clusterID string) (model.MediaCapacityConsentResult, error)
 	ReviewClusterMediaConsentChange(ctx context.Context, input model.ReviewMediaCapacityConsentInput) (model.MediaPlacementReviewResult, error)
 	ClusterMediaConsentChange(ctx context.Context, clusterID string, idempotencyKey string) (model.MediaCapacityConsentChangeResult, error)
@@ -4761,6 +4854,7 @@ type StreamResolver interface {
 	Record(ctx context.Context, obj *commodorepb.Stream) (bool, error)
 	IngestMode(ctx context.Context, obj *commodorepb.Stream) (model.IngestMode, error)
 
+	SourceLocation(ctx context.Context, obj *commodorepb.Stream) (*model.SourceLocation, error)
 	CreatedAt(ctx context.Context, obj *commodorepb.Stream) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *commodorepb.Stream) (*time.Time, error)
 	Metrics(ctx context.Context, obj *commodorepb.Stream) (*periscopepb.StreamStatusResponse, error)
@@ -4898,6 +4992,7 @@ type SubscriptionResolver interface {
 	LiveStorageEvents(ctx context.Context, streamID *string) (<-chan *periscopepb.StorageEvent, error)
 	LiveProcessingEvents(ctx context.Context, streamID *string) (<-chan *periscopepb.ProcessingUsageRecord, error)
 	LiveSystemHealth(ctx context.Context) (<-chan *ipcpb.NodeLifecycleUpdate, error)
+	LiveIncidentUpdates(ctx context.Context) (<-chan *model.IncidentUpdatedEvent, error)
 	LiveFirehose(ctx context.Context) (<-chan *model.TenantEvent, error)
 	SkipperChat(ctx context.Context, input model.SkipperChatInput) (<-chan model.SkipperChatEvent, error)
 	LiveMessageReceived(ctx context.Context, conversationID string) (<-chan *model.Message, error)
@@ -7589,6 +7684,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ClusterAccess.AccessLevel(childComplexity), true
+	case "ClusterAccess.allowPrivatePullSources":
+		if e.ComplexityRoot.ClusterAccess.AllowPrivatePullSources == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterAccess.AllowPrivatePullSources(childComplexity), true
 	case "ClusterAccess.clusterId":
 		if e.ComplexityRoot.ClusterAccess.ClusterID == nil {
 			break
@@ -9627,6 +9728,343 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.GeographicDistribution.ViewersByCountry(childComplexity), true
 
+	case "Incident.acknowledgedAt":
+		if e.ComplexityRoot.Incident.AcknowledgedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.AcknowledgedAt(childComplexity), true
+	case "Incident.acknowledgedBy":
+		if e.ComplexityRoot.Incident.AcknowledgedBy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.AcknowledgedBy(childComplexity), true
+	case "Incident.alertname":
+		if e.ComplexityRoot.Incident.Alertname == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Alertname(childComplexity), true
+	case "Incident.assignedTo":
+		if e.ComplexityRoot.Incident.AssignedTo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.AssignedTo(childComplexity), true
+	case "Incident.clusterId":
+		if e.ComplexityRoot.Incident.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.ClusterID(childComplexity), true
+	case "Incident.createdAt":
+		if e.ComplexityRoot.Incident.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.CreatedAt(childComplexity), true
+	case "Incident.firingAlertCount":
+		if e.ComplexityRoot.Incident.FiringAlertCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.FiringAlertCount(childComplexity), true
+	case "Incident.id":
+		if e.ComplexityRoot.Incident.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.ID(childComplexity), true
+	case "Incident.lastAlertAt":
+		if e.ComplexityRoot.Incident.LastAlertAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.LastAlertAt(childComplexity), true
+	case "Incident.region":
+		if e.ComplexityRoot.Incident.Region == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Region(childComplexity), true
+	case "Incident.resolution":
+		if e.ComplexityRoot.Incident.Resolution == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Resolution(childComplexity), true
+	case "Incident.resolvedAt":
+		if e.ComplexityRoot.Incident.ResolvedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.ResolvedAt(childComplexity), true
+	case "Incident.resolvedBy":
+		if e.ComplexityRoot.Incident.ResolvedBy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.ResolvedBy(childComplexity), true
+	case "Incident.scope":
+		if e.ComplexityRoot.Incident.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Scope(childComplexity), true
+	case "Incident.severity":
+		if e.ComplexityRoot.Incident.Severity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Severity(childComplexity), true
+	case "Incident.startedAt":
+		if e.ComplexityRoot.Incident.StartedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.StartedAt(childComplexity), true
+	case "Incident.status":
+		if e.ComplexityRoot.Incident.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Status(childComplexity), true
+	case "Incident.summary":
+		if e.ComplexityRoot.Incident.Summary == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Summary(childComplexity), true
+	case "Incident.tenantId":
+		if e.ComplexityRoot.Incident.TenantID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.TenantID(childComplexity), true
+	case "Incident.title":
+		if e.ComplexityRoot.Incident.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.Title(childComplexity), true
+	case "Incident.updatedAt":
+		if e.ComplexityRoot.Incident.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Incident.UpdatedAt(childComplexity), true
+
+	case "IncidentAlert.annotations":
+		if e.ComplexityRoot.IncidentAlert.Annotations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.Annotations(childComplexity), true
+	case "IncidentAlert.endsAt":
+		if e.ComplexityRoot.IncidentAlert.EndsAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.EndsAt(childComplexity), true
+	case "IncidentAlert.fingerprint":
+		if e.ComplexityRoot.IncidentAlert.Fingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.Fingerprint(childComplexity), true
+	case "IncidentAlert.generatorUrl":
+		if e.ComplexityRoot.IncidentAlert.GeneratorURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.GeneratorURL(childComplexity), true
+	case "IncidentAlert.labels":
+		if e.ComplexityRoot.IncidentAlert.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.Labels(childComplexity), true
+	case "IncidentAlert.startsAt":
+		if e.ComplexityRoot.IncidentAlert.StartsAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.StartsAt(childComplexity), true
+	case "IncidentAlert.status":
+		if e.ComplexityRoot.IncidentAlert.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentAlert.Status(childComplexity), true
+
+	case "IncidentDetail.alerts":
+		if e.ComplexityRoot.IncidentDetail.Alerts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentDetail.Alerts(childComplexity), true
+	case "IncidentDetail.incident":
+		if e.ComplexityRoot.IncidentDetail.Incident == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentDetail.Incident(childComplexity), true
+	case "IncidentDetail.timeline":
+		if e.ComplexityRoot.IncidentDetail.Timeline == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentDetail.Timeline(childComplexity), true
+
+	case "IncidentEdge.cursor":
+		if e.ComplexityRoot.IncidentEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentEdge.Cursor(childComplexity), true
+	case "IncidentEdge.node":
+		if e.ComplexityRoot.IncidentEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentEdge.Node(childComplexity), true
+
+	case "IncidentTimelineEvent.actorUserId":
+		if e.ComplexityRoot.IncidentTimelineEvent.ActorUserID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.ActorUserID(childComplexity), true
+	case "IncidentTimelineEvent.alertFingerprint":
+		if e.ComplexityRoot.IncidentTimelineEvent.AlertFingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.AlertFingerprint(childComplexity), true
+	case "IncidentTimelineEvent.alertname":
+		if e.ComplexityRoot.IncidentTimelineEvent.Alertname == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.Alertname(childComplexity), true
+	case "IncidentTimelineEvent.assignedTo":
+		if e.ComplexityRoot.IncidentTimelineEvent.AssignedTo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.AssignedTo(childComplexity), true
+	case "IncidentTimelineEvent.channel":
+		if e.ComplexityRoot.IncidentTimelineEvent.Channel == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.Channel(childComplexity), true
+	case "IncidentTimelineEvent.createdAt":
+		if e.ComplexityRoot.IncidentTimelineEvent.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.CreatedAt(childComplexity), true
+	case "IncidentTimelineEvent.id":
+		if e.ComplexityRoot.IncidentTimelineEvent.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.ID(childComplexity), true
+	case "IncidentTimelineEvent.kind":
+		if e.ComplexityRoot.IncidentTimelineEvent.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.Kind(childComplexity), true
+	case "IncidentTimelineEvent.note":
+		if e.ComplexityRoot.IncidentTimelineEvent.Note == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.Note(childComplexity), true
+	case "IncidentTimelineEvent.reportId":
+		if e.ComplexityRoot.IncidentTimelineEvent.ReportID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.ReportID(childComplexity), true
+	case "IncidentTimelineEvent.resolution":
+		if e.ComplexityRoot.IncidentTimelineEvent.Resolution == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentTimelineEvent.Resolution(childComplexity), true
+
+	case "IncidentUpdatedEvent.change":
+		if e.ComplexityRoot.IncidentUpdatedEvent.Change == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.Change(childComplexity), true
+	case "IncidentUpdatedEvent.clusterId":
+		if e.ComplexityRoot.IncidentUpdatedEvent.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.ClusterID(childComplexity), true
+	case "IncidentUpdatedEvent.incidentId":
+		if e.ComplexityRoot.IncidentUpdatedEvent.IncidentID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.IncidentID(childComplexity), true
+	case "IncidentUpdatedEvent.severity":
+		if e.ComplexityRoot.IncidentUpdatedEvent.Severity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.Severity(childComplexity), true
+	case "IncidentUpdatedEvent.status":
+		if e.ComplexityRoot.IncidentUpdatedEvent.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.Status(childComplexity), true
+	case "IncidentUpdatedEvent.title":
+		if e.ComplexityRoot.IncidentUpdatedEvent.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.Title(childComplexity), true
+	case "IncidentUpdatedEvent.updatedAt":
+		if e.ComplexityRoot.IncidentUpdatedEvent.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentUpdatedEvent.UpdatedAt(childComplexity), true
+
+	case "IncidentsConnection.edges":
+		if e.ComplexityRoot.IncidentsConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentsConnection.Edges(childComplexity), true
+	case "IncidentsConnection.nodes":
+		if e.ComplexityRoot.IncidentsConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentsConnection.Nodes(childComplexity), true
+	case "IncidentsConnection.pageInfo":
+		if e.ComplexityRoot.IncidentsConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentsConnection.PageInfo(childComplexity), true
+	case "IncidentsConnection.totalCount":
+		if e.ComplexityRoot.IncidentsConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.IncidentsConnection.TotalCount(childComplexity), true
+
 	case "InfrastructureNode.availabilityZone":
 		if e.ComplexityRoot.InfrastructureNode.AvailabilityZone == nil {
 			break
@@ -10611,12 +11049,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.LiveUsageSummary.VodDeleted(childComplexity), true
 
-	case "ManagedSourceView.allowedClusterIds":
-		if e.ComplexityRoot.ManagedSourceView.AllowedClusterIds == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ManagedSourceView.AllowedClusterIds(childComplexity), true
 	case "ManagedSourceView.alwaysOn":
 		if e.ComplexityRoot.ManagedSourceView.AlwaysOn == nil {
 			break
@@ -11199,31 +11631,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.MediaPlacementImpact.ExistingSessionsRetained(childComplexity), true
 
-	case "MediaPlacementLegacyPins.clusterIds":
-		if e.ComplexityRoot.MediaPlacementLegacyPins.ClusterIds == nil {
-			break
-		}
-
-		return e.ComplexityRoot.MediaPlacementLegacyPins.ClusterIds(childComplexity), true
-	case "MediaPlacementLegacyPins.currentlyEnforced":
-		if e.ComplexityRoot.MediaPlacementLegacyPins.CurrentlyEnforced == nil {
-			break
-		}
-
-		return e.ComplexityRoot.MediaPlacementLegacyPins.CurrentlyEnforced(childComplexity), true
-	case "MediaPlacementLegacyPins.streamId":
-		if e.ComplexityRoot.MediaPlacementLegacyPins.StreamID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.MediaPlacementLegacyPins.StreamID(childComplexity), true
-
 	case "MediaPlacementOption.clusterClass":
 		if e.ComplexityRoot.MediaPlacementOption.ClusterClass == nil {
 			break
 		}
 
 		return e.ComplexityRoot.MediaPlacementOption.ClusterClass(childComplexity), true
+	case "MediaPlacementOption.clusterId":
+		if e.ComplexityRoot.MediaPlacementOption.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.ClusterID(childComplexity), true
 	case "MediaPlacementOption.eligible":
 		if e.ComplexityRoot.MediaPlacementOption.Eligible == nil {
 			break
@@ -11613,6 +12032,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.MediaPlacementSelector.ClusterIds(childComplexity), true
+	case "MediaPlacementSelector.nodeIds":
+		if e.ComplexityRoot.MediaPlacementSelector.NodeIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.NodeIds(childComplexity), true
 	case "MediaPlacementSelector.ownerIds":
 		if e.ComplexityRoot.MediaPlacementSelector.OwnerIds == nil {
 			break
@@ -11930,6 +12355,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.AcceptClusterInvite(childComplexity, args["inviteToken"].(string)), true
+	case "Mutation.acknowledgeIncident":
+		if e.ComplexityRoot.Mutation.AcknowledgeIncident == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_acknowledgeIncident_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AcknowledgeIncident(childComplexity, args["id"].(string)), true
+	case "Mutation.addIncidentNote":
+		if e.ComplexityRoot.Mutation.AddIncidentNote == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_addIncidentNote_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AddIncidentNote(childComplexity, args["id"].(string), args["body"].(string)), true
 	case "Mutation.applyClusterMediaConsentChange":
 		if e.ComplexityRoot.Mutation.ApplyClusterMediaConsentChange == nil {
 			break
@@ -11963,6 +12410,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ApproveClusterSubscription(childComplexity, args["subscriptionId"].(string)), true
+	case "Mutation.assignIncident":
+		if e.ComplexityRoot.Mutation.AssignIncident == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_assignIncident_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AssignIncident(childComplexity, args["id"].(string), args["assigneeUserId"].(*string)), true
 	case "Mutation.bootstrapEdge":
 		if e.ComplexityRoot.Mutation.BootstrapEdge == nil {
 			break
@@ -12392,6 +12850,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ResetMediaRetentionOverride(childComplexity, args["input"].(model.ResetMediaRetentionOverrideInput)), true
+	case "Mutation.resolveIncident":
+		if e.ComplexityRoot.Mutation.ResolveIncident == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_resolveIncident_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ResolveIncident(childComplexity, args["id"].(string)), true
 	case "Mutation.revokeBootstrapToken":
 		if e.ComplexityRoot.Mutation.RevokeBootstrapToken == nil {
 			break
@@ -13986,6 +14455,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Platform.Clusters(childComplexity), true
+	case "Platform.incidents":
+		if e.ComplexityRoot.Platform.Incidents == nil {
+			break
+		}
+
+		args, err := ec.field_Platform_incidents_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Platform.Incidents(childComplexity, args["page"].(*model.ConnectionInput), args["filter"].(*model.PlatformIncidentFilterInput)), true
 	case "Platform.tenant":
 		if e.ComplexityRoot.Platform.Tenant == nil {
 			break
@@ -15253,12 +15733,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PullSourceEvent.InternalName(childComplexity), true
 
-	case "PullSourceView.allowedClusterIds":
-		if e.ComplexityRoot.PullSourceView.AllowedClusterIds == nil {
-			break
-		}
-
-		return e.ComplexityRoot.PullSourceView.AllowedClusterIds(childComplexity), true
 	case "PullSourceView.class":
 		if e.ComplexityRoot.PullSourceView.Class == nil {
 			break
@@ -15780,6 +16254,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.DvrChapters(childComplexity, args["dvrId"].(string), args["mode"].(*model.DVRChapterMode), args["intervalSeconds"].(*int), args["rangeStartMs"].(*float64), args["rangeEndMs"].(*float64), args["pageSize"].(*int), args["pageToken"].(*string)), true
+	case "Query.incident":
+		if e.ComplexityRoot.Query.Incident == nil {
+			break
+		}
+
+		args, err := ec.field_Query_incident_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Incident(childComplexity, args["id"].(string)), true
+	case "Query.incidentsConnection":
+		if e.ComplexityRoot.Query.IncidentsConnection == nil {
+			break
+		}
+
+		args, err := ec.field_Query_incidentsConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.IncidentsConnection(childComplexity, args["page"].(*model.ConnectionInput), args["filter"].(*model.IncidentFilterInput)), true
 
 	case "Query.invoice":
 		if e.ComplexityRoot.Query.Invoice == nil {
@@ -15847,17 +16343,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.MediaPlacementChange(childComplexity, args["scope"].(model.MediaPlacementScopeInput), args["idempotencyKey"].(string)), true
-	case "Query.mediaPlacementLegacyPins":
-		if e.ComplexityRoot.Query.MediaPlacementLegacyPins == nil {
-			break
-		}
-
-		args, err := ec.field_Query_mediaPlacementLegacyPins_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.MediaPlacementLegacyPins(childComplexity, args["streamId"].(string)), true
 	case "Query.mediaPlacementOptions":
 		if e.ComplexityRoot.Query.MediaPlacementOptions == nil {
 			break
@@ -17425,6 +17910,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SkipperToolStartEvent.Tool(childComplexity), true
 
+	case "SourceLocation.avoidNodeIds":
+		if e.ComplexityRoot.SourceLocation.AvoidNodeIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceLocation.AvoidNodeIds(childComplexity), true
+	case "SourceLocation.clusters":
+		if e.ComplexityRoot.SourceLocation.Clusters == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceLocation.Clusters(childComplexity), true
+	case "SourceLocation.mode":
+		if e.ComplexityRoot.SourceLocation.Mode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceLocation.Mode(childComplexity), true
+
+	case "SourceLocationCluster.clusterId":
+		if e.ComplexityRoot.SourceLocationCluster.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceLocationCluster.ClusterID(childComplexity), true
+	case "SourceLocationCluster.nodeIds":
+		if e.ComplexityRoot.SourceLocationCluster.NodeIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SourceLocationCluster.NodeIds(childComplexity), true
+
 	case "StorageArtifact.createdAt":
 		if e.ComplexityRoot.StorageArtifact.CreatedAt == nil {
 			break
@@ -18107,6 +18624,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.RetentionOverrides(childComplexity), true
+	case "Stream.sourceLocation":
+		if e.ComplexityRoot.Stream.SourceLocation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Stream.SourceLocation(childComplexity), true
 	case "Stream.streamId":
 		if e.ComplexityRoot.Stream.StreamId == nil {
 			break
@@ -19509,24 +20032,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StreamValidation.StreamKey(childComplexity), true
 
-	case "StreamingConfig.chandlerDomain":
-		if e.ComplexityRoot.StreamingConfig.ChandlerDomain == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StreamingConfig.ChandlerDomain(childComplexity), true
 	case "StreamingConfig.edgeDomain":
 		if e.ComplexityRoot.StreamingConfig.EdgeDomain == nil {
 			break
 		}
 
 		return e.ComplexityRoot.StreamingConfig.EdgeDomain(childComplexity), true
-	case "StreamingConfig.globalChandlerDomain":
-		if e.ComplexityRoot.StreamingConfig.GlobalChandlerDomain == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StreamingConfig.GlobalChandlerDomain(childComplexity), true
 	case "StreamingConfig.globalEdgeDomain":
 		if e.ComplexityRoot.StreamingConfig.GlobalEdgeDomain == nil {
 			break
@@ -19557,12 +20068,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamingConfig.IngestDomain(childComplexity), true
-	case "StreamingConfig.officialChandlerDomain":
-		if e.ComplexityRoot.StreamingConfig.OfficialChandlerDomain == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StreamingConfig.OfficialChandlerDomain(childComplexity), true
 	case "StreamingConfig.officialClusterLabel":
 		if e.ComplexityRoot.StreamingConfig.OfficialClusterLabel == nil {
 			break
@@ -19611,12 +20116,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamingConfig.SrtPort(childComplexity), true
-	case "StreamingConfig.tenantChandlerDomain":
-		if e.ComplexityRoot.StreamingConfig.TenantChandlerDomain == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StreamingConfig.TenantChandlerDomain(childComplexity), true
 	case "StreamingConfig.tenantEdgeDomain":
 		if e.ComplexityRoot.StreamingConfig.TenantEdgeDomain == nil {
 			break
@@ -19859,6 +20358,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.LiveFirehose(childComplexity), true
+	case "Subscription.liveIncidentUpdates":
+		if e.ComplexityRoot.Subscription.LiveIncidentUpdates == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Subscription.LiveIncidentUpdates(childComplexity), true
 	case "Subscription.liveMessageReceived":
 		if e.ComplexityRoot.Subscription.LiveMessageReceived == nil {
 			break
@@ -20482,6 +20987,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TenantEvent.DvrEvent(childComplexity), true
+	case "TenantEvent.incidentUpdated":
+		if e.ComplexityRoot.TenantEvent.IncidentUpdated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TenantEvent.IncidentUpdated(childComplexity), true
 	case "TenantEvent.processingEvent":
 		if e.ComplexityRoot.TenantEvent.ProcessingEvent == nil {
 			break
@@ -22620,6 +23131,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateStreamKeyInput,
 		ec.unmarshalInputCreateVodUploadInput,
 		ec.unmarshalInputEntitlementEntryInput,
+		ec.unmarshalInputIncidentFilterInput,
 		ec.unmarshalInputLinkEmailInput,
 		ec.unmarshalInputMediaPlacementAllowInput,
 		ec.unmarshalInputMediaPlacementConstraintsInput,
@@ -22632,13 +23144,13 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputMediaPlacementSelectorInput,
 		ec.unmarshalInputMediaPlacementVerbUpdateInput,
 		ec.unmarshalInputOpenMistAdminSessionInput,
+		ec.unmarshalInputPlatformIncidentFilterInput,
 		ec.unmarshalInputPlaybackJwtClaimRequirementInput,
 		ec.unmarshalInputPlaybackJwtPolicyInput,
 		ec.unmarshalInputPlaybackPolicyInput,
 		ec.unmarshalInputPlaybackWebhookPolicyInput,
 		ec.unmarshalInputPreviewMediaPlacementInput,
 		ec.unmarshalInputPricingRuleInput,
-		ec.unmarshalInputPullSourceAllowedClustersInput,
 		ec.unmarshalInputPullSourceInput,
 		ec.unmarshalInputResetMediaRetentionOverrideInput,
 		ec.unmarshalInputReviewMediaCapacityConsentInput,
@@ -22649,6 +23161,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputSetPlaybackPolicyInput,
 		ec.unmarshalInputSetStreamRetentionOverridesInput,
 		ec.unmarshalInputSkipperChatInput,
+		ec.unmarshalInputSourceLocationClusterInput,
+		ec.unmarshalInputSourceLocationInput,
 		ec.unmarshalInputStorageArtifactsInput,
 		ec.unmarshalInputTestPlaybackAccessInput,
 		ec.unmarshalInputTimeRangeInput,
@@ -22844,6 +23358,27 @@ type Query {
   other callers receive an authorization error.
   """
   platform: Platform!
+
+  """
+  Incidents raised by platform alerting on clusters the current tenant owns,
+  newest first.
+  """
+  incidentsConnection(
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Optional status and cluster filters.
+    """
+    filter: IncidentFilterInput
+  ): IncidentsConnection!
+
+  """
+  One incident with its alerts and timeline. Null when the incident does not
+  exist or is not visible to the caller.
+  """
+  incident(id: ID!): IncidentDetail
 
   """
   List all streams for the current tenant with pagination.
@@ -23521,10 +24056,6 @@ type Query {
     scope: MediaPlacementScopeInput!
     idempotencyKey: String!
   ): MediaPlacementChangeResult!
-  """
-  Inactive legacy pins, available for an explicit reviewed import into stream rules.
-  """
-  mediaPlacementLegacyPins(streamId: ID!): MediaPlacementLegacyPinsResult!
   clusterMediaConsent(clusterId: ID!): MediaCapacityConsentResult!
   reviewClusterMediaConsentChange(
     input: ReviewMediaCapacityConsentInput!
@@ -24756,6 +25287,24 @@ type Mutation {
   ): MediaCapacityConsentChangeResult!
 
   """
+  Acknowledge an incident. The incident stays open until its alerts resolve
+  or someone resolves it.
+  """
+  acknowledgeIncident(id: ID!): IncidentMutationResult!
+  """
+  Assign an incident to a user of the incident's tenant. A null assignee
+  clears the assignment.
+  """
+  assignIncident(id: ID!, assigneeUserId: ID): IncidentMutationResult!
+  """
+  Resolve an incident manually. Repeats of the same firing alerts do not
+  reopen it; a new alert opens a new incident.
+  """
+  resolveIncident(id: ID!): IncidentMutationResult!
+  "Add a note to an incident's timeline."
+  addIncidentNote(id: ID!, body: String!): IncidentMutationResult!
+
+  """
   Apply a per-asset retention override on a finalized DVR recording, clip,
   or VOD asset (set targetType accordingly). Override beats tenant default
   beats tier entitlement. Active assets are rejected — retention applies
@@ -24985,6 +25534,12 @@ type Subscription {
   liveSystemHealth: SystemHealthEvent!
 
   """
+  Changes to incidents on clusters the current tenant owns. For platform
+  operators, changes to every incident: platform scope and every tenant.
+  """
+  liveIncidentUpdates: IncidentUpdatedEvent!
+
+  """
   Firehose subscription receiving ALL tenant events in a single stream.
   Combines stream, analytics, and system events for unified dashboards.
   Use the type and channel fields to filter/route events client-side.
@@ -25045,6 +25600,21 @@ type TenantEvent {
   routingEvent: RoutingEvent
   systemHealthEvent: SystemHealthEvent
   skipperInvestigation: SkipperInvestigationEvent
+  incidentUpdated: IncidentUpdatedEvent
+}
+
+"""
+Change to an incident the subscriber can see.
+"""
+type IncidentUpdatedEvent {
+  incidentId: ID!
+  clusterId: String
+  status: IncidentStatus!
+  severity: String!
+  title: String!
+  "Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved."
+  change: String!
+  updatedAt: Time!
 }
 
 # Skipper investigation notification event
@@ -25148,31 +25718,11 @@ enum IngestMode {
   MANAGED
 }
 
-"""
-Placement-pin wrapper for CreateStream / UpdateStream. The wrapper makes
-the field's *presence* meaningful: omitting allowedClusters on UpdateStream
-preserves the existing pin, while sending the wrapper (even with an empty
-clusterIds list) replaces it.
-"""
-input PullSourceAllowedClustersInput {
-  "Cluster IDs this pull source may run on. Empty list clears the pin (only valid for public sources)."
-  clusterIds: [String!]!
-}
-
 input PullSourceInput {
   "Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI. Required when creating or replacing a pull source."
   sourceUri: String
   "Whether the media plane may pull from the source."
   enabled: Boolean = true
-  """
-  Per-source placement pin. Omit on UpdateStream to preserve the existing
-  pin; send the wrapper to replace it (empty clusterIds clears the pin).
-  On CreateStream, omit means \"no pin\" — which is rejected for
-  private/multicast sources. Each cluster ID must be a registered
-  media-capable cluster, and for private sources must additionally have
-  allow_private_pull_sources=true.
-  """
-  allowedClusters: PullSourceAllowedClustersInput
 }
 
 """
@@ -25185,12 +25735,6 @@ type PullSourceView {
   enabled: Boolean!
   "Eligibility class: public or private."
   class: String!
-  """
-  Effective per-source placement pin. Empty list means \"any media cluster\"
-  (only valid for public sources). Surfaced so operators and admin UIs can
-  inspect placement without reading the database directly.
-  """
-  allowedClusterIds: [String!]!
 }
 
 """
@@ -25204,8 +25748,55 @@ type ManagedSourceView {
   alwaysOn: Boolean!
   "Number of source placements requested by the operator configuration."
   placementCount: Int!
-  "Clusters on which the source is allowed to materialize."
-  allowedClusterIds: [String!]!
+}
+
+"""
+Where a stream's source may be ingested. It is a summary of the stream's own
+ingest placement rules.
+"""
+enum SourceLocationMode {
+  "No stream-level restriction; FrameWorks chooses among the tenant's entitled clusters."
+  ANY
+  "Only the listed clusters, optionally narrowed to specific nodes and excluding avoided nodes."
+  RESTRICTED
+  """
+  The stream's own ingest rules contain constraints this summary cannot
+  express. Read-only here; edit them in the stream's placement rules.
+  """
+  CUSTOM
+}
+
+input SourceLocationClusterInput {
+  clusterId: ID!
+  "Nodes of this cluster the source may run on. Empty means any node of the cluster. Only nodes of clusters the tenant owns are accepted."
+  nodeIds: [ID!]! = []
+}
+
+"""
+Replaces the stream's own ingest restriction. Private and multicast pull
+sources require RESTRICTED with clusters that allow private pull sources.
+"""
+input SourceLocationInput {
+  "ANY or RESTRICTED. CUSTOM is rejected."
+  mode: SourceLocationMode!
+  "Required and non-empty for RESTRICTED; must be empty for ANY."
+  clusters: [SourceLocationClusterInput!]! = []
+  "Nodes the source must never run on. Only nodes of clusters the tenant owns are accepted."
+  avoidNodeIds: [ID!]! = []
+}
+
+type SourceLocationCluster {
+  clusterId: ID!
+  "Empty means any node of the cluster."
+  nodeIds: [ID!]!
+}
+
+type SourceLocation {
+  mode: SourceLocationMode!
+  "Empty unless mode is RESTRICTED."
+  clusters: [SourceLocationCluster!]!
+  "Empty unless mode is RESTRICTED."
+  avoidNodeIds: [ID!]!
 }
 
 """
@@ -25222,6 +25813,8 @@ input CreateStreamInput {
   ingestMode: IngestMode = PUSH
   "Pull-source configuration. Required when ingestMode is PULL."
   pullSource: PullSourceInput
+  "Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources."
+  sourceLocation: SourceLocationInput
 }
 
 """
@@ -25239,6 +25832,8 @@ input UpdateStreamInput {
   ingestMode: IngestMode
   "Update the pull-source configuration for an existing pull stream."
   pullSource: PullSourceInput
+  "Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams."
+  sourceLocation: SourceLocationInput
   """
   Historical chapter rotation mode. Snapshotted onto the DVR artifact
   at StartDVR; changes take effect on the next recording, not in-flight.
@@ -26578,8 +27173,9 @@ type CustomDomainStatus {
   "The domain Navigator is tracking (mirrors Tenant.customDomain)."
   domain: String!
   """
-  pending_verification | verified | cert_issuing | cert_issued | cert_failed |
-  tearing_down — verbatim from Navigator.
+  pending_verification | verified | pending_alias | cert_issuing | cert_issued |
+  cert_failed | tearing_down — verbatim from Navigator. pending_alias means the
+  CNAMEs are verified and the domain waits for the tenant alias certificate.
   """
   state: String!
   """
@@ -26627,6 +27223,8 @@ type Stream implements Node {
   pullSource: PullSourceView
   "Safe source summary for managed streams; null for push and pull streams."
   managedSource: ManagedSourceView
+  "Where the stream's source may be ingested, derived from the stream's own ingest placement rules."
+  sourceLocation: SourceLocation!
   "When this stream was created."
   createdAt: Time!
   "When this stream was last modified."
@@ -29078,12 +29676,10 @@ type StreamingConfig {
   ingestDomain: String
   edgeDomain: String
   playDomain: String
-  chandlerDomain: String
   officialClusterLabel: String
   officialIngestDomain: String
   officialEdgeDomain: String
   officialPlayDomain: String
-  officialChandlerDomain: String
   # Global root entrypoints. Default user-facing URL surface for free
   # and platform-official tenants. Bunny smart DNS does geo routing from
   # one record per service. Webapp/SDK should prefer these over
@@ -29091,7 +29687,6 @@ type StreamingConfig {
   globalIngestDomain: String
   globalEdgeDomain: String
   globalPlayDomain: String
-  globalChandlerDomain: String
   globalLivepeerDomain: String
   # Tenant alias entrypoints. Populated only when Navigator has
   # published at least one DNS member for the tenant alias. When
@@ -29099,7 +29694,6 @@ type StreamingConfig {
   tenantIngestDomain: String
   tenantEdgeDomain: String
   tenantPlayDomain: String
-  tenantChandlerDomain: String
   tenantLivepeerDomain: String
   srtPort: Int
   rtmpPort: Int
@@ -29549,6 +30143,8 @@ type ClusterAccess {
   clusterName: String!
   accessLevel: String!
   resourceLimits: JSON
+  "Whether the cluster may pull from private (RFC 1918) and multicast sources."
+  allowPrivatePullSources: Boolean!
 }
 
 # Available cluster entry (Quartermaster)
@@ -30691,7 +31287,155 @@ type Platform {
   Cluster pivot: each cluster with live stats and resident tenants.
   """
   clusters: [ClusterPivotRow!]!
+
+  """
+  Incidents across platform and tenant scopes, newest first.
+  """
+  incidents(
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Optional scope, status, cluster, and tenant filters.
+    """
+    filter: PlatformIncidentFilterInput
+  ): IncidentsConnection!
 }
+
+# ============================================================================
+# INCIDENTS (Lookout)
+# ============================================================================
+
+enum IncidentScope {
+  "Platform infrastructure; visible to platform operators only."
+  PLATFORM
+  "A cluster owned by one tenant; visible to that tenant and platform operators."
+  TENANT
+}
+
+enum IncidentStatus {
+  FIRING
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum IncidentResolution {
+  "Every alert of the incident resolved."
+  AUTO
+  "A user resolved the incident."
+  MANUAL
+}
+
+enum IncidentEventKind {
+  ALERT_FIRING
+  ALERT_RESOLVED
+  ACKNOWLEDGED
+  ASSIGNED
+  NOTE
+  RESOLVED
+  INVESTIGATION_ATTACHED
+  NOTIFIED
+  "The incident's visibility moved after its cluster owner was confirmed."
+  SCOPE_CHANGED
+}
+
+input IncidentFilterInput {
+  "Empty or omitted matches every status."
+  statuses: [IncidentStatus!]
+  clusterId: String
+}
+
+input PlatformIncidentFilterInput {
+  "Omitted matches both scopes."
+  scope: IncidentScope
+  "Empty or omitted matches every status."
+  statuses: [IncidentStatus!]
+  clusterId: String
+  "Narrows tenant-scope incidents to one tenant."
+  tenantId: ID
+}
+
+type Incident {
+  id: ID!
+  scope: IncidentScope!
+  "Null for platform-scope incidents."
+  tenantId: ID
+  clusterId: String
+  region: String
+  alertname: String!
+  severity: String!
+  status: IncidentStatus!
+  "Null until the incident is resolved."
+  resolution: IncidentResolution
+  title: String!
+  summary: String
+  "Alerts of this incident that are still firing."
+  firingAlertCount: Int!
+  startedAt: Time!
+  lastAlertAt: Time!
+  acknowledgedAt: Time
+  acknowledgedBy: ID
+  assignedTo: ID
+  resolvedAt: Time
+  resolvedBy: ID
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type IncidentAlert {
+  fingerprint: String!
+  "firing or resolved."
+  status: String!
+  labels: JSON!
+  annotations: JSON!
+  startsAt: Time!
+  endsAt: Time
+  generatorUrl: String
+}
+
+type IncidentTimelineEvent {
+  id: ID!
+  kind: IncidentEventKind!
+  "Null for events produced by alerting or services."
+  actorUserId: ID
+  createdAt: Time!
+  "NOTE events."
+  note: String
+  "ASSIGNED events; null clears the assignment."
+  assignedTo: ID
+  "INVESTIGATION_ATTACHED events: the Skipper report."
+  reportId: ID
+  "NOTIFIED events: email, slack, or discord."
+  channel: String
+  "RESOLVED events."
+  resolution: IncidentResolution
+  "ALERT_FIRING and ALERT_RESOLVED events."
+  alertFingerprint: String
+  "ALERT_FIRING and ALERT_RESOLVED events."
+  alertname: String
+}
+
+type IncidentDetail {
+  incident: Incident!
+  alerts: [IncidentAlert!]!
+  "Oldest first."
+  timeline: [IncidentTimelineEvent!]!
+}
+
+type IncidentEdge {
+  cursor: String!
+  node: Incident!
+}
+
+type IncidentsConnection {
+  edges: [IncidentEdge!]!
+  nodes: [Incident!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+union IncidentMutationResult = Incident | ValidationError | NotFoundError | AuthError
 
 type PlatformTenantIndex {
   rows: [PlatformTenantRow!]!
@@ -30850,6 +31594,8 @@ enum MediaPlacementOptionKind {
   CLUSTER
   OPERATOR
   REGION
+  "A node of a cluster the tenant owns."
+  NODE
 }
 
 input MediaPlacementScopeInput {
@@ -30865,6 +31611,8 @@ type MediaPlacementScope {
 "Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity."
 input MediaPlacementSelectorInput {
   clusterIds: [ID!]
+  "Nodes of clusters the tenant owns."
+  nodeIds: [ID!]
   ownerIds: [ID!]
   regions: [String!]
   classes: [MediaPlacementClass!]
@@ -30873,6 +31621,7 @@ input MediaPlacementSelectorInput {
 
 type MediaPlacementSelector {
   clusterIds: [ID!]!
+  nodeIds: [ID!]!
   ownerIds: [ID!]!
   regions: [String!]!
   classes: [MediaPlacementClass!]!
@@ -31020,6 +31769,8 @@ input MediaPlacementOptionsFilter {
   query: String
   kind: MediaPlacementOptionKind
   classes: [MediaPlacementClass!]
+  "Limits NODE options to one cluster."
+  clusterId: ID
 }
 
 type MediaPlacementOption {
@@ -31029,6 +31780,8 @@ type MediaPlacementOption {
   clusterClass: MediaPlacementClass
   region: String
   ownerId: ID
+  "Cluster of a NODE option."
+  clusterId: ID
   eligible: Boolean!
   reason: String
 }
@@ -31161,12 +31914,6 @@ type MediaPlacementChange {
   createdAt: Time!
 }
 
-type MediaPlacementLegacyPins {
-  streamId: ID!
-  clusterIds: [ID!]!
-  currentlyEnforced: Boolean!
-}
-
 type MediaCapacityConsent {
   clusterId: ID!
   revision: String!
@@ -31227,11 +31974,6 @@ union MediaPlacementReviewResult =
   | NotFoundError
 union MediaPlacementChangeResult =
   | MediaPlacementChange
-  | MediaPlacementError
-  | AuthError
-  | NotFoundError
-union MediaPlacementLegacyPinsResult =
-  | MediaPlacementLegacyPins
   | MediaPlacementError
   | AuthError
   | NotFoundError
@@ -32236,6 +32978,33 @@ func (ec *executionContext) field_Mutation_acceptClusterInvite_args(ctx context.
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_acknowledgeIncident_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_addIncidentNote_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "body", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["body"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_applyClusterMediaConsentChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -32266,6 +33035,22 @@ func (ec *executionContext) field_Mutation_approveClusterSubscription_args(ctx c
 		return nil, err
 	}
 	args["subscriptionId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_assignIncident_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "assigneeUserId", ec.unmarshalOID2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["assigneeUserId"] = arg1
 	return args, nil
 }
 
@@ -32768,6 +33553,17 @@ func (ec *executionContext) field_Mutation_resetMediaRetentionOverride_args(ctx 
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_resolveIncident_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_revokeBootstrapToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -33092,6 +33888,22 @@ func (ec *executionContext) field_PlatformOverview_dailyStats_args(ctx context.C
 		return nil, err
 	}
 	args["days"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Platform_incidents_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "filter", ec.unmarshalOPlatformIncidentFilterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformIncidentFilterInput)
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg1
 	return args, nil
 }
 
@@ -33468,6 +34280,33 @@ func (ec *executionContext) field_Query_dvrChapters_args(ctx context.Context, ra
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_incident_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_incidentsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "page", ec.unmarshalOConnectionInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐConnectionInput)
+	if err != nil {
+		return nil, err
+	}
+	args["page"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "filter", ec.unmarshalOIncidentFilterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentFilterInput)
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_invoice_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -33541,17 +34380,6 @@ func (ec *executionContext) field_Query_mediaPlacementChange_args(ctx context.Co
 		return nil, err
 	}
 	args["idempotencyKey"] = arg1
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_mediaPlacementLegacyPins_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg0
 	return args, nil
 }
 
@@ -38306,6 +39134,8 @@ func (ec *executionContext) fieldContext_ArtifactEvent_stream(_ context.Context,
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -39014,6 +39844,8 @@ func (ec *executionContext) fieldContext_ArtifactState_stream(_ context.Context,
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -44882,6 +45714,8 @@ func (ec *executionContext) fieldContext_ClientMetrics5m_stream(_ context.Contex
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -45682,6 +46516,8 @@ func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field gr
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -46804,6 +47640,8 @@ func (ec *executionContext) fieldContext_ClipLifecycle_stream(_ context.Context,
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -47870,6 +48708,35 @@ func (ec *executionContext) fieldContext_ClusterAccess_resourceLimits(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _ClusterAccess_allowPrivatePullSources(ctx context.Context, field graphql.CollectedField, obj *model.ClusterAccess) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ClusterAccess_allowPrivatePullSources,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowPrivatePullSources, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ClusterAccess_allowPrivatePullSources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClusterAccess",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ClusterAccessConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.ClusterAccessConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -47937,6 +48804,8 @@ func (ec *executionContext) fieldContext_ClusterAccessConnection_nodes(_ context
 				return ec.fieldContext_ClusterAccess_accessLevel(ctx, field)
 			case "resourceLimits":
 				return ec.fieldContext_ClusterAccess_resourceLimits(ctx, field)
+			case "allowPrivatePullSources":
+				return ec.fieldContext_ClusterAccess_allowPrivatePullSources(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClusterAccess", field.Name)
 		},
@@ -48073,6 +48942,8 @@ func (ec *executionContext) fieldContext_ClusterAccessEdge_node(_ context.Contex
 				return ec.fieldContext_ClusterAccess_accessLevel(ctx, field)
 			case "resourceLimits":
 				return ec.fieldContext_ClusterAccess_resourceLimits(ctx, field)
+			case "allowPrivatePullSources":
+				return ec.fieldContext_ClusterAccess_allowPrivatePullSources(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClusterAccess", field.Name)
 		},
@@ -51336,6 +52207,8 @@ func (ec *executionContext) fieldContext_ConnectionEvent_stream(_ context.Contex
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -55267,6 +56140,8 @@ func (ec *executionContext) fieldContext_DVREvent_stream(_ context.Context, fiel
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -55485,6 +56360,8 @@ func (ec *executionContext) fieldContext_DVRRequest_stream(_ context.Context, fi
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -58237,6 +59114,8 @@ func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -58465,6 +59344,1789 @@ func (ec *executionContext) fieldContext_GeographicDistribution_viewersByCountry
 				return ec.fieldContext_CountryTimeSeries_viewerCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type CountryTimeSeries", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_id(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_scope(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_scope,
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		ec.marshalNIncidentScope2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentScope does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_tenantId(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_tenantId,
+		func(ctx context.Context) (any, error) {
+			return obj.TenantID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_region(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_region,
+		func(ctx context.Context) (any, error) {
+			return obj.Region, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_region(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_alertname(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_alertname,
+		func(ctx context.Context) (any, error) {
+			return obj.Alertname, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_alertname(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_severity(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_severity,
+		func(ctx context.Context) (any, error) {
+			return obj.Severity, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_severity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_status(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_resolution(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_resolution,
+		func(ctx context.Context) (any, error) {
+			return obj.Resolution, nil
+		},
+		nil,
+		ec.marshalOIncidentResolution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentResolution,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_resolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentResolution does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_title(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_title,
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_summary(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_summary,
+		func(ctx context.Context) (any, error) {
+			return obj.Summary, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_summary(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_firingAlertCount(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_firingAlertCount,
+		func(ctx context.Context) (any, error) {
+			return obj.FiringAlertCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_firingAlertCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_startedAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_startedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.StartedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_lastAlertAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_lastAlertAt,
+		func(ctx context.Context) (any, error) {
+			return obj.LastAlertAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_lastAlertAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_acknowledgedAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_acknowledgedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.AcknowledgedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_acknowledgedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_acknowledgedBy(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_acknowledgedBy,
+		func(ctx context.Context) (any, error) {
+			return obj.AcknowledgedBy, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_acknowledgedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_assignedTo(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_assignedTo,
+		func(ctx context.Context) (any, error) {
+			return obj.AssignedTo, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_assignedTo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_resolvedAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_resolvedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ResolvedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_resolvedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_resolvedBy(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_resolvedBy,
+		func(ctx context.Context) (any, error) {
+			return obj.ResolvedBy, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_resolvedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Incident_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.Incident) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Incident_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Incident_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Incident",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_fingerprint(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_fingerprint,
+		func(ctx context.Context) (any, error) {
+			return obj.Fingerprint, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_fingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_status(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_labels(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_labels,
+		func(ctx context.Context) (any, error) {
+			return obj.Labels, nil
+		},
+		nil,
+		ec.marshalNJSON2interface,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_annotations(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_annotations,
+		func(ctx context.Context) (any, error) {
+			return obj.Annotations, nil
+		},
+		nil,
+		ec.marshalNJSON2interface,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_annotations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_startsAt(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_startsAt,
+		func(ctx context.Context) (any, error) {
+			return obj.StartsAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_startsAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_endsAt(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_endsAt,
+		func(ctx context.Context) (any, error) {
+			return obj.EndsAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_endsAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentAlert_generatorUrl(ctx context.Context, field graphql.CollectedField, obj *model.IncidentAlert) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentAlert_generatorUrl,
+		func(ctx context.Context) (any, error) {
+			return obj.GeneratorURL, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentAlert_generatorUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentDetail_incident(ctx context.Context, field graphql.CollectedField, obj *model.IncidentDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentDetail_incident,
+		func(ctx context.Context) (any, error) {
+			return obj.Incident, nil
+		},
+		nil,
+		ec.marshalNIncident2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncident,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentDetail_incident(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Incident_id(ctx, field)
+			case "scope":
+				return ec.fieldContext_Incident_scope(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_Incident_tenantId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_Incident_clusterId(ctx, field)
+			case "region":
+				return ec.fieldContext_Incident_region(ctx, field)
+			case "alertname":
+				return ec.fieldContext_Incident_alertname(ctx, field)
+			case "severity":
+				return ec.fieldContext_Incident_severity(ctx, field)
+			case "status":
+				return ec.fieldContext_Incident_status(ctx, field)
+			case "resolution":
+				return ec.fieldContext_Incident_resolution(ctx, field)
+			case "title":
+				return ec.fieldContext_Incident_title(ctx, field)
+			case "summary":
+				return ec.fieldContext_Incident_summary(ctx, field)
+			case "firingAlertCount":
+				return ec.fieldContext_Incident_firingAlertCount(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Incident_startedAt(ctx, field)
+			case "lastAlertAt":
+				return ec.fieldContext_Incident_lastAlertAt(ctx, field)
+			case "acknowledgedAt":
+				return ec.fieldContext_Incident_acknowledgedAt(ctx, field)
+			case "acknowledgedBy":
+				return ec.fieldContext_Incident_acknowledgedBy(ctx, field)
+			case "assignedTo":
+				return ec.fieldContext_Incident_assignedTo(ctx, field)
+			case "resolvedAt":
+				return ec.fieldContext_Incident_resolvedAt(ctx, field)
+			case "resolvedBy":
+				return ec.fieldContext_Incident_resolvedBy(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Incident_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Incident_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Incident", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentDetail_alerts(ctx context.Context, field graphql.CollectedField, obj *model.IncidentDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentDetail_alerts,
+		func(ctx context.Context) (any, error) {
+			return obj.Alerts, nil
+		},
+		nil,
+		ec.marshalNIncidentAlert2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentAlertᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentDetail_alerts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "fingerprint":
+				return ec.fieldContext_IncidentAlert_fingerprint(ctx, field)
+			case "status":
+				return ec.fieldContext_IncidentAlert_status(ctx, field)
+			case "labels":
+				return ec.fieldContext_IncidentAlert_labels(ctx, field)
+			case "annotations":
+				return ec.fieldContext_IncidentAlert_annotations(ctx, field)
+			case "startsAt":
+				return ec.fieldContext_IncidentAlert_startsAt(ctx, field)
+			case "endsAt":
+				return ec.fieldContext_IncidentAlert_endsAt(ctx, field)
+			case "generatorUrl":
+				return ec.fieldContext_IncidentAlert_generatorUrl(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentAlert", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentDetail_timeline(ctx context.Context, field graphql.CollectedField, obj *model.IncidentDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentDetail_timeline,
+		func(ctx context.Context) (any, error) {
+			return obj.Timeline, nil
+		},
+		nil,
+		ec.marshalNIncidentTimelineEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentTimelineEventᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentDetail_timeline(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_IncidentTimelineEvent_id(ctx, field)
+			case "kind":
+				return ec.fieldContext_IncidentTimelineEvent_kind(ctx, field)
+			case "actorUserId":
+				return ec.fieldContext_IncidentTimelineEvent_actorUserId(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_IncidentTimelineEvent_createdAt(ctx, field)
+			case "note":
+				return ec.fieldContext_IncidentTimelineEvent_note(ctx, field)
+			case "assignedTo":
+				return ec.fieldContext_IncidentTimelineEvent_assignedTo(ctx, field)
+			case "reportId":
+				return ec.fieldContext_IncidentTimelineEvent_reportId(ctx, field)
+			case "channel":
+				return ec.fieldContext_IncidentTimelineEvent_channel(ctx, field)
+			case "resolution":
+				return ec.fieldContext_IncidentTimelineEvent_resolution(ctx, field)
+			case "alertFingerprint":
+				return ec.fieldContext_IncidentTimelineEvent_alertFingerprint(ctx, field)
+			case "alertname":
+				return ec.fieldContext_IncidentTimelineEvent_alertname(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentTimelineEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.IncidentEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentEdge_cursor,
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.IncidentEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentEdge_node,
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		ec.marshalNIncident2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncident,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Incident_id(ctx, field)
+			case "scope":
+				return ec.fieldContext_Incident_scope(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_Incident_tenantId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_Incident_clusterId(ctx, field)
+			case "region":
+				return ec.fieldContext_Incident_region(ctx, field)
+			case "alertname":
+				return ec.fieldContext_Incident_alertname(ctx, field)
+			case "severity":
+				return ec.fieldContext_Incident_severity(ctx, field)
+			case "status":
+				return ec.fieldContext_Incident_status(ctx, field)
+			case "resolution":
+				return ec.fieldContext_Incident_resolution(ctx, field)
+			case "title":
+				return ec.fieldContext_Incident_title(ctx, field)
+			case "summary":
+				return ec.fieldContext_Incident_summary(ctx, field)
+			case "firingAlertCount":
+				return ec.fieldContext_Incident_firingAlertCount(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Incident_startedAt(ctx, field)
+			case "lastAlertAt":
+				return ec.fieldContext_Incident_lastAlertAt(ctx, field)
+			case "acknowledgedAt":
+				return ec.fieldContext_Incident_acknowledgedAt(ctx, field)
+			case "acknowledgedBy":
+				return ec.fieldContext_Incident_acknowledgedBy(ctx, field)
+			case "assignedTo":
+				return ec.fieldContext_Incident_assignedTo(ctx, field)
+			case "resolvedAt":
+				return ec.fieldContext_Incident_resolvedAt(ctx, field)
+			case "resolvedBy":
+				return ec.fieldContext_Incident_resolvedBy(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Incident_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Incident_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Incident", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_id(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_kind(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_kind,
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		ec.marshalNIncidentEventKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEventKind,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentEventKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_actorUserId(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_actorUserId,
+		func(ctx context.Context) (any, error) {
+			return obj.ActorUserID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_actorUserId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_note(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_note,
+		func(ctx context.Context) (any, error) {
+			return obj.Note, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_note(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_assignedTo(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_assignedTo,
+		func(ctx context.Context) (any, error) {
+			return obj.AssignedTo, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_assignedTo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_reportId(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_reportId,
+		func(ctx context.Context) (any, error) {
+			return obj.ReportID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_reportId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_channel(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_channel,
+		func(ctx context.Context) (any, error) {
+			return obj.Channel, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_channel(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_resolution(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_resolution,
+		func(ctx context.Context) (any, error) {
+			return obj.Resolution, nil
+		},
+		nil,
+		ec.marshalOIncidentResolution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentResolution,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_resolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentResolution does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_alertFingerprint(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_alertFingerprint,
+		func(ctx context.Context) (any, error) {
+			return obj.AlertFingerprint, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_alertFingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentTimelineEvent_alertname(ctx context.Context, field graphql.CollectedField, obj *model.IncidentTimelineEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentTimelineEvent_alertname,
+		func(ctx context.Context) (any, error) {
+			return obj.Alertname, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentTimelineEvent_alertname(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentTimelineEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_incidentId(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_incidentId,
+		func(ctx context.Context) (any, error) {
+			return obj.IncidentID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_incidentId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_status(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_severity(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_severity,
+		func(ctx context.Context) (any, error) {
+			return obj.Severity, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_severity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_title(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_title,
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_change(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_change,
+		func(ctx context.Context) (any, error) {
+			return obj.Change, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_change(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentUpdatedEvent_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.IncidentUpdatedEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentUpdatedEvent_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentUpdatedEvent_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentUpdatedEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.IncidentsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentsConnection_edges,
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		ec.marshalNIncidentEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEdgeᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "cursor":
+				return ec.fieldContext_IncidentEdge_cursor(ctx, field)
+			case "node":
+				return ec.fieldContext_IncidentEdge_node(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentEdge", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.IncidentsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentsConnection_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNIncident2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Incident_id(ctx, field)
+			case "scope":
+				return ec.fieldContext_Incident_scope(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_Incident_tenantId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_Incident_clusterId(ctx, field)
+			case "region":
+				return ec.fieldContext_Incident_region(ctx, field)
+			case "alertname":
+				return ec.fieldContext_Incident_alertname(ctx, field)
+			case "severity":
+				return ec.fieldContext_Incident_severity(ctx, field)
+			case "status":
+				return ec.fieldContext_Incident_status(ctx, field)
+			case "resolution":
+				return ec.fieldContext_Incident_resolution(ctx, field)
+			case "title":
+				return ec.fieldContext_Incident_title(ctx, field)
+			case "summary":
+				return ec.fieldContext_Incident_summary(ctx, field)
+			case "firingAlertCount":
+				return ec.fieldContext_Incident_firingAlertCount(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_Incident_startedAt(ctx, field)
+			case "lastAlertAt":
+				return ec.fieldContext_Incident_lastAlertAt(ctx, field)
+			case "acknowledgedAt":
+				return ec.fieldContext_Incident_acknowledgedAt(ctx, field)
+			case "acknowledgedBy":
+				return ec.fieldContext_Incident_acknowledgedBy(ctx, field)
+			case "assignedTo":
+				return ec.fieldContext_Incident_assignedTo(ctx, field)
+			case "resolvedAt":
+				return ec.fieldContext_Incident_resolvedAt(ctx, field)
+			case "resolvedBy":
+				return ec.fieldContext_Incident_resolvedBy(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Incident_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Incident_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Incident", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.IncidentsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentsConnection_pageInfo,
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "startCursor":
+				return ec.fieldContext_PageInfo_startCursor(ctx, field)
+			case "endCursor":
+				return ec.fieldContext_PageInfo_endCursor(ctx, field)
+			case "hasNextPage":
+				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+			case "hasPreviousPage":
+				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _IncidentsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.IncidentsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_IncidentsConnection_totalCount,
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_IncidentsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "IncidentsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -59785,6 +62447,8 @@ func (ec *executionContext) fieldContext_IngestMetadata_stream(_ context.Context
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -63565,35 +66229,6 @@ func (ec *executionContext) fieldContext_ManagedSourceView_placementCount(_ cont
 	return fc, nil
 }
 
-func (ec *executionContext) _ManagedSourceView_allowedClusterIds(ctx context.Context, field graphql.CollectedField, obj *commodorepb.ManagedSourceView) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_ManagedSourceView_allowedClusterIds,
-		func(ctx context.Context) (any, error) {
-			return obj.AllowedClusterIds, nil
-		},
-		nil,
-		ec.marshalNString2ᚕstringᚄ,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_ManagedSourceView_allowedClusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ManagedSourceView",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _MarketplaceCluster_clusterId(ctx context.Context, field graphql.CollectedField, obj *quartermasterpb.MarketplaceClusterEntry) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -64830,6 +67465,8 @@ func (ec *executionContext) fieldContext_MediaPlacementAllow_any(_ context.Conte
 			switch field.Name {
 			case "clusterIds":
 				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "nodeIds":
+				return ec.fieldContext_MediaPlacementSelector_nodeIds(ctx, field)
 			case "ownerIds":
 				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
 			case "regions":
@@ -65400,6 +68037,8 @@ func (ec *executionContext) fieldContext_MediaPlacementConstraints_deny(_ contex
 			switch field.Name {
 			case "clusterIds":
 				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "nodeIds":
+				return ec.fieldContext_MediaPlacementSelector_nodeIds(ctx, field)
 			case "ownerIds":
 				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
 			case "regions":
@@ -66113,6 +68752,8 @@ func (ec *executionContext) fieldContext_MediaPlacementGroup_match(_ context.Con
 			switch field.Name {
 			case "clusterIds":
 				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "nodeIds":
+				return ec.fieldContext_MediaPlacementSelector_nodeIds(ctx, field)
 			case "ownerIds":
 				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
 			case "regions":
@@ -66447,93 +69088,6 @@ func (ec *executionContext) fieldContext_MediaPlacementImpact_existingSessionsRe
 	return fc, nil
 }
 
-func (ec *executionContext) _MediaPlacementLegacyPins_streamId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_MediaPlacementLegacyPins_streamId,
-		func(ctx context.Context) (any, error) {
-			return obj.StreamID, nil
-		},
-		nil,
-		ec.marshalNID2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "MediaPlacementLegacyPins",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _MediaPlacementLegacyPins_clusterIds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_MediaPlacementLegacyPins_clusterIds,
-		func(ctx context.Context) (any, error) {
-			return obj.ClusterIds, nil
-		},
-		nil,
-		ec.marshalNID2ᚕstringᚄ,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_clusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "MediaPlacementLegacyPins",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _MediaPlacementLegacyPins_currentlyEnforced(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_MediaPlacementLegacyPins_currentlyEnforced,
-		func(ctx context.Context) (any, error) {
-			return obj.CurrentlyEnforced, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_currentlyEnforced(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "MediaPlacementLegacyPins",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _MediaPlacementOption_id(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -66708,6 +69262,35 @@ func (ec *executionContext) fieldContext_MediaPlacementOption_ownerId(_ context.
 	return fc, nil
 }
 
+func (ec *executionContext) _MediaPlacementOption_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MediaPlacementOption_eligible(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -66802,6 +69385,8 @@ func (ec *executionContext) fieldContext_MediaPlacementOptionsConnection_nodes(_
 				return ec.fieldContext_MediaPlacementOption_region(ctx, field)
 			case "ownerId":
 				return ec.fieldContext_MediaPlacementOption_ownerId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_MediaPlacementOption_clusterId(ctx, field)
 			case "eligible":
 				return ec.fieldContext_MediaPlacementOption_eligible(ctx, field)
 			case "reason":
@@ -68522,6 +71107,35 @@ func (ec *executionContext) _MediaPlacementSelector_clusterIds(ctx context.Conte
 }
 
 func (ec *executionContext) fieldContext_MediaPlacementSelector_clusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_nodeIds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_nodeIds,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_nodeIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "MediaPlacementSelector",
 		Field:      field,
@@ -72942,6 +75556,170 @@ func (ec *executionContext) fieldContext_Mutation_applyClusterMediaConsentChange
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_applyClusterMediaConsentChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_acknowledgeIncident(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_acknowledgeIncident,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().AcknowledgeIncident(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalNIncidentMutationResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentMutationResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_acknowledgeIncident(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentMutationResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_acknowledgeIncident_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_assignIncident(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_assignIncident,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().AssignIncident(ctx, fc.Args["id"].(string), fc.Args["assigneeUserId"].(*string))
+		},
+		nil,
+		ec.marshalNIncidentMutationResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentMutationResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_assignIncident(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentMutationResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_assignIncident_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_resolveIncident(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_resolveIncident,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ResolveIncident(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalNIncidentMutationResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentMutationResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_resolveIncident(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentMutationResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_resolveIncident_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_addIncidentNote(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_addIncidentNote,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().AddIncidentNote(ctx, fc.Args["id"].(string), fc.Args["body"].(string))
+		},
+		nil,
+		ec.marshalNIncidentMutationResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentMutationResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_addIncidentNote(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type IncidentMutationResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_addIncidentNote_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -80024,6 +82802,57 @@ func (ec *executionContext) fieldContext_Platform_clusters(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _Platform_incidents(ctx context.Context, field graphql.CollectedField, obj *markers.Platform) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Platform_incidents,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Platform().Incidents(ctx, obj, fc.Args["page"].(*model.ConnectionInput), fc.Args["filter"].(*model.PlatformIncidentFilterInput))
+		},
+		nil,
+		ec.marshalNIncidentsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentsConnection,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Platform_incidents(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Platform",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_IncidentsConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_IncidentsConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_IncidentsConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_IncidentsConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentsConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Platform_incidents_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PlatformOverview_totalStreams(ctx context.Context, field graphql.CollectedField, obj *periscopepb.GetPlatformOverviewResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -84136,6 +86965,8 @@ func (ec *executionContext) fieldContext_ProcessingUsageRecord_stream(_ context.
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -86485,35 +89316,6 @@ func (ec *executionContext) fieldContext_PullSourceView_class(_ context.Context,
 	return fc, nil
 }
 
-func (ec *executionContext) _PullSourceView_allowedClusterIds(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PullSourceView) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_PullSourceView_allowedClusterIds,
-		func(ctx context.Context) (any, error) {
-			return obj.AllowedClusterIds, nil
-		},
-		nil,
-		ec.marshalNString2ᚕstringᚄ,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_PullSourceView_allowedClusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "PullSourceView",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _PushTarget_id(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PushTarget) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -86964,6 +89766,8 @@ func (ec *executionContext) fieldContext_QualityTierDaily_stream(_ context.Conte
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -87993,9 +90797,111 @@ func (ec *executionContext) fieldContext_Query_platform(_ context.Context, field
 				return ec.fieldContext_Platform_tenant(ctx, field)
 			case "clusters":
 				return ec.fieldContext_Platform_clusters(ctx, field)
+			case "incidents":
+				return ec.fieldContext_Platform_incidents(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Platform", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_incidentsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_incidentsConnection,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().IncidentsConnection(ctx, fc.Args["page"].(*model.ConnectionInput), fc.Args["filter"].(*model.IncidentFilterInput))
+		},
+		nil,
+		ec.marshalNIncidentsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentsConnection,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_incidentsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "edges":
+				return ec.fieldContext_IncidentsConnection_edges(ctx, field)
+			case "nodes":
+				return ec.fieldContext_IncidentsConnection_nodes(ctx, field)
+			case "pageInfo":
+				return ec.fieldContext_IncidentsConnection_pageInfo(ctx, field)
+			case "totalCount":
+				return ec.fieldContext_IncidentsConnection_totalCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentsConnection", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_incidentsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_incident(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_incident,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Incident(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		ec.marshalOIncidentDetail2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentDetail,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_incident(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "incident":
+				return ec.fieldContext_IncidentDetail_incident(ctx, field)
+			case "alerts":
+				return ec.fieldContext_IncidentDetail_alerts(ctx, field)
+			case "timeline":
+				return ec.fieldContext_IncidentDetail_timeline(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentDetail", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_incident_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -88096,6 +91002,8 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -89754,6 +92662,8 @@ func (ec *executionContext) fieldContext_Query_clustersAccess(ctx context.Contex
 				return ec.fieldContext_ClusterAccess_accessLevel(ctx, field)
 			case "resourceLimits":
 				return ec.fieldContext_ClusterAccess_resourceLimits(ctx, field)
+			case "allowPrivatePullSources":
+				return ec.fieldContext_ClusterAccess_allowPrivatePullSources(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClusterAccess", field.Name)
 		},
@@ -90211,8 +93121,6 @@ func (ec *executionContext) fieldContext_Query_streamingConfig(_ context.Context
 				return ec.fieldContext_StreamingConfig_edgeDomain(ctx, field)
 			case "playDomain":
 				return ec.fieldContext_StreamingConfig_playDomain(ctx, field)
-			case "chandlerDomain":
-				return ec.fieldContext_StreamingConfig_chandlerDomain(ctx, field)
 			case "officialClusterLabel":
 				return ec.fieldContext_StreamingConfig_officialClusterLabel(ctx, field)
 			case "officialIngestDomain":
@@ -90221,16 +93129,12 @@ func (ec *executionContext) fieldContext_Query_streamingConfig(_ context.Context
 				return ec.fieldContext_StreamingConfig_officialEdgeDomain(ctx, field)
 			case "officialPlayDomain":
 				return ec.fieldContext_StreamingConfig_officialPlayDomain(ctx, field)
-			case "officialChandlerDomain":
-				return ec.fieldContext_StreamingConfig_officialChandlerDomain(ctx, field)
 			case "globalIngestDomain":
 				return ec.fieldContext_StreamingConfig_globalIngestDomain(ctx, field)
 			case "globalEdgeDomain":
 				return ec.fieldContext_StreamingConfig_globalEdgeDomain(ctx, field)
 			case "globalPlayDomain":
 				return ec.fieldContext_StreamingConfig_globalPlayDomain(ctx, field)
-			case "globalChandlerDomain":
-				return ec.fieldContext_StreamingConfig_globalChandlerDomain(ctx, field)
 			case "globalLivepeerDomain":
 				return ec.fieldContext_StreamingConfig_globalLivepeerDomain(ctx, field)
 			case "tenantIngestDomain":
@@ -90239,8 +93143,6 @@ func (ec *executionContext) fieldContext_Query_streamingConfig(_ context.Context
 				return ec.fieldContext_StreamingConfig_tenantEdgeDomain(ctx, field)
 			case "tenantPlayDomain":
 				return ec.fieldContext_StreamingConfig_tenantPlayDomain(ctx, field)
-			case "tenantChandlerDomain":
-				return ec.fieldContext_StreamingConfig_tenantChandlerDomain(ctx, field)
 			case "tenantLivepeerDomain":
 				return ec.fieldContext_StreamingConfig_tenantLivepeerDomain(ctx, field)
 			case "srtPort":
@@ -92074,47 +94976,6 @@ func (ec *executionContext) fieldContext_Query_mediaPlacementChange(ctx context.
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_mediaPlacementLegacyPins(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_Query_mediaPlacementLegacyPins,
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().MediaPlacementLegacyPins(ctx, fc.Args["streamId"].(string))
-		},
-		nil,
-		ec.marshalNMediaPlacementLegacyPinsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementLegacyPinsResult,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_Query_mediaPlacementLegacyPins(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type MediaPlacementLegacyPinsResult does not have child fields")
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_mediaPlacementLegacyPins_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_clusterMediaConsent(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -92535,6 +95396,8 @@ func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Conte
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -93275,6 +96138,8 @@ func (ec *executionContext) fieldContext_RoutingEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -97888,6 +100753,157 @@ func (ec *executionContext) fieldContext_SkipperToolStartEvent_tool(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _SourceLocation_mode(ctx context.Context, field graphql.CollectedField, obj *model.SourceLocation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SourceLocation_mode,
+		func(ctx context.Context) (any, error) {
+			return obj.Mode, nil
+		},
+		nil,
+		ec.marshalNSourceLocationMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationMode,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SourceLocation_mode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceLocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type SourceLocationMode does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceLocation_clusters(ctx context.Context, field graphql.CollectedField, obj *model.SourceLocation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SourceLocation_clusters,
+		func(ctx context.Context) (any, error) {
+			return obj.Clusters, nil
+		},
+		nil,
+		ec.marshalNSourceLocationCluster2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SourceLocation_clusters(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceLocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterId":
+				return ec.fieldContext_SourceLocationCluster_clusterId(ctx, field)
+			case "nodeIds":
+				return ec.fieldContext_SourceLocationCluster_nodeIds(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SourceLocationCluster", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceLocation_avoidNodeIds(ctx context.Context, field graphql.CollectedField, obj *model.SourceLocation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SourceLocation_avoidNodeIds,
+		func(ctx context.Context) (any, error) {
+			return obj.AvoidNodeIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SourceLocation_avoidNodeIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceLocation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceLocationCluster_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.SourceLocationCluster) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SourceLocationCluster_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SourceLocationCluster_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceLocationCluster",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceLocationCluster_nodeIds(ctx context.Context, field graphql.CollectedField, obj *model.SourceLocationCluster) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SourceLocationCluster_nodeIds,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SourceLocationCluster_nodeIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceLocationCluster",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StorageArtifact_key(ctx context.Context, field graphql.CollectedField, obj *model.StorageArtifact) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -99444,6 +102460,8 @@ func (ec *executionContext) fieldContext_StorageEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -101209,8 +104227,6 @@ func (ec *executionContext) fieldContext_Stream_pullSource(_ context.Context, fi
 				return ec.fieldContext_PullSourceView_enabled(ctx, field)
 			case "class":
 				return ec.fieldContext_PullSourceView_class(ctx, field)
-			case "allowedClusterIds":
-				return ec.fieldContext_PullSourceView_allowedClusterIds(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullSourceView", field.Name)
 		},
@@ -101248,10 +104264,45 @@ func (ec *executionContext) fieldContext_Stream_managedSource(_ context.Context,
 				return ec.fieldContext_ManagedSourceView_alwaysOn(ctx, field)
 			case "placementCount":
 				return ec.fieldContext_ManagedSourceView_placementCount(ctx, field)
-			case "allowedClusterIds":
-				return ec.fieldContext_ManagedSourceView_allowedClusterIds(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ManagedSourceView", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Stream_sourceLocation(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_sourceLocation,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Stream().SourceLocation(ctx, obj)
+		},
+		nil,
+		ec.marshalNSourceLocation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocation,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_sourceLocation(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "mode":
+				return ec.fieldContext_SourceLocation_mode(ctx, field)
+			case "clusters":
+				return ec.fieldContext_SourceLocation_clusters(ctx, field)
+			case "avoidNodeIds":
+				return ec.fieldContext_SourceLocation_avoidNodeIds(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SourceLocation", field.Name)
 		},
 	}
 	return fc, nil
@@ -101829,6 +104880,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsDaily_stream(_ context.C
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -102306,6 +105359,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummary_stream(_ context
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -103455,6 +106510,8 @@ func (ec *executionContext) fieldContext_StreamConnectionHourly_stream(_ context
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -103866,6 +106923,8 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -104026,6 +107085,8 @@ func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, f
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -106141,6 +109202,8 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Con
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -107572,6 +110635,8 @@ func (ec *executionContext) fieldContext_StreamKey_stream(_ context.Context, fie
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -109335,35 +112400,6 @@ func (ec *executionContext) fieldContext_StreamingConfig_playDomain(_ context.Co
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamingConfig_chandlerDomain(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_StreamingConfig_chandlerDomain,
-		func(ctx context.Context) (any, error) {
-			return obj.ChandlerDomain, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_StreamingConfig_chandlerDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamingConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _StreamingConfig_officialClusterLabel(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -109480,35 +112516,6 @@ func (ec *executionContext) fieldContext_StreamingConfig_officialPlayDomain(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamingConfig_officialChandlerDomain(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_StreamingConfig_officialChandlerDomain,
-		func(ctx context.Context) (any, error) {
-			return obj.OfficialChandlerDomain, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_StreamingConfig_officialChandlerDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamingConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _StreamingConfig_globalIngestDomain(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -109584,35 +112591,6 @@ func (ec *executionContext) _StreamingConfig_globalPlayDomain(ctx context.Contex
 }
 
 func (ec *executionContext) fieldContext_StreamingConfig_globalPlayDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamingConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamingConfig_globalChandlerDomain(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_StreamingConfig_globalChandlerDomain,
-		func(ctx context.Context) (any, error) {
-			return obj.GlobalChandlerDomain, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_StreamingConfig_globalChandlerDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamingConfig",
 		Field:      field,
@@ -109729,35 +112707,6 @@ func (ec *executionContext) _StreamingConfig_tenantPlayDomain(ctx context.Contex
 }
 
 func (ec *executionContext) fieldContext_StreamingConfig_tenantPlayDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamingConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamingConfig_tenantChandlerDomain(ctx context.Context, field graphql.CollectedField, obj *model.StreamingConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_StreamingConfig_tenantChandlerDomain,
-		func(ctx context.Context) (any, error) {
-			return obj.TenantChandlerDomain, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_StreamingConfig_tenantChandlerDomain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamingConfig",
 		Field:      field,
@@ -110549,6 +113498,8 @@ func (ec *executionContext) fieldContext_StreamsConnection_nodes(_ context.Conte
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -111593,6 +114544,51 @@ func (ec *executionContext) fieldContext_Subscription_liveSystemHealth(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _Subscription_liveIncidentUpdates(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Subscription_liveIncidentUpdates,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Subscription().LiveIncidentUpdates(ctx)
+		},
+		nil,
+		ec.marshalNIncidentUpdatedEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentUpdatedEvent,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Subscription_liveIncidentUpdates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "incidentId":
+				return ec.fieldContext_IncidentUpdatedEvent_incidentId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_IncidentUpdatedEvent_clusterId(ctx, field)
+			case "status":
+				return ec.fieldContext_IncidentUpdatedEvent_status(ctx, field)
+			case "severity":
+				return ec.fieldContext_IncidentUpdatedEvent_severity(ctx, field)
+			case "title":
+				return ec.fieldContext_IncidentUpdatedEvent_title(ctx, field)
+			case "change":
+				return ec.fieldContext_IncidentUpdatedEvent_change(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_IncidentUpdatedEvent_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentUpdatedEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Subscription_liveFirehose(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
 	return graphql.ResolveFieldStream(
 		ctx,
@@ -111649,6 +114645,8 @@ func (ec *executionContext) fieldContext_Subscription_liveFirehose(_ context.Con
 				return ec.fieldContext_TenantEvent_systemHealthEvent(ctx, field)
 			case "skipperInvestigation":
 				return ec.fieldContext_TenantEvent_skipperInvestigation(ctx, field)
+			case "incidentUpdated":
+				return ec.fieldContext_TenantEvent_incidentUpdated(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type TenantEvent", field.Name)
 		},
@@ -115401,6 +118399,51 @@ func (ec *executionContext) fieldContext_TenantEvent_skipperInvestigation(_ cont
 	return fc, nil
 }
 
+func (ec *executionContext) _TenantEvent_incidentUpdated(ctx context.Context, field graphql.CollectedField, obj *model.TenantEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_TenantEvent_incidentUpdated,
+		func(ctx context.Context) (any, error) {
+			return obj.IncidentUpdated, nil
+		},
+		nil,
+		ec.marshalOIncidentUpdatedEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentUpdatedEvent,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_TenantEvent_incidentUpdated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "incidentId":
+				return ec.fieldContext_IncidentUpdatedEvent_incidentId(ctx, field)
+			case "clusterId":
+				return ec.fieldContext_IncidentUpdatedEvent_clusterId(ctx, field)
+			case "status":
+				return ec.fieldContext_IncidentUpdatedEvent_status(ctx, field)
+			case "severity":
+				return ec.fieldContext_IncidentUpdatedEvent_severity(ctx, field)
+			case "title":
+				return ec.fieldContext_IncidentUpdatedEvent_title(ctx, field)
+			case "change":
+				return ec.fieldContext_IncidentUpdatedEvent_change(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_IncidentUpdatedEvent_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type IncidentUpdatedEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TenantStorageUsage_tenantId(ctx context.Context, field graphql.CollectedField, obj *ipcpb.TenantStorageUsage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -117036,6 +120079,8 @@ func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -117539,6 +120584,8 @@ func (ec *executionContext) fieldContext_TrackListUpdate_stream(_ context.Contex
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -119195,6 +122242,8 @@ func (ec *executionContext) fieldContext_ViewerCountBucket_stream(_ context.Cont
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -120148,6 +123197,8 @@ func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Conte
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -120910,6 +123961,8 @@ func (ec *executionContext) fieldContext_ViewerHoursHourly_stream(_ context.Cont
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -121449,6 +124502,8 @@ func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context,
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -122131,6 +125186,8 @@ func (ec *executionContext) fieldContext_ViewerSession_stream(_ context.Context,
 				return ec.fieldContext_Stream_pullSource(ctx, field)
 			case "managedSource":
 				return ec.fieldContext_Stream_managedSource(ctx, field)
+			case "sourceLocation":
+				return ec.fieldContext_Stream_sourceLocation(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -128599,7 +131656,7 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 		asMap["ingestMode"] = "PUSH"
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource"}
+	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource", "sourceLocation"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -128641,6 +131698,13 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.PullSource = data
+		case "sourceLocation":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sourceLocation"))
+			data, err := ec.unmarshalOSourceLocationInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SourceLocation = data
 		}
 	}
 	return it, nil
@@ -128766,6 +131830,43 @@ func (ec *executionContext) unmarshalInputEntitlementEntryInput(ctx context.Cont
 				return it, err
 			}
 			it.Value = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputIncidentFilterInput(ctx context.Context, obj any) (model.IncidentFilterInput, error) {
+	var it model.IncidentFilterInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"statuses", "clusterId"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "statuses":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
+			data, err := ec.unmarshalOIncidentStatus2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatusᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Statuses = data
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
 		}
 	}
 	return it, nil
@@ -129029,7 +132130,7 @@ func (ec *executionContext) unmarshalInputMediaPlacementOptionsFilter(ctx contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"query", "kind", "classes"}
+	fieldsInOrder := [...]string{"query", "kind", "classes", "clusterId"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -129057,6 +132158,13 @@ func (ec *executionContext) unmarshalInputMediaPlacementOptionsFilter(ctx contex
 				return it, err
 			}
 			it.Classes = data
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
 		}
 	}
 	return it, nil
@@ -129188,7 +132296,7 @@ func (ec *executionContext) unmarshalInputMediaPlacementSelectorInput(ctx contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clusterIds", "ownerIds", "regions", "classes", "charging"}
+	fieldsInOrder := [...]string{"clusterIds", "nodeIds", "ownerIds", "regions", "classes", "charging"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -129202,6 +132310,13 @@ func (ec *executionContext) unmarshalInputMediaPlacementSelectorInput(ctx contex
 				return it, err
 			}
 			it.ClusterIds = data
+		case "nodeIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeIds"))
+			data, err := ec.unmarshalOID2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeIds = data
 		case "ownerIds":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ownerIds"))
 			data, err := ec.unmarshalOID2ᚕstringᚄ(ctx, v)
@@ -129304,6 +132419,57 @@ func (ec *executionContext) unmarshalInputOpenMistAdminSessionInput(ctx context.
 				return it, err
 			}
 			it.NodeID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputPlatformIncidentFilterInput(ctx context.Context, obj any) (model.PlatformIncidentFilterInput, error) {
+	var it model.PlatformIncidentFilterInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"scope", "statuses", "clusterId", "tenantId"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "scope":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scope"))
+			data, err := ec.unmarshalOIncidentScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scope = data
+		case "statuses":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
+			data, err := ec.unmarshalOIncidentStatus2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatusᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Statuses = data
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
+		case "tenantId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tenantId"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TenantID = data
 		}
 	}
 	return it, nil
@@ -129622,36 +132788,6 @@ func (ec *executionContext) unmarshalInputPricingRuleInput(ctx context.Context, 
 	return it, nil
 }
 
-func (ec *executionContext) unmarshalInputPullSourceAllowedClustersInput(ctx context.Context, obj any) (commodorepb.PullSourceAllowedClustersInput, error) {
-	var it commodorepb.PullSourceAllowedClustersInput
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"clusterIds"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "clusterIds":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterIds"))
-			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClusterIds = data
-		}
-	}
-	return it, nil
-}
-
 func (ec *executionContext) unmarshalInputPullSourceInput(ctx context.Context, obj any) (commodorepb.PullSourceInput, error) {
 	var it commodorepb.PullSourceInput
 	if obj == nil {
@@ -129667,7 +132803,7 @@ func (ec *executionContext) unmarshalInputPullSourceInput(ctx context.Context, o
 		asMap["enabled"] = true
 	}
 
-	fieldsInOrder := [...]string{"sourceUri", "enabled", "allowedClusters"}
+	fieldsInOrder := [...]string{"sourceUri", "enabled"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -129688,13 +132824,6 @@ func (ec *executionContext) unmarshalInputPullSourceInput(ctx context.Context, o
 				return it, err
 			}
 			it.Enabled = data
-		case "allowedClusters":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowedClusters"))
-			data, err := ec.unmarshalOPullSourceAllowedClustersInput2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐPullSourceAllowedClustersInput(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.AllowedClusters = data
 		}
 	}
 	return it, nil
@@ -130126,6 +133255,98 @@ func (ec *executionContext) unmarshalInputSkipperChatInput(ctx context.Context, 
 				return it, err
 			}
 			it.Mode = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSourceLocationClusterInput(ctx context.Context, obj any) (model.SourceLocationClusterInput, error) {
+	var it model.SourceLocationClusterInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["nodeIds"]; !present {
+		asMap["nodeIds"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"clusterId", "nodeIds"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
+		case "nodeIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeIds"))
+			data, err := ec.unmarshalNID2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeIds = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputSourceLocationInput(ctx context.Context, obj any) (model.SourceLocationInput, error) {
+	var it model.SourceLocationInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["clusters"]; !present {
+		asMap["clusters"] = []any{}
+	}
+	if _, present := asMap["avoidNodeIds"]; !present {
+		asMap["avoidNodeIds"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"mode", "clusters", "avoidNodeIds"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "mode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("mode"))
+			data, err := ec.unmarshalNSourceLocationMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationMode(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Mode = data
+		case "clusters":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusters"))
+			data, err := ec.unmarshalNSourceLocationClusterInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Clusters = data
+		case "avoidNodeIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("avoidNodeIds"))
+			data, err := ec.unmarshalNID2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AvoidNodeIds = data
 		}
 	}
 	return it, nil
@@ -130568,7 +133789,7 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring"}
+	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource", "sourceLocation", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -130610,6 +133831,13 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.PullSource = data
+		case "sourceLocation":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sourceLocation"))
+			data, err := ec.unmarshalOSourceLocationInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SourceLocation = data
 		case "dvrChapterMode":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dvrChapterMode"))
 			data, err := ec.unmarshalODVRChapterMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDVRChapterMode(ctx, v)
@@ -131638,6 +134866,47 @@ func (ec *executionContext) _Error(ctx context.Context, sel ast.SelectionSet, ob
 	}
 }
 
+func (ec *executionContext) _IncidentMutationResult(ctx context.Context, sel ast.SelectionSet, obj model.IncidentMutationResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.Incident:
+		return ec._Incident(ctx, sel, &obj)
+	case *model.Incident:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Incident(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of IncidentMutationResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _LinkEmailResult(ctx context.Context, sel ast.SelectionSet, obj model.LinkEmailResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -131825,47 +135094,6 @@ func (ec *executionContext) _MediaPlacementChangeResult(ctx context.Context, sel
 			return typedObj
 		} else {
 			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementChangeResult must implement graphql.Marshaler", obj))
-		}
-	}
-}
-
-func (ec *executionContext) _MediaPlacementLegacyPinsResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementLegacyPinsResult) graphql.Marshaler {
-	switch obj := (obj).(type) {
-	case nil:
-		return graphql.Null
-	case model.NotFoundError:
-		return ec._NotFoundError(ctx, sel, &obj)
-	case *model.NotFoundError:
-		if obj == nil {
-			return graphql.Null
-		}
-		return ec._NotFoundError(ctx, sel, obj)
-	case model.AuthError:
-		return ec._AuthError(ctx, sel, &obj)
-	case *model.AuthError:
-		if obj == nil {
-			return graphql.Null
-		}
-		return ec._AuthError(ctx, sel, obj)
-	case model.MediaPlacementLegacyPins:
-		return ec._MediaPlacementLegacyPins(ctx, sel, &obj)
-	case *model.MediaPlacementLegacyPins:
-		if obj == nil {
-			return graphql.Null
-		}
-		return ec._MediaPlacementLegacyPins(ctx, sel, obj)
-	case model.MediaPlacementError:
-		return ec._MediaPlacementError(ctx, sel, &obj)
-	case *model.MediaPlacementError:
-		if obj == nil {
-			return graphql.Null
-		}
-		return ec._MediaPlacementError(ctx, sel, obj)
-	default:
-		if typedObj, ok := obj.(graphql.Marshaler); ok {
-			return typedObj
-		} else {
-			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementLegacyPinsResult must implement graphql.Marshaler", obj))
 		}
 	}
 }
@@ -137290,7 +140518,7 @@ func (ec *executionContext) _AssetNodeCopy(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
+var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _AuthError(ctx context.Context, sel ast.SelectionSet, obj *model.AuthError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, authErrorImplementors)
@@ -140864,6 +144092,11 @@ func (ec *executionContext) _ClusterAccess(ctx context.Context, sel ast.Selectio
 			}
 		case "resourceLimits":
 			out.Values[i] = ec._ClusterAccess_resourceLimits(ctx, field, obj)
+		case "allowPrivatePullSources":
+			out.Values[i] = ec._ClusterAccess_allowPrivatePullSources(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -145894,6 +149127,456 @@ func (ec *executionContext) _GeographicDistribution(ctx context.Context, sel ast
 	return out
 }
 
+var incidentImplementors = []string{"Incident", "IncidentMutationResult"}
+
+func (ec *executionContext) _Incident(ctx context.Context, sel ast.SelectionSet, obj *model.Incident) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Incident")
+		case "id":
+			out.Values[i] = ec._Incident_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scope":
+			out.Values[i] = ec._Incident_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tenantId":
+			out.Values[i] = ec._Incident_tenantId(ctx, field, obj)
+		case "clusterId":
+			out.Values[i] = ec._Incident_clusterId(ctx, field, obj)
+		case "region":
+			out.Values[i] = ec._Incident_region(ctx, field, obj)
+		case "alertname":
+			out.Values[i] = ec._Incident_alertname(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "severity":
+			out.Values[i] = ec._Incident_severity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._Incident_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resolution":
+			out.Values[i] = ec._Incident_resolution(ctx, field, obj)
+		case "title":
+			out.Values[i] = ec._Incident_title(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "summary":
+			out.Values[i] = ec._Incident_summary(ctx, field, obj)
+		case "firingAlertCount":
+			out.Values[i] = ec._Incident_firingAlertCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startedAt":
+			out.Values[i] = ec._Incident_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastAlertAt":
+			out.Values[i] = ec._Incident_lastAlertAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "acknowledgedAt":
+			out.Values[i] = ec._Incident_acknowledgedAt(ctx, field, obj)
+		case "acknowledgedBy":
+			out.Values[i] = ec._Incident_acknowledgedBy(ctx, field, obj)
+		case "assignedTo":
+			out.Values[i] = ec._Incident_assignedTo(ctx, field, obj)
+		case "resolvedAt":
+			out.Values[i] = ec._Incident_resolvedAt(ctx, field, obj)
+		case "resolvedBy":
+			out.Values[i] = ec._Incident_resolvedBy(ctx, field, obj)
+		case "createdAt":
+			out.Values[i] = ec._Incident_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._Incident_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentAlertImplementors = []string{"IncidentAlert"}
+
+func (ec *executionContext) _IncidentAlert(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentAlert) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentAlertImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentAlert")
+		case "fingerprint":
+			out.Values[i] = ec._IncidentAlert_fingerprint(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._IncidentAlert_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "labels":
+			out.Values[i] = ec._IncidentAlert_labels(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "annotations":
+			out.Values[i] = ec._IncidentAlert_annotations(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startsAt":
+			out.Values[i] = ec._IncidentAlert_startsAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "endsAt":
+			out.Values[i] = ec._IncidentAlert_endsAt(ctx, field, obj)
+		case "generatorUrl":
+			out.Values[i] = ec._IncidentAlert_generatorUrl(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentDetailImplementors = []string{"IncidentDetail"}
+
+func (ec *executionContext) _IncidentDetail(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentDetail) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentDetailImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentDetail")
+		case "incident":
+			out.Values[i] = ec._IncidentDetail_incident(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "alerts":
+			out.Values[i] = ec._IncidentDetail_alerts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "timeline":
+			out.Values[i] = ec._IncidentDetail_timeline(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentEdgeImplementors = []string{"IncidentEdge"}
+
+func (ec *executionContext) _IncidentEdge(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentEdge")
+		case "cursor":
+			out.Values[i] = ec._IncidentEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._IncidentEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentTimelineEventImplementors = []string{"IncidentTimelineEvent"}
+
+func (ec *executionContext) _IncidentTimelineEvent(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentTimelineEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentTimelineEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentTimelineEvent")
+		case "id":
+			out.Values[i] = ec._IncidentTimelineEvent_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._IncidentTimelineEvent_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "actorUserId":
+			out.Values[i] = ec._IncidentTimelineEvent_actorUserId(ctx, field, obj)
+		case "createdAt":
+			out.Values[i] = ec._IncidentTimelineEvent_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "note":
+			out.Values[i] = ec._IncidentTimelineEvent_note(ctx, field, obj)
+		case "assignedTo":
+			out.Values[i] = ec._IncidentTimelineEvent_assignedTo(ctx, field, obj)
+		case "reportId":
+			out.Values[i] = ec._IncidentTimelineEvent_reportId(ctx, field, obj)
+		case "channel":
+			out.Values[i] = ec._IncidentTimelineEvent_channel(ctx, field, obj)
+		case "resolution":
+			out.Values[i] = ec._IncidentTimelineEvent_resolution(ctx, field, obj)
+		case "alertFingerprint":
+			out.Values[i] = ec._IncidentTimelineEvent_alertFingerprint(ctx, field, obj)
+		case "alertname":
+			out.Values[i] = ec._IncidentTimelineEvent_alertname(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentUpdatedEventImplementors = []string{"IncidentUpdatedEvent"}
+
+func (ec *executionContext) _IncidentUpdatedEvent(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentUpdatedEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentUpdatedEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentUpdatedEvent")
+		case "incidentId":
+			out.Values[i] = ec._IncidentUpdatedEvent_incidentId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusterId":
+			out.Values[i] = ec._IncidentUpdatedEvent_clusterId(ctx, field, obj)
+		case "status":
+			out.Values[i] = ec._IncidentUpdatedEvent_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "severity":
+			out.Values[i] = ec._IncidentUpdatedEvent_severity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "title":
+			out.Values[i] = ec._IncidentUpdatedEvent_title(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "change":
+			out.Values[i] = ec._IncidentUpdatedEvent_change(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._IncidentUpdatedEvent_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var incidentsConnectionImplementors = []string{"IncidentsConnection"}
+
+func (ec *executionContext) _IncidentsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.IncidentsConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, incidentsConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("IncidentsConnection")
+		case "edges":
+			out.Values[i] = ec._IncidentsConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodes":
+			out.Values[i] = ec._IncidentsConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._IncidentsConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalCount":
+			out.Values[i] = ec._IncidentsConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var infrastructureNodeImplementors = []string{"InfrastructureNode", "SetNodeModeResult", "Node"}
 
 func (ec *executionContext) _InfrastructureNode(ctx context.Context, sel ast.SelectionSet, obj *quartermasterpb.InfrastructureNode) graphql.Marshaler {
@@ -148942,11 +152625,6 @@ func (ec *executionContext) _ManagedSourceView(ctx context.Context, sel ast.Sele
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "allowedClusterIds":
-			out.Values[i] = ec._ManagedSourceView_allowedClusterIds(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -149667,7 +153345,7 @@ func (ec *executionContext) _MediaPlacementEffectivePolicy(ctx context.Context, 
 	return out
 }
 
-var mediaPlacementErrorImplementors = []string{"MediaPlacementError", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
+var mediaPlacementErrorImplementors = []string{"MediaPlacementError", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _MediaPlacementError(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementErrorImplementors)
@@ -149949,55 +153627,6 @@ func (ec *executionContext) _MediaPlacementImpact(ctx context.Context, sel ast.S
 	return out
 }
 
-var mediaPlacementLegacyPinsImplementors = []string{"MediaPlacementLegacyPins", "MediaPlacementLegacyPinsResult"}
-
-func (ec *executionContext) _MediaPlacementLegacyPins(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementLegacyPins) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementLegacyPinsImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("MediaPlacementLegacyPins")
-		case "streamId":
-			out.Values[i] = ec._MediaPlacementLegacyPins_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "clusterIds":
-			out.Values[i] = ec._MediaPlacementLegacyPins_clusterIds(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "currentlyEnforced":
-			out.Values[i] = ec._MediaPlacementLegacyPins_currentlyEnforced(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var mediaPlacementOptionImplementors = []string{"MediaPlacementOption"}
 
 func (ec *executionContext) _MediaPlacementOption(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementOption) graphql.Marshaler {
@@ -150030,6 +153659,8 @@ func (ec *executionContext) _MediaPlacementOption(ctx context.Context, sel ast.S
 			out.Values[i] = ec._MediaPlacementOption_region(ctx, field, obj)
 		case "ownerId":
 			out.Values[i] = ec._MediaPlacementOption_ownerId(ctx, field, obj)
+		case "clusterId":
+			out.Values[i] = ec._MediaPlacementOption_clusterId(ctx, field, obj)
 		case "eligible":
 			out.Values[i] = ec._MediaPlacementOption_eligible(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -150651,6 +154282,11 @@ func (ec *executionContext) _MediaPlacementSelector(ctx context.Context, sel ast
 			out.Values[i] = graphql.MarshalString("MediaPlacementSelector")
 		case "clusterIds":
 			out.Values[i] = ec._MediaPlacementSelector_clusterIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeIds":
+			out.Values[i] = ec._MediaPlacementSelector_nodeIds(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -151905,6 +155541,34 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "applyClusterMediaConsentChange":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_applyClusterMediaConsentChange(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "acknowledgeIncident":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_acknowledgeIncident(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "assignIncident":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_assignIncident(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resolveIncident":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_resolveIncident(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "addIncidentNote":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_addIncidentNote(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -154448,7 +158112,7 @@ func (ec *executionContext) _NodesConnection(ctx context.Context, sel ast.Select
 	return out
 }
 
-var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
+var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _NotFoundError(ctx context.Context, sel ast.SelectionSet, obj *model.NotFoundError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, notFoundErrorImplementors)
@@ -156315,6 +159979,42 @@ func (ec *executionContext) _Platform(ctx context.Context, sel ast.SelectionSet,
 					}
 				}()
 				res = ec._Platform_clusters(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "incidents":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Platform_incidents(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -158748,11 +162448,6 @@ func (ec *executionContext) _PullSourceView(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "allowedClusterIds":
-			out.Values[i] = ec._PullSourceView_allowedClusterIds(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -160135,6 +163830,47 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "incidentsConnection":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_incidentsConnection(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "incident":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_incident(ctx, field)
 				return res
 			}
 
@@ -161632,28 +165368,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_mediaPlacementChange(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "mediaPlacementLegacyPins":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_mediaPlacementLegacyPins(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -164550,6 +168264,99 @@ func (ec *executionContext) _SkipperToolStartEvent(ctx context.Context, sel ast.
 	return out
 }
 
+var sourceLocationImplementors = []string{"SourceLocation"}
+
+func (ec *executionContext) _SourceLocation(ctx context.Context, sel ast.SelectionSet, obj *model.SourceLocation) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourceLocationImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourceLocation")
+		case "mode":
+			out.Values[i] = ec._SourceLocation_mode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusters":
+			out.Values[i] = ec._SourceLocation_clusters(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "avoidNodeIds":
+			out.Values[i] = ec._SourceLocation_avoidNodeIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sourceLocationClusterImplementors = []string{"SourceLocationCluster"}
+
+func (ec *executionContext) _SourceLocationCluster(ctx context.Context, sel ast.SelectionSet, obj *model.SourceLocationCluster) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourceLocationClusterImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourceLocationCluster")
+		case "clusterId":
+			out.Values[i] = ec._SourceLocationCluster_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeIds":
+			out.Values[i] = ec._SourceLocationCluster_nodeIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var storageArtifactImplementors = []string{"StorageArtifact"}
 
 func (ec *executionContext) _StorageArtifact(ctx context.Context, sel ast.SelectionSet, obj *model.StorageArtifact) graphql.Marshaler {
@@ -166036,6 +169843,42 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			out.Values[i] = ec._Stream_pullSource(ctx, field, obj)
 		case "managedSource":
 			out.Values[i] = ec._Stream_managedSource(ctx, field, obj)
+		case "sourceLocation":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Stream_sourceLocation(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "createdAt":
 			field := field
 
@@ -170273,8 +174116,6 @@ func (ec *executionContext) _StreamingConfig(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._StreamingConfig_edgeDomain(ctx, field, obj)
 		case "playDomain":
 			out.Values[i] = ec._StreamingConfig_playDomain(ctx, field, obj)
-		case "chandlerDomain":
-			out.Values[i] = ec._StreamingConfig_chandlerDomain(ctx, field, obj)
 		case "officialClusterLabel":
 			out.Values[i] = ec._StreamingConfig_officialClusterLabel(ctx, field, obj)
 		case "officialIngestDomain":
@@ -170283,16 +174124,12 @@ func (ec *executionContext) _StreamingConfig(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._StreamingConfig_officialEdgeDomain(ctx, field, obj)
 		case "officialPlayDomain":
 			out.Values[i] = ec._StreamingConfig_officialPlayDomain(ctx, field, obj)
-		case "officialChandlerDomain":
-			out.Values[i] = ec._StreamingConfig_officialChandlerDomain(ctx, field, obj)
 		case "globalIngestDomain":
 			out.Values[i] = ec._StreamingConfig_globalIngestDomain(ctx, field, obj)
 		case "globalEdgeDomain":
 			out.Values[i] = ec._StreamingConfig_globalEdgeDomain(ctx, field, obj)
 		case "globalPlayDomain":
 			out.Values[i] = ec._StreamingConfig_globalPlayDomain(ctx, field, obj)
-		case "globalChandlerDomain":
-			out.Values[i] = ec._StreamingConfig_globalChandlerDomain(ctx, field, obj)
 		case "globalLivepeerDomain":
 			out.Values[i] = ec._StreamingConfig_globalLivepeerDomain(ctx, field, obj)
 		case "tenantIngestDomain":
@@ -170301,8 +174138,6 @@ func (ec *executionContext) _StreamingConfig(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._StreamingConfig_tenantEdgeDomain(ctx, field, obj)
 		case "tenantPlayDomain":
 			out.Values[i] = ec._StreamingConfig_tenantPlayDomain(ctx, field, obj)
-		case "tenantChandlerDomain":
-			out.Values[i] = ec._StreamingConfig_tenantChandlerDomain(ctx, field, obj)
 		case "tenantLivepeerDomain":
 			out.Values[i] = ec._StreamingConfig_tenantLivepeerDomain(ctx, field, obj)
 		case "srtPort":
@@ -170929,6 +174764,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_liveProcessingEvents(ctx, fields[0])
 	case "liveSystemHealth":
 		return ec._Subscription_liveSystemHealth(ctx, fields[0])
+	case "liveIncidentUpdates":
+		return ec._Subscription_liveIncidentUpdates(ctx, fields[0])
 	case "liveFirehose":
 		return ec._Subscription_liveFirehose(ctx, fields[0])
 	case "skipperChat":
@@ -172659,6 +176496,8 @@ func (ec *executionContext) _TenantEvent(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._TenantEvent_systemHealthEvent(ctx, field, obj)
 		case "skipperInvestigation":
 			out.Values[i] = ec._TenantEvent_skipperInvestigation(ctx, field, obj)
+		case "incidentUpdated":
+			out.Values[i] = ec._TenantEvent_incidentUpdated(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -174711,7 +178550,7 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 	return out
 }
 
-var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "CreateClipResult", "CreateStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult"}
+var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "CreateClipResult", "CreateStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult"}
 
 func (ec *executionContext) _ValidationError(ctx context.Context, sel ast.SelectionSet, obj *model.ValidationError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, validationErrorImplementors)
@@ -180827,6 +184666,178 @@ func (ec *executionContext) marshalNID2ᚕstringᚄ(ctx context.Context, sel ast
 	return ret
 }
 
+func (ec *executionContext) marshalNIncident2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Incident) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIncident2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncident(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNIncident2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncident(ctx context.Context, sel ast.SelectionSet, v *model.Incident) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Incident(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNIncidentAlert2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentAlertᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.IncidentAlert) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIncidentAlert2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentAlert(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNIncidentAlert2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentAlert(ctx context.Context, sel ast.SelectionSet, v *model.IncidentAlert) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentAlert(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNIncidentEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.IncidentEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIncidentEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNIncidentEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEdge(ctx context.Context, sel ast.SelectionSet, v *model.IncidentEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentEdge(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNIncidentEventKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEventKind(ctx context.Context, v any) (model.IncidentEventKind, error) {
+	var res model.IncidentEventKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNIncidentEventKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentEventKind(ctx context.Context, sel ast.SelectionSet, v model.IncidentEventKind) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNIncidentMutationResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentMutationResult(ctx context.Context, sel ast.SelectionSet, v model.IncidentMutationResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentMutationResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNIncidentScope2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope(ctx context.Context, v any) (model.IncidentScope, error) {
+	var res model.IncidentScope
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNIncidentScope2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope(ctx context.Context, sel ast.SelectionSet, v model.IncidentScope) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus(ctx context.Context, v any) (model.IncidentStatus, error) {
+	var res model.IncidentStatus
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus(ctx context.Context, sel ast.SelectionSet, v model.IncidentStatus) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNIncidentTimelineEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentTimelineEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.IncidentTimelineEvent) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIncidentTimelineEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentTimelineEvent(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNIncidentTimelineEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentTimelineEvent(ctx context.Context, sel ast.SelectionSet, v *model.IncidentTimelineEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentTimelineEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNIncidentUpdatedEvent2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentUpdatedEvent(ctx context.Context, sel ast.SelectionSet, v model.IncidentUpdatedEvent) graphql.Marshaler {
+	return ec._IncidentUpdatedEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNIncidentUpdatedEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentUpdatedEvent(ctx context.Context, sel ast.SelectionSet, v *model.IncidentUpdatedEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentUpdatedEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNIncidentsConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentsConnection(ctx context.Context, sel ast.SelectionSet, v model.IncidentsConnection) graphql.Marshaler {
+	return ec._IncidentsConnection(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNIncidentsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentsConnection(ctx context.Context, sel ast.SelectionSet, v *model.IncidentsConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._IncidentsConnection(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNInfrastructureNode2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋquartermasterᚐInfrastructureNodeᚄ(ctx context.Context, sel ast.SelectionSet, v []*quartermasterpb.InfrastructureNode) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -181597,16 +185608,6 @@ func (ec *executionContext) marshalNMediaPlacementImpact2ᚖframeworksᚋapi_gat
 		return graphql.Null
 	}
 	return ec._MediaPlacementImpact(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNMediaPlacementLegacyPinsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementLegacyPinsResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementLegacyPinsResult) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._MediaPlacementLegacyPinsResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNMediaPlacementOption2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementOption) graphql.Marshaler {
@@ -183954,6 +187955,76 @@ func (ec *executionContext) marshalNSkipperToolDetail2ᚖframeworksᚋapi_gatewa
 		return graphql.Null
 	}
 	return ec._SkipperToolDetail(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSourceLocation2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocation(ctx context.Context, sel ast.SelectionSet, v model.SourceLocation) graphql.Marshaler {
+	return ec._SourceLocation(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSourceLocation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocation(ctx context.Context, sel ast.SelectionSet, v *model.SourceLocation) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SourceLocation(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSourceLocationCluster2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.SourceLocationCluster) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSourceLocationCluster2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationCluster(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSourceLocationCluster2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationCluster(ctx context.Context, sel ast.SelectionSet, v *model.SourceLocationCluster) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SourceLocationCluster(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNSourceLocationClusterInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterInputᚄ(ctx context.Context, v any) ([]*model.SourceLocationClusterInput, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.SourceLocationClusterInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNSourceLocationClusterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNSourceLocationClusterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationClusterInput(ctx context.Context, v any) (*model.SourceLocationClusterInput, error) {
+	res, err := ec.unmarshalInputSourceLocationClusterInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNSourceLocationMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationMode(ctx context.Context, v any) (model.SourceLocationMode, error) {
+	var res model.SourceLocationMode
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNSourceLocationMode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationMode(ctx context.Context, sel ast.SelectionSet, v model.SourceLocationMode) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNStartDVRResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStartDVRResult(ctx context.Context, sel ast.SelectionSet, v model.StartDVRResult) graphql.Marshaler {
@@ -186681,6 +190752,97 @@ func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalOIncidentDetail2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentDetail(ctx context.Context, sel ast.SelectionSet, v *model.IncidentDetail) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._IncidentDetail(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOIncidentFilterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentFilterInput(ctx context.Context, v any) (*model.IncidentFilterInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputIncidentFilterInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOIncidentResolution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentResolution(ctx context.Context, v any) (*model.IncidentResolution, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.IncidentResolution)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOIncidentResolution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentResolution(ctx context.Context, sel ast.SelectionSet, v *model.IncidentResolution) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOIncidentScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope(ctx context.Context, v any) (*model.IncidentScope, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.IncidentScope)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOIncidentScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentScope(ctx context.Context, sel ast.SelectionSet, v *model.IncidentScope) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOIncidentStatus2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatusᚄ(ctx context.Context, v any) ([]model.IncidentStatus, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]model.IncidentStatus, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOIncidentStatus2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []model.IncidentStatus) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIncidentStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalOIncidentUpdatedEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentUpdatedEvent(ctx context.Context, sel ast.SelectionSet, v *model.IncidentUpdatedEvent) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._IncidentUpdatedEvent(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOIngestEndpointResponse2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐIngestEndpointResponse(ctx context.Context, sel ast.SelectionSet, v *sharedpb.IngestEndpointResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -187146,6 +191308,14 @@ func (ec *executionContext) marshalOOrchestratorWithDetails2ᚖframeworksᚋapi_
 	return ec._OrchestratorWithDetails(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOPlatformIncidentFilterInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPlatformIncidentFilterInput(ctx context.Context, v any) (*model.PlatformIncidentFilterInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputPlatformIncidentFilterInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOPlatformOverview2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋperiscopeᚐGetPlatformOverviewResponse(ctx context.Context, sel ast.SelectionSet, v *periscopepb.GetPlatformOverviewResponse) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -187283,14 +191453,6 @@ func (ec *executionContext) marshalOProcessingUsageRecord2ᚖgithubᚗcomᚋLive
 		return graphql.Null
 	}
 	return ec._ProcessingUsageRecord(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalOPullSourceAllowedClustersInput2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐPullSourceAllowedClustersInput(ctx context.Context, v any) (*commodorepb.PullSourceAllowedClustersInput, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := ec.unmarshalInputPullSourceAllowedClustersInput(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOPullSourceEvent2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐPullSourceEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*commodorepb.PullSourceEvent) graphql.Marshaler {
@@ -187442,6 +191604,14 @@ func (ec *executionContext) marshalOSortOrder2ᚖgithubᚗcomᚋLivepeerᚑFrame
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) unmarshalOSourceLocationInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐSourceLocationInput(ctx context.Context, v any) (*model.SourceLocationInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputSourceLocationInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalOStorageArtifactKind2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStorageArtifactKindᚄ(ctx context.Context, v any) ([]model.StorageArtifactKind, error) {

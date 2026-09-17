@@ -1,0 +1,17 @@
+mutation AssignIncident($id: ID!, $assigneeUserId: ID) {
+  assignIncident(id: $id, assigneeUserId: $assigneeUserId) {
+    __typename
+    ... on Incident {
+      ...IncidentFields
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

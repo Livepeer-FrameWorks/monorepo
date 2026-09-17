@@ -79,6 +79,7 @@ func (s *FoghornGRPCServer) attestCellPlacementCapability(ctx context.Context) *
 		SupportedSchemaVersions: capability.SupportedSchemaVersions,
 		EnforcementReady:        capability.EnforcementReady,
 		LiveReplicas:            uint32(capability.LiveReplicas),
+		NodePlacementReady:      capability.NodePlacementReady,
 	}
 }
 

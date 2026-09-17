@@ -226,3 +226,75 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 		t.Fatalf("late/replayed API ledger requests=%d, want 3", apiRequests)
 	}
 }
+
+// A regional final reaches the aggregator through MirrorMaker2 under a
+// source-prefixed topic and can also be redelivered at least once. Both copies
+// must converge to one raw journal row, one final fact, and one ledger entry.
+func TestMirroredRawTriggerProjectsOnce_RealClickHouse(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dockerch.StartCurrent(t, root, "fw-metering-mirror-ingest").Native
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	ctx := context.Background()
+
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	const sourceID = "mirrored-user-end"
+	const nodeID = "edge-us-mirror-1"
+	const sessionID = "session-us-mirror-1"
+	endedAt := time.Now().UTC().Add(-20 * time.Minute).Truncate(time.Second)
+	projectionStart := time.Now().UTC().Add(-time.Second)
+
+	trigger := &ipcpb.MistTrigger{
+		NodeId: nodeID, TriggerType: "USER_END", RequestId: sourceID,
+		Timestamp: endedAt.UnixMilli(), TenantId: proto.String(tenantID), ClusterId: proto.String("media-us-1"),
+		OriginClusterId: proto.String("media-us-1"), StreamId: proto.String(streamID),
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
+			StreamName: "live+mirror", StreamId: proto.String(streamID), SessionId: sessionID,
+			Connector: "webrtc", Host: "198.51.100.7", Duration: 300, UpBytes: 1 << 20, DownBytes: 1 << 30,
+		}},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := map[string]string{
+		"tenant_id": tenantID, "cluster_id": "media-us-1", "source_event_id": sourceID,
+		"trigger_type": "USER_END", "node_id": nodeID, "source_region": "us-east",
+	}
+
+	for _, topic := range []string{"us-east.analytics.raw_mist_triggers", "us-east.analytics.raw_mist_triggers", "analytics.raw_mist_triggers"} {
+		if err := h.HandleRawMistTriggerMessage(ctx, kafka.Message{Topic: topic, Value: payload, Headers: headers}); err != nil {
+			t.Fatalf("deliver via %s: %v", topic, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	projectionEnd := time.Now().UTC().Add(time.Second)
+
+	var rawLogical, finalLogical uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM (SELECT source_request_id FROM periscope.raw_mist_triggers
+		WHERE tenant_id = ? GROUP BY node_id, trigger_type, source_request_id)`, tenantID).Scan(&rawLogical); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.viewer_sessions_final_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, nodeID, sessionID).Scan(&finalLogical); err != nil {
+		t.Fatal(err)
+	}
+	if rawLogical != 1 || finalLogical != 1 {
+		t.Fatalf("mirrored delivery logical counts raw=%d viewer_final=%d, want 1/1", rawLogical, finalLogical)
+	}
+
+	if err := h.rebuildViewerUsage5m(ctx, projectionStart, projectionEnd); err != nil {
+		t.Fatalf("ledger rebuild: %v", err)
+	}
+	var ledgerSeconds uint64
+	if err := conn.QueryRow(ctx, `SELECT sum(seconds_observed) FROM periscope.viewer_usage_5m_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, nodeID, sessionID).Scan(&ledgerSeconds); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerSeconds != 300 {
+		t.Fatalf("mirrored delivery ledger seconds=%d, want 300", ledgerSeconds)
+	}
+}

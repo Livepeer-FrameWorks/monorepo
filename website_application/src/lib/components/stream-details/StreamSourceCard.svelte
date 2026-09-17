@@ -4,7 +4,7 @@
   interface Stream {
     ingestMode?: "PUSH" | "PULL" | "MANAGED" | string | null;
     pullSource?: { enabled: boolean; class: string } | null;
-    managedSource?: { sourceKind: string; alwaysOn: boolean; allowedClusterIds: string[] } | null;
+    managedSource?: { sourceKind: string; alwaysOn: boolean } | null;
   }
 
   let { stream }: { stream: Stream } = $props();

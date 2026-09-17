@@ -18,10 +18,69 @@ import { Aside } from "@astrojs/starlight/components";
 PostgreSQL and YugabyteDB schema changes are managed through embedded,
 versioned migrations:
 
-| Scenario      | What to use                                                                                                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Fresh install | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision` |
-| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                |
+| Scenario                | What to use                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Fresh install           | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision` |
+| Upgrading               | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                |
+| Release adds a database | `frameworks cluster release apply` or `frameworks cluster migrate --phase expand` creates it from its baseline     |
+
+## New service databases
+
+A release can introduce a service that owns a new database (for example `lookout`). Declare the
+database in `postgres.databases`. Before the expand migrations, `cluster migrate --phase expand`
+(and therefore `cluster release apply`) probes every manifest database that has an embedded
+baseline:
+
+- **Absent database:** created with the same owner role, runtime role, and grants that
+  provisioning uses, then its current baseline is applied. The baseline writes the
+  `_schema_baseline` marker, so the database starts at the current floor with no migration history.
+- **Database present but its schema has no tables:** the roles are ensured and the baseline is
+  applied. This resumes a bootstrap that stopped after creating the database.
+- **Database with tables and a `_schema_baseline` marker or migration history:** already
+  initialized. Nothing is applied; its migrations run as usual.
+- **Database with tables but no marker and no migration history:** its provenance is ambiguous. It
+  may be an interrupted YugabyteDB baseline, a manual restore, or an imported database. Release and
+  migration commands refuse it before sending baseline SQL. Inspect the database first, then opt in
+  only when completing it against the current baseline is appropriate:
+
+  ```bash
+  frameworks cluster migrate --phase expand --complete-interrupted-baselines
+  # or, as part of the complete release:
+  frameworks cluster release apply --complete-interrupted-baselines
+  ```
+
+  The opted-in completion verifies the result:
+  1. It records a pending marker (`baseline-verification-pending`), so the database stays
+     unverified if the run stops at any later point.
+  2. It creates a temporary reference database on the same server, named
+     `<database>__baseline_check_<16 hex characters>`, and drops any reference an earlier
+     interrupted run left for that database.
+  3. It applies the baseline again to the database, which creates only the missing objects, and
+     applies the same baseline to the reference.
+  4. It compares the service schema of both: tables, columns (type, nullability, default),
+     constraints, indexes (including validity), triggers, functions, views, sequences, types, and
+     row-security policies. Ownership and grants are not compared because the role reasserts them
+     on every apply. It then drops the reference.
+  - **Identical:** the pending marker becomes the baseline's floor and the expand migrations
+    continue.
+  - **Different:** the release stops and prints every differing object with the expected
+    (baseline) and actual definition, for example
+    `column lookout.incidents.note / expected: (absent) / actual: text`. The database keeps its
+    pending marker, so every later release refuses it the same way until its schema matches the
+    baseline, and floor-dependent commands refuse it too.
+
+The reference database is dropped whether the comparison passes, fails, or the apply itself fails.
+Re-applying a baseline runs its data statements again, including seed statements and backfills.
+The explicit flag is therefore required even when the database has no migration history.
+
+After the bootstrap the CLI probes again and stops unless every database is initialized.
+Regional YugabyteDB aliases (such as `foghorn_eu`) are created per cell from their logical baseline.
+With `--dry-run` only read-only probes run: the output lists each database that would be created or
+completed and verified, no database, marker, or baseline SQL is sent, and the ledger checks skip
+those databases.
+
+`frameworks cluster upgrade <service>` checks the service's own database first and refuses with the
+command to run when it is missing, empty, or not yet verified.
 
 ## Migration structure
 

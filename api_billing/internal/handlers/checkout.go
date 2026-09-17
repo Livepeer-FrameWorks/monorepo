@@ -490,7 +490,7 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 		return s.stageTenantSubscriptionPending(ctx, sessionID, tenantID, customerID, subscriptionID)
 	}
 
-	rows, err := s.activateTenantSubscriptionFromStripe(ctx, tenantID, customerID, subscriptionID, tierID, nil, nil)
+	rows, err := s.activateTenantSubscriptionFromStripe(ctx, s.db, tenantID, customerID, subscriptionID, tierID, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -522,14 +522,14 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 // COALESCEd so an event that omits them cannot wipe known values. Idempotent;
 // returns the number of tenant rows updated. Shared by the
 // checkout.session.completed and customer.subscription.updated paths.
-func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time) (int64, error) {
+func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec purserdb.DBTX, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time) (int64, error) {
 	toNullTime := func(value *time.Time) sql.NullTime {
 		if value == nil {
 			return sql.NullTime{}
 		}
 		return sql.NullTime{Time: *value, Valid: true}
 	}
-	rows, err := purserdb.New(s.db).ActivateTenantSubscriptionFromStripe(ctx, purserdb.ActivateTenantSubscriptionFromStripeParams{
+	rows, err := purserdb.New(exec).ActivateTenantSubscriptionFromStripe(ctx, purserdb.ActivateTenantSubscriptionFromStripeParams{
 		CustomerID: customerID, SubscriptionID: subscriptionID, TierID: tierID,
 		PeriodEnd: toNullTime(periodEnd), PeriodStart: toNullTime(periodStart), TenantID: tenantID,
 	})
@@ -688,13 +688,13 @@ func (s *Service) stageClusterSubscriptionPending(ctx context.Context, sessionID
 // expires the still-open provider intent and clears the staged pending tier
 // fields, guarded by pending_reason so an active subscription's tier is never
 // touched. Idempotent.
-func (s *Service) clearStagedStripeCheckout(ctx context.Context, tenantID, subscriptionID string) error {
+func (s *Service) clearStagedStripeCheckout(ctx context.Context, exec purserdb.DBTX, tenantID, subscriptionID string) error {
 	if subscriptionID != "" {
-		if err := purserdb.New(s.db).ExpireStripeIntentBySubscription(ctx, subscriptionID); err != nil {
+		if err := purserdb.New(exec).ExpireStripeIntentBySubscription(ctx, subscriptionID); err != nil {
 			return fmt.Errorf("expire staged stripe intent for %s: %w", subscriptionID, err)
 		}
 	}
-	if err := purserdb.New(s.db).ClearTenantStripeCheckoutPending(ctx, tenantID); err != nil {
+	if err := purserdb.New(exec).ClearTenantStripeCheckoutPending(ctx, tenantID); err != nil {
 		return fmt.Errorf("clear staged stripe checkout for tenant %s: %w", tenantID, err)
 	}
 	return nil
@@ -789,7 +789,7 @@ func (s *Service) handleInvoiceCheckoutCompleted(ctx context.Context, sessionID,
 		}).Info("Invoice checkout pending async settlement; awaiting async_payment_succeeded")
 		return nil
 	}
-	updated, err := s.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed", nil, providerSettlementEvidence{
 		TenantID: tenantID, AmountCents: amountCents, Currency: currency,
 	})
 	if err != nil {
@@ -966,6 +966,16 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		s.logger.WithError(err).Warn("Failed to unsuspend tenant (may not have been suspended)")
 	}
 
+	if err := emitBillingEventTx(ctx, tx, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
+		TopupId:  topupID,
+		Amount:   float64(amountCents) / 100.0,
+		Currency: currency,
+		Provider: string(provider),
+		Status:   "credited",
+	}); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -979,13 +989,6 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		"transaction_id": txID,
 	}).Info("Credited prepaid balance from card top-up")
 
-	emitBillingEvent(s.db, s.logger, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
-		TopupId:  topupID,
-		Amount:   float64(amountCents) / 100.0,
-		Currency: currency,
-		Provider: string(provider),
-		Status:   "credited",
-	})
 	if s.convergeTenantEntitlements != nil {
 		if err := s.convergeTenantEntitlements(ctx, tenantID); err != nil {
 			return fmt.Errorf("converge tenant entitlements after top-up: %w", err)

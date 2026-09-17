@@ -12,7 +12,6 @@ import (
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
-	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -180,6 +179,27 @@ func TestPlacementAPITypedFailuresDoNotLeakDiagnostics(t *testing.T) {
 	}
 }
 
+func TestPlacementAPINodePlacementNotReadyIsNotStaleReview(t *testing.T) {
+	refusal := placement.NodePlacementNotReadyError("private-node-and-source-secret")
+	typed, ok := placementFailure(refusal).(*model.MediaPlacementError)
+	if !ok || typed.Code != model.MediaPlacementErrorCodeUnsupported || typed.Message != nodePlacementNotReadyMessage {
+		t.Fatalf("node placement refusal mapped to %+v", typed)
+	}
+	stale, ok := placementFailure(status.Error(codes.FailedPrecondition, "review expired")).(*model.MediaPlacementError)
+	if !ok || stale.Code != model.MediaPlacementErrorCodeStaleReview {
+		t.Fatalf("stale review mapped to %+v", stale)
+	}
+
+	streamErr := streamPlacementValidationError(refusal)
+	if streamErr == nil || streamErr.Message != nodePlacementNotReadyMessage || streamErr.Field == nil || *streamErr.Field != "sourceLocation" {
+		t.Fatalf("stream write node placement refusal mapped to %+v", streamErr)
+	}
+	otherPrecondition := streamPlacementValidationError(status.Error(codes.FailedPrecondition, "source location cluster is not entitled"))
+	if otherPrecondition == nil || otherPrecondition.Message != "source location cluster is not entitled" {
+		t.Fatalf("other stream precondition mapped to %+v", otherPrecondition)
+	}
+}
+
 func TestPlacementAPIApplyAndRecoverKeepExactChange(t *testing.T) {
 	input := placementAPITestInput()
 	var saved *placementpb.ApplyChangeRequest
@@ -281,24 +301,5 @@ func TestPlacementAPICapacityConsentRejectsServiceAndOperatorBypass(t *testing.T
 				t.Fatal("consent access did not return a typed refusal")
 			}
 		})
-	}
-}
-
-func TestPlacementAPILegacyPinsExposeOnlyTenantScopedPins(t *testing.T) {
-	fake := &clientstest.FakeCommodore{GetStreamFn: func(ctx context.Context, id string) (*commodorepb.Stream, error) {
-		if ctxkeys.GetTenantID(ctx) != "tenant" || id != "stream" {
-			t.Fatal("legacy pins lost tenant scope")
-		}
-		return &commodorepb.Stream{StreamId: "stream", StreamKey: "secret-stream-key", PullSource: &commodorepb.PullSourceView{SourceUriRedacted: "private-source", AllowedClusterIds: []string{"owned"}}}, nil
-	}}
-	r := &Resolver{Clients: clientstest.Clients(clientstest.WithCommodore(fake))}
-	result, err := r.DoMediaPlacementLegacyPins(placementAPITestContext(), "stream")
-	pins, ok := result.(*model.MediaPlacementLegacyPins)
-	if err != nil || !ok || len(pins.ClusterIds) != 1 || pins.ClusterIds[0] != "owned" || !pins.CurrentlyEnforced {
-		t.Fatal("legacy source pin was not reported")
-	}
-	body, err := json.Marshal(result)
-	if err != nil || strings.Contains(string(body), "secret-stream-key") || strings.Contains(string(body), "private-source") {
-		t.Fatal("legacy pin projection exposed source credentials")
 	}
 }

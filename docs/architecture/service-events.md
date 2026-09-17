@@ -29,7 +29,17 @@ Service Producer → Decklog (gRPC) → Kafka [service_events] → Periscope Ing
 Deckhand → Decklog → Kafka [service_events] → Signalman → GraphQL Subscriptions → UI
 ```
 
-**Note**: Signalman only forwards messaging‑related service events (e.g., message/conversation updates). `api_request_batch` is ignored. A latent `skipper_investigation` → `CHANNEL_AI` routing branch exists in Signalman (`api_realtime/cmd/signalman/main.go`), but nothing currently produces that event type, so it is functionally unused today.
+Each regional Signalman also consumes the `{source_region}.service_events` copies MirrorMaker2 writes into its Kafka cluster, so a subscriber attached to its own region's Bridge receives service events produced in every region. See [multiregion-kafka-mirrormaker.md](multiregion-kafka-mirrormaker.md).
+
+**Note**: Signalman forwards messaging‑related service events (e.g., message/conversation updates) and Lookout's tenant-scoped `incident_updated` (to `CHANNEL_SYSTEM`, delivered only to that tenant). `api_request_batch` is ignored. A latent `skipper_investigation` → `CHANNEL_AI` routing branch exists in Signalman (`api_realtime/cmd/signalman/main.go`), but nothing currently produces that event type, so it is functionally unused today.
+
+**Ownership path (Lookout)**:
+
+```
+Quartermaster outbox → Decklog (aggregator) → Kafka [service_events] → Lookout (group lookout-cluster-ownership)
+```
+
+Lookout reads only the aggregator's local `service_events`, because Quartermaster publishes there. It acts on `cluster_updated` alone: it re-reads the cluster's owner from Quartermaster and moves open incidents to it. See [lookout.md](lookout.md), "Ownership changes".
 
 ---
 
@@ -88,7 +98,7 @@ Event types are string constants emitted by services. The list below reflects cu
 
 - `tenant_created`, `tenant_updated`, `tenant_deleted`
 - `tenant_cluster_assigned`, `tenant_cluster_unassigned`
-- `cluster_created`, `cluster_updated`, `cluster_deleted`
+- `cluster_created`, `cluster_updated` (platform-scoped with no `tenant_id` when the cluster has no owner: Decklog accepts them and Periscope-Ingest writes no tenant audit row)
 - `cluster_invite_created`, `cluster_invite_revoked`
 - `cluster_subscription_requested`, `cluster_subscription_approved`, `cluster_subscription_rejected`
 
@@ -116,6 +126,10 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 
 - `message_received`, `message_updated`, `conversation_created`, `conversation_updated`
 
+**Incidents (Lookout)**
+
+- `incident_updated` (tenant-scoped incidents only; platform incidents are not emitted). See [lookout.md](lookout.md).
+
 ---
 
 ## 5. Producers & Payloads
@@ -127,11 +141,13 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 | Quartermaster | `TenantEvent`, `ClusterEvent`                                                                                        | Tenant + cluster lifecycle                    |
 | Purser        | `BillingEvent`                                                                                                       | Billing lifecycle (webhooks + gRPC)           |
 | Deckhand      | `MessageLifecycleData`                                                                                               | Messaging lifecycle                           |
+| Lookout       | `IncidentEvent`                                                                                                      | Tenant incident changes                       |
 | Foghorn       | `ArtifactEvent`                                                                                                      | Artifact lifecycle (clip/DVR/VOD)             |
 
 **Notes**
 
 - Quartermaster does not call Decklog inline: it enqueues its service events into its own transactional outbox (`quartermaster.service_event_outbox`, written inside the state-changing transaction) and a drain worker delivers them to Decklog with retry/backoff (`api_tenants/internal/grpc/service_event_outbox.go`). Quartermaster also keeps separate Navigator intent outboxes (`navigator_custom_domain_outbox`, `navigator_tenant_alias_outbox`) for custom-domain/tenant-alias intents — those carry DNS/ingress intents to Navigator, not service events, and the full pipeline is documented on the Quartermaster/Navigator side.
+- Purser does not call Decklog inline either: each billing mutation writes its `BillingEvent` into `purser.billing_event_outbox` inside the mutation's own transaction (`EnqueueBillingEventTx` in `api_billing/internal/grpc`, `emitBillingEventTx` in `api_billing/internal/handlers`), so a failed insert rolls the mutation back, and `runBillingOutboxWorker` delivers committed rows to Decklog. The exception is x402 accounting-anomaly and RPC-error telemetry (`emitBillingTelemetryEvent`), written as a standalone insert whose failure is logged, because it reports an observed condition rather than a billing state change.
 - Foghorn's artifact events use the same transactional-outbox shape (`foghorn.artifact_event_outbox`); see the node-copy telemetry section of [analytics-pipeline.md](analytics-pipeline.md).
 - Media-authority refresh is a separate correctness pipeline, not a Decklog
   service event. Purser and Quartermaster mutations enqueue dedicated refresh
@@ -198,6 +214,7 @@ default unless a manifest topic config overrides it.
 **DLQ**
 
 - Periscope Ingest and Signalman wrap Kafka handlers and publish failures to `decklog_events_dlq`.
+- Lookout's ownership consumer does not dead-letter: it skips malformed events and retries a `cluster_updated` it could not apply until it applies, without committing past it.
 - DLQ payloads are JSON with base64-encoded keys/values and the original headers for replay.
 - Include `tenant_id` and `event_type` headers on DLQ messages to keep tenant-aware replay filters and routing intact.
 - Wrapper semantics (retryable-vs-permanent classification, `wrapWithDLQ` vs `wrapRetryOnly`, payload encoding) are documented in [decklog.md](decklog.md).

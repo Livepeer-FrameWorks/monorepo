@@ -40,6 +40,7 @@ type SavedRules = NonNullable<Policy["verbs"][number]["ownRules"]>;
 export function copySelector(selector: Selector): Selector {
   return {
     clusterIds: [...(selector.clusterIds ?? [])],
+    nodeIds: [...(selector.nodeIds ?? [])],
     ownerIds: [...(selector.ownerIds ?? [])],
     regions: [...(selector.regions ?? [])],
     classes: [...(selector.classes ?? [])],
@@ -164,6 +165,7 @@ export function selectorLabel(selector: Selector): string {
   const parts = [
     selector.classes?.map((value) => classes[value]).join(" or "),
     selector.clusterIds?.length ? `${selector.clusterIds.length} selected cluster(s)` : "",
+    selector.nodeIds?.length ? `${selector.nodeIds.length} selected node(s)` : "",
     selector.ownerIds?.length ? `${selector.ownerIds.length} selected operator(s)` : "",
     selector.regions?.length ? `regions: ${selector.regions.join(", ")}` : "",
     selector.charging

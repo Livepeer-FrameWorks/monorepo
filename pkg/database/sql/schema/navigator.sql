@@ -212,13 +212,17 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
     tenant_id UUID NOT NULL,
     -- Customer-owned FQDN, e.g. "media.acme-inc.com". Lowercased + DNS-safe.
     domain TEXT NOT NULL,
-    -- Lifecycle:
+    -- Lifecycle. The domain is served only as a SAN of the tenant bundle
+    -- (tls_bundles.bundle_id = 'tenant:{tenant_id}'); no per-domain
+    -- certificate exists.
     --   pending_verification   waiting for customer CNAMEs to point at platform
-    --   verified               CNAMEs verified; cert issuance queued
-    --   cert_issuing           ACME order in flight
-    --   cert_issued            cert active; ready for distribution to edges
-    --   cert_failed            ACME failed; manual intervention
+    --   verified               CNAMEs verified; tenant bundle order queued
+    --   pending_alias          CNAMEs verified; waiting for the tenant alias bundle to be cert_issued
+    --   cert_issuing           tenant bundle order including this SAN in flight
+    --   cert_issued            SAN served by the tenant bundle
+    --   cert_failed            bundle order failed; retried after next_attempt_at
     --   tearing_down           remove requested; worker clearing state
+    -- Only cert_issuing and cert_issued join the tenant bundle SAN set.
     status TEXT NOT NULL DEFAULT 'pending_verification',
     -- Stable Navigator-owned subdomain for ACME-DNS-01 delegation. The
     -- customer CNAMEs _acme-challenge.{domain} → {acme_dns_subdomain}.acme-dns.{root}
@@ -226,15 +230,21 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
     -- a fresh random slug so revoking one domain doesn't strand a shared
     -- challenge path.
     acme_dns_subdomain TEXT NOT NULL,
-    -- Issuer chosen at issuance time; persisted so renewals stay on the
-    -- same CA unless an operator-driven migration moves them.
+    -- CA and expiry of the tenant bundle currently serving this SAN.
     issuer_id TEXT,
     last_verified_at TIMESTAMPTZ,
     cert_issued_at TIMESTAMPTZ,
     cert_expires_at TIMESTAMPTZ,
+    -- Verification or initial issuance failure for the current status.
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Failed tenant bundle renewal while the SAN keeps serving the previous
+    -- still-valid bundle; cleared by the next successful bundle.
+    last_renewal_error TEXT,
+    last_renewal_error_at TIMESTAMPTZ,
+    -- Earliest retry of a cert_failed domain.
+    next_attempt_at TIMESTAMPTZ,
     PRIMARY KEY (tenant_id, domain),
     CONSTRAINT uq_tenant_custom_domains_domain UNIQUE (domain)
 );

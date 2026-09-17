@@ -24,6 +24,7 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
 
@@ -95,9 +96,9 @@ func main() {
 	brokers := strings.Split(brokersEnv, ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "periscope-ingest")
-	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
-	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
-	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
+	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", topology.TopicAnalyticsEvents)
+	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", topology.TopicServiceEvents)
+	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", topology.TopicDecklogDLQ)
 
 	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger,
 		kafka.WithLagTracker(kafka.LagTrackerConfig{Gauge: metrics.KafkaLag}),
@@ -232,10 +233,6 @@ func main() {
 		return wrapConsumerHandler(consumerName, handler, false)
 	}
 
-	// Subscribe to local regional topics. Cross-region mirrored topics
-	// from MIRROR_REGION_PREFIXES are wired separately below.
-	consumer.AddHandler(analyticsTopic, wrapWithDLQ("periscope-ingest-analytics", eventHandler.HandleMessage))
-
 	serviceHandler := func(ctx context.Context, msg kafka.Message) error {
 		var event kafka.ServiceEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
@@ -270,44 +267,24 @@ func main() {
 		}
 		return analyticsHandler.HandleServiceEvent(event)
 	}
-	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("periscope-ingest-service", serviceHandler))
-
-	// Raw MistTrigger audit/replay topic. Decklog republishes the original
-	// MistTrigger envelope for the seven final/accounting trigger types so
-	// Periscope can populate raw_mist_triggers for incident recovery and
-	// reparse. Configurable via RAW_MIST_TRIGGERS_KAFKA_TOPIC; set to "-"
-	// to disable consumption on this instance.
-	rawTriggersTopic := strings.TrimSpace(config.GetEnv("RAW_MIST_TRIGGERS_KAFKA_TOPIC", "analytics.raw_mist_triggers"))
-	if rawTriggersTopic != "" && rawTriggersTopic != "-" {
-		// Raw final-trigger projection is billing-critical. Let Kafka
-		// retry transient ClickHouse failures instead of committing the
-		// offset via DLQ; poison protobuf payloads are swallowed inside
-		// HandleRawMistTriggerMessage after logging.
-		consumer.AddHandler(rawTriggersTopic, wrapRetryOnly("periscope-ingest-raw-triggers", analyticsHandler.HandleRawMistTriggerMessage))
-	}
-
-	// Mirrored-topic subscriptions. MIRROR_REGION_PREFIXES is a comma-
-	// separated list of region IDs (e.g. "us-east,ap-tokyo"); each adds
-	// {region}.analytics_events and {region}.service_events to the
-	// subscription set. Empty = consume only local-cluster topics.
-	mirrorPrefixes := strings.TrimSpace(config.GetEnv("MIRROR_REGION_PREFIXES", ""))
-	if mirrorPrefixes != "" {
-		for _, prefix := range strings.Split(mirrorPrefixes, ",") {
-			prefix = strings.TrimSpace(prefix)
-			if prefix == "" {
-				continue
-			}
-			mirroredAnalytics := prefix + "." + analyticsTopic
-			mirroredServiceEvents := prefix + "." + serviceEventsTopic
-			consumer.AddHandler(mirroredAnalytics, wrapWithDLQ("periscope-ingest-analytics-mirror:"+prefix, eventHandler.HandleMessage))
-			consumer.AddHandler(mirroredServiceEvents, wrapWithDLQ("periscope-ingest-service-mirror:"+prefix, serviceHandler))
-			logger.WithFields(logging.Fields{
-				"region_prefix":   prefix,
-				"analytics_topic": mirroredAnalytics,
-				"service_events":  mirroredServiceEvents,
-			}).Info("Subscribed to MirrorMaker2 mirrored topics")
-		}
-	}
+	// Decklog republishes the original MistTrigger envelope for final and
+	// accounting triggers to the raw journal topic; HandleRawMistTriggerMessage
+	// logs and drops poison protobuf payloads itself.
+	rawTriggersTopic := config.GetEnv("RAW_MIST_TRIGGERS_KAFKA_TOPIC", topology.TopicRawMistTriggers)
+	subscriptions := ingestSubscriptions(
+		ingestTopics{analytics: analyticsTopic, serviceEvents: serviceEventsTopic, rawTriggers: rawTriggersTopic},
+		ingestHandlers{
+			analytics:     eventHandler.HandleMessage,
+			serviceEvents: serviceHandler,
+			rawTriggers:   analyticsHandler.HandleRawMistTriggerMessage,
+		},
+		wrapWithDLQ,
+		wrapRetryOnly,
+	)
+	// MIRROR_REGION_PREFIXES lists the MirrorMaker2 source aliases whose
+	// prefixed topic copies land in this aggregator Kafka cluster.
+	subscribedTopics := registerIngestSubscriptions(consumer, subscriptions, splitMirrorPrefixes(config.GetEnv("MIRROR_REGION_PREFIXES", "")))
+	logger.WithField("topics", subscribedTopics).Info("Subscribed to Kafka topics")
 
 	// Now add health checks with all dependencies
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))

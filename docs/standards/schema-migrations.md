@@ -26,6 +26,54 @@ commit.** A fresh `init` applies the baseline then only post-floor migrations; a
 upgrade applies the migration. They must converge. The verification harness (below)
 enforces this for post-floor migrations.
 
+## New service databases
+
+A database introduced by a release has a baseline and **no migrations**: its whole
+schema lives in `pkg/database/sql/schema/<db>.sql`. Existing clusters receive it through
+the release path, not through `cluster provision`:
+
+- `cluster migrate --phase expand` (the first step of `cluster release apply`) probes
+  every manifest database with an embedded baseline before the below-floor guard and
+  any migration. An absent database, or a present one whose service schema has no base
+  tables, is initialized by the postgres/yugabyte role's `init` tag (owner role,
+  database, runtime role, ownership) and `schema` tag (current baseline, which writes
+  the `_schema_baseline` marker, plus owner and runtime grants), restricted to those
+  databases. A database with tables and a marker or `_migrations` rows is initialized
+  and receives nothing.
+- A database with tables but neither a marker nor `_migrations` rows has unknown
+  provenance. Release and migration commands refuse it before baseline SQL unless the
+  operator supplies `--complete-interrupted-baselines` after inspecting it. The opted-in
+  path completes and verifies it (`InitializeServiceDatabases` in `cli/pkg/provisioner`):
+  the marker is set to
+  `baseline-verification-pending`; a scratch reference `<db>__baseline_check_<hex>` is
+  created on the same server (stale references for that database are dropped first);
+  the `schema` tag runs with `reapply` for both the database and the reference; the
+  service-schema catalogs (tables, columns, constraints, indexes with validity,
+  triggers, routines, views, sequences, types, policies; not ownership or grants) are
+  compared; the reference is dropped; and only an identical catalog replaces the
+  pending marker with the reference's floor. A difference stops the release with each
+  object's expected and actual definition and leaves the pending marker, which the
+  initialization probe ignores and every floor reader refuses, so the refusal survives
+  reruns and interruptions. The completion flag never accepts a divergent schema.
+- A second probe must show every bootstrapped database initialized or the release stops.
+- Dry-run sends no role, database, marker, or baseline SQL. It lists the databases it
+  would create or complete and excludes them from the floor guard and migration ledger
+  checks.
+- The pre-deploy gate (`cluster upgrade`) refuses a service whose owned database is
+  missing, empty, or unverified, because a database without migrations would otherwise
+  pass the ledger checks.
+- Tagged-upgrade proofs treat a baseline absent at the tag as created from the current
+  baseline, and fail if a post-tag migration targets that database.
+
+Every service baseline must write the `_schema_baseline` marker and be safe to apply
+twice: `TestBaselineMarkerFloorMatchesConst` checks the marker, and
+`TestPostgresServiceBaselinesApplyTwice` / `TestYugabyteServiceBaselineReapplyAndCompletion`
+apply each baseline a second time on a real engine and require an unchanged catalog.
+Use `IF NOT EXISTS`, `CREATE OR REPLACE`, or `DROP ... IF EXISTS` before `ADD CONSTRAINT`.
+
+Do not ship migrations for a database in the release that introduces it; change its
+baseline instead.
+
 ## Release catalog and migration version ceiling
 
 `cli/internal/releases/catalog.yaml` declares releasable platform versions and the
@@ -115,7 +163,7 @@ The exhaustive Yugabyte target reconstructs every supported tagged/current datab
 therefore a release and scheduled-CI proof, not the default inner-loop check for every Go
 change. Use `make verify-yugabyte-service SERVICE=<name>` for query or repository changes in
 one of `commodore`, `purser`, `navigator`, `skipper`, `quartermaster`,
-`periscope-metering`, or `foghorn`. Use
+`periscope-metering`, `foghorn`, or `lookout`. Use
 `make verify-yugabyte-database DATABASE=<name>` when that database's baseline, migrations,
 or capability assumptions changed; this runs its tagged/current convergence plus its service
 contracts. The database name for Periscope Metering is `periscope`. Both focused targets use
@@ -294,6 +342,7 @@ Each PostgreSQL-backed service owns a sqlc configuration and a service-local que
 | `api_consultant`      | `api_consultant/sqlc.yaml`      | `api_consultant/internal/database/queries/`      | `api_consultant/internal/database/skipperdb`       |
 | `api_analytics_query` | `api_analytics_query/sqlc.yaml` | `api_analytics_query/internal/database/queries/` | `api_analytics_query/internal/database/meteringdb` |
 | `api_balancing`       | `api_balancing/sqlc.yaml`       | `api_balancing/internal/database/queries/`       | `api_balancing/internal/database/foghorndb`        |
+| `api_incidents`       | `api_incidents/sqlc.yaml`       | `api_incidents/internal/database/queries/`       | `api_incidents/internal/database/lookoutdb`        |
 
 Each config points `schema:` at that database's baseline file under
 `pkg/database/sql/schema/`, so generation itself fails when a query no longer matches

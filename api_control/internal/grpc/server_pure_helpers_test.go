@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"strings"
 	"testing"
 
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -186,36 +185,6 @@ func TestPullSourceEnabled(t *testing.T) {
 	enabledTrue := true
 	if !pullSourceEnabled(&commodorepb.PullSourceInput{Enabled: &enabledTrue}) {
 		t.Error("pullSourceEnabled(Enabled=true) = false, want true")
-	}
-}
-
-func TestFormatRuntimePlacementRejects(t *testing.T) {
-	redacted := "rtmp://upstream.example.com"
-	rejects := []pullsource.PlacementReject{
-		{Reason: pullsource.PlacementRejectEmptyForPrivate},
-		{ClusterID: "c-unknown", Reason: pullsource.PlacementRejectUnknownCluster},
-		{ClusterID: "c-nopriv", Reason: pullsource.PlacementRejectMissingPrivateCapability},
-	}
-	got := formatRuntimePlacementRejects(rejects, redacted)
-
-	// Private-without-pins remains actionable, while cluster-specific denials
-	// deliberately collapse existence and capability to one message.
-	for _, want := range []string{
-		"is private/multicast",
-		"c-unknown",
-		"not eligible for pull source placement",
-		"c-nopriv",
-	} {
-		if !contains(got, want) {
-			t.Errorf("formatRuntimePlacementRejects output %q missing %q", got, want)
-		}
-	}
-	// Three rejects joined with "; ".
-	if strings.Count(got, "; ") != 2 {
-		t.Errorf("expected 2 separators in %q", got)
-	}
-	if strings.Contains(got, "registered media") || strings.Contains(got, "allow_private_pull_sources") {
-		t.Errorf("placement denial leaks fleet existence or capability: %q", got)
 	}
 }
 

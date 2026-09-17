@@ -112,12 +112,17 @@ Stream and routing analytics already exist, and first-party view-level QoE now s
 The broader coverage should explain which viewers buffered, why, and which route or rendition they
 used, including viewers outside the FrameWorks player.
 
-### Incidents and Alerts <Badge text="Next" variant="tip" />
+### Incidents and Alerts <Badge text="Now" variant="success" />
 
-A tenant-scoped incident feed is planned: node-health, certificate, DNS, capacity, and cluster alerts aggregated with acknowledge/resolve workflows, realtime delivery, and agent tooling for triage. Self-hosted operators get visibility into their own clusters — certificate expiry, port reachability, DNS resolution, resource thresholds — without standing up a separate monitoring stack.
+Lookout now turns platform alerts into tenant-aware incidents with acknowledge, assignment,
+resolution, notes, realtime updates, operator notifications, and Skipper investigations. Tenants
+see incidents only for clusters they own; platform operators retain the cross-tenant operational
+view. See the [incident API guide](/builders/incidents) and
+[operator setup](/operators/alerting).
 
-Operators and agents will be able to see, acknowledge, and resolve problems across streams, nodes,
-and clusters from one incident feed.
+The remaining work is broader alert coverage, especially richer edge reachability, certificate,
+DNS, capacity, and per-stream causes. Those signals can join the same incident workflow without
+changing its ownership or authorization model.
 
 ## Infrastructure & BYOC
 

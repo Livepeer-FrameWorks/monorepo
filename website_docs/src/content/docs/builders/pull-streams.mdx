@@ -43,7 +43,9 @@ output instead.
 ## Create a Pull Stream
 
 In the dashboard, create a stream and choose **Pull** as the ingest mode. Provide the upstream
-source URI and keep the source enabled if it should start when viewers request playback.
+source URI and keep the source enabled if it should start when viewers request playback. Under
+**Where can this source be reached?**, keep **Any cluster FrameWorks chooses** for a public source,
+or choose **Only these clusters** to restrict it.
 
 Through GraphQL, use `createStream` with `ingestMode: PULL` and `pullSource`:
 
@@ -59,8 +61,19 @@ mutation CreatePullStream($input: CreateStreamInput!) {
         sourceUriRedacted
         enabled
         class
-        allowedClusterIds
       }
+      sourceLocation {
+        mode
+        clusters {
+          clusterId
+          nodeIds
+        }
+        avoidNodeIds
+      }
+    }
+    ... on ValidationError {
+      message
+      field
     }
   }
 }
@@ -73,26 +86,50 @@ mutation CreatePullStream($input: CreateStreamInput!) {
     "ingestMode": "PULL",
     "pullSource": {
       "sourceUri": "rtsp://camera.example.net/live",
-      "enabled": true,
-      "allowedClusters": {
-        "clusterIds": []
-      }
+      "enabled": true
     }
   }
 }
 ```
 
-The source URI is stored encrypted and returned only in redacted form. For public sources,
-`allowedClusters.clusterIds: []` means any media cluster may run the pull. Set cluster IDs to
-pin a public source to a specific cluster set.
+The source URI is stored encrypted and returned only in redacted form. Omitting `sourceLocation`
+leaves it `ANY`: FrameWorks may run a public source on any media cluster your account can use.
+
+## Source Location
+
+A stream's `sourceLocation` says where FrameWorks may connect to the upstream:
+
+| Mode         | Meaning                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANY`        | No stream-level restriction. FrameWorks chooses among your entitled media clusters.                                                                |
+| `RESTRICTED` | Only the listed clusters. On clusters you own, each entry can be narrowed to specific nodes, and `avoidNodeIds` excludes nodes entirely.           |
+| `CUSTOM`     | Read-only. The stream's ingest placement rules hold more than a location can express; edit them with [media placement](/builders/media-placement). |
+
+The location is stored as the stream's own ingest placement rules. The edge that dials the source
+is checked against those rules node by node, so a camera restricted to one node is never opened
+from another node, even in the same cluster. Other nodes and clusters serve viewers by relaying
+from the node that holds the source. Writing a location replaces only where the source may run;
+viewer placement rules and ingest preferences stay as they are.
+
+- `clusters` must be non-empty for `RESTRICTED` and empty for `ANY`. Each cluster must be one your
+  account can use (`clustersAccessConnection`).
+- `nodeIds` and `avoidNodeIds` accept only nodes of clusters your account owns, and are accepted
+  once every media cell serving your account supports node placement. A node cannot be both allowed
+  and avoided.
+- `updateStream` with `sourceLocation` replaces the location; omitting it keeps the current one.
+  A `CUSTOM` location cannot be replaced from `updateStream`.
+- Rejections come back as `ValidationError` with the reason, such as a cluster you cannot use, a
+  node you do not own, or a private source without a consenting cluster.
 
 ## Private Upstreams on Self-hosted Edges
 
-Private literals require two pieces of configuration:
+A camera on a LAN or a multicast feed is reachable only from edges on that network. Private
+literals (RFC1918, ULA, or non-link-local multicast addresses) require two pieces of configuration:
 
-- The target media cluster must opt in with `allow_private_pull_sources: true`.
-- The pull stream must explicitly pin itself to that cluster with `allowedClusters.clusterIds`
-  (GraphQL) or `allowed_cluster_ids` (bootstrap).
+- The media cluster must opt in with `allow_private_pull_sources: true`. Tenants see this as
+  `ClusterAccess.allowPrivatePullSources`.
+- The stream's `sourceLocation` must be `RESTRICTED` to clusters that opted in. A restriction to
+  those clusters in your account-level ingest rules also satisfies this.
 
 ```yaml
 clusters:
@@ -104,7 +141,40 @@ clusters:
     allow_private_pull_sources: true
 ```
 
-Then create the pull stream with the placement pin:
+Find the cluster and, if the camera is reachable from only some edges, the node IDs:
+
+```graphql
+query SourceLocationChoices {
+  clustersAccessConnection {
+    nodes {
+      clusterId
+      clusterName
+      allowPrivatePullSources
+    }
+  }
+  mediaPlacementOptions(
+    scope: { kind: TENANT }
+    filter: { kind: NODE, clusterId: "warehouse-edge" }
+  ) {
+    __typename
+    ... on MediaPlacementOptionsConnection {
+      nodes {
+        id
+        name
+        clusterId
+        eligible
+        reason
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+  }
+}
+```
+
+Then create the pull stream restricted to that cluster, and to the node on the camera's network:
 
 ```json
 {
@@ -113,24 +183,77 @@ Then create the pull stream with the placement pin:
     "ingestMode": "PULL",
     "pullSource": {
       "sourceUri": "rtsp://192.168.10.50/live",
-      "enabled": true,
-      "allowedClusters": {
-        "clusterIds": ["warehouse-edge"]
-      }
+      "enabled": true
+    },
+    "sourceLocation": {
+      "mode": "RESTRICTED",
+      "clusters": [{ "clusterId": "warehouse-edge", "nodeIds": ["warehouse-edge-1"] }]
     }
   }
 }
 ```
 
-This protects platform-managed clusters from trying to reach sources they cannot access and keeps
-private-source placement constrained to edge nodes you operate.
+Leave `nodeIds` empty to allow every node of the cluster. To keep a source off one node without
+listing the others, use `"avoidNodeIds": ["warehouse-edge-3"]`. To change an existing stream:
 
-| Deployment shape                              | Result                                                               |
-| --------------------------------------------- | -------------------------------------------------------------------- |
-| Platform cluster, public source URI           | Allowed.                                                             |
-| Platform cluster, private literal source URI  | Rejected.                                                            |
-| Self-hosted edge with opt-in + placement pin  | Allowed and routed only to the pinned eligible media clusters.       |
-| Hostname resolving to private IP from an edge | Treated as public at validation; DNS reachability is operator-owned. |
+```graphql
+mutation RestrictSource($id: ID!) {
+  updateStream(
+    id: $id
+    input: {
+      sourceLocation: {
+        mode: RESTRICTED
+        clusters: [{ clusterId: "warehouse-edge", nodeIds: ["warehouse-edge-1"] }]
+      }
+    }
+  ) {
+    __typename
+    ... on Stream {
+      sourceLocation {
+        mode
+        clusters {
+          clusterId
+          nodeIds
+        }
+        avoidNodeIds
+      }
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Through MCP, `create_stream` and `update_stream` take the same location as `source_location`:
+
+```json
+{
+  "name": "Warehouse Camera",
+  "ingest_mode": "pull",
+  "pull_source": { "source_uri": "rtsp://192.168.10.50/live" },
+  "source_location": {
+    "mode": "restricted",
+    "clusters": [{ "cluster_id": "warehouse-edge", "node_ids": ["warehouse-edge-1"] }]
+  }
+}
+```
+
+This keeps platform-managed clusters from trying to reach sources they cannot access and keeps
+private-source placement on edge nodes you operate.
+
+| Deployment shape                                   | Result                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------- |
+| Platform cluster, public source URI                | Allowed.                                                             |
+| Platform cluster, private literal source URI       | Rejected.                                                            |
+| Self-hosted edge with opt-in + restricted location | Allowed; dialed only from the listed clusters and nodes.             |
+| Hostname resolving to private IP from an edge      | Treated as public at validation; DNS reachability is operator-owned. |
+
+Operator-declared pull streams set the same restriction in the bootstrap overlay with
+`source_location` (see [Cluster manifest](/operators/cluster-manifest#stream-source-location)).
 
 <Aside type="caution" title="Hostname reachability is on you">
   Private-vs-public classification uses literal IPs in the URI. A hostname that resolves to an

@@ -60,6 +60,7 @@ import (
 
 func newClusterProvisionCmd() *cobra.Command {
 	var only string
+	var version string
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
@@ -97,6 +98,9 @@ save a default, or pass them explicitly.`,
   # Provision from a GitHub repo (requires github-app-id/installation-id/private-key)
   frameworks cluster provision --github-repo org/infra-repo --cluster production
 
+  # Provision a specific release instead of the one the manifest channel resolves to
+  frameworks cluster provision --version v1.2.3 --only interfaces
+
   # Force re-provision even if services exist
   frameworks cluster provision --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,11 +112,12 @@ save a default, or pass them explicitly.`,
 			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
 				return err
 			}
-			return runProvision(cmd, rc, only, dryRun, force, ignoreValidation)
+			return runProvision(cmd, rc, only, version, dryRun, force, ignoreValidation)
 		},
 	}
 
 	cmd.Flags().StringVar(&only, "only", "all", "Phase to provision (infrastructure|applications|interfaces|all)")
+	cmd.Flags().StringVar(&version, "version", "", "Target release (stable, rc, v1.2.3); defaults to the cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
@@ -131,7 +136,7 @@ save a default, or pass them explicitly.`,
 	return cmd
 }
 
-func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, force, ignoreValidation bool) error {
+func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string, dryRun, force, ignoreValidation bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	out := cmd.OutOrStdout()
@@ -182,7 +187,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		}
 	}
 
-	frozenManifest, releaseSelector, releaseVersion, err := freezeProvisionReleaseManifest(manifest, rc.ReleaseRepos)
+	frozenManifest, releaseSelector, releaseVersion, err := freezeProvisionReleaseManifestWithFetchOptions(manifest, resolveUpgradeVersion(cmd, manifest, version), rc.ReleaseRepos, provisionReleaseFetchOptions())
 	if err != nil {
 		return err
 	}
@@ -271,6 +276,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	}
 	preflightPool.Close()
 
+	if envErr := preflightProvisionRequiredEnv(out, plan, manifest, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, ignoreValidation); envErr != nil {
+		return envErr
+	}
+
 	// Show plan. In dry-run mode, annotate each task with a desired-vs-observed
 	// config diff summary so operators see the real change surface before applying.
 	annotateTask := func(task *orchestrator.Task) string { return "" }
@@ -297,6 +306,13 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 
 	if dryRun {
 		printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
+		if phaseConvergesInfrastructure(phase) {
+			mmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+			if mmErr := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, out, manifest, mmPool, true); mmErr != nil {
+				fmt.Fprintf(out, "Removed kafka-mirrormaker worker plan: inconclusive: %v\n\n", mmErr)
+			}
+			mmPool.Close()
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Dry-run complete. Use without --dry-run to execute.")
 		return nil
 	}
@@ -356,7 +372,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		// otherwise stay unapplied. Run it here — after services are deployed (executeProvision) and expand is applied
 		// (init), before the edge target sync and success — mirroring release apply's postdeploy phase. Pinned to the
 		// frozen concrete releaseVersion; a no-op when the target declares no postdeploy migrations.
-		if err := runMigrate(cmd, rc, false, "postdeploy", true, releaseVersion, false); err != nil {
+		if err := runMigrate(cmd, rc, false, "postdeploy", true, releaseVersion, false, false); err != nil {
 			return fmt.Errorf("postdeploy migrations: %w", err)
 		}
 		if err := runSeed(cmd, rc, false, true); err != nil {
@@ -385,6 +401,13 @@ func phaseRunsPostProvisionInit(phase orchestrator.Phase) bool {
 	}
 }
 
+// phaseConvergesInfrastructure reports whether a provision phase owns host
+// infrastructure placement, including removal of MirrorMaker2 workers the
+// manifest no longer declares.
+func phaseConvergesInfrastructure(phase orchestrator.Phase) bool {
+	return phase == orchestrator.PhaseInfrastructure || phase == orchestrator.PhaseAll
+}
+
 func phaseSyncsEdgeReleaseTarget(phase orchestrator.Phase) bool {
 	switch phase {
 	case orchestrator.PhaseApplications, orchestrator.PhaseAll:
@@ -394,28 +417,34 @@ func phaseSyncsEdgeReleaseTarget(phase orchestrator.Phase) bool {
 	}
 }
 
+// freezeProvisionReleaseManifest pins the manifest to the concrete release its
+// channel resolves to.
 func freezeProvisionReleaseManifest(manifest *inventory.Manifest, releaseRepos []string) (*inventory.Manifest, string, string, error) {
-	return freezeProvisionReleaseManifestWithFetchOptions(manifest, releaseRepos, gitops.FetchOptions{
-		LatestTTL:      -time.Nanosecond,
-		LatestMaxStale: -time.Nanosecond,
-	})
-}
-
-func freezeProvisionReleaseManifestWithFetchOptions(manifest *inventory.Manifest, releaseRepos []string, opts gitops.FetchOptions) (*inventory.Manifest, string, string, error) {
 	if manifest == nil {
 		return nil, "", "", fmt.Errorf("manifest is required")
 	}
-	selector := manifest.ResolvedChannel()
-	channel, version := gitops.ResolveVersion(selector)
-	if !isConcreteVersion(version) {
-		releaseManifest, err := gitops.FetchFromRepositories(opts, releaseRepos, channel, version)
-		if err != nil {
-			return nil, selector, "", fmt.Errorf("resolve platform release from cluster channel %q: %w", selector, err)
-		}
-		version = strings.TrimSpace(releaseManifest.PlatformVersion)
+	return freezeProvisionReleaseManifestWithFetchOptions(manifest, manifest.ResolvedChannel(), releaseRepos, provisionReleaseFetchOptions())
+}
+
+// provisionReleaseFetchOptions bypasses the channel cache so a provision run
+// resolves the channel's current release, not a cached earlier one.
+func provisionReleaseFetchOptions() gitops.FetchOptions {
+	return gitops.FetchOptions{
+		LatestTTL:      -time.Nanosecond,
+		LatestMaxStale: -time.Nanosecond,
 	}
-	if !isConcreteVersion(version) {
-		return nil, selector, version, fmt.Errorf("cluster channel %q resolved to non-concrete platform release %q", selector, version)
+}
+
+// freezeProvisionReleaseManifestWithFetchOptions resolves selector (a channel or
+// a concrete vX.Y.Z) once and returns a manifest copy whose channel is that
+// concrete release, so every task in the run renders the same release.
+func freezeProvisionReleaseManifestWithFetchOptions(manifest *inventory.Manifest, selector string, releaseRepos []string, opts gitops.FetchOptions) (*inventory.Manifest, string, string, error) {
+	if manifest == nil {
+		return nil, "", "", fmt.Errorf("manifest is required")
+	}
+	version, err := resolveConcretePlatformVersion(releaseRepos, selector, opts)
+	if err != nil {
+		return nil, selector, "", err
 	}
 	frozen := *manifest
 	frozen.Channel = version
@@ -669,15 +698,6 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Execute each batch sequentially
-	runtimeData := make(map[string]any)
-
-	// Seed service_token from the preloaded shared env. All downstream callers
-	// (bootstrap auth, service env builders, QM self-seed) read this key.
-	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
-		runtimeData["service_token"] = token
-	}
-
 	if err := ensureNodeBaseline(ctx, cmd, manifest, plan, sshPool, force); err != nil {
 		return err
 	}
@@ -707,17 +727,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		return err
 	}
 
-	if edgeTelemetryJWTRequired(manifest) {
-		if err := ensureEdgeTelemetryJWTKeypair(runtimeData, sharedEnv); err != nil {
-			return fmt.Errorf("load edge telemetry jwt keypair: %w", err)
-		}
-	}
-	if pkiRequired := internalPKIBootstrapRequired(manifest); pkiRequired {
-		pki, err := loadInternalPKIBootstrap(sharedEnv, manifestDir)
-		if err != nil {
-			return fmt.Errorf("load internal PKI bootstrap material: %w", err)
-		}
-		runtimeData["internal_pki_bootstrap"] = pki
+	runtimeData, err := provisionRuntimeData(manifest, manifestDir, sharedEnv)
+	if err != nil {
+		return err
 	}
 
 	dataMigrationGateRan := false
@@ -1032,6 +1044,11 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	if err := reconcileRemovedServicePlacements(ctx, cmd, manifest, phase, runtimeData, raSession, sshPool); err != nil {
 		return fmt.Errorf("removed service placement reconciliation failed: %w", err)
 	}
+	if phaseConvergesInfrastructure(phase) {
+		if err := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, cmd.OutOrStdout(), manifest, sshPool, false); err != nil {
+			return fmt.Errorf("removed kafka-mirrormaker worker reconciliation failed: %w", err)
+		}
+	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
 	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, raSession); err != nil {
@@ -1039,6 +1056,32 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	}
 
 	return nil
+}
+
+// provisionRuntimeData returns the run-wide runtime data every provision task
+// renders with before any batch adds discovered values: the shared
+// SERVICE_TOKEN, the edge telemetry JWT keypair when edges need it, and the
+// internal PKI bootstrap material when internal gRPC TLS is in use.
+func provisionRuntimeData(manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string) (map[string]any, error) {
+	runtimeData := make(map[string]any)
+	// Bootstrap auth, service env builders, and the Quartermaster self-seed
+	// all read service_token.
+	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
+		runtimeData["service_token"] = token
+	}
+	if edgeTelemetryJWTRequired(manifest) {
+		if err := ensureEdgeTelemetryJWTKeypair(runtimeData, sharedEnv); err != nil {
+			return nil, fmt.Errorf("load edge telemetry jwt keypair: %w", err)
+		}
+	}
+	if internalPKIBootstrapRequired(manifest) {
+		pki, err := loadInternalPKIBootstrap(sharedEnv, manifestDir)
+		if err != nil {
+			return nil, fmt.Errorf("load internal PKI bootstrap material: %w", err)
+		}
+		runtimeData["internal_pki_bootstrap"] = pki
+	}
+	return runtimeData, nil
 }
 
 // postProvisionFinalize handles Purser pricing bootstrap, optional admin user creation,
@@ -1597,7 +1640,7 @@ func manifestMeshHostname(manifest *inventory.Manifest, hostName string) string 
 
 func usesInternalGRPCLeaf(serviceName string) bool {
 	switch serviceName {
-	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator":
+	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator", "lookout":
 		return true
 	default:
 		return false
@@ -3071,37 +3114,8 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if mm.TaskCount > 0 {
 					config.Metadata["task_count"] = mm.TaskCount
 				}
-				views := allKafkaClusters(manifest)
-				target := aggregatorKafkaClusterView(manifest)
-				if target != nil {
-					targetAlias := kafkaClusterAlias(manifest, target)
-					config.Metadata["target"] = map[string]any{
-						"alias":             targetAlias,
-						"region_id":         target.RegionID,
-						"bootstrap_servers": kafkaBrokersBootstrap(manifest, target),
-						"replicas":          replicasForCluster(target, mm.Replicas),
-					}
-				}
-				sources := make([]map[string]any, 0, len(views))
-				for i := range views {
-					v := views[i]
-					if isAggregatorKafkaClusterView(manifest, &v) {
-						continue
-					}
-					alias := kafkaClusterAlias(manifest, &v)
-					sources = append(sources, map[string]any{
-						"alias":             alias,
-						"region_id":         v.RegionID,
-						"bootstrap_servers": kafkaBrokersBootstrap(manifest, &v),
-						"topics":            mirrorTopicsForRegional(manifest, v.RegionID),
-						"replicas":          replicasForCluster(&v, 0),
-					})
-				}
-				config.Metadata["sources"] = sources
-				if local := serviceKafkaCluster(manifest, "", manifestTaskRegion(manifest, task)); local != nil {
-					if alias := kafkaClusterAlias(manifest, local); alias != "" {
-						config.Metadata["local_cluster_alias"] = alias
-					}
+				if err := addKafkaMirrorMakerLinkMetadata(config.Metadata, manifest, task); err != nil {
+					return config, err
 				}
 			}
 		case "kafka-controller":
@@ -3290,6 +3304,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		config.Mode = "docker"
 		if targets := buildVMAgentScrapeTargets(manifest, task.Host); len(targets) > 0 {
 			config.Metadata["scrape_targets"] = targets
+		}
+		if labels := vmagentExternalLabels(manifest, task.Host); len(labels) > 0 {
+			config.Metadata["external_labels"] = labels
 		}
 	}
 
@@ -3656,6 +3673,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"livepeer-gateway":   {port: 7935, bindAddrKey: "cli_addr"},
 		"livepeer-signer":    {},
 		"mistserver":         {},
+		"lookout":            {},
 		"navigator":          {},
 		"periscope-ingest":   {},
 		"periscope-metering": {},
@@ -3669,6 +3687,8 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"victoriametrics":    {},
 		"vmagent":            {},
 		"vmauth":             {},
+		"vmalert":            {},
+		"alertmanager":       {},
 	}
 
 	type target struct {
@@ -3782,6 +3802,15 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			"node_id":            hostName,
 		})
 	}
+	// The MirrorMaker2 JMX exporter binds loopback, so only this host's vmagent
+	// can scrape it; region and cluster come from the vmagent external labels.
+	if slices.Contains(orchestrator.KafkaMirrorMakerHosts(manifest), hostName) {
+		addTarget("kafka-mirrormaker", "127.0.0.1", provisioner.KafkaMirrorMakerJMXPort, "/metrics", map[string]string{
+			"frameworks_service": "kafka-mirrormaker",
+			"frameworks_source":  "infrastructure",
+			"node_id":            hostName,
+		})
+	}
 
 	if len(targets) == 0 {
 		return nil
@@ -3811,22 +3840,73 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	return result
 }
 
-func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
+// vmagentExternalLabels returns the region and cluster a host's vmagent stamps
+// on every series it scrapes, so alerts and dashboards can group any metric by
+// placement without per-target label wiring.
+func vmagentExternalLabels(manifest *inventory.Manifest, hostName string) map[string]string {
+	if manifest == nil || hostName == "" {
+		return nil
+	}
+	labels := map[string]string{}
+	if region := manifestHostRegion(manifest, hostName); region != "" {
+		labels["region"] = region
+	}
+	if cluster := strings.TrimSpace(manifest.HostCluster(hostName)); cluster != "" {
+		labels["cluster"] = cluster
+	}
+	return labels
+}
+
+// defaultObservabilityURL returns http://<service>.internal:<port> for an
+// enabled observability service, resolved through its Privateer alias.
+func defaultObservabilityURL(manifest *inventory.Manifest, serviceName string) string {
 	if manifest == nil {
 		return ""
 	}
-	obs, ok := manifest.Observability["victoriametrics"]
+	obs, ok := manifest.Observability[serviceName]
 	if !ok || !obs.Enabled {
 		return ""
 	}
-	port, err := resolvePort("victoriametrics", obs)
+	port, err := resolvePort(serviceName, obs)
 	if err != nil || port == 0 {
-		port = provisioner.ServicePorts["victoriametrics"]
+		port = provisioner.ServicePorts[serviceName]
 	}
 	if port == 0 {
 		return ""
 	}
-	return fmt.Sprintf("http://victoriametrics.internal:%d/api/v1/write", port)
+	return fmt.Sprintf("http://%s.internal:%d", serviceName, port)
+}
+
+// lookoutAlertmanagerWebhookURL returns Lookout's Alertmanager webhook endpoint
+// through the same mesh alias the topology dependency declares, so an
+// aggregator-region scope resolves to that region's Lookout replicas.
+func lookoutAlertmanagerWebhookURL(manifest *inventory.Manifest, task *orchestrator.Task) string {
+	if manifest == nil || task == nil {
+		return ""
+	}
+	_, svc, ok := serviceConfigForDependency(manifest.Services, "lookout", task.ClusterID, task.Host)
+	if !ok || !svc.Enabled {
+		return ""
+	}
+	port := svc.Port
+	if port == 0 {
+		port = defaultPort("lookout")
+	}
+	alias := "lookout"
+	if topology.ServiceDependencyScope(task.Type, "lookout", "ALERTMANAGER_LOOKOUT_URL") == topology.DNSScopeAggregatorRegion {
+		if regional := aggregatorRegionAlias(manifest, "lookout"); regional != "" {
+			alias = regional
+		}
+	}
+	return fmt.Sprintf("http://%s.internal:%d/v1/alertmanager", alias, port)
+}
+
+func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
+	base := defaultObservabilityURL(manifest, "victoriametrics")
+	if base == "" {
+		return ""
+	}
+	return base + "/api/v1/write"
 }
 
 func defaultVMAUTHWriteURL(manifest *inventory.Manifest) string {
@@ -3951,14 +4031,22 @@ func privateerDependencyPeerHosts(manifest *inventory.Manifest, selfHostName str
 		return hosts
 	}
 	globalAliases := privateerGlobalDNSAliasesForHost(manifest, selfHostName)
+	aggregatorRegionAliases := privateerAggregatorRegionDNSAliasesForHost(manifest, selfHostName)
 	contextClusters := privateerDNSContextClusters(manifest, selfHostName)
 	for alias := range privateerDNSAliasesForHost(manifest, selfHostName) {
 		var providerHosts []string
 		if _, ok := globalAliases[alias]; ok {
 			providerHosts = serviceProviderHostsForAliasGlobal(manifest, alias)
+		} else if _, ok := aggregatorRegionAliases[alias]; ok {
+			providerHosts = serviceProviderHostsInAggregatorRegion(manifest, alias)
 		} else {
 			providerHosts = serviceProviderHostsForAlias(manifest, alias, contextClusters)
 		}
+		for _, hostName := range providerHosts {
+			hosts[hostName] = struct{}{}
+		}
+	}
+	for _, providerHosts := range privateerRegionalSignalmanDNSRecords(manifest, selfHostName) {
 		for _, hostName := range providerHosts {
 			hosts[hostName] = struct{}{}
 		}
@@ -4320,11 +4408,28 @@ func buildPrivateerSeedDNS(manifest *inventory.Manifest, selfHostName string) ma
 	addServices(manifest.Services)
 	addServices(manifest.Interfaces)
 	addServices(manifest.Observability)
-	if _, ok := dnsAliases["signalman"]; ok {
-		for recordName, hosts := range signalmanRegionalDNSRecords(manifest) {
-			for _, hostName := range hosts {
-				addRecord(recordName, hostName)
+	for alias := range privateerAggregatorRegionDNSAliasesForHost(manifest, selfHostName) {
+		recordName := aggregatorRegionAlias(manifest, alias)
+		if recordName == "" {
+			recordName = alias
+		}
+		// A service still running the previous release dials the plain alias.
+		// When no in-context replica already answers it, the plain alias
+		// resolves to the same aggregator-region replicas, so seeds converged
+		// ahead of the service upgrades never drop a name an old binary uses.
+		_, plainAliasResolved := dns[alias]
+		for _, hostName := range serviceProviderHostsInAggregatorRegion(manifest, alias) {
+			addRecord(hostName, hostName)
+			addRecord(recordName, hostName)
+			if !plainAliasResolved {
+				addRecord(alias, hostName)
 			}
+		}
+	}
+	for recordName, hosts := range privateerRegionalSignalmanDNSRecords(manifest, selfHostName) {
+		for _, hostName := range hosts {
+			addRecord(hostName, hostName)
+			addRecord(recordName, hostName)
 		}
 	}
 	for alias := range globalDNSAliases {
@@ -5545,13 +5650,6 @@ func aggregatorKafkaClusterView(manifest *inventory.Manifest) *kafkaClusterView 
 	return nil
 }
 
-func isAggregatorKafkaClusterView(_ *inventory.Manifest, cluster *kafkaClusterView) bool {
-	if cluster == nil {
-		return false
-	}
-	return cluster.Role == "aggregator"
-}
-
 func kafkaClusterAlias(manifest *inventory.Manifest, cluster *kafkaClusterView) string {
 	if cluster == nil {
 		return ""
@@ -5588,26 +5686,6 @@ func singleKafkaBrokerRegion(manifest *inventory.Manifest, cluster *kafkaCluster
 		}
 	}
 	return region
-}
-
-// nonAggregatorKafkaRegionIDs returns the region_id of every regional Kafka
-// cluster that is not the aggregator. These are the MM2 source clusters and
-// therefore the prefixes the aggregator Periscope-Ingest subscribes to.
-func nonAggregatorKafkaRegionIDs(manifest *inventory.Manifest) []string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(manifest.Infrastructure.Kafka.Regional))
-	for _, rc := range manifest.Infrastructure.Kafka.Regional {
-		if rc.Role == "aggregator" {
-			continue
-		}
-		if rc.RegionID == "" {
-			continue
-		}
-		ids = append(ids, rc.RegionID)
-	}
-	return ids
 }
 
 // replicasForCluster returns the replication factor that lands within
@@ -5647,27 +5725,6 @@ func kafkaBrokersBootstrap(manifest *inventory.Manifest, c *kafkaClusterView) st
 		parts = append(parts, fmt.Sprintf("%s:%d", manifest.MeshAddress(broker.Host), port))
 	}
 	return strings.Join(parts, ",")
-}
-
-// mirrorTopicsForRegional returns the MM2 topics regex for a given regional
-// cluster, derived from RegionalKafkaCluster.MirrorTopics. When the manifest
-// list is empty, falls back to the canonical mirrored set.
-func mirrorTopicsForRegional(manifest *inventory.Manifest, regionID string) string {
-	if manifest == nil || manifest.Infrastructure.Kafka == nil {
-		return ""
-	}
-	var topics []string
-	for _, rc := range manifest.Infrastructure.Kafka.Regional {
-		if rc.RegionID != regionID {
-			continue
-		}
-		topics = rc.MirrorTopics
-		break
-	}
-	if len(topics) == 0 {
-		topics = []string{"analytics_events", "service_events", "decklog_events_dlq", "billing.usage_reports"}
-	}
-	return strings.Join(topics, ",")
 }
 
 func kafkaBrokersToMetadata(manifest *inventory.Manifest, c *kafkaClusterView) []map[string]any {
@@ -6023,62 +6080,22 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Get provisioner from registry
-	prov, err := provisioner.GetProvisioner(task.Type, pool)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get provisioner: %w", err)
-	}
-
-	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+	prov, config, err := renderProvisionTask(task, pool, manifest, force, runtimeData, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, err
 	}
+	beforeState := detectProvisionTaskState(ctx, prov, host, config)
 
-	// Infrastructure roles need shared credentials during the initial
-	// Provision/Validate run as well, not only during Initialize. ClickHouse in
-	// particular applies auth in its configure path and then reuses the same
-	// credentials for init-time database creation.
-	if task.Phase == orchestrator.PhaseInfrastructure {
-		infraCreds := extractInfraCredentials(sharedEnv)
-		for k, v := range infraCreds {
-			if config.Metadata == nil {
-				config.Metadata = make(map[string]any)
-			}
-			config.Metadata[k] = v
+	if missing := missingRequiredExternalEnv(task.Type, config.EnvVars); len(missing) > 0 {
+		ux.Fail(os.Stderr, fmt.Sprintf("%s: missing required config:", task.Name))
+		for _, mk := range missing {
+			fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
 		}
-	}
-	if err := validateInfrastructureRuntimeRoleConfig(task.Type, config); err != nil {
-		return nil, err
-	}
-
-	var beforeState *detect.ServiceState
-	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
-		var detectErr error
-		beforeState, detectErr = provisioner.DetectWithConfig(phaseCtx, prov, host, config)
-		return detectErr
-	}); phaseErr != nil {
-		beforeState = &detect.ServiceState{Exists: true, Running: true}
-	}
-
-	// Preflight: check required external env vars
-	if required := servicedefs.RequiredExternalEnv(task.Type); len(required) > 0 {
-		var missing []servicedefs.RequiredEnvVar
-		for _, req := range required {
-			if v, ok := config.EnvVars[req.Key]; !ok || v == "" {
-				missing = append(missing, req)
-			}
+		if !ignoreValidation {
+			return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in shared env files, a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, len(missing))
 		}
-		if len(missing) > 0 {
-			ux.Fail(os.Stderr, fmt.Sprintf("%s: missing required config:", task.Name))
-			for _, mk := range missing {
-				fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
-			}
-			if !ignoreValidation {
-				return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in shared env files, a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, len(missing))
-			}
-			config.DeferStart = true
-			fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
-		}
+		config.DeferStart = true
+		fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
 	}
 
 	provisionSkipped := false
@@ -6163,6 +6180,66 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		preexisting: serviceExists(beforeState),
 		running:     serviceRunning(afterState),
 	}, nil
+}
+
+// renderProvisionTask resolves a task's provisioner and the ServiceConfig it
+// provisions with.
+func renderProvisionTask(task *orchestrator.Task, pool *ssh.Pool, manifest *inventory.Manifest, force bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.Provisioner, provisioner.ServiceConfig, error) {
+	prov, err := provisioner.GetProvisioner(task.Type, pool)
+	if err != nil {
+		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
+	}
+
+	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+	if err != nil {
+		return nil, provisioner.ServiceConfig{}, err
+	}
+
+	// Infrastructure roles need shared credentials during the initial
+	// Provision/Validate run as well, not only during Initialize. ClickHouse in
+	// particular applies auth in its configure path and then reuses the same
+	// credentials for init-time database creation.
+	if task.Phase == orchestrator.PhaseInfrastructure {
+		infraCreds := extractInfraCredentials(sharedEnv)
+		for k, v := range infraCreds {
+			if config.Metadata == nil {
+				config.Metadata = make(map[string]any)
+			}
+			config.Metadata[k] = v
+		}
+	}
+	if err := validateInfrastructureRuntimeRoleConfig(task.Type, config); err != nil {
+		return nil, provisioner.ServiceConfig{}, err
+	}
+	return prov, config, nil
+}
+
+// detectProvisionTaskState reports the task's installed state. A failed probe
+// reads as installed and running, so the no-op precheck decides instead of a
+// blind first install.
+func detectProvisionTaskState(ctx context.Context, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig) *detect.ServiceState {
+	var state *detect.ServiceState
+	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
+		var detectErr error
+		state, detectErr = provisioner.DetectWithConfig(phaseCtx, prov, host, config)
+		return detectErr
+	}); phaseErr != nil {
+		return &detect.ServiceState{Exists: true, Running: true}
+	}
+	return state
+}
+
+// missingRequiredExternalEnv returns the operator-supplied env vars serviceType
+// declares required that are absent or empty in the rendered env. Provision,
+// upgrade, and the release preflight all gate on this one check.
+func missingRequiredExternalEnv(serviceType string, env map[string]string) []servicedefs.RequiredEnvVar {
+	var missing []servicedefs.RequiredEnvVar
+	for _, req := range servicedefs.RequiredExternalEnv(serviceType) {
+		if strings.TrimSpace(env[req.Key]) == "" {
+			missing = append(missing, req)
+		}
+	}
+	return missing
 }
 
 func validateInfrastructureRuntimeRoleConfig(taskType string, config provisioner.ServiceConfig) error {
@@ -6317,20 +6394,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
-		var kc *kafkaClusterView
-		if isAggregatorPinnedService(task.Type) {
-			// Central-only consumers/producers (analytics ingest, billing,
-			// federation control) bind aggregator Kafka regardless of where
-			// the binary happens to run. Pinning here prevents a regional
-			// host placement from silently routing them at the local cluster
-			// (which would dual-write ClickHouse or miss billing rows).
-			kc = aggregatorKafkaClusterView(manifest)
-			if kc == nil {
-				kc = &kafkaClusterView{}
-			}
-		} else {
-			kc = serviceKafkaCluster(manifest, task.ClusterID, manifestTaskRegion(manifest, task))
+		if err := validateAggregatorPinnedPlacement(manifest, task); err != nil {
+			return nil, err
 		}
+		kc := kafkaClusterForServiceTask(manifest, task)
 		var brokers []string
 		for _, b := range kc.Brokers {
 			brokerHost := manifestMeshHostname(manifest, b.Host)
@@ -6452,7 +6519,13 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if svc.GRPCPort != 0 {
 			port = svc.GRPCPort
 		}
-		env[grpc.EnvKey] = fmt.Sprintf("%s.internal:%d", grpc.ServiceID, port)
+		alias := grpc.ServiceID
+		if topology.ServiceDependencyScope(task.Type, grpc.ServiceID, grpc.EnvKey) == topology.DNSScopeAggregatorRegion {
+			if regional := aggregatorRegionAlias(manifest, grpc.ServiceID); regional != "" {
+				alias = regional
+			}
+		}
+		env[grpc.EnvKey] = fmt.Sprintf("%s.internal:%d", alias, port)
 	}
 
 	// Per-binary env injection. Keys off task.Type (the deploy slug) so
@@ -6516,6 +6589,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["NAVIGATOR_PORT"] = strconv.Itoa(defaultPort("navigator"))
 		env["NAVIGATOR_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("navigator"))
 	}
+	if baseName == "lookout" {
+		env["LOOKOUT_PORT"] = strconv.Itoa(defaultPort("lookout"))
+		env["LOOKOUT_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("lookout"))
+	}
 	if baseName == "bridge" {
 		if skipper, ok := manifest.Services["skipper"]; ok && skipper.Enabled {
 			port := skipper.Port
@@ -6524,10 +6601,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			}
 			env["SKIPPER_SPOKE_URL"] = fmt.Sprintf("http://skipper.internal:%d/mcp/spoke", port)
 		}
-		// Per-region Signalman dial: the default address remains
-		// signalman.internal so local placement is owned by mesh DNS. Stream
-		// origin overrides use region-scoped service aliases, not concrete
-		// node names, so TLS still verifies the Signalman service identity.
+		// Bridge subscribes to its own region's Signalman through mesh DNS. Each
+		// regional Signalman consumes every other region's mirrored realtime
+		// topics, so the local replicas carry the complete event set.
 		if signalmanSvc, ok := manifest.Services["signalman"]; ok && signalmanSvc.Enabled {
 			if env["SIGNALMAN_GRPC_ADDR"] == "" {
 				port := signalmanSvc.GRPCPort
@@ -6535,28 +6611,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 					port = defaultGRPCPort("signalman")
 				}
 				env["SIGNALMAN_GRPC_ADDR"] = fmt.Sprintf("signalman.internal:%d", port)
-			}
-			byRegionMulti := signalmanAddrsByRegionMulti(manifest)
-
-			if len(byRegionMulti) > 0 {
-				regions := make([]string, 0, len(byRegionMulti))
-				for r := range byRegionMulti {
-					regions = append(regions, r)
-				}
-				sort.Strings(regions)
-
-				singlePairs := make([]string, 0, len(regions))
-				multiPairs := make([]string, 0, len(regions))
-				for _, r := range regions {
-					addrs := byRegionMulti[r]
-					if len(addrs) == 0 {
-						continue
-					}
-					singlePairs = append(singlePairs, fmt.Sprintf("%s=%s", r, addrs[0]))
-					multiPairs = append(multiPairs, fmt.Sprintf("%s=%s", r, strings.Join(addrs, ",")))
-				}
-				env["SIGNALMAN_GRPC_ADDR_BY_REGION"] = strings.Join(singlePairs, ",")
-				env["SIGNALMAN_GRPC_ADDRS_BY_REGION"] = strings.Join(multiPairs, ";")
 			}
 		}
 	}
@@ -6620,13 +6674,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Periscope-Ingest is pinned to aggregator Kafka even when its process is
-	// placed on a regional host. Every replica must consume the same local +
-	// mirrored topic set, otherwise regional placements are not HA-capable
-	// substitutes for aggregator-region workers.
-	if baseName == "periscope-ingest" && env["MIRROR_REGION_PREFIXES"] == "" {
-		prefixes := nonAggregatorKafkaRegionIDs(manifest)
-		if len(prefixes) > 0 {
+	// Periscope-Ingest and Signalman consume the source-prefixed topic copies
+	// MirrorMaker2 writes into the Kafka cluster they bind, so the prefixes are
+	// the sources of the links into that cluster.
+	if (baseName == "periscope-ingest" || baseName == "signalman") && env["MIRROR_REGION_PREFIXES"] == "" {
+		bound := kafkaClusterForServiceTask(manifest, task)
+		if prefixes := mirroredSourceAliases(manifest, kafkaClusterAlias(manifest, bound)); len(prefixes) > 0 {
 			env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
 		}
 	}
@@ -6906,6 +6959,27 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 		if env["VMAGENT_SCRAPE_INTERVAL"] == "" {
 			env["VMAGENT_SCRAPE_INTERVAL"] = "30s"
+		}
+	}
+
+	if baseName == "vmalert" {
+		// vmalert queries VictoriaMetrics directly, the same unauthenticated
+		// mesh endpoint Grafana reads; vmauth only fronts remote write.
+		if env["VMALERT_DATASOURCE_URL"] == "" {
+			if url := defaultObservabilityURL(manifest, "victoriametrics"); url != "" {
+				env["VMALERT_DATASOURCE_URL"] = url
+			}
+		}
+		if env["VMALERT_NOTIFIER_URL"] == "" {
+			if url := defaultObservabilityURL(manifest, "alertmanager"); url != "" {
+				env["VMALERT_NOTIFIER_URL"] = url
+			}
+		}
+	}
+
+	if baseName == "alertmanager" && env["ALERTMANAGER_LOOKOUT_URL"] == "" {
+		if url := lookoutAlertmanagerWebhookURL(manifest, task); url != "" {
+			env["ALERTMANAGER_LOOKOUT_URL"] = url
 		}
 	}
 
@@ -7949,55 +8023,6 @@ func manifestHostRegion(manifest *inventory.Manifest, hostName string) string {
 		return strings.TrimSpace(cluster.Region)
 	}
 	return ""
-}
-
-// signalmanAddrsByRegionMulti builds region→service-alias addrs. The alias
-// resolves through Privateer DNS to all Signalman replicas in that region, so
-// callers keep a service-identity target instead of concrete node names.
-func signalmanAddrsByRegionMulti(manifest *inventory.Manifest) map[string][]string {
-	if manifest == nil {
-		return nil
-	}
-	svc, ok := manifest.Services["signalman"]
-	if !ok || !svc.Enabled {
-		return nil
-	}
-	port := svc.GRPCPort
-	if port == 0 {
-		port = defaultGRPCPort("signalman")
-	}
-	out := map[string][]string{}
-	for recordName := range signalmanRegionalDNSRecords(manifest) {
-		region := strings.TrimPrefix(recordName, "signalman.")
-		if region == recordName || region == "" {
-			continue
-		}
-		out[region] = []string{fmt.Sprintf("%s.internal:%d", recordName, port)}
-	}
-	return out
-}
-
-func signalmanRegionalDNSRecords(manifest *inventory.Manifest) map[string][]string {
-	if manifest == nil {
-		return nil
-	}
-	svc, ok := manifest.Services["signalman"]
-	if !ok || !svc.Enabled {
-		return nil
-	}
-	out := map[string][]string{}
-	for _, hostName := range serviceHosts(svc) {
-		region := pkgdns.SanitizeLabel(privateerHostRegion(manifest, hostName))
-		if region == "" {
-			continue
-		}
-		recordName := "signalman." + region
-		out[recordName] = append(out[recordName], hostName)
-	}
-	for recordName := range out {
-		sort.Strings(out[recordName])
-	}
-	return out
 }
 
 const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"

@@ -4,26 +4,36 @@
   import { onMount, onDestroy } from "svelte";
   import { auth } from "$lib/stores/auth";
   import NotificationPanel from "./NotificationPanel.svelte";
+  import { incidentCounts, syncFiringIncidentCount } from "$lib/stores/incidents.svelte";
 
   const POLL_INTERVAL_MS = 60_000;
 
   let isAuthenticated = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let stopIncidentCount: (() => void) | undefined;
 
   const unsubscribeAuth = auth.subscribe((s) => {
     isAuthenticated = s.isAuthenticated;
   });
 
+  const badgeCount = $derived(notificationStore.unreadCount + incidentCounts.firing);
+
   onMount(() => {
     if (isAuthenticated) {
       notificationStore.loadReports();
-      pollTimer = setInterval(() => notificationStore.refreshUnreadCount(), POLL_INTERVAL_MS);
+      // The firing incident count follows incident updates, so only the report
+      // count is polled.
+      pollTimer = setInterval(() => {
+        notificationStore.refreshUnreadCount();
+      }, POLL_INTERVAL_MS);
+      stopIncidentCount = syncFiringIncidentCount();
     }
   });
 
   onDestroy(() => {
     unsubscribeAuth();
     if (pollTimer) clearInterval(pollTimer);
+    stopIncidentCount?.();
   });
 
   function handleClick(e: MouseEvent) {
@@ -39,11 +49,11 @@
     title="Notifications"
   >
     <Bell class="w-5 h-5" />
-    {#if notificationStore.unreadCount > 0}
+    {#if badgeCount > 0}
       <span
         class="absolute top-2 right-2 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold leading-none text-white bg-[hsl(var(--tn-red))] rounded-full"
       >
-        {notificationStore.unreadCount > 9 ? "9+" : notificationStore.unreadCount}
+        {badgeCount > 9 ? "9+" : badgeCount}
       </span>
     {/if}
   </button>

@@ -199,6 +199,10 @@ type conn struct {
 	// orders whole-node artifact reports across reconnects (a later connection ranks strictly
 	// higher) and is used to write a terminal watermark tombstone when the connection is evicted.
 	fence int64
+	// release is closed once when the node's cluster control moves to another Foghorn cell; the Connect
+	// loop then ends the stream so Helmsman redials the new control cell.
+	release     chan struct{}
+	releaseOnce sync.Once
 	// superseded is set the moment this connection is removed or replaced in the registry, UNDER sendGate.
 	superseded atomic.Bool
 	// sendGate serializes a dispatch's (check-superseded → Send) against retirement's (set-superseded). Holding
@@ -1292,13 +1296,20 @@ func loadServedClustersFrom(client servedClustersAPI) {
 	if err != nil || resp == nil {
 		return
 	}
-	applyServedClustersRefresh(resp.GetClusterIds())
+	applyServedClustersRefresh(resp.GetClusterIds(), resp.GetReleasedClusterIds())
 }
 
+// releasedControlClusters holds the tenant-private clusters whose control
+// moved from this Foghorn's cell to another cell. Their edges are released
+// and refused here so they reconnect to the new control cell.
+var releasedControlClusters atomic.Pointer[map[string]struct{}]
+
 // applyServedClustersRefresh atomically replaces the served set from the given
-// cluster IDs. localClusterID is always preserved. Split out so the
-// filter/replace logic is unit-testable without a live Quartermaster.
-func applyServedClustersRefresh(clusterIDs []string) {
+// cluster IDs and the released set, then releases local Helmsman connections
+// of released clusters. localClusterID is always served and never released.
+// Split out so the filter/replace logic is unit-testable without a live
+// Quartermaster.
+func applyServedClustersRefresh(clusterIDs, releasedClusterIDs []string) {
 	fresh := &sync.Map{}
 	if localClusterID != "" {
 		fresh.Store(localClusterID, true)
@@ -1309,6 +1320,55 @@ func applyServedClustersRefresh(clusterIDs []string) {
 		}
 	}
 	servedClusters.Store(fresh)
+
+	released := make(map[string]struct{}, len(releasedClusterIDs))
+	for _, clusterID := range releasedClusterIDs {
+		if clusterID == "" {
+			continue
+		}
+		if _, served := fresh.Load(clusterID); served {
+			continue
+		}
+		released[clusterID] = struct{}{}
+	}
+	releasedControlClusters.Store(&released)
+	releaseControlConnsForClusters(released)
+}
+
+func isReleasedControlCluster(clusterID string) bool {
+	released := releasedControlClusters.Load()
+	if released == nil || clusterID == "" {
+		return false
+	}
+	_, ok := (*released)[clusterID]
+	return ok
+}
+
+// releaseControlConnsForClusters ends the local Helmsman control streams of
+// released clusters. Helmsman redials the cluster's Foghorn address, which now
+// resolves to the new control cell.
+func releaseControlConnsForClusters(released map[string]struct{}) {
+	if registry == nil || len(released) == 0 {
+		return
+	}
+	registry.mu.RLock()
+	toRelease := make([]*conn, 0)
+	for _, c := range registry.conns {
+		if _, ok := released[c.clusterID]; ok {
+			toRelease = append(toRelease, c)
+		}
+	}
+	registry.mu.RUnlock()
+	for _, c := range toRelease {
+		c.releaseControl()
+	}
+}
+
+func (c *conn) releaseControl() {
+	if c == nil || c.release == nil {
+		return
+	}
+	c.releaseOnce.Do(func() { close(c.release) })
 }
 
 // ServedClustersSnapshot returns the current set of served cluster IDs (sorted).
@@ -1511,11 +1571,25 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 	// entry between a message's receipt and its goroutine execution can never substitute a newer session for work
 	// received on this connection.
 	var connSession NodeSession
+	// release is attached to this connection at registration and closed when the node's cluster control moves
+	// to another Foghorn cell. Receiving runs in a pump so the loop can end the stream on release.
+	release := make(chan struct{})
+	releasedToControlCell := false
+	received := receiveControlMessages(stream)
 	// On initial message we expect a Register
+receiveLoop:
 	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			break
+		var msg *ipcpb.ControlMessage
+		received.request()
+		select {
+		case next, ok := <-received.messages:
+			if !ok || next.err != nil {
+				break receiveLoop
+			}
+			msg = next.msg
+		case <-release:
+			releasedToControlCell = true
+			break receiveLoop
 		}
 		if nodeID != "" {
 			if _, ok := currentControlConn(nodeID, stream); !ok {
@@ -1773,6 +1847,12 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			if !identityResolvedFromLocalAdmission {
 				clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
 			}
+			if isReleasedControlCluster(clusterID) {
+				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "cluster_id": clusterID}).
+					Info("Refusing Helmsman registration: cluster control moved to another Foghorn cell")
+				cleanup()
+				return status.Error(codes.Unavailable, "cluster control moved to another Foghorn cell")
+			}
 			if identityResolvedByControlPlane && durableAdmissionEligible {
 				persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				persistErr := persistDurableNodeAdmission(persistCtx, canonicalNodeID, tenantID, clusterID, x.Register, durableFingerprintMatch)
@@ -1798,6 +1878,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// Keep the connection out of the dispatchable registry until every ownership
 			// claim below succeeds.
 			newConn := &conn{
+				release:         release,
 				stream:          stream,
 				last:            time.Now(),
 				rawNodeID:       nodeID,
@@ -2383,7 +2464,57 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 		cleanupControlDisconnect(nodeID, canonicalID, stream, registry.log)
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
+	if releasedToControlCell {
+		registry.log.WithField("node_id", nodeID).Info("Released Helmsman control stream to its cluster's new control cell")
+		return status.Error(codes.Unavailable, "cluster control moved to another Foghorn cell")
+	}
 	return nil
+}
+
+type controlReceive struct {
+	msg *ipcpb.ControlMessage
+	err error
+}
+
+// controlReceiver is the stream's only receiver. It calls Recv once per
+// request, so a message is read only after the Connect loop has finished
+// handling the previous one, and the loop can stop waiting on release.
+type controlReceiver struct {
+	requests chan struct{}
+	messages chan controlReceive
+}
+
+func receiveControlMessages(stream ipcpb.HelmsmanControl_ConnectServer) *controlReceiver {
+	receiver := &controlReceiver{requests: make(chan struct{}, 1), messages: make(chan controlReceive)}
+	go func() {
+		defer close(receiver.messages)
+		for {
+			select {
+			case <-receiver.requests:
+			case <-stream.Context().Done():
+				return
+			}
+			msg, err := stream.Recv()
+			select {
+			case receiver.messages <- controlReceive{msg: msg, err: err}:
+			case <-stream.Context().Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return receiver
+}
+
+// request asks for the next message. The loop requests only after receiving
+// the previous message, so the one-slot buffer is always free.
+func (r *controlReceiver) request() {
+	select {
+	case r.requests <- struct{}{}:
+	default:
+	}
 }
 
 // activationResultHasTerminalConfigurationFailure distinguishes failures that

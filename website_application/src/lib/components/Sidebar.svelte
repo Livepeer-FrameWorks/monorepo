@@ -9,6 +9,7 @@
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import DiscordBadge from "./DiscordBadge.svelte";
+  import { incidentCounts } from "$lib/stores/incidents.svelte";
 
   interface Props {
     collapsed?: boolean;
@@ -296,7 +297,16 @@
                   <span class="flex-1 text-left text-sm">{child.name}</span>
 
                   <!-- Badges -->
-                  {#if child.badge}
+                  {#if child.countBadge === "firingIncidents" && incidentCounts.firing > 0}
+                    <span
+                      class="badge badge-danger text-xs"
+                      title="{incidentCounts.firing} firing {incidentCounts.firing === 1
+                        ? 'incident'
+                        : 'incidents'}"
+                    >
+                      {incidentCounts.firing > 99 ? "99+" : incidentCounts.firing}
+                    </span>
+                  {:else if child.badge}
                     <span class="badge badge-primary text-xs">{child.badge}</span>
                   {:else if child.active === "soon"}
                     <span class="badge badge-warning text-xs">Soon</span>

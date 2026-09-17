@@ -33,6 +33,10 @@ const (
 	Channel_CHANNEL_ALL         Channel = 4
 	Channel_CHANNEL_MESSAGING   Channel = 5 // Support messaging updates
 	Channel_CHANNEL_AI          Channel = 6 // AI assistant events
+	// Platform operator audience. Only a service-token stream without a tenant
+	// may subscribe, CHANNEL_ALL does not include it, and its events are never
+	// delivered to tenant subscribers.
+	Channel_CHANNEL_PLATFORM Channel = 7
 )
 
 // Enum value maps for Channel.
@@ -45,6 +49,7 @@ var (
 		4: "CHANNEL_ALL",
 		5: "CHANNEL_MESSAGING",
 		6: "CHANNEL_AI",
+		7: "CHANNEL_PLATFORM",
 	}
 	Channel_value = map[string]int32{
 		"CHANNEL_UNSPECIFIED": 0,
@@ -54,6 +59,7 @@ var (
 		"CHANNEL_ALL":         4,
 		"CHANNEL_MESSAGING":   5,
 		"CHANNEL_AI":          6,
+		"CHANNEL_PLATFORM":    7,
 	}
 )
 
@@ -101,6 +107,10 @@ const (
 	// System events (channel: system)
 	EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE EventType = 20
 	EventType_EVENT_TYPE_LOAD_BALANCING        EventType = 21
+	// Lookout incident change. On CHANNEL_SYSTEM it is tenant-scoped and carries
+	// only that tenant's incidents; on CHANNEL_PLATFORM it covers every incident
+	// for platform operators.
+	EventType_EVENT_TYPE_INCIDENT_UPDATED EventType = 61
 	// Analytics events (channel: analytics)
 	EventType_EVENT_TYPE_VIEWER_CONNECT          EventType = 30
 	EventType_EVENT_TYPE_VIEWER_DISCONNECT       EventType = 31
@@ -135,6 +145,7 @@ var (
 		15: "EVENT_TYPE_PLAY_REWRITE",
 		20: "EVENT_TYPE_NODE_LIFECYCLE_UPDATE",
 		21: "EVENT_TYPE_LOAD_BALANCING",
+		61: "EVENT_TYPE_INCIDENT_UPDATED",
 		30: "EVENT_TYPE_VIEWER_CONNECT",
 		31: "EVENT_TYPE_VIEWER_DISCONNECT",
 		32: "EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE",
@@ -163,6 +174,7 @@ var (
 		"EVENT_TYPE_PLAY_REWRITE":             15,
 		"EVENT_TYPE_NODE_LIFECYCLE_UPDATE":    20,
 		"EVENT_TYPE_LOAD_BALANCING":           21,
+		"EVENT_TYPE_INCIDENT_UPDATED":         61,
 		"EVENT_TYPE_VIEWER_CONNECT":           30,
 		"EVENT_TYPE_VIEWER_DISCONNECT":        31,
 		"EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE":  32,
@@ -383,6 +395,7 @@ type EventData struct {
 	//	*EventData_StorageSnapshot
 	//	*EventData_MessageLifecycle
 	//	*EventData_StreamChange
+	//	*EventData_IncidentUpdated
 	Payload isEventData_Payload `protobuf_oneof:"payload"`
 	// Placement envelope copied from MistTrigger. Keeping this outside the
 	// payload oneof makes live subscription events preserve the same topology
@@ -641,6 +654,15 @@ func (x *EventData) GetStreamChange() *ipc.StreamChangeEvent {
 	return nil
 }
 
+func (x *EventData) GetIncidentUpdated() *ipc.IncidentEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*EventData_IncidentUpdated); ok {
+			return x.IncidentUpdated
+		}
+	}
+	return nil
+}
+
 func (x *EventData) GetSourceRegion() string {
 	if x != nil {
 		return x.SourceRegion
@@ -779,6 +801,10 @@ type EventData_StreamChange struct {
 	StreamChange *ipc.StreamChangeEvent `protobuf:"bytes,24,opt,name=stream_change,json=streamChange,proto3,oneof"`
 }
 
+type EventData_IncidentUpdated struct {
+	IncidentUpdated *ipc.IncidentEvent `protobuf:"bytes,25,opt,name=incident_updated,json=incidentUpdated,proto3,oneof"`
+}
+
 func (*EventData_ClientLifecycle) isEventData_Payload() {}
 
 func (*EventData_NodeLifecycle) isEventData_Payload() {}
@@ -824,6 +850,8 @@ func (*EventData_StorageSnapshot) isEventData_Payload() {}
 func (*EventData_MessageLifecycle) isEventData_Payload() {}
 
 func (*EventData_StreamChange) isEventData_Payload() {}
+
+func (*EventData_IncidentUpdated) isEventData_Payload() {}
 
 type SignalmanEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1365,7 +1393,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x12UnsubscribeRequest\x12.\n" +
 	"\bchannels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\bchannels\"_\n" +
 	"\x18SubscriptionConfirmation\x12C\n" +
-	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\xb5\x10\n" +
+	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\x82\x11\n" +
 	"\tEventData\x12S\n" +
 	"\x10client_lifecycle\x18\x01 \x01(\v2&.helmsmancontrol.ClientLifecycleUpdateH\x00R\x0fclientLifecycle\x12M\n" +
 	"\x0enode_lifecycle\x18\x02 \x01(\v2$.helmsmancontrol.NodeLifecycleUpdateH\x00R\rnodeLifecycle\x12H\n" +
@@ -1392,7 +1420,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\rstream_source\x18\x15 \x01(\v2$.helmsmancontrol.StreamSourceTriggerH\x00R\fstreamSource\x12M\n" +
 	"\x10storage_snapshot\x18\x16 \x01(\v2 .helmsmancontrol.StorageSnapshotH\x00R\x0fstorageSnapshot\x12T\n" +
 	"\x11message_lifecycle\x18\x17 \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\x10messageLifecycle\x12I\n" +
-	"\rstream_change\x18\x18 \x01(\v2\".helmsmancontrol.StreamChangeEventH\x00R\fstreamChange\x12#\n" +
+	"\rstream_change\x18\x18 \x01(\v2\".helmsmancontrol.StreamChangeEventH\x00R\fstreamChange\x12K\n" +
+	"\x10incident_updated\x18\x19 \x01(\v2\x1e.helmsmancontrol.IncidentEventH\x00R\x0fincidentUpdated\x12#\n" +
 	"\rsource_region\x18( \x01(\tR\fsourceRegion\x12*\n" +
 	"\x11source_cluster_id\x18) \x01(\tR\x0fsourceClusterId\x120\n" +
 	"\x14stream_origin_region\x18* \x01(\tR\x12streamOriginRegion\x127\n" +
@@ -1434,7 +1463,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x15channel_subscriptions\x18\x03 \x03(\v2-.signalman.HubStats.ChannelSubscriptionsEntryR\x14channelSubscriptions\x1aG\n" +
 	"\x19ChannelSubscriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\x9a\x01\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\xb0\x01\n" +
 	"\aChannel\x12\x17\n" +
 	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fCHANNEL_STREAMS\x10\x01\x12\x15\n" +
@@ -1443,7 +1472,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\vCHANNEL_ALL\x10\x04\x12\x15\n" +
 	"\x11CHANNEL_MESSAGING\x10\x05\x12\x0e\n" +
 	"\n" +
-	"CHANNEL_AI\x10\x06*\xe1\x06\n" +
+	"CHANNEL_AI\x10\x06\x12\x14\n" +
+	"\x10CHANNEL_PLATFORM\x10\a*\x82\a\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!EVENT_TYPE_SUBSCRIPTION_CONFIRMED\x10\x01\x12'\n" +
@@ -1456,7 +1486,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\x18EVENT_TYPE_STREAM_SOURCE\x10\x0e\x12\x1b\n" +
 	"\x17EVENT_TYPE_PLAY_REWRITE\x10\x0f\x12$\n" +
 	" EVENT_TYPE_NODE_LIFECYCLE_UPDATE\x10\x14\x12\x1d\n" +
-	"\x19EVENT_TYPE_LOAD_BALANCING\x10\x15\x12\x1d\n" +
+	"\x19EVENT_TYPE_LOAD_BALANCING\x10\x15\x12\x1f\n" +
+	"\x1bEVENT_TYPE_INCIDENT_UPDATED\x10=\x12\x1d\n" +
 	"\x19EVENT_TYPE_VIEWER_CONNECT\x10\x1e\x12 \n" +
 	"\x1cEVENT_TYPE_VIEWER_DISCONNECT\x10\x1f\x12&\n" +
 	"\"EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE\x10 \x12\x1d\n" +
@@ -1529,7 +1560,8 @@ var file_signalman_proto_goTypes = []any{
 	(*ipc.StorageSnapshot)(nil),          // 35: helmsmancontrol.StorageSnapshot
 	(*ipc.MessageLifecycleData)(nil),     // 36: helmsmancontrol.MessageLifecycleData
 	(*ipc.StreamChangeEvent)(nil),        // 37: helmsmancontrol.StreamChangeEvent
-	(*timestamppb.Timestamp)(nil),        // 38: google.protobuf.Timestamp
+	(*ipc.IncidentEvent)(nil),            // 38: helmsmancontrol.IncidentEvent
+	(*timestamppb.Timestamp)(nil),        // 39: google.protobuf.Timestamp
 }
 var file_signalman_proto_depIdxs = []int32{
 	0,  // 0: signalman.SubscribeRequest.channels:type_name -> signalman.Channel
@@ -1558,27 +1590,28 @@ var file_signalman_proto_depIdxs = []int32{
 	35, // 23: signalman.EventData.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
 	36, // 24: signalman.EventData.message_lifecycle:type_name -> helmsmancontrol.MessageLifecycleData
 	37, // 25: signalman.EventData.stream_change:type_name -> helmsmancontrol.StreamChangeEvent
-	1,  // 26: signalman.SignalmanEvent.event_type:type_name -> signalman.EventType
-	0,  // 27: signalman.SignalmanEvent.channel:type_name -> signalman.Channel
-	5,  // 28: signalman.SignalmanEvent.data:type_name -> signalman.EventData
-	38, // 29: signalman.SignalmanEvent.timestamp:type_name -> google.protobuf.Timestamp
-	2,  // 30: signalman.ClientMessage.subscribe:type_name -> signalman.SubscribeRequest
-	3,  // 31: signalman.ClientMessage.unsubscribe:type_name -> signalman.UnsubscribeRequest
-	8,  // 32: signalman.ClientMessage.ping:type_name -> signalman.Ping
-	4,  // 33: signalman.ServerMessage.subscription_confirmed:type_name -> signalman.SubscriptionConfirmation
-	6,  // 34: signalman.ServerMessage.event:type_name -> signalman.SignalmanEvent
-	10, // 35: signalman.ServerMessage.pong:type_name -> signalman.Pong
-	11, // 36: signalman.ServerMessage.error:type_name -> signalman.SignalmanError
-	14, // 37: signalman.HubStats.channel_subscriptions:type_name -> signalman.HubStats.ChannelSubscriptionsEntry
-	7,  // 38: signalman.SignalmanService.Subscribe:input_type -> signalman.ClientMessage
-	12, // 39: signalman.SignalmanService.GetHubStats:input_type -> signalman.GetHubStatsRequest
-	9,  // 40: signalman.SignalmanService.Subscribe:output_type -> signalman.ServerMessage
-	13, // 41: signalman.SignalmanService.GetHubStats:output_type -> signalman.HubStats
-	40, // [40:42] is the sub-list for method output_type
-	38, // [38:40] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	38, // 26: signalman.EventData.incident_updated:type_name -> helmsmancontrol.IncidentEvent
+	1,  // 27: signalman.SignalmanEvent.event_type:type_name -> signalman.EventType
+	0,  // 28: signalman.SignalmanEvent.channel:type_name -> signalman.Channel
+	5,  // 29: signalman.SignalmanEvent.data:type_name -> signalman.EventData
+	39, // 30: signalman.SignalmanEvent.timestamp:type_name -> google.protobuf.Timestamp
+	2,  // 31: signalman.ClientMessage.subscribe:type_name -> signalman.SubscribeRequest
+	3,  // 32: signalman.ClientMessage.unsubscribe:type_name -> signalman.UnsubscribeRequest
+	8,  // 33: signalman.ClientMessage.ping:type_name -> signalman.Ping
+	4,  // 34: signalman.ServerMessage.subscription_confirmed:type_name -> signalman.SubscriptionConfirmation
+	6,  // 35: signalman.ServerMessage.event:type_name -> signalman.SignalmanEvent
+	10, // 36: signalman.ServerMessage.pong:type_name -> signalman.Pong
+	11, // 37: signalman.ServerMessage.error:type_name -> signalman.SignalmanError
+	14, // 38: signalman.HubStats.channel_subscriptions:type_name -> signalman.HubStats.ChannelSubscriptionsEntry
+	7,  // 39: signalman.SignalmanService.Subscribe:input_type -> signalman.ClientMessage
+	12, // 40: signalman.SignalmanService.GetHubStats:input_type -> signalman.GetHubStatsRequest
+	9,  // 41: signalman.SignalmanService.Subscribe:output_type -> signalman.ServerMessage
+	13, // 42: signalman.SignalmanService.GetHubStats:output_type -> signalman.HubStats
+	41, // [41:43] is the sub-list for method output_type
+	39, // [39:41] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_signalman_proto_init() }
@@ -1611,6 +1644,7 @@ func file_signalman_proto_init() {
 		(*EventData_StorageSnapshot)(nil),
 		(*EventData_MessageLifecycle)(nil),
 		(*EventData_StreamChange)(nil),
+		(*EventData_IncidentUpdated)(nil),
 	}
 	file_signalman_proto_msgTypes[4].OneofWrappers = []any{}
 	file_signalman_proto_msgTypes[5].OneofWrappers = []any{

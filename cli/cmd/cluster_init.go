@@ -125,39 +125,99 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		}
 	}
 
+	init, err := postgresInitConfig(rc, nil)
+	if err != nil {
+		return err
+	}
+	prov, provErr := provisioner.GetProvisioner(init.service, pool)
+	if provErr != nil {
+		return provErr
+	}
+	if initErr := prov.Initialize(ctx, host, init.config); initErr != nil {
+		return initErr
+	}
+
+	target := ""
+	if hasMigrations, hasErr := provisioner.HasMigrationsForDatabases(init.schemaDatabases, "expand"); hasErr != nil {
+		return hasErr
+	} else if hasMigrations {
+		var targetErr error
+		target, targetErr = resolveMigrationTarget(rc, "")
+		if targetErr != nil {
+			return fmt.Errorf("resolve init target version: %w", targetErr)
+		}
+	}
+	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), init.service, host, init.config, prov, init.schemaDatabases, target, pool, pg, init.password)
+}
+
+// postgresRoleInit is the configuration the postgres or yugabyte role's init
+// and schema tags receive for a set of manifest databases.
+type postgresRoleInit struct {
+	service         string
+	config          provisioner.ServiceConfig
+	schemaDatabases []provisioner.SchemaDatabase
+	password        string
+}
+
+// postgresInitConfig builds the owner/runtime role metadata, credentials, and
+// baseline schema targets for the manifest's databases, the same inputs
+// `cluster init`, provisioning, and the release database bootstrap hand to the
+// role. When only is non-nil it restricts both lists to those physical database
+// names (Yugabyte regional aliases included).
+func postgresInitConfig(rc *resolvedCluster, only map[string]struct{}) (postgresRoleInit, error) {
+	manifest := rc.Manifest
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil || !pg.Enabled {
+		return postgresRoleInit{}, fmt.Errorf("postgres is not enabled in the manifest")
+	}
 	// Local administration may use peer/trust authentication, but the roles
 	// created here always need their distinct owner and runtime credentials.
 	sharedEnv, err := rc.SharedEnv()
 	if err != nil {
-		return fmt.Errorf("load manifest env_files: %w", err)
+		return postgresRoleInit{}, fmt.Errorf("load manifest env_files: %w", err)
 	}
 	var clusterEnvs map[string]map[string]string
 	if pg.IsYugabyte() {
 		envs, clusterEnvErr := rc.ClusterEnvs()
 		if clusterEnvErr != nil {
-			return fmt.Errorf("load cluster env_files: %w", clusterEnvErr)
+			return postgresRoleInit{}, fmt.Errorf("load cluster env_files: %w", clusterEnvErr)
 		}
 		clusterEnvs = envs
 	}
 	password, err := resolveYugabytePassword(pg, sharedEnv)
 	if err != nil {
-		return err
+		return postgresRoleInit{}, err
 	}
 	if !pg.IsYugabyte() {
 		password = strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
 		if password == "" {
-			return fmt.Errorf("DATABASE_PASSWORD missing from manifest env_files — add it to your gitops secrets")
+			return postgresRoleInit{}, fmt.Errorf("DATABASE_PASSWORD missing from manifest env_files — add it to your gitops secrets")
 		}
 	}
 	runtimePassword := strings.TrimSpace(sharedEnv["DATABASE_RUNTIME_PASSWORD"])
 	if runtimePassword == "" {
-		return fmt.Errorf("DATABASE_RUNTIME_PASSWORD missing from manifest env_files — add it to your gitops secrets")
+		return postgresRoleInit{}, fmt.Errorf("DATABASE_RUNTIME_PASSWORD missing from manifest env_files — add it to your gitops secrets")
 	}
 
-	dbConfigs := pg.Databases
+	included := func(name string) bool {
+		if only == nil {
+			return true
+		}
+		_, ok := only[strings.TrimSpace(name)]
+		return ok
+	}
+	var dbConfigs []inventory.DatabaseConfig
+	source := pg.Databases
+	if pg.IsYugabyte() {
+		source = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
+	}
+	for _, db := range source {
+		if included(db.Name) {
+			dbConfigs = append(dbConfigs, db)
+		}
+	}
 	var databases []map[string]string
 	if pg.IsYugabyte() {
-		dbConfigs = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
 		databases = yugabyteDatabaseConfigsToMetadata(dbConfigs, manifest, sharedEnv, clusterEnvs, password)
 	} else {
 		databases = databaseConfigsToMetadata(dbConfigs, password, sharedEnv)
@@ -183,33 +243,60 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		service = "yugabyte"
 	}
 	if err := validateInfrastructureRuntimeRoleConfig(service, config); err != nil {
-		return err
-	}
-	prov, provErr := provisioner.GetProvisioner(service, pool)
-	if provErr != nil {
-		return provErr
-	}
-	if initErr := prov.Initialize(ctx, host, config); initErr != nil {
-		return initErr
+		return postgresRoleInit{}, err
 	}
 
-	var schemaDatabases []provisioner.SchemaDatabase
+	var allSchemaDatabases []provisioner.SchemaDatabase
 	if pg.IsYugabyte() {
-		schemaDatabases = yugabyteSchemaDatabases(pg.Databases, manifest)
+		allSchemaDatabases = yugabyteSchemaDatabases(pg.Databases, manifest)
 	} else {
-		schemaDatabases = schemaDatabasesFromConfigs(dbConfigs)
+		allSchemaDatabases = schemaDatabasesFromConfigs(pg.Databases)
 	}
-	target := ""
-	if hasMigrations, hasErr := provisioner.HasMigrationsForDatabases(schemaDatabases, "expand"); hasErr != nil {
-		return hasErr
-	} else if hasMigrations {
-		var targetErr error
-		target, targetErr = resolveMigrationTarget(rc, "")
-		if targetErr != nil {
-			return fmt.Errorf("resolve init target version: %w", targetErr)
+	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(allSchemaDatabases))
+	for _, database := range allSchemaDatabases {
+		if included(database.Name) {
+			schemaDatabases = append(schemaDatabases, database)
 		}
 	}
-	return applyPostgresSchemasAndMigrations(ctx, cmd.OutOrStdout(), service, host, config, prov, schemaDatabases, target, pool, pg, password)
+	return postgresRoleInit{service: service, config: config, schemaDatabases: schemaDatabases, password: password}, nil
+}
+
+// applyPostgresBaselineSchemas runs the role's schema tag for the databases that
+// have an embedded baseline. The role applies a baseline only to a service
+// schema without base tables and then grants owner and runtime privileges.
+func applyPostgresBaselineSchemas(
+	ctx context.Context,
+	out io.Writer,
+	service string,
+	host inventory.Host,
+	config provisioner.ServiceConfig,
+	prov provisioner.Provisioner,
+	databases []provisioner.SchemaDatabase,
+) error {
+	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
+	defer schemaCleanup()
+	if err != nil {
+		return fmt.Errorf("collect baseline schemas: %w", err)
+	}
+	if len(schemaItems) == 0 {
+		return nil
+	}
+	applier, ok := prov.(provisioner.SchemaApplier)
+	if !ok {
+		return fmt.Errorf("%s provisioner does not implement SchemaApplier", service)
+	}
+	cfg := configWithMetadata(config)
+	schemaKey := "postgres_schema_items"
+	if service == "yugabyte" {
+		schemaKey = "yugabyte_schema_items"
+	}
+	cfg.Metadata[schemaKey] = schemaItems
+	fmt.Fprintf(out, "Applying %s baseline schemas...\n", service)
+	if applyErr := applier.ApplySchemas(ctx, host, cfg); applyErr != nil {
+		return fmt.Errorf("apply %s baseline schemas: %w", service, applyErr)
+	}
+	ux.Success(out, fmt.Sprintf("%s baseline schemas applied", service))
+	return nil
 }
 
 func applyPostgresSchemasAndMigrations(
@@ -225,27 +312,8 @@ func applyPostgresSchemasAndMigrations(
 	pg *inventory.PostgresConfig,
 	password string,
 ) error {
-	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
-	defer schemaCleanup()
-	if err != nil {
-		return fmt.Errorf("collect baseline schemas: %w", err)
-	}
-	if len(schemaItems) > 0 {
-		applier, ok := prov.(provisioner.SchemaApplier)
-		if !ok {
-			return fmt.Errorf("%s provisioner does not implement SchemaApplier", service)
-		}
-		cfg := configWithMetadata(config)
-		schemaKey := "postgres_schema_items"
-		if service == "yugabyte" {
-			schemaKey = "yugabyte_schema_items"
-		}
-		cfg.Metadata[schemaKey] = schemaItems
-		fmt.Fprintf(out, "Applying %s baseline schemas...\n", service)
-		if applyErr := applier.ApplySchemas(ctx, host, cfg); applyErr != nil {
-			return fmt.Errorf("apply %s baseline schemas: %w", service, applyErr)
-		}
-		ux.Success(out, fmt.Sprintf("%s baseline schemas applied", service))
+	if err := applyPostgresBaselineSchemas(ctx, out, service, host, config, prov, databases); err != nil {
+		return err
 	}
 
 	if targetVersion == "" {

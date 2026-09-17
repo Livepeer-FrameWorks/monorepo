@@ -309,28 +309,56 @@ type PullStream struct {
 
 	Enabled bool `yaml:"enabled"`
 
-	// AllowedClusterIDs pins this pull source to a specific cluster set.
-	// Each entry is a manifest cluster key (== infrastructure_clusters.cluster_id).
-	// Empty + public source ⇒ any media (edge) cluster (legacy behavior).
-	// Empty + private/multicast source ⇒ rejected at render. Non-empty refs
-	// must point at edge clusters; for private/multicast they must also
-	// carry allow_private_pull_sources=true.
-	AllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
+	// SourceLocation restricts where the source may be reached. Absent ⇒ any
+	// media (edge) cluster for public sources; private/multicast sources must
+	// list clusters that carry allow_private_pull_sources=true.
+	SourceLocation *SourceLocation `yaml:"source_location,omitempty"`
+
+	// LegacyAllowedClusterIDs captures the retired allowed_cluster_ids key so
+	// render can reject it with a message naming source_location instead of a
+	// generic unknown-field parse error.
+	LegacyAllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
 
 	// Override = true on an Overlay item replaces the manifest-derived entry
 	// with the same PlaybackID. Ignored on Derived and Rendered.
 	Override bool `yaml:"override,omitempty"`
 }
 
+// SourceLocation is the manifest form of a stream's source location. Clusters
+// are manifest cluster keys; Nodes and AvoidNodes are manifest host keys, which
+// are the node IDs Quartermaster registers. Every listed node must belong to a
+// listed cluster.
+type SourceLocation struct {
+	Clusters   []string `yaml:"clusters,omitempty"`
+	Nodes      []string `yaml:"nodes,omitempty"`
+	AvoidNodes []string `yaml:"avoid_nodes,omitempty"`
+}
+
+// SourceLocationRendered is the source location consumed by `commodore
+// bootstrap`, which writes it as the stream's own ingest placement rules:
+// one allow alternative per cluster (restricted to NodeIDs when present) and
+// one deny selector for AvoidNodeIDs.
+type SourceLocationRendered struct {
+	Clusters     []SourceLocationClusterRendered `yaml:"clusters"`
+	AvoidNodeIDs []string                        `yaml:"avoid_node_ids,omitempty"`
+}
+
+// SourceLocationClusterRendered is one allowed cluster; empty NodeIDs allows
+// every node of the cluster.
+type SourceLocationClusterRendered struct {
+	ClusterID string   `yaml:"cluster_id"`
+	NodeIDs   []string `yaml:"node_ids,omitempty"`
+}
+
 // PullStreamRendered is the resolved-secrets shape consumed by `commodore bootstrap`.
 type PullStreamRendered struct {
-	PlaybackID        string    `yaml:"playback_id"`
-	OwnerTenant       TenantRef `yaml:"owner_tenant"`
-	Title             string    `yaml:"title"`
-	Description       string    `yaml:"description,omitempty"`
-	SourceURI         string    `yaml:"source_uri"`
-	Enabled           bool      `yaml:"enabled"`
-	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
+	PlaybackID     string                  `yaml:"playback_id"`
+	OwnerTenant    TenantRef               `yaml:"owner_tenant"`
+	Title          string                  `yaml:"title"`
+	Description    string                  `yaml:"description,omitempty"`
+	SourceURI      string                  `yaml:"source_uri"`
+	Enabled        bool                    `yaml:"enabled"`
+	SourceLocation *SourceLocationRendered `yaml:"source_location,omitempty"`
 }
 
 // MistNativeStream is an operator-owned stream whose Mist `source` is a
@@ -381,11 +409,14 @@ type MistNativeStream struct {
 	// N replicas within the allowed source cluster.
 	PlacementCount int `yaml:"placement_count,omitempty"`
 
-	// AllowedClusterIDs scopes which source cluster can serve this stream.
-	// The slice shape is retained for schema symmetry, but mist_native accepts
-	// exactly one cluster because cross-cluster source election is not
-	// implemented.
-	AllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
+	// SourceLocation names the source cluster (and optionally nodes) this
+	// stream may run on. mist_native requires exactly one cluster because
+	// cross-cluster source election is not implemented.
+	SourceLocation *SourceLocation `yaml:"source_location,omitempty"`
+
+	// LegacyAllowedClusterIDs captures the retired allowed_cluster_ids key so
+	// render can reject it with a message naming source_location.
+	LegacyAllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
 
 	// LocalAssets declares files Ansible must place on every eligible edge.
 	// Informational at the bootstrap layer — reconciler writes them to
@@ -420,7 +451,7 @@ type MistNativeStreamRendered struct {
 	Monitoring         string                  `yaml:"monitoring,omitempty"`
 	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
 	PlacementCount     int                     `yaml:"placement_count,omitempty"`
-	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`
+	SourceLocation     *SourceLocationRendered `yaml:"source_location,omitempty"`
 	LocalAssets        []MistNativeStreamAsset `yaml:"local_assets,omitempty"`
 }
 

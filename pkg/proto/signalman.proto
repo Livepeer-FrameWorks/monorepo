@@ -19,6 +19,10 @@ enum Channel {
   CHANNEL_ALL = 4;
   CHANNEL_MESSAGING = 5;  // Support messaging updates
   CHANNEL_AI = 6;         // AI assistant events
+  // Platform operator audience. Only a service-token stream without a tenant
+  // may subscribe, CHANNEL_ALL does not include it, and its events are never
+  // delivered to tenant subscribers.
+  CHANNEL_PLATFORM = 7;
 }
 
 enum EventType {
@@ -39,6 +43,10 @@ enum EventType {
   // System events (channel: system)
   EVENT_TYPE_NODE_LIFECYCLE_UPDATE = 20;
   EVENT_TYPE_LOAD_BALANCING = 21;
+  // Lookout incident change. On CHANNEL_SYSTEM it is tenant-scoped and carries
+  // only that tenant's incidents; on CHANNEL_PLATFORM it covers every incident
+  // for platform operators.
+  EVENT_TYPE_INCIDENT_UPDATED = 61;
 
   // Analytics events (channel: analytics)
   EVENT_TYPE_VIEWER_CONNECT = 30;
@@ -109,6 +117,7 @@ message EventData {
     helmsmancontrol.StorageSnapshot storage_snapshot = 22;
     helmsmancontrol.MessageLifecycleData message_lifecycle = 23;
     helmsmancontrol.StreamChangeEvent stream_change = 24;
+    helmsmancontrol.IncidentEvent incident_updated = 25;
   }
 
   reserved 13;

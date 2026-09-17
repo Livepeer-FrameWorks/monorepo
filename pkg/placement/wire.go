@@ -285,7 +285,7 @@ func selectorsFromProto(in []*placementpb.Selector) ([]Selector, error) {
 }
 
 func selectorFromProto(in *placementpb.Selector) (Selector, error) {
-	out := Selector{ClusterIDs: slices.Clone(in.GetClusterIds()), OwnerIDs: slices.Clone(in.GetOwnerIds()), Regions: slices.Clone(in.GetRegions())}
+	out := Selector{ClusterIDs: slices.Clone(in.GetClusterIds()), OwnerIDs: slices.Clone(in.GetOwnerIds()), Regions: slices.Clone(in.GetRegions()), NodeIDs: slices.Clone(in.GetNodeIds())}
 	for _, value := range in.GetClasses() {
 		class, ok := wireClasses[value]
 		if !ok {
@@ -312,7 +312,7 @@ func selectorsToProto(in []Selector) []*placementpb.Selector {
 }
 
 func selectorToProto(in Selector) *placementpb.Selector {
-	out := &placementpb.Selector{ClusterIds: slices.Clone(in.ClusterIDs), OwnerIds: slices.Clone(in.OwnerIDs), Regions: slices.Clone(in.Regions)}
+	out := &placementpb.Selector{ClusterIds: slices.Clone(in.ClusterIDs), OwnerIds: slices.Clone(in.OwnerIDs), Regions: slices.Clone(in.Regions), NodeIds: slices.Clone(in.NodeIDs)}
 	for _, value := range in.Classes {
 		out.Classes = append(out.Classes, enumToProto(value, wireClasses))
 	}

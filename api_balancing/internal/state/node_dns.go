@@ -19,6 +19,9 @@ type NodeDNSSnapshot struct {
 	CapEdge       bool
 	CapStorage    bool
 	CapProcessing bool
+	// ObservedAt is the node's last state update on this Foghorn cell. It is
+	// excluded from equals so a heartbeat alone never emits a DNS delta.
+	ObservedAt time.Time
 }
 
 func (a NodeDNSSnapshot) equals(b NodeDNSSnapshot) bool {
@@ -76,6 +79,7 @@ func (sm *StreamStateManager) snapshotNodeDNSLocked(nodeID string) (NodeDNSSnaps
 		CapEdge:       n.CapEdge,
 		CapStorage:    n.CapStorage,
 		CapProcessing: n.CapProcessing,
+		ObservedAt:    n.LastUpdate,
 	}, true
 }
 

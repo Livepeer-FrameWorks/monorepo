@@ -185,7 +185,7 @@ func ybVerifyTaggedMigrationPaths(t *testing.T) {
 			t.Cleanup(func() { ybDropDatabase(t, name, upgradeDatabase) })
 			ybCreateDatabase(t, name, currentDatabase)
 			t.Cleanup(func() { ybDropDatabase(t, name, currentDatabase) })
-			ybApply(t, name, upgradeDatabase, repositoryFileAtTag(t, fromTag, "pkg/database/sql/schema/"+service+".sql"))
+			ybApply(t, name, upgradeDatabase, baselineAtTagOrRelease(t, fromTag, "schema/"+service+".sql", postTag))
 
 			applied := 0
 			for _, migration := range postTag {

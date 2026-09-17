@@ -426,7 +426,7 @@ func TestRevokeMaterializedClusterAccessDoesNotRemoveDNSMembershipBeforeBillingO
 		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 			AddRow("legacy.example", true, true, true, time.Unix(0, 0).UTC(), false))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
-		WithArgs(eventClusterAccessRevoked, "tenant-1", "", "cluster_access", "tenant-1:core-1", sqlmock.AnyArg()).
+		WithArgs(eventClusterAccessRevoked, "tenant-1", "tenant", "", "cluster_access", "tenant-1:core-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))
 	mock.ExpectCommit()
 
@@ -579,7 +579,7 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 		WithArgs("tenant-1", "core-1").
 		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(`{"access_level":"read","access_source":"operator_override","expires_at":null}`))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
-		WithArgs(eventClusterAccessGranted, "tenant-1", "operator-1", "cluster_access", "tenant-1:core-1", sqlmock.AnyArg()).
+		WithArgs(eventClusterAccessGranted, "tenant-1", "tenant", "operator-1", "cluster_access", "tenant-1:core-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))
 	mock.ExpectCommit()
 
@@ -704,7 +704,7 @@ func TestMaterializeClusterAccessOwnerGrantIsAuditedAtomically(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
-		WithArgs(eventClusterAccessMaterialized, "tenant-1", "", "cluster_access", "tenant-1:byo-1", sqlmock.AnyArg()).
+		WithArgs(eventClusterAccessMaterialized, "tenant-1", "tenant", "", "cluster_access", "tenant-1:byo-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))
 	mock.ExpectCommit()
 
@@ -746,7 +746,7 @@ func TestMaterializeClusterAccessMarketplaceRequestRemainsPending(t *testing.T) 
 		WithArgs("tenant-1", "market-1", "marketplace_subscription", "pending_approval").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
-		WithArgs(eventClusterSubscriptionRequested, "tenant-1", "", "cluster_subscription", "tenant-1:market-1", sqlmock.AnyArg()).
+		WithArgs(eventClusterSubscriptionRequested, "tenant-1", "tenant", "", "cluster_subscription", "tenant-1:market-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))
 	mock.ExpectCommit()
 

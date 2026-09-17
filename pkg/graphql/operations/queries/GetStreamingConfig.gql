@@ -4,21 +4,17 @@ query GetStreamingConfig {
     ingestDomain
     edgeDomain
     playDomain
-    chandlerDomain
     officialClusterLabel
     officialIngestDomain
     officialEdgeDomain
     officialPlayDomain
-    officialChandlerDomain
     globalIngestDomain
     globalEdgeDomain
     globalPlayDomain
-    globalChandlerDomain
     globalLivepeerDomain
     tenantIngestDomain
     tenantEdgeDomain
     tenantPlayDomain
-    tenantChandlerDomain
     tenantLivepeerDomain
     srtPort
     rtmpPort

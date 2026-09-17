@@ -129,7 +129,11 @@ func compareSelectors(a, b Selector) int {
 	if n := slices.Compare(a.Classes, b.Classes); n != 0 {
 		return n
 	}
-	return slices.Compare(a.Charging, b.Charging)
+	// Node IDs compare last so ordering among selectors without nodes is unchanged.
+	if n := slices.Compare(a.Charging, b.Charging); n != 0 {
+		return n
+	}
+	return slices.Compare(a.NodeIDs, b.NodeIDs)
 }
 
 func canonicalSelectors(values []Selector) []Selector {
@@ -147,6 +151,7 @@ func canonicalSelector(s Selector) Selector {
 	s.Regions = sortedUnique(s.Regions)
 	s.Classes = sortedUnique(s.Classes)
 	s.Charging = sortedUnique(s.Charging)
+	s.NodeIDs = sortedUnique(s.NodeIDs)
 	return s
 }
 

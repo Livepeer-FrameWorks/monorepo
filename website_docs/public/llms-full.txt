@@ -200,7 +200,6 @@ Actions the agent can perform.
 | `review_media_placement_change`       | Review exact policy updates without applying       | Owner/Admin + placement:write                                                         |
 | `apply_media_placement_change`        | Apply a reviewed, idempotent policy change         | Owner/Admin + placement:write; API tokens also need mcp:high-risk                     |
 | `get_media_placement_change`          | Recover a change with its original idempotency key | Auth + placement:read                                                                 |
-| `get_media_placement_legacy_pins`     | Read stream pin migration restrictions             | Auth + placement:read                                                                 |
 | `get_cluster_media_consent`           | Read cluster-owner media consent                   | Auth + placement:read + cluster ownership                                             |
 | `review_cluster_media_consent_change` | Review owner consent without applying              | Owner/Admin + placement:write + cluster ownership                                     |
 | `apply_cluster_media_consent_change`  | Apply reviewed, idempotent owner consent           | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
@@ -283,6 +282,12 @@ Actions the agent can perform.
 | `manage_node`                         | Activate/deactivate/drain/restart a node           | Owner/Admin + Infrastructure                                                          |
 | `set_node_mode`                       | Set node mode (normal/draining/maintenance)        | Owner/Admin + Infrastructure                                                          |
 | `get_node_health`                     | Node health and metrics summary                    | Owner/Admin + Infrastructure                                                          |
+| `list_incidents`                      | Incidents on clusters the tenant owns              | Owner/Admin + Infrastructure                                                          |
+| `get_incident`                        | One incident with alerts and timeline              | Owner/Admin + Infrastructure                                                          |
+| `acknowledge_incident`                | Acknowledge a firing incident                      | Owner/Admin + Infrastructure                                                          |
+| `assign_incident`                     | Assign an incident to yourself, or unassign it     | Owner/Admin + Infrastructure                                                          |
+| `resolve_incident`                    | Resolve an incident manually                       | Owner/Admin + Infrastructure                                                          |
+| `add_incident_note`                   | Add a note to an incident timeline                 | Owner/Admin + Infrastructure                                                          |
 | `create_edge_cluster`                 | Create edge cluster (returns token and Foghorn)    | Owner/Admin + Infrastructure                                                          |
 
 <Aside type="tip" title="CLI Alternative">
@@ -377,6 +382,14 @@ fetches and validates the tenant's mandate before creating the subscription.
 
 - `name` (required): Stream display name
 - `description`, `record`, `public`: Optional
+- `ingest_mode`: `push` (default) or `pull`
+- `pull_source`: `{ source_uri, enabled }`, required for `pull`
+- `source_location`: Optional `{ mode: any | restricted, clusters: [{ cluster_id, node_ids }], avoid_node_ids }`.
+  Omitted means `any`; private (LAN) and multicast pull sources require `restricted` with clusters
+  that allow private pull sources. Node IDs are accepted only for clusters the tenant owns. The
+  result returns the stream's `source_location`, with mode `custom` when its placement rules hold
+  more than a location. `update_stream` takes the same field; omitting it keeps the current
+  location. See [Pull-input streams](/builders/pull-streams#source-location).
 
 **create_clip**
 
@@ -1391,7 +1404,9 @@ Each region is a full media cell: Foghorn for routing, edge nodes, a Livepeer ga
 
 The center of gravity stays in the EU: the distributed SQL cluster that backs the platform services, ClickHouse for analytics, and the control plane — provisioning, tenant management, billing, DNS. Media and events are regional; state and money are central.
 
-The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology manifest; every other region is `role: regional`. MirrorMaker2 — running in the aggregator region — mirrors a small canonical set of topics one way, from each regional cluster onto the aggregator:
+The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology
+manifest; every other region is `role: regional`. MirrorMaker2 runs as coordinated workers in each
+link's target region. Links into the aggregator carry the durable event set:
 
 - `analytics_events` — stream lifecycle, viewer events, routing decisions
 - `service_events` — service-level events from the control-plane services
@@ -1399,7 +1414,13 @@ The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in th
 - `billing.usage_reports` — per-tenant usage from the analytics query layer
 - `decklog_events_dlq` — the ingest dead-letter queue, aggregated so failed events can be inspected and replayed from one place
 
-MM2's replication policy prefixes mirrored topics with the source region, so US events land on the aggregator as `us-east.analytics_events` next to the EU-native `analytics_events`. Everything else stays home: stream-scoped realtime topics never cross the ocean, because the realtime layer (Signalman) only ever serves them regionally and the gateway routes subscriptions to the stream's origin region.
+MM2's replication policy prefixes mirrored topics with the source region, so US events land on the
+aggregator as `us-east.analytics_events` next to the EU-native `analytics_events`. A reverse link
+copies only `analytics_events` and `service_events` to the US cluster. Signalman therefore consumes
+its local bare topics plus the source-prefixed realtime topics from the other region. A GraphQL
+client can stay on its nearest Gateway and Signalman while still receiving changes produced in
+either region; the raw trigger journal, billing reports, and dead-letter queue are not broadcast
+back out.
 
 ```mermaid
 graph LR
@@ -1407,23 +1428,38 @@ graph LR
         USV["Viewers / Streams"] --> USF["Foghorn US"]
         USF --> USD["Decklog US"]
         USD --> USK["Kafka US<br/><small>KRaft · RF 3</small>"]
+        USK --> USS["Signalman US"]
     end
     subgraph "eu-west (aggregator)"
         EUD["Decklog EU"] --> EUK["Kafka EU<br/><small>role: aggregator</small>"]
-        USK -- "MirrorMaker2<br/><small>us-east.* prefix</small>" --> EUK
+        EUK --> EUS["Signalman EU"]
         EUK --> PI["Periscope-Ingest"]
         PI --> CH[("ClickHouse")]
         EUK --> PUR["Purser<br/><small>billing</small>"]
     end
+    USK -- "durable + realtime<br/><small>us-east.* prefix</small>" --> EUK
+    EUK -- "realtime only<br/><small>eu-west.* prefix</small>" --> USK
 ```
 
-## Why an aggregator instead of a mesh
+## One durable aggregator, narrow realtime links
 
-The consumers decided the shape. ClickHouse is central, the analytics ingest service is pinned to the aggregator, and billing needs every region's usage reports in one place before it can rate them. Mirroring a handful of topics to where those consumers already live is a much smaller commitment than making every consumer region-aware, and the canonical set is kept small so cross-region traffic stays proportional to events that matter globally.
+The consumers decided the shape. ClickHouse is central, the analytics ingest service is pinned to
+the aggregator, and billing needs every region's usage reports in one place before it can rate
+them. Mirroring the durable topics to where those consumers already live is a much smaller
+commitment than making every durable consumer region-aware.
 
-Each analytics ingest instance gets the list of non-aggregator region prefixes injected by the provisioning CLI and registers one extra consumer handler per prefix — the same parsing code reads `analytics_events` and `us-east.analytics_events` without knowing or caring which region produced them. Producers needed even less: Decklog (the event firehose) reads its broker list from the environment, so a regional Decklog points at regional Kafka and the services in each cell dial their regional Decklog. No new routing code, just scoped configuration.
+Periscope-Ingest gets the list of source prefixes mirrored into the aggregator and registers the
+same handlers for the bare and prefixed topics. Signalman gets the source prefixes mirrored into
+its own Kafka cluster and does the same for the two realtime topics. Producers need no topology
+logic: Decklog reads its regional broker list from the environment, and services in each cell dial
+their regional Decklog.
 
-When a third region shows up, it gets its own KRaft cluster and MM2 flow, and the aggregator either stays on the EU cluster or moves to a dedicated one by flipping the `role` in the manifest.
+The manifest declares every directed MM2 link explicitly, and the CLI rejects a missing pair,
+unknown region, duplicate link, or worker placed outside the target region. That full mesh is
+deliberate for the current two-region topology. Before adding a third region, we will measure the
+realtime rate and either retain the small mesh or replace it with subscriber-aware forwarding;
+broadcasting every realtime event to an unbounded number of regions is not the long-term scaling
+model.
 
 ## The consistency bill
 
@@ -1437,7 +1473,12 @@ The billing read model takes one more step. Finalized facts (a viewer session en
 
 ## What it looks like from outside
 
-Latency-sensitive paths — routing decisions, stream startup, realtime events — never wait on the ocean. Analytics dashboards aggregate both regions because the data already converged. A tenant's bill covers usage in every region because Purser only ever reads the aggregator. And [federation](/blog/federation-went-live) rides on top: the regions' Foghorns peer with each other, so cross-region viewers get the same origin-pull-or-redirect treatment as any cross-cluster viewer.
+Media startup and routing decisions never wait on the ocean. Cross-region realtime dashboard
+updates traverse the narrow MM2 link asynchronously, while local updates remain local. Analytics
+dashboards aggregate both regions because the durable data converges on the aggregator. A tenant's
+bill covers usage in every region because Purser reads the aggregate path. And
+[federation](/blog/federation-went-live) rides on top: the regions' Foghorns peer with each other,
+so cross-region viewers get the same origin-pull-or-redirect treatment as any cross-cluster viewer.
 
 The topology, as always, is in the [public manifest](https://github.com/Livepeer-FrameWorks/gitops) — see [multi-cluster operations](/operators/multi-cluster) and the [cluster manifest reference](/operators/cluster-manifest) for the operator's view.
 
@@ -1469,6 +1510,76 @@ Signed Foghorn authority protects the media cell from upstream control-plane out
 This changes admission for new requests, not a command to terminate established playback. The goal is to survive control-plane interruptions using verified authority, without turning a cached stream name into permission.
 
 The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.
+
+
+---
+# Lookout: Alerts Become Incidents
+https://logbook.frameworks.network/blog/lookout-incidents
+
+An alert is a signal. An incident is the work that follows: who owns it, what is still firing,
+who acknowledged it, what changed, and whether the problem is actually over. FrameWorks already
+had metrics and alert rules, but handing raw Alertmanager notifications to every tenant would have
+mixed infrastructure details, tenant boundaries, and delivery policy into one brittle interface.
+
+Lookout is the incident service between alerting and people. It receives grouped Alertmanager
+notifications, resolves the alerting cluster to its current owner, and creates either a
+platform-only incident or a tenant-visible incident. The result is available in the dashboard,
+GraphQL, MCP tools, and realtime subscriptions.
+
+## Tenant ownership is part of ingestion
+
+The difficult part is not inserting an alert into Postgres. Cluster ownership can change while
+alerts are arriving, and a control-plane outage must never make another tenant's incident visible.
+
+Lookout keeps a verified cluster-scope record from Quartermaster. Ingestion and ownership changes
+coordinate through database locks and revisions, so an open incident is either written with the
+new owner or moved to that owner after the concurrent ingest commits. When ownership cannot be
+verified, the incident stays platform-scoped. That fails closed for tenant visibility while still
+letting operators see an outage during a control-plane failure.
+
+Resolved incidents do not move when ownership changes. They remain part of the operational
+history of the tenant that owned the cluster when the incident happened.
+
+## One incident, not a stream of pages
+
+Alertmanager still does what it is good at: rule evaluation, grouping, inhibition, silences, and
+delivery retries. Lookout turns each group into a state machine:
+
+- new firing alerts open an incident;
+- repeated notifications update the existing incident;
+- acknowledgement records ownership without stopping alert ingestion;
+- assignments and notes build an operational timeline;
+- the incident auto-resolves when every alert resolves, or can be resolved manually;
+- repeated copies of the same alert do not reopen a manually resolved incident.
+
+Every state change is visible through `liveIncidentUpdates`, while GraphQL queries remain the
+durable source of truth after a reconnect.
+
+## Delivery survives the failure it reports
+
+Platform incidents can notify email, Slack, and Discord. Tenant incidents are published for
+Skipper investigation and tenant realtime delivery. Those sends use a lease-fenced transactional
+outbox: the incident and its delivery obligation commit together, multiple Lookout replicas cannot
+successfully settle the same claim, and temporary downstream failures retry with backoff.
+
+Critical alerts also have a direct Alertmanager email route. That route deliberately bypasses
+Lookout, so an outage in the incident service does not suppress the page reporting it. A permanent
+Watchdog alert goes to an external heartbeat endpoint; if Alertmanager itself stops delivering,
+the missing heartbeat becomes the signal.
+
+## One workflow for people and agents
+
+Tenants work incidents under **Infrastructure → Incidents**. Platform operators have a
+cross-tenant view under **Platform Admin → Incidents**. The same actions are available through
+GraphQL and the Gateway's MCP tools: list, inspect, acknowledge, assign, resolve, and add a note.
+
+Skipper consumes the tenant incident feed and can attach an investigation report to the incident
+timeline. It does not silently acknowledge or resolve anything; analysis and state-changing
+operator actions remain separate.
+
+Start with the [incident API guide](/builders/incidents). Operators deploying the service should
+use [Alerting and Incidents](/operators/alerting), which covers the Lookout database, Alertmanager
+token, heartbeat, notification channels, and an end-to-end delivery test.
 
 
 ---
@@ -3007,6 +3118,121 @@ Variable Bitrate (VBR) is excellent for recording but problematic for live strea
 ## Troubleshooting
 
 See [Troubleshooting](/builders/troubleshooting) for common issues like connection failures and encoding overload.
+
+
+---
+# Incidents
+https://logbook.frameworks.network/builders/incidents
+
+FrameWorks turns platform alerts for a tenant-owned cluster into a tenant incident. An incident
+collects the active alerts, current status, assignment, notes, resolution, and a chronological
+timeline. Tenant isolation follows cluster ownership: your account can only read or change
+incidents for clusters it owns.
+
+The dashboard exposes the same API at **Infrastructure → Incidents**. Platform operators have a
+separate cross-tenant view under **Platform Admin → Incidents**.
+
+## List incidents
+
+`incidentsConnection` returns incidents newest first. Omit `statuses` to include firing,
+acknowledged, and resolved incidents.
+
+```graphql
+query TenantIncidents($after: String, $clusterId: String) {
+  incidentsConnection(
+    page: { first: 50, after: $after }
+    filter: { statuses: [FIRING, ACKNOWLEDGED], clusterId: $clusterId }
+  ) {
+    nodes {
+      id
+      clusterId
+      region
+      severity
+      status
+      title
+      firingAlertCount
+      assignedTo
+      startedAt
+      lastAlertAt
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}
+```
+
+Use `incident(id:)` for the complete record, including its alerts and oldest-first timeline.
+Unknown incidents and incidents owned by another tenant both return `null`; the API does not leak
+whether another tenant's incident exists.
+
+## Follow live changes
+
+Subscribe to `liveIncidentUpdates` to refresh incident state without polling:
+
+```graphql
+subscription IncidentUpdates {
+  liveIncidentUpdates {
+    incidentId
+    status
+    change
+    updatedAt
+  }
+}
+```
+
+The subscription is a change signal, not the durable incident record. After connecting or
+reconnecting, query `incidentsConnection` or `incident(id:)` and treat that response as current
+truth. This also covers changes that happened while the client was offline.
+
+## Triage an incident
+
+The incident mutations return an `IncidentMutationResult` union. Handle validation,
+authorization, and not-found results explicitly.
+
+```graphql
+mutation AcknowledgeIncident($id: ID!) {
+  acknowledgeIncident(id: $id) {
+    ... on Incident {
+      id
+      status
+      acknowledgedAt
+      acknowledgedBy
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Available actions:
+
+- `acknowledgeIncident(id:)` marks a firing incident as acknowledged. Alert ingestion continues,
+  and the incident still auto-resolves when every alert resolves.
+- `assignIncident(id:, assigneeUserId:)` assigns a user; pass `null` to clear the assignment.
+- `addIncidentNote(id:, body:)` adds operational context to the timeline, including after
+  resolution.
+- `resolveIncident(id:)` resolves manually. Repeats of the same firing alerts do not reopen it;
+  a genuinely new alert opens a new incident.
+
+Skipper can attach an investigation report to tenant incidents. The attachment appears in the
+same timeline and does not change the incident state automatically.
+
+## What creates incidents
+
+Lookout receives grouped notifications from the deployment's Alertmanager. Alertmanager owns
+rule evaluation, grouping, silences, and inhibition; Lookout owns incident state and tenant
+visibility. Which alert rules are enabled is an operator decision. See
+[Alerting and Incidents](/operators/alerting) for deployment and notification-channel setup.
 
 
 ---
@@ -4871,6 +5097,82 @@ issued to it; until every cell serving your account has attested, routing follow
 path and the placement status surface reports no confirmed enforcement. Actual media proof across
 cells remains under development; schema/player support alone does not establish end-to-end
 enforcement. The read-only API demo supports only formats in its synthetic fixture.
+
+## Restrict placement to clusters and nodes
+
+A selector combines `clusterIds`, `nodeIds`, `ownerIds`, `regions`, `classes` and `charging`:
+fields combine with AND, values within a field with OR. `nodeIds` names individual nodes and is
+accepted only for nodes of media clusters your account owns. List them with
+`mediaPlacementOptions` using `filter: { kind: NODE }`, optionally with `clusterId` to limit the
+list to one cluster; each NODE option carries its `clusterId`. Nodes of platform or marketplace
+clusters are never offered.
+
+Node selectors are accepted once every media cell serving your account supports node placement;
+until then, review and apply refuse rules that name nodes. Ingest rules are checked against the
+exact node that admits a publisher or dials a pull or managed source, and serve rules against the
+exact node chosen for a viewer.
+
+For a pull stream, the simplest way to express "only this cluster" or "only these nodes" is the
+stream's [source location](/builders/pull-streams#source-location), which writes the same ingest
+rules. Use the placement rules below when you need more, such as preferences or selectors on
+region or owner. A stream whose own ingest rules go beyond a location reports
+`sourceLocation.mode: CUSTOM` and is edited here.
+
+This review restricts ingest for one stream to two nodes of an owned cluster:
+
+```graphql
+query ReviewNodeRestriction($streamId: ID!, $revision: String!, $parentRevision: String!) {
+  reviewMediaPlacementChange(
+    input: {
+      scope: { kind: STREAM, streamId: $streamId }
+      expectedRevision: $revision
+      expectedParentRevision: $parentRevision
+      updates: [
+        {
+          verb: INGEST
+          kind: SET
+          rules: {
+            constraints: {
+              allow: {
+                any: [
+                  {
+                    clusterIds: ["warehouse-edge"]
+                    nodeIds: ["warehouse-edge-1", "warehouse-edge-2"]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ) {
+    __typename
+    ... on MediaPlacementReview {
+      reviewToken
+      expiresAt
+      differences {
+        label
+        before
+        after
+      }
+      warnings {
+        id
+        message
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+  }
+}
+```
+
+Apply it with `applyMediaPlacementChange` using the same updates and revisions, the returned
+`reviewToken`, the acknowledged warning IDs and a stable `idempotencyKey`. Through MCP,
+`get_media_placement_options` accepts `filter: { "kind": "NODE", "clusterId": "..." }` and the
+placement review/apply tools accept `nodeIds` in selectors.
 
 ## Preview saved rules
 
@@ -7781,7 +8083,9 @@ output instead.
 ## Create a Pull Stream
 
 In the dashboard, create a stream and choose **Pull** as the ingest mode. Provide the upstream
-source URI and keep the source enabled if it should start when viewers request playback.
+source URI and keep the source enabled if it should start when viewers request playback. Under
+**Where can this source be reached?**, keep **Any cluster FrameWorks chooses** for a public source,
+or choose **Only these clusters** to restrict it.
 
 Through GraphQL, use `createStream` with `ingestMode: PULL` and `pullSource`:
 
@@ -7797,8 +8101,19 @@ mutation CreatePullStream($input: CreateStreamInput!) {
         sourceUriRedacted
         enabled
         class
-        allowedClusterIds
       }
+      sourceLocation {
+        mode
+        clusters {
+          clusterId
+          nodeIds
+        }
+        avoidNodeIds
+      }
+    }
+    ... on ValidationError {
+      message
+      field
     }
   }
 }
@@ -7811,26 +8126,50 @@ mutation CreatePullStream($input: CreateStreamInput!) {
     "ingestMode": "PULL",
     "pullSource": {
       "sourceUri": "rtsp://camera.example.net/live",
-      "enabled": true,
-      "allowedClusters": {
-        "clusterIds": []
-      }
+      "enabled": true
     }
   }
 }
 ```
 
-The source URI is stored encrypted and returned only in redacted form. For public sources,
-`allowedClusters.clusterIds: []` means any media cluster may run the pull. Set cluster IDs to
-pin a public source to a specific cluster set.
+The source URI is stored encrypted and returned only in redacted form. Omitting `sourceLocation`
+leaves it `ANY`: FrameWorks may run a public source on any media cluster your account can use.
+
+## Source Location
+
+A stream's `sourceLocation` says where FrameWorks may connect to the upstream:
+
+| Mode         | Meaning                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANY`        | No stream-level restriction. FrameWorks chooses among your entitled media clusters.                                                                |
+| `RESTRICTED` | Only the listed clusters. On clusters you own, each entry can be narrowed to specific nodes, and `avoidNodeIds` excludes nodes entirely.           |
+| `CUSTOM`     | Read-only. The stream's ingest placement rules hold more than a location can express; edit them with [media placement](/builders/media-placement). |
+
+The location is stored as the stream's own ingest placement rules. The edge that dials the source
+is checked against those rules node by node, so a camera restricted to one node is never opened
+from another node, even in the same cluster. Other nodes and clusters serve viewers by relaying
+from the node that holds the source. Writing a location replaces only where the source may run;
+viewer placement rules and ingest preferences stay as they are.
+
+- `clusters` must be non-empty for `RESTRICTED` and empty for `ANY`. Each cluster must be one your
+  account can use (`clustersAccessConnection`).
+- `nodeIds` and `avoidNodeIds` accept only nodes of clusters your account owns, and are accepted
+  once every media cell serving your account supports node placement. A node cannot be both allowed
+  and avoided.
+- `updateStream` with `sourceLocation` replaces the location; omitting it keeps the current one.
+  A `CUSTOM` location cannot be replaced from `updateStream`.
+- Rejections come back as `ValidationError` with the reason, such as a cluster you cannot use, a
+  node you do not own, or a private source without a consenting cluster.
 
 ## Private Upstreams on Self-hosted Edges
 
-Private literals require two pieces of configuration:
+A camera on a LAN or a multicast feed is reachable only from edges on that network. Private
+literals (RFC1918, ULA, or non-link-local multicast addresses) require two pieces of configuration:
 
-- The target media cluster must opt in with `allow_private_pull_sources: true`.
-- The pull stream must explicitly pin itself to that cluster with `allowedClusters.clusterIds`
-  (GraphQL) or `allowed_cluster_ids` (bootstrap).
+- The media cluster must opt in with `allow_private_pull_sources: true`. Tenants see this as
+  `ClusterAccess.allowPrivatePullSources`.
+- The stream's `sourceLocation` must be `RESTRICTED` to clusters that opted in. A restriction to
+  those clusters in your account-level ingest rules also satisfies this.
 
 ```yaml
 clusters:
@@ -7842,7 +8181,40 @@ clusters:
     allow_private_pull_sources: true
 ```
 
-Then create the pull stream with the placement pin:
+Find the cluster and, if the camera is reachable from only some edges, the node IDs:
+
+```graphql
+query SourceLocationChoices {
+  clustersAccessConnection {
+    nodes {
+      clusterId
+      clusterName
+      allowPrivatePullSources
+    }
+  }
+  mediaPlacementOptions(
+    scope: { kind: TENANT }
+    filter: { kind: NODE, clusterId: "warehouse-edge" }
+  ) {
+    __typename
+    ... on MediaPlacementOptionsConnection {
+      nodes {
+        id
+        name
+        clusterId
+        eligible
+        reason
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+  }
+}
+```
+
+Then create the pull stream restricted to that cluster, and to the node on the camera's network:
 
 ```json
 {
@@ -7851,24 +8223,77 @@ Then create the pull stream with the placement pin:
     "ingestMode": "PULL",
     "pullSource": {
       "sourceUri": "rtsp://192.168.10.50/live",
-      "enabled": true,
-      "allowedClusters": {
-        "clusterIds": ["warehouse-edge"]
-      }
+      "enabled": true
+    },
+    "sourceLocation": {
+      "mode": "RESTRICTED",
+      "clusters": [{ "clusterId": "warehouse-edge", "nodeIds": ["warehouse-edge-1"] }]
     }
   }
 }
 ```
 
-This protects platform-managed clusters from trying to reach sources they cannot access and keeps
-private-source placement constrained to edge nodes you operate.
+Leave `nodeIds` empty to allow every node of the cluster. To keep a source off one node without
+listing the others, use `"avoidNodeIds": ["warehouse-edge-3"]`. To change an existing stream:
 
-| Deployment shape                              | Result                                                               |
-| --------------------------------------------- | -------------------------------------------------------------------- |
-| Platform cluster, public source URI           | Allowed.                                                             |
-| Platform cluster, private literal source URI  | Rejected.                                                            |
-| Self-hosted edge with opt-in + placement pin  | Allowed and routed only to the pinned eligible media clusters.       |
-| Hostname resolving to private IP from an edge | Treated as public at validation; DNS reachability is operator-owned. |
+```graphql
+mutation RestrictSource($id: ID!) {
+  updateStream(
+    id: $id
+    input: {
+      sourceLocation: {
+        mode: RESTRICTED
+        clusters: [{ clusterId: "warehouse-edge", nodeIds: ["warehouse-edge-1"] }]
+      }
+    }
+  ) {
+    __typename
+    ... on Stream {
+      sourceLocation {
+        mode
+        clusters {
+          clusterId
+          nodeIds
+        }
+        avoidNodeIds
+      }
+    }
+    ... on ValidationError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+Through MCP, `create_stream` and `update_stream` take the same location as `source_location`:
+
+```json
+{
+  "name": "Warehouse Camera",
+  "ingest_mode": "pull",
+  "pull_source": { "source_uri": "rtsp://192.168.10.50/live" },
+  "source_location": {
+    "mode": "restricted",
+    "clusters": [{ "cluster_id": "warehouse-edge", "node_ids": ["warehouse-edge-1"] }]
+  }
+}
+```
+
+This keeps platform-managed clusters from trying to reach sources they cannot access and keeps
+private-source placement on edge nodes you operate.
+
+| Deployment shape                                   | Result                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------- |
+| Platform cluster, public source URI                | Allowed.                                                             |
+| Platform cluster, private literal source URI       | Rejected.                                                            |
+| Self-hosted edge with opt-in + restricted location | Allowed; dialed only from the listed clusters and nodes.             |
+| Hostname resolving to private IP from an edge      | Treated as public at validation; DNS reachability is operator-owned. |
+
+Operator-declared pull streams set the same restriction in the bootstrap overlay with
+`source_location` (see [Cluster manifest](/operators/cluster-manifest#stream-source-location)).
 
 <Aside type="caution" title="Hostname reachability is on you">
   Private-vs-public classification uses literal IPs in the URI. A hostname that resolves to an
@@ -9073,20 +9498,20 @@ https://chandler.example.com/assets/abc123def456/sprite.jpg
 https://chandler.example.com/assets/abc123def456/sprite.vtt
 ```
 
-The Chandler hostname for your environment is returned by the GraphQL playback resolver — you don't need to hardcode it.
-
-For grid or library views, fetch the Chandler host once from `streamingConfig`, then combine it with the asset IDs returned by your list queries:
+You don't build these URLs yourself. Stream and artifact queries return them already resolved against the regional Chandler in `thumbnailAssets`. For grid or library views, request `thumbnailAssets` on the list query:
 
 ```graphql
-query LibraryPreviewInputs {
-  streamingConfig {
-    chandlerDomain
-  }
+query LibraryPreviews {
   streamsConnection(page: { first: 50 }) {
     nodes {
       streamId
       playbackId
       name
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   clips: storageArtifactsConnection(input: { kinds: [CLIP], first: 50, offset: 0 }) {
@@ -9094,6 +9519,11 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   recordings: storageArtifactsConnection(input: { kinds: [DVR], first: 50, offset: 0 }) {
@@ -9101,6 +9531,11 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
   vod: storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 50, offset: 0 }) {
@@ -9108,24 +9543,29 @@ query LibraryPreviewInputs {
       hash
       playbackId
       title
+      thumbnailAssets {
+        posterUrl
+        spriteJpgUrl
+        spriteVttUrl
+      }
     }
   }
 }
 ```
 
-Use `https://{chandlerDomain}/assets/{assetId}/poster.jpg`, `sprite.jpg`, and `sprite.vtt`. `assetId` is `streamId` for live streams and the artifact `hash` for clips, DVR recordings, and VOD.
+`thumbnailAssets` is null for a live stream that has never been live, and for an artifact until its thumbnail upload is confirmed.
 
 ## In the FrameWorks Player
 
 Sprite hover-scrub is **automatic**. When the stream has thumbnail processing enabled, the player auto-detects the sprite track from MistServer metadata and shows tiles on the seek bar during hover. No configuration needed for live or VOD content.
 
-To set the click-to-play poster overlay, pass `thumbnailUrl`:
+To set the click-to-play poster overlay, pass the `posterUrl` your query returned as `thumbnailUrl`:
 
 ```tsx
 <Player
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
-  thumbnailUrl="https://chandler.example.com/assets/<assetId>/poster.jpg"
+  thumbnailUrl={stream.thumbnailAssets?.posterUrl}
 />
 ```
 
@@ -11271,7 +11711,7 @@ Bunny Stream does not currently expose a first-class live-ingest product, so thi
 | Clip API (`CLIP_NOW`, `DURATION`, `ABSOLUTE`, `RELATIVE`)                             |
 | Multistream / restream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/RTMPS/SRT   |
 
-Pull-input streams use `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` — see [Pull-input streams](/builders/pull-streams). Self-hosted edges can pull from RFC1918 / multicast sources only when the source is pinned with `allowedClusters.clusterIds` to clusters that have `allow_private_pull_sources=true`.
+Pull-input streams use `createStream(input: { ingestMode: PULL, pullSource: { sourceUri }, sourceLocation })` — see [Pull-input streams](/builders/pull-streams). Self-hosted edges can pull from RFC1918 / multicast sources only when the stream's `sourceLocation` is `RESTRICTED` to clusters that have `allow_private_pull_sources=true`.
 
 ### Captions, chapters, transcription
 
@@ -11880,15 +12320,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Streams
 
-| Studio                                        | FrameWorks                                                                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /stream`                                | `createStream(input)` mutation                                                                                                             |
-| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                         |
-| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                         |
-| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                                |
-| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                  |
-| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                              |
-| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` — see [Pull-input streams](/builders/pull-streams) |
+| Studio                                        | FrameWorks                                                                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /stream`                                | `createStream(input)` mutation                                                                                                            |
+| `GET /stream/{id}`                            | `stream(id)` query                                                                                                                        |
+| `PATCH /stream/{id}`                          | `updateStream(id, input)` mutation                                                                                                        |
+| `DELETE /stream/{id}`                         | `deleteStream(id)` mutation                                                                                                               |
+| `DELETE /stream/{id}/terminate`               | No direct equivalent today; stop the encoder, or delete the stream if you are retiring it                                                 |
+| `record: true` flag at create                 | `record: true` at create, or `startDVR(streamId)` post-create                                                                             |
+| `POST /stream` with `pull: { source }` config | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri }, sourceLocation })` — see [Pull-input streams](/builders/pull-streams) |
 
 ### Recordings, clips, and VOD
 
@@ -12251,10 +12691,7 @@ mutation CreateMistPullStream {
     input: {
       name: "Existing Mist origin"
       ingestMode: PULL
-      pullSource: {
-        sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret"
-        allowedClusters: { clusterIds: [] }
-      }
+      pullSource: { sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret" }
     }
   ) {
     ... on Stream {
@@ -12571,18 +13008,18 @@ The Mux shapes you know, mapped to FrameWorks:
 
 ### Streams
 
-| Mux                                                     | FrameWorks                                                                                                                                                                                                           |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /video/v1/live-streams`                           | `createStream(input)` mutation                                                                                                                                                                                       |
-| `GET /video/v1/live-streams/{id}`                       | `stream(id)` query                                                                                                                                                                                                   |
-| `PATCH /video/v1/live-streams/{id}`                     | `updateStream(id, input)` mutation                                                                                                                                                                                   |
-| `DELETE /video/v1/live-streams/{id}`                    | `deleteStream(id)` mutation                                                                                                                                                                                          |
-| `PUT /video/v1/live-streams/{id}/disable` and `/enable` | No direct equivalent; manage at the encoder side                                                                                                                                                                     |
-| `latency_mode: "standard" \| "reduced" \| "low"`        | Choose the protocol/profile at the player — HLS for VOD/standard, LL-HLS for reduced, WHEP for low — see [Player (Playback)](/builders/playback)                                                                     |
-| `new_asset_settings` for live-to-VOD                    | `record: true` at create, or `startDVR(streamId)` post-create                                                                                                                                                        |
-| 12-hour continuous-stream auto-disconnect               | No fixed cap; 24/7 streams supported, including continuous DVR archive replay through chapters                                                                                                                       |
-| URL pull is VOD-only; no live pull-source ingest        | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri, allowedClusters } })` for live URL pull from RTSP / SRT / RIST / HLS / DTSC / MKV / TS-over-UDP — see [Pull-input streams](/builders/pull-streams) |
-| _(RTMP pull is unsupported on Mux)_                     | RTMP pull is not supported on FrameWorks either; bridge via FFmpeg, MistServer, or `srt-live-transmit` to SRT / RIST / RTSP / HLS                                                                                    |
+| Mux                                                     | FrameWorks                                                                                                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /video/v1/live-streams`                           | `createStream(input)` mutation                                                                                                                                                                                      |
+| `GET /video/v1/live-streams/{id}`                       | `stream(id)` query                                                                                                                                                                                                  |
+| `PATCH /video/v1/live-streams/{id}`                     | `updateStream(id, input)` mutation                                                                                                                                                                                  |
+| `DELETE /video/v1/live-streams/{id}`                    | `deleteStream(id)` mutation                                                                                                                                                                                         |
+| `PUT /video/v1/live-streams/{id}/disable` and `/enable` | No direct equivalent; manage at the encoder side                                                                                                                                                                    |
+| `latency_mode: "standard" \| "reduced" \| "low"`        | Choose the protocol/profile at the player — HLS for VOD/standard, LL-HLS for reduced, WHEP for low — see [Player (Playback)](/builders/playback)                                                                    |
+| `new_asset_settings` for live-to-VOD                    | `record: true` at create, or `startDVR(streamId)` post-create                                                                                                                                                       |
+| 12-hour continuous-stream auto-disconnect               | No fixed cap; 24/7 streams supported, including continuous DVR archive replay through chapters                                                                                                                      |
+| URL pull is VOD-only; no live pull-source ingest        | `createStream(input: { ingestMode: PULL, pullSource: { sourceUri }, sourceLocation })` for live URL pull from RTSP / SRT / RIST / HLS / DTSC / MKV / TS-over-UDP — see [Pull-input streams](/builders/pull-streams) |
+| _(RTMP pull is unsupported on Mux)_                     | RTMP pull is not supported on FrameWorks either; bridge via FFmpeg, MistServer, or `srt-live-transmit` to SRT / RIST / RTSP / HLS                                                                                   |
 
 ### Recordings, clips, and VOD
 
@@ -12959,6 +13396,115 @@ Pick whichever channel fits.
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
 | **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
 | **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+
+
+---
+# Alerting and Incidents
+https://logbook.frameworks.network/operators/alerting
+
+vmalert evaluates the rules in `pkg/grafana/rules/frameworks.yml` and sends firing and resolved
+alerts to Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
+each group three ways:
+
+- **Lookout** receives every group. Lookout (`api_incidents`) turns groups into incidents, keeps a
+  timeline, notifies operator email, Slack, and Discord, and scopes incidents on tenant-owned
+  clusters to that tenant.
+- **Direct email** receives critical alerts as well, so a page still goes out if Lookout is down.
+- **External heartbeat** receives only the always-firing `Watchdog` alert, once a minute. Configure
+  your heartbeat provider to alarm when those pings stop; that detects a dead vmalert or
+  Alertmanager.
+
+Lookout notifies operator channels only for platform incidents. Critical incidents go to every
+configured channel; other severities go to Slack and Discord. Notifications are sent when an
+incident opens and when it resolves.
+
+## Secrets
+
+Set these in your gitops secrets. The CLI renders the Lookout webhook URL
+(`http://lookout.internal:18022/v1/alertmanager`) from the manifest, so it is not a secret.
+
+Every service receives the manifest's shared `env_files`, so each key below is set once, for
+example in `secrets/production.env`; Alertmanager needs no env file of its own.
+
+**Alertmanager:**
+
+| Key                                    | Required | Purpose                                                         |
+| -------------------------------------- | -------- | --------------------------------------------------------------- |
+| `LOOKOUT_ALERTMANAGER_TOKEN`           | Yes      | Bearer token sent to Lookout; the same key Lookout reads        |
+| `ALERTMANAGER_HEARTBEAT_URL`           | Yes      | Webhook URL of your external heartbeat monitor                  |
+| `ALERTMANAGER_EMAIL_TO`                | Yes      | Recipient for the direct critical email fallback                |
+| `SMTP_HOST`, `SMTP_PORT`, `FROM_EMAIL` | Yes      | Platform SMTP server and sender the fallback email is sent with |
+| `SMTP_USER`, `SMTP_PASSWORD`           | No       | Platform SMTP credentials, used when set                        |
+
+The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTHOST`,
+`ALERTMANAGER_SMTP_FROM`, `ALERTMANAGER_SMTP_AUTH_USERNAME`, `ALERTMANAGER_SMTP_AUTH_PASSWORD` and
+`ALERTMANAGER_WEBHOOK_URL` are not read.
+
+**Lookout:**
+
+| Key                                                    | Required  | Purpose                                                                  |
+| ------------------------------------------------------ | --------- | ------------------------------------------------------------------------ |
+| `LOOKOUT_ALERTMANAGER_TOKEN`                           | Yes       | Token Alertmanager must present; Lookout does not start without it       |
+| `LOOKOUT_NOTIFY_EMAIL_TO`                              | No        | Comma-separated operator recipients; enables email notifications         |
+| `LOOKOUT_SLACK_WEBHOOK_URL`                            | No        | Slack incoming webhook; enables Slack notifications                      |
+| `LOOKOUT_DISCORD_WEBHOOK_URL`                          | No        | Discord webhook; enables Discord notifications                           |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | For email | Shared SMTP settings                                                     |
+| `FROM_EMAIL`, `FROM_NAME`                              | No        | Sender address and display name                                          |
+| `WEBAPP_PUBLIC_URL`                                    | No        | Adds an "Open incident" link to `/admin/incidents/<id>` in notifications |
+
+Each notification channel is active only while its key is set. Lookout re-reads these keys on
+every use, so an env reload changes routing without a restart.
+
+<Aside type="caution">
+  A webhook URL is a credential. Lookout never writes it to logs or delivery errors; keep it in
+  encrypted secrets only.
+</Aside>
+
+## Database
+
+Lookout stores incidents in the `lookout` PostgreSQL/YugabyteDB database. Add it to
+`postgres.databases` in the cluster manifest. On a new cluster `frameworks cluster provision`
+creates it. On an existing cluster, `frameworks cluster release apply` (or
+`frameworks cluster migrate --phase expand`) creates the missing database with its owner and
+runtime roles and applies its baseline before Lookout deploys; `--dry-run` lists it without
+creating anything. `frameworks cluster upgrade lookout` refuses until the database exists.
+
+Delivered notification rows are deleted after 7 days. A delivery that keeps failing is abandoned
+after 20 attempts (about two hours), recorded as `lookout_deliveries_total{result="failed"}` with
+its last error, and deleted after 30 days.
+
+## Verify
+
+1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
+   Alertmanager.
+2. **Lookout ingestion.** From a host on the private network, send a test notification. Use a new
+   `groupKey` and `fingerprint` for each test run:
+
+   ```bash
+   curl -sS -X POST http://lookout.internal:18022/v1/alertmanager \
+     -H "Authorization: Bearer $LOOKOUT_ALERTMANAGER_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"version":"4","groupKey":"operator-test-1","status":"firing",
+          "groupLabels":{"alertname":"OperatorTest"},
+          "commonAnnotations":{"summary":"Lookout delivery test"},
+          "alerts":[{"status":"firing","fingerprint":"operator-test-1",
+                     "labels":{"alertname":"OperatorTest","severity":"critical"},
+                     "startsAt":"2026-01-01T00:00:00Z"}]}'
+   ```
+
+   The response is `{"outcome":"created","incident_id":"..."}`. A `401` means the token does not
+   match. Check the counter:
+
+   ```bash
+   curl -sS http://lookout.internal:18022/metrics | grep lookout_alertmanager_webhooks_total
+   ```
+
+3. **Notifications.** The test alert is critical, so every configured channel receives an
+   "[CRITICAL] Lookout delivery test" message within a few seconds. Delivery failures show in
+   `lookout_deliveries_total{result="error"}` and Lookout's logs; failed deliveries retry with
+   backoff.
+4. **Resolve the test.** Send the same request with both `status` fields set to `resolved` and an
+   `endsAt`. The response outcome is `resolved` and the channels receive a "[RESOLVED]" message.
 
 
 ---
@@ -13973,6 +14519,7 @@ Database initialization (baseline schema + expand migrations, behind the baselin
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
+- `--version string` - Target release (`stable`, `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -14209,7 +14756,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag.                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
@@ -14680,9 +15227,10 @@ frameworks cluster upgrade --all --yes
 
 ### frameworks cluster release
 
-Run a full cluster release as one ordered, resumable plan: expand migrations → service
+Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
+(Privateer seeds, declared Kafka topics, MirrorMaker2 workers) → expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
-dependency points → postdeploy migrations. Contract migrations are printed as a deferred
+dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;
 `cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain
 recovery tools.
@@ -14698,7 +15246,8 @@ frameworks cluster release apply [flags]
 manifest topology, classifies platform artifacts, independently pinned dependencies, and host
 infrastructure, and prints schema/reconciliation ordering. It does not decrypt secrets, open SSH,
 or dial the control plane. `cluster release apply --dry-run` is the live preflight: it additionally
-runs database, artifact, health, and reconciliation checks against the cluster.
+runs database, artifact, required operator input, host convergence, health, and reconciliation
+checks against the cluster.
 
 A reconciliation transition is a constrained **Check → Apply → Verify** node registered by
 a compiled handler id (never a shell command); an unknown handler or an outdated CLI fails
@@ -14714,6 +15263,7 @@ prints the planned transitions without mutating anything.
 - `--yes` - Skip the confirmation prompt
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
+- `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
 
 **Examples:**
 
@@ -15179,6 +15729,8 @@ List and manage clusters.
 - `invites` - Manage invites (`frameworks admin clusters invites create`, `frameworks admin clusters invites list`, `frameworks admin clusters invites revoke`, `frameworks admin clusters invites list-mine`, `frameworks admin clusters invites accept`)
 - `subscriptions` - List cluster subscriptions (`frameworks admin clusters subscriptions list`)
 - `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
+- `reassign-control-cell` - Move a tenant-private cluster to another Foghorn control cell (`--to`, `--timeout`)
+- `control-cell` - Show a tenant-private cluster's control cell, reassignment state, and edges not yet moved
 
 ```bash
 # List all clusters (shows name and ID)
@@ -15228,6 +15780,11 @@ frameworks admin clusters subscriptions list --tenant-id <tenant-id>
 frameworks admin clusters migrate-artifacts \
   --tenant-id <tenant-id> \
   --from-cluster <source-cluster-id>
+
+# Move a tenant-private cluster to another Foghorn control cell, then follow
+# its edges moving; reassigning back to the previous cell is the rollback
+frameworks admin clusters reassign-control-cell <cluster-id> --to <control-cell-id> --timeout 30m
+frameworks admin clusters control-cell <cluster-id>
 ```
 
 **Sample output:**
@@ -17023,6 +17580,48 @@ Optional path to a bootstrap desired-state overlay. The CLI renders manifest-der
 bootstrap_overlay: gitops/clusters/production/bootstrap.yaml
 ```
 
+#### Stream source location
+
+Operator-declared `commodore.pull_streams` and `commodore.mist_native_streams` in the overlay
+declare where their source may run with `source_location`:
+
+```yaml
+commodore:
+  pull_streams:
+    - playback_id: warehouse-cam
+      owner_tenant: { ref: quartermaster.tenants[acme] }
+      title: Warehouse Camera
+      source_uri_ref: { sops: gitops/secrets/acme.env, key: WAREHOUSE_CAM_URI }
+      enabled: true
+      source_location:
+        clusters: [warehouse-edge] # cluster keys from this manifest
+        nodes: [warehouse-edge-1] # optional: host keys inside a listed cluster
+        avoid_nodes: [warehouse-edge-3] # optional: hosts the source must never run on
+  mist_native_streams:
+    - playback_id: demo
+      owner_tenant: { ref: quartermaster.system_tenant }
+      # source, source_kind, always_on, ...
+      source_location:
+        clusters: [media-eu-1] # exactly one cluster
+```
+
+- Omit `source_location` to let a public pull source run on any media cluster. A private or
+  multicast `source_uri` requires `clusters`, each with `allow_private_pull_sources: true`.
+- `nodes` and `avoid_nodes` require `clusters`; every entry must be a host of a listed cluster, and
+  a host cannot appear in both. Listing nodes narrows only that host's cluster.
+- `mist_native_streams` require exactly one cluster.
+- The previous `allowed_cluster_ids` key is rejected with an error naming `source_location`.
+  Replace `allowed_cluster_ids: [a, b]` with `source_location: { clusters: [a, b] }`.
+
+`commodore bootstrap` writes each location as the stream's own ingest placement rules and reports
+`stream source_locations: updated=N noop=N`. Streams declared in the overlay take their location
+from the overlay: a change made to such a stream's ingest rules through the API is replaced on the
+next bootstrap run. A location that lists `nodes` or `avoid_nodes` needs every media cell serving
+the stream's owner to support node placement: until then `commodore bootstrap` (and its
+`--dry-run`) exits with an error before writing anything. Upgrade Foghorn in every cell, then rerun
+bootstrap. See
+[media placement](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/media-placement-policy.md#source-location).
+
 ---
 
 ### hosts
@@ -17119,7 +17718,7 @@ clusters:
 - `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
 - `default` (optional) - Mark as the default cluster. New tenants auto-subscribe to this cluster on signup. At most one cluster may have `default: true`.
 - `platform_official` (optional) - Mark as a platform-operated cluster. Used by billing tier access and unauthenticated service discovery.
-- `allow_private_pull_sources` (optional) - Capability flag allowing pull-input streams on this media cluster to use private literal source addresses such as RFC1918, ULA, or non-link-local multicast. Keep this `false` for platform-managed clusters and enable it only on self-hosted edges that can reach those sources. This does not place a pull stream by itself; private sources must also set `allowed_cluster_ids` / `allowedClusters.clusterIds` on the pull source.
+- `allow_private_pull_sources` (optional) - Capability flag allowing pull-input streams on this media cluster to use private literal source addresses such as RFC1918, ULA, or non-link-local multicast. Keep this `false` for platform-managed clusters and enable it only on self-hosted edges that can reach those sources. This does not place a pull stream by itself; a private source must also restrict its source location to consenting clusters (`source_location.clusters` in the bootstrap overlay, `sourceLocation` with mode `RESTRICTED` through the API).
 - `owner_tenant` (optional) - Owning tenant. Use `frameworks` for the system tenant, or a tenant UUID.
 - `pricing` (optional) - Purser cluster pricing config. When present, provision reconciles it authoritatively. When absent, existing pricing is left untouched.
   - `model` (required) - `free_unmetered`, `metered`, `monthly`, `tier_inherit`, or `custom`
@@ -18557,17 +19156,22 @@ pushes revision-only changes so Helmsman can ACK the exact material it applied.
 
 Custom-domain removal follows the same rule: reactivation wins over stale
 cleanup, late ACME writes cannot cross the lifecycle fence, and Navigator removes
-the tenant ACME account once no custom domain in `verified`, `cert_issuing`,
-`cert_issued`, or `cert_failed` remains. Pending and teardown rows cannot preserve
-an otherwise orphaned account. On addition, `cert_issued` is published only after
-the tenant's edge-distributed multi-SAN bundle includes the custom domain; bundle
-refresh failures remain retryable.
-`cert_failed` retains the domain's retry credentials but is excluded from the
-tenant-wide SAN bundle until it returns to an issuing/issued state, preventing one
-broken custom domain from blocking renewal for the tenant alias and healthy SANs.
-Renewal re-derives the SAN set, and an issuance failure immediately rebuilds the
-aggregate bundle without the failed domain. If that rebuild fails, each
-`cert_failed` pass retries it before re-verifying the domain.
+the tenant ACME account once no custom domain in `verified`, `pending_alias`,
+`cert_issuing`, `cert_issued`, or `cert_failed` remains. Pending-verification and
+teardown rows cannot preserve an otherwise orphaned account.
+
+A custom domain is served only as a SAN of the tenant's multi-SAN bundle;
+Navigator never issues a separate per-domain certificate. After CNAME
+verification the domain waits in `pending_alias` until the tenant alias bundle is
+issued, then joins the bundle (`cert_issuing`) and becomes `cert_issued` once the
+edge-distributed bundle includes it. Only `cert_issuing` and `cert_issued` domains
+join bundle orders, so one broken custom domain cannot block issuance or renewal
+for the tenant alias and healthy SANs. A failed order marks only that domain
+`cert_failed` (check `last_error`) and retries after `next_attempt_at`, 15 minutes
+later. No bundle is rebuilt, because the serving bundle never contained the
+failed SAN. A failed renewal leaves every domain's status and SAN in place while
+the still-valid bundle keeps serving; `GetCustomDomainStatus` reports it as
+`last_renewal_error` until the next successful bundle clears it.
 During mixed-version rollouts, legacy edges may ACK without a bundle revision.
 An already-published legacy row stays in DNS for continuity, but it does not count
 as replacement readiness and an unproven edge cannot enter the pool. A legacy
@@ -20349,6 +20953,12 @@ Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. The peer m
 2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
 3. **Origin-Pull**: Foghorn arranges a DTSC pull from the remote origin into a local edge, and the viewer is served from there. Subsequent viewers are served locally. Viewers are never redirected to another cluster
 
+Source advertisements carry both Mist's native buffer health state and a separate
+media-playability signal. `FULL`, `DRY`, and `RECOVER` can all serve viewers; `DRY`
+means the booted buffer has a diagnostic issue, not that it is empty. This distinction
+matters for valid video-only streams, which Mist may flag with `HLSnoaudio!` while
+continuing to serve video. Federation refuses only sources whose media is not playable.
+
 ### Leader-Only Peering
 
 Each cluster elects one Foghorn instance (via Redis `SET NX`, 15s TTL) to run PeerChannel connections. This prevents duplicate peer traffic in HA deployments.
@@ -20747,10 +21357,69 @@ https://logbook.frameworks.network/operators/postgres-migrations
 PostgreSQL and YugabyteDB schema changes are managed through embedded,
 versioned migrations:
 
-| Scenario      | What to use                                                                                                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Fresh install | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision` |
-| Upgrading     | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                |
+| Scenario                | What to use                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Fresh install           | Bootstrap baseline schemas and `expand` migrations via `frameworks cluster init` or `frameworks cluster provision` |
+| Upgrading               | `frameworks cluster migrate` applies migrations from `pkg/database/sql/migrations/`                                |
+| Release adds a database | `frameworks cluster release apply` or `frameworks cluster migrate --phase expand` creates it from its baseline     |
+
+## New service databases
+
+A release can introduce a service that owns a new database (for example `lookout`). Declare the
+database in `postgres.databases`. Before the expand migrations, `cluster migrate --phase expand`
+(and therefore `cluster release apply`) probes every manifest database that has an embedded
+baseline:
+
+- **Absent database:** created with the same owner role, runtime role, and grants that
+  provisioning uses, then its current baseline is applied. The baseline writes the
+  `_schema_baseline` marker, so the database starts at the current floor with no migration history.
+- **Database present but its schema has no tables:** the roles are ensured and the baseline is
+  applied. This resumes a bootstrap that stopped after creating the database.
+- **Database with tables and a `_schema_baseline` marker or migration history:** already
+  initialized. Nothing is applied; its migrations run as usual.
+- **Database with tables but no marker and no migration history:** its provenance is ambiguous. It
+  may be an interrupted YugabyteDB baseline, a manual restore, or an imported database. Release and
+  migration commands refuse it before sending baseline SQL. Inspect the database first, then opt in
+  only when completing it against the current baseline is appropriate:
+
+  ```bash
+  frameworks cluster migrate --phase expand --complete-interrupted-baselines
+  # or, as part of the complete release:
+  frameworks cluster release apply --complete-interrupted-baselines
+  ```
+
+  The opted-in completion verifies the result:
+  1. It records a pending marker (`baseline-verification-pending`), so the database stays
+     unverified if the run stops at any later point.
+  2. It creates a temporary reference database on the same server, named
+     `<database>__baseline_check_<16 hex characters>`, and drops any reference an earlier
+     interrupted run left for that database.
+  3. It applies the baseline again to the database, which creates only the missing objects, and
+     applies the same baseline to the reference.
+  4. It compares the service schema of both: tables, columns (type, nullability, default),
+     constraints, indexes (including validity), triggers, functions, views, sequences, types, and
+     row-security policies. Ownership and grants are not compared because the role reasserts them
+     on every apply. It then drops the reference.
+  - **Identical:** the pending marker becomes the baseline's floor and the expand migrations
+    continue.
+  - **Different:** the release stops and prints every differing object with the expected
+    (baseline) and actual definition, for example
+    `column lookout.incidents.note / expected: (absent) / actual: text`. The database keeps its
+    pending marker, so every later release refuses it the same way until its schema matches the
+    baseline, and floor-dependent commands refuse it too.
+
+The reference database is dropped whether the comparison passes, fails, or the apply itself fails.
+Re-applying a baseline runs its data statements again, including seed statements and backfills.
+The explicit flag is therefore required even when the database has no migration history.
+
+After the bootstrap the CLI probes again and stops unless every database is initialized.
+Regional YugabyteDB aliases (such as `foghorn_eu`) are created per cell from their logical baseline.
+With `--dry-run` only read-only probes run: the output lists each database that would be created or
+completed and verified, no database, marker, or baseline SQL is sent, and the ledger checks skip
+those databases.
+
+`frameworks cluster upgrade <service>` checks the service's own database first and refuses with the
+command to run when it is missing, empty, or not yet verified.
 
 ## Migration structure
 
@@ -21159,6 +21828,13 @@ schema phases, platform artifact upgrades, live gates, and any declared one-off
 reconciliation into one resumable operation. `cluster migrate` and `cluster upgrade`
 remain explicit recovery/debugging primitives.
 
+The first release step creates any service database the manifest declares but the cluster does not
+have yet (a database introduced by this release), with its owner and runtime roles and current
+baseline, before expand migrations and before any service that owns it deploys. The static plan
+lists the manifest's service databases; `release apply --dry-run` probes the cluster and names the
+ones it would create without creating them. See
+[New service databases](/operators/postgres-migrations#new-service-databases).
+
 Managed dependencies such as Chatwoot, Listmonk, Grafana, and VictoriaMetrics have
 independent manifest pins; host infrastructure has its own OS/data lifecycle. The static
 release plan lists both groups explicitly rather than implying that a platform release
@@ -21564,12 +22240,32 @@ runs the whole release as one ordered, resumable plan and interleaves reconcilia
 their declared points:
 
 ```text
-expand migrations
+pre-upgrade host convergence: Privateer on every mesh host, declared Kafka
+  topics, MirrorMaker2 workers (hosts already converged are skipped)
+→ service databases and expand migrations
 → service upgrades in dependency order, with reconciliation transitions
   interleaved at their declared points
+→ stale placement cleanup: service replicas and MirrorMaker2 workers the
+  manifest no longer places
 → postdeploy migrations
 → contract migrations explicitly deferred until the rollback window closes
 ```
+
+The pre-upgrade stage runs on every release, before the first migration. It uses the same roles as
+`cluster provision`: each host renders its desired Privateer or MirrorMaker2 state and runs the
+role's check-mode precheck, so a host that already matches is skipped without a restart, and a
+rerun after a failure resumes where the cluster still differs. Hosts converge one at a time. A
+Privateer restart briefly interrupts that host's mesh DNS, and the stage verifies mesh health
+before it moves on to Kafka. The Kafka step only creates declared topics that do not exist yet;
+it never reconfigures or restarts a broker or controller. Privateer seeds carry the service names
+both the previous and the target release resolve, so converging them before the service upgrades
+leaves every running binary reachable. `release plan` lists the stage, and
+`release apply --dry-run` runs each host's precheck and reports whether it would install,
+converge, or skip.
+
+Before the first mutation, `release apply` also renders every service it will install or upgrade
+and fails if a declared operator input (for example `LOOKOUT_ALERTMANAGER_TOKEN` for Lookout) is
+missing, in `--dry-run` too. `cluster provision` runs the same check over its whole plan.
 
 ```bash
 frameworks cluster release apply --dry-run   # show the plan + every gate/Check, mutate nothing
@@ -21586,8 +22282,14 @@ with a clear reason instead of guessing, and a transition whose precondition doe
 
 `cluster migrate` and `cluster upgrade` remain as
 **recovery/debugging tools**; `release apply` is the normal path **for a cluster that is already
-installed** — it upgrades existing services and runs the reconciliation transitions, and it
-refuses to "upgrade" a service that is not yet installed. A **from-scratch** cluster is brought
+installed** — it upgrades existing services and runs the reconciliation transitions. A platform
+service the manifest adds or moves to a new host is installed there during the release, and the
+stale placement it left behind is removed only after every desired replica is healthy. A direct
+`cluster upgrade <service>` refuses a host where the service is not installed. Managed
+dependencies (VictoriaMetrics, vmagent, vmalert, Alertmanager, and similar) and data
+infrastructure (Kafka brokers and controllers, PostgreSQL/YugabyteDB, Redis, ClickHouse) are
+never installed or changed by `release apply`; its only host-infrastructure work is the
+pre-upgrade stage above. A **from-scratch** cluster is brought
 up with `cluster provision` (see [When to use provision](#when-to-use-provision)), which is where
 install ordering and initial descriptor establishment happen. After the initial provision, use
 `release apply` for subsequent rollouts. At **serving** time Chandler has no runtime dependency on Foghorn's version (it serves a
@@ -21618,6 +22320,227 @@ freeze gate, and a below-minimum sidecar is **rejected at registration** rather 
 a degraded mode. There is no
 "upgrade edges first" or "run old sidecars against a new Foghorn" step: deploy the
 control plane, then redeploy every edge.
+
+### Multi-region event mesh, alerting, and incidents (v0.3.5)
+
+v0.3.5 changes production topology as well as binaries. `release apply` carries the topology
+change in a safe order; only the managed alerting dependencies and the pull-source pin conversion
+run separately:
+
+| Change                                                                                                                                                                | Command                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Privateer seed DNS, the `lookout.incidents` topic, MirrorMaker2 links in both directions with the JMX exporter, platform services, Lookout and its `lookout` database | `cluster release apply`                                |
+| vmagent `region` and `cluster` labels, the MirrorMaker2 scrape, vmalert, Alertmanager                                                                                 | `cluster provision --version v0.3.5 --only interfaces` |
+| Pull-source pins                                                                                                                                                      | `cluster data-migrate`                                 |
+
+`release apply` converges the mesh and Kafka in its pre-upgrade stage (see
+[The release command](#the-release-command-reconciliations-run-automatically)) before any service
+rolls:
+
+- Privateer seeds gain `decklog.<aggregator-region>` and keep the names v0.3.4 binaries dial:
+  `signalman.<region>` on Bridge hosts, and a plain `decklog` on central writer hosts resolving
+  to the aggregator-region replicas. Each mesh host also receives the v0.3.5 Privateer binary.
+- `lookout.incidents` is created on the aggregator Kafka cluster. No broker or controller is
+  reconfigured or restarted.
+- The existing MirrorMaker2 workers restart with the JMX exporter, which pauses replication into
+  the aggregator briefly, and the workers for the link out of the aggregator start.
+
+The service upgrades then render the new wiring: Signalman consumes the other regions' mirrored
+`analytics_events` and `service_events` (`MIRROR_REGION_PREFIXES`), Bridge subscribes only to its
+local Signalman, central writers dial `decklog.<aggregator-region>.internal`, and Periscope-Ingest
+runs only in the aggregator region. Every Signalman upgrades before any Bridge, and the mirrored
+topics the new Signalman reads already exist.
+
+#### Before you start
+
+1. **Upgrade the CLI and the manifest together.** Run `frameworks update`, then confirm
+   `frameworks version` reports v0.3.5 or later. The v0.3.5 CLI rejects the old
+   `infrastructure.kafka.mirrormaker.host`, `mirrormaker.hosts`, and `regional[].mirror_topics`
+   fields. An older CLI rejects `mirrormaker.links`, `services.lookout`, `observability.vmalert`, and
+   `observability.alertmanager`. Merge the new manifest only when every operator has the new CLI;
+   an old CLI binary is usable only with the previous manifest revision.
+2. **Update the manifest.**
+   - Replace `mirrormaker.hosts` and each `mirror_topics` list with `mirrormaker.links`: one link for
+     every ordered pair of Kafka regions, with worker `hosts` in that link's target region. The
+     planner refuses a missing direction or a worker outside the target region. Omit `topics` to
+     use the default set for each direction.
+   - Place every `periscope-ingest` host in the aggregator Kafka region. Rendering refuses a
+     Periscope-Ingest host in another region.
+   - Add `services.lookout`, `lookout` under `infrastructure.postgres.databases`, and a
+     `lookout.incidents` topic on the aggregator Kafka cluster.
+   - Add `observability.vmalert` and `observability.alertmanager`. Alertmanager runs on one host.
+   - Replace `allowed_cluster_ids` in the bootstrap overlay, as described in
+     [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v035).
+3. **Set the alerting inputs** in the shared secrets file with the GitOps helper
+   `gitops/scripts/sops-env.sh`. From the GitOps repository root, omitting the value makes the
+   helper prompt for it without echoing:
+
+   ```bash
+   openssl rand -hex 32   # generate the token, then paste it at the prompt
+   ./scripts/sops-env.sh set secrets/production.env LOOKOUT_ALERTMANAGER_TOKEN
+   ./scripts/sops-env.sh set secrets/production.env ALERTMANAGER_HEARTBEAT_URL
+   ./scripts/sops-env.sh set secrets/production.env ALERTMANAGER_EMAIL_TO
+   ```
+
+   The optional Lookout channels use the same command: `LOOKOUT_NOTIFY_EMAIL_TO`,
+   `LOOKOUT_SLACK_WEBHOOK_URL`, and `LOOKOUT_DISCORD_WEBHOOK_URL`. Alertmanager's email fallback
+   reuses the platform `SMTP_HOST`, `SMTP_PORT`, and `FROM_EMAIL`, plus `SMTP_USER` and
+   `SMTP_PASSWORD` when set. Confirm that the keys have values without printing them:
+
+   ```bash
+   sops -d secrets/production.env | grep -oE '^(LOOKOUT_ALERTMANAGER_TOKEN|ALERTMANAGER_HEARTBEAT_URL|ALERTMANAGER_EMAIL_TO)=.' | cut -d= -f1
+   grep -hoE '^(SMTP_HOST|SMTP_PORT|FROM_EMAIL)=.' config/production.env secrets/production.env | cut -d= -f1
+   ```
+
+   Lookout exits at startup without `LOOKOUT_ALERTMANAGER_TOKEN`. `release apply` (including
+   `--dry-run`) refuses to start while Lookout's token is missing, and
+   `provision --only interfaces` refuses while any Alertmanager input above is missing. Both list
+   every missing key. See [Alerting and Incidents](/operators/alerting).
+
+4. **Check Redis Sentinel.** A v0.3.5 Foghorn configured with a Sentinel topology waits for it and
+   exits if it stays unreachable. The previous Foghorn logged a warning and ran without Redis, so
+   look for `Failed to initialize redis` in `frameworks cluster logs foghorn-eu --tail 500` (and
+   for every other Foghorn alias) and fix Sentinel first.
+
+#### Upgrade sequence
+
+<Steps>
+1. Preview the release. The static plan lists Privateer on every mesh host, Kafka topics for each
+   region, and `kafka-mirrormaker` on every link worker host, with `signalman` ordered before
+   `bridge`. The dry-run must pass the required-input preflight, show the existing MM2 workers as
+   `would converge` and the new reverse-link workers as `would install`, list the `lookout`
+   database, and list non-aggregator Periscope-Ingest replicas for removal without removing any
+   declared MM2 worker.
+
+   ```bash
+   frameworks cluster release plan --version v0.3.5
+   frameworks cluster release apply --version v0.3.5 --dry-run
+   ```
+
+2. Apply the release:
+
+   ```bash
+   frameworks cluster release apply --version v0.3.5 --yes
+   ```
+
+   The pre-upgrade stage restarts Privateer one host at a time, verifies mesh health, creates
+   `lookout.incidents`, and converges MirrorMaker2 one worker at a time. The release then creates
+   the `lookout` database, runs expand migrations, upgrades every platform service with Signalman
+   ahead of Bridge, installs Lookout, removes Periscope-Ingest from hosts outside the aggregator
+   region after the remaining replicas are healthy, and runs postdeploy migrations.
+
+   While it runs, services on v0.3.4 and v0.3.5 resolve every name they dial. An upgraded
+   Quartermaster may emit platform-scoped service events that the older Decklog rejects; its
+   outbox retries them once Decklog is upgraded.
+
+   If any step fails, fix the cause and rerun the same command. Hosts already converged and
+   services already at v0.3.5 are skipped.
+
+3. Convert pull-source pins with the data migration in
+   [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v035):
+
+   ```bash
+   frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+   frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+   ```
+
+4. Install alerting once Lookout is healthy, because Alertmanager delivers every alert group to it:
+
+   ```bash
+   frameworks cluster provision --version v0.3.5 --only interfaces --dry-run
+   frameworks cluster provision --version v0.3.5 --only interfaces
+   frameworks cluster grafana sync
+   ```
+
+   `--version v0.3.5` pins the provision to the release you just applied, whatever the manifest
+   channel currently resolves to. The run adds `region` and `cluster` labels to every vmagent
+   (restarting each), scrapes the MirrorMaker2 exporter on its worker hosts, and installs vmalert
+   and Alertmanager. Tasks that already match their rendered state, such as Privateer after the
+   release, are skipped without a restart.
+
+5. Verify:
+
+   ```bash
+   frameworks cluster status
+   frameworks cluster doctor --deep
+   frameworks cluster diff
+   ```
+
+</Steps>
+
+#### What to watch
+
+| After step | Check                                                                                                                                                                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2          | `signalman_kafka_consumer_lag` gains series for the other regions' mirrored topics (`us-east.analytics_events` on aggregator-region Signalmans, `<aggregator-region>.service_events` elsewhere); `signalman_kafka_duplicate_events_total` rises only while copies overlap. |
+| 2          | `periscope_ingest_kafka_consumer_lag{topic="us-east.analytics.raw_mist_triggers"}` rises and drains as retained regional usage is replayed; `foghorn_redis_connected` is `1` on every Foghorn; `frameworks cluster logs commodore` shows no Decklog dial errors.           |
+| 4          | `kafka_connect_mirror_source_connector_replication_latency_ms_max` for every `source`/`target` pair; the heartbeat provider receives Alertmanager pings; the `MM2ReplicationLagHigh` and `RegionalTelemetryStale` rules stay inactive.                                     |
+
+#### Rollback
+
+- v0.3.5 declares no rollback restrictions and no reconciliation transitions, so a service whose
+  health check fails during step 2 is rolled back automatically, as described in
+  [Rollback behavior](#rollback-behavior). Rerun `release apply`; converged hosts and services
+  already at v0.3.5 are skipped.
+- A failure in the pre-upgrade stage stops the release before any migration or service upgrade.
+  Hosts that converged stay converged, which is safe for the v0.3.4 services still running.
+- Lookout is a new installation and has no automatic rollback. A Lookout that fails its health
+  check stops `release apply` after the services before it have upgraded; fix the cause and rerun.
+  To continue without it, disable `services.lookout`, `observability.alertmanager`, and
+  `observability.vmalert` together; Alertmanager refuses to provision without a Lookout service in
+  the manifest.
+- To return an individual service to v0.3.4, keep the v0.3.5 CLI and manifest and run
+  `frameworks cluster upgrade <service> --version v0.3.4`. The seeds keep the names v0.3.4
+  binaries dial, so a rolled-back Bridge or central writer still resolves Signalman and Decklog.
+  Lookout has no earlier artifact. Expand migrations stay in place for the older binaries. The
+  Navigator postdeploy migration deletes exact per-domain certificates for tenant custom domains,
+  and a rolled-back Navigator does not get them back.
+- Do not roll back the CLI or the manifest to recover. The older CLI cannot parse the v0.3.5
+  manifest, and the v0.3.5 CLI cannot parse the older one.
+- MirrorMaker2 links and Privateer are not rolled back. The added link only creates
+  source-prefixed topic copies, which older consumers ignore. A failed link is repaired forward:
+  fix the cause and rerun `release apply`. While a link is down, Signalmans in its target region
+  miss realtime events from its source region, and a link into the aggregator delays regional
+  analytics and billing. Moving a link to other worker hosts starts the new workers in the
+  pre-upgrade stage and removes the old ones during stale placement cleanup.
+- Alerting is outside the serving path. If `provision --only interfaces` fails, fix the reported
+  input and rerun it.
+
+### Pull-source pins become stream placement rules (v0.3.5)
+
+v0.3.5 stores where a pull or managed stream's source may run as the stream's own ingest placement
+rules (its source location) and lets placement rules name nodes. The per-source
+`allowed_cluster_ids` pins remain in the schema and are still enforced by Foghorn during this
+release; Commodore mirrors every written location's clusters into them.
+
+Before rendering, replace every `allowed_cluster_ids` key under `commodore.pull_streams` and
+`commodore.mist_native_streams` in the bootstrap overlay with
+`source_location: { clusters: [...] }` (see [Cluster manifest](/operators/cluster-manifest#stream-source-location)).
+The v0.3.5 CLI rejects the old key.
+
+After the control plane is deployed, convert existing pins with the release-catalogued data
+migration:
+
+```bash
+frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5 --dry-run
+frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_5
+```
+
+The dry run counts streams whose rules would change without writing. The run converts each pinned
+stream in its own transaction, recording a placement change with actor `system:data-migration`,
+and is safe to rerun. A stream with no own ingest allow gets one allowed alternative per pinned
+cluster; a stream that already has one keeps it, narrowed to the pinned clusters. If that rule
+and the pins share no cluster, the pins replace the rule's allowed clusters. Verify fails
+while any pinned stream lacks an equivalent rule. The migration is required before the contract
+phase.
+
+Node placement activates per cell: once every live Foghorn replica in a cell runs v0.3.5 and
+enforces placement, the cell attests `node_placement_ready`, and tenants whose cells all attest are issued node-capable
+authority. Rules that name nodes are refused until then. The pin columns,
+`commodore.stream_cluster_pins` and the Foghorn pin readers are removed in the release after
+v0.3.5, which requires this migration to be verified and every media cell to attest node
+placement.
 
 ## Version selection
 
@@ -21773,7 +22696,8 @@ It is not an operator upgrade path.
 Use `frameworks cluster provision` for:
 
 - first deployment of a cluster,
-- adding a new service or host to the manifest,
+- adding a host, an infrastructure component, or a managed dependency to the manifest (a new
+  platform service is installed by `release apply`),
 - repairing drift where you intentionally want a full converge,
 - re-rendering infrastructure after changing role inputs.
 
@@ -22811,6 +23735,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#media-library)
 | ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
 | **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
 | ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
 | **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
 | **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
@@ -22829,12 +23754,10 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 
 ### Analytics & Observability
 
-Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--observability).
-
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
-| **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
+| **Incidents and alerts** | Available | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. |
 
 ### Infrastructure & BYOC
 
@@ -22848,6 +23771,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
 | ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| ↳ Cluster ingest protocol allowlist *(foundation)* | Planned | — | Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission. |
+| ↳ Regional edge redundancy *(foundation)* | Planned | — | More than one edge node per region per cluster, so a single node failure does not take a region's media offline. |
 | ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
 | ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
@@ -22865,7 +23790,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
 | **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
-| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
+| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
 
@@ -22954,6 +23879,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
 | **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
 | ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
+| ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
 | **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
 | **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
@@ -22973,18 +23899,21 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
-| **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
+| **Incidents and alerts** | Available | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. |
 
 ### Infrastructure & BYOC
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
+| **Network egress economics and peering** *(foundation)* *(platform)* | Planned | — | Operator-side supply-cost attribution, destination-network traffic analysis, percentile demand forecasting, and evidence-gated transit or peering evaluation for media egress. |
 | **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
 | ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
 | ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| ↳ Cluster ingest protocol allowlist *(foundation)* | Planned | — | Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission. |
+| ↳ Regional edge redundancy *(foundation)* | Planned | — | More than one edge node per region per cluster, so a single node failure does not take a region's media offline. |
 | ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
 | ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
@@ -23002,7 +23931,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
 | **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission. |
-| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
+| **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into the signed media authority evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 | **Drain-integrated OS updates** *(foundation)* *(platform)* | Planned | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
 | **Dynamic mesh routing** *(foundation)* *(platform)* | Planned | — | Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration. |
 | **Service identity and trust lifecycle** *(foundation)* *(platform)* | Planned | — | Live rotation of trust material without service interruption — dual-validity intermediate CA rotation, asymmetric token authority (the signing key never leaves the issuing service), and non-forgeable cluster-bound service identities. |
@@ -23167,12 +24096,17 @@ Stream and routing analytics already exist, and first-party view-level QoE now s
 The broader coverage should explain which viewers buffered, why, and which route or rendition they
 used, including viewers outside the FrameWorks player.
 
-### Incidents and Alerts <Badge text="Next" variant="tip" />
+### Incidents and Alerts <Badge text="Now" variant="success" />
 
-A tenant-scoped incident feed is planned: node-health, certificate, DNS, capacity, and cluster alerts aggregated with acknowledge/resolve workflows, realtime delivery, and agent tooling for triage. Self-hosted operators get visibility into their own clusters — certificate expiry, port reachability, DNS resolution, resource thresholds — without standing up a separate monitoring stack.
+Lookout now turns platform alerts into tenant-aware incidents with acknowledge, assignment,
+resolution, notes, realtime updates, operator notifications, and Skipper investigations. Tenants
+see incidents only for clusters they own; platform operators retain the cross-tenant operational
+view. See the [incident API guide](/builders/incidents) and
+[operator setup](/operators/alerting).
 
-Operators and agents will be able to see, acknowledge, and resolve problems across streams, nodes,
-and clusters from one incident feed.
+The remaining work is broader alert coverage, especially richer edge reachability, certificate,
+DNS, capacity, and per-stream causes. Those signals can join the same incident workflow without
+changing its ownership or authorization model.
 
 ## Infrastructure & BYOC
 

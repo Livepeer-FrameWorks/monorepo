@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -16,6 +18,44 @@ func TestReverseAllocatedPrepaidDepositIsAtomicAndAudited(t *testing.T) {
 	defer db.Close()
 	monitor := &CryptoMonitor{db: db, logger: logrus.New()}
 
+	expectPrepaidDepositReversalMutations(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventCryptoDepositReorg, "tenant-1", "", "crypto_deposit_event", "event-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := monitor.reverseAllocatedDeposit(context.Background(), "event-1", "0xold", "0xnew"); err != nil {
+		t.Fatalf("reverseAllocatedDeposit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestReverseAllocatedDepositRollsBackWhenOutboxInsertFails(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	monitor := &CryptoMonitor{db: db, logger: logrus.New()}
+
+	expectPrepaidDepositReversalMutations(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventCryptoDepositReorg, "tenant-1", "", "crypto_deposit_event", "event-1", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = monitor.reverseAllocatedDeposit(context.Background(), "event-1", "0xold", "0xnew")
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func expectPrepaidDepositReversalMutations(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT event\.status AS event_status, event\.canonical, wallet\.network`).
 		WithArgs("event-1").
@@ -47,15 +87,4 @@ func TestReverseAllocatedPrepaidDepositIsAtomicAndAudited(t *testing.T) {
 	mock.ExpectExec(`UPDATE purser\.crypto_wallets[\s\S]*status = 'review_required'`).
 		WithArgs("wallet-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs(sqlmock.AnyArg(), eventCryptoDepositReorg, "tenant-1", "", "crypto_deposit_event", "event-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	if err := monitor.reverseAllocatedDeposit(context.Background(), "event-1", "0xold", "0xnew"); err != nil {
-		t.Fatalf("reverseAllocatedDeposit: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
 }

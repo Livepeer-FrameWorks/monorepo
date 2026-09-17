@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -23,25 +25,28 @@ import (
 )
 
 type fakeStore struct {
-	getCertFunc                         func(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
-	saveCertFunc                        func(ctx context.Context, tenantID string, cert *store.Certificate) error
-	getTLSBundleFunc                    func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
-	getTLSBundleForIssuanceFunc         func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
-	saveTLSBundleFunc                   func(ctx context.Context, bundle *store.TLSBundle) error
-	getAccountFunc                      func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
-	saveAccountFunc                     func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
-	listTenantCustomDomainsFunc         func(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
-	setTenantCustomDomainCertMetadataFn func(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error
-	upsertTenantEdgeApplyAckFunc        func(ctx context.Context, state *store.TenantEdgeApplyState) (store.TenantEdgeApplyAckOutcome, error)
-	getTenantAliasFunc                  func(ctx context.Context, tenantID string) (*store.TenantAlias, error)
-	saveCertCalled                      int
-	saveBundleCalled                    int
-	saveAccountCalled                   int
-	setCustomDomainMetadataCalled       int
-	issuanceLeaseHeld                   bool
-	issuanceLeaseOwners                 []string
-	issuanceLeaseRenewed                bool
-	renewIssuanceLeaseFunc              func() (bool, error)
+	getCertFunc                  func(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
+	saveCertFunc                 func(ctx context.Context, tenantID string, cert *store.Certificate) error
+	getTLSBundleFunc             func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	getTLSBundleForIssuanceFunc  func(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	saveTLSBundleFunc            func(ctx context.Context, bundle *store.TLSBundle) error
+	getAccountFunc               func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
+	saveAccountFunc              func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
+	listTenantCustomDomainsFunc  func(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
+	upsertTenantEdgeApplyAckFunc func(ctx context.Context, state *store.TenantEdgeApplyState) (store.TenantEdgeApplyAckOutcome, error)
+	getTenantAliasFunc           func(ctx context.Context, tenantID string) (*store.TenantAlias, error)
+	saveCertCalled               int
+	saveBundleCalled             int
+	saveAccountCalled            int
+	issuanceLeaseHeld            bool
+	issuanceLeaseOwners          []string
+	issuanceLeaseRenewed         bool
+	renewIssuanceLeaseFunc       func() (bool, error)
+	// customDomains, keyed by domain, backs the custom-domain lifecycle with
+	// the same transition fences as the SQL queries. Nil leaves those methods
+	// as permissive no-ops for tests outside the lifecycle.
+	customDomains              map[string]*store.TenantCustomDomain
+	servedCertificateRefreshes int
 }
 
 func (f *fakeStore) GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
@@ -146,95 +151,23 @@ func TestSuccessfulACMEOrderCannotPublishAfterIssuanceLeaseExpires(t *testing.T)
 	require.Equal(t, 0, fakeStore.saveBundleCalled)
 }
 
-func TestTenantBundleSANsExcludeFailedCustomDomains(t *testing.T) {
+func TestTenantBundleSANsIncludeOnlyIssuingAndIssuedCustomDomains(t *testing.T) {
 	fakeStore := &fakeStore{
 		listTenantCustomDomainsFunc: func(context.Context, string) ([]store.TenantCustomDomain, error) {
 			return []store.TenantCustomDomain{
+				{Domain: "pending.example.test", Status: "pending_verification"},
 				{Domain: "verified.example.test", Status: "verified"},
+				{Domain: "waiting.example.test", Status: "pending_alias"},
 				{Domain: "issuing.example.test", Status: "cert_issuing"},
 				{Domain: "issued.example.test", Status: "cert_issued"},
 				{Domain: "failed.example.test", Status: "cert_failed"},
+				{Domain: "removed.example.test", Status: "tearing_down"},
 			}, nil
 		},
 	}
 	domains, err := NewCertManager(fakeStore).verifiedCustomDomainsForTenant(context.Background(), "tenant-1")
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"verified.example.test", "issuing.example.test", "issued.example.test"}, domains)
-	require.NotContains(t, domains, "failed.example.test")
-}
-
-func TestCustomDomainFailureImmediatelyRebuildsTenantBundleWithoutFailedSAN(t *testing.T) {
-	ctx := context.Background()
-	certPEM, keyPEM := buildTestCert(t, time.Now().Add(48*time.Hour))
-	acme := &fakeACMEClient{resource: &certificate.Resource{Certificate: certPEM, PrivateKey: keyPEM}}
-	fakeStore := &fakeStore{
-		getTenantAliasFunc: func(context.Context, string) (*store.TenantAlias, error) {
-			return &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued", AuthorityVersion: 4}, nil
-		},
-		listTenantCustomDomainsFunc: func(context.Context, string) ([]store.TenantCustomDomain, error) {
-			return []store.TenantCustomDomain{
-				{TenantID: "tenant-1", Domain: "failed.example.test", Status: "cert_failed"},
-				{TenantID: "tenant-1", Domain: "healthy.example.test", Status: "cert_issued"},
-			}, nil
-		},
-		getTLSBundleFunc: func(context.Context, string) (*store.TLSBundle, error) {
-			return nil, store.ErrNotFound
-		},
-		getAccountFunc: func(context.Context, string, string, string) (*store.ACMEAccount, error) {
-			return nil, store.ErrNotFound
-		},
-		saveAccountFunc: func(context.Context, string, *store.ACMEAccount) error { return nil },
-		saveTLSBundleFunc: func(_ context.Context, bundle *store.TLSBundle) error {
-			require.Equal(t, int64(4), bundle.AuthorityVersion)
-			require.NotContains(t, bundle.Domains, "failed.example.test")
-			require.Contains(t, bundle.Domains, "healthy.example.test")
-			return nil
-		},
-	}
-	manager := NewCertManager(fakeStore)
-	manager.acmeClientFactory = func(*lego.Config) (acmeClient, error) { return acme, nil }
-	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) { return &fakeDNSProvider{}, nil }
-
-	cause := errors.New("custom-domain order failed")
-	err := manager.failCustomDomainIssue(ctx, store.TenantCustomDomain{
-		TenantID: "tenant-1", Domain: "failed.example.test", Status: "cert_issuing",
-	}, "frameworks.network", "ops@frameworks.network", cause)
-	require.ErrorIs(t, err, cause)
-	require.Equal(t, []string{"*.acme.cdn.frameworks.network", "acme.cdn.frameworks.network", "healthy.example.test"}, acme.obtainedDomains)
-	require.Equal(t, 1, fakeStore.saveBundleCalled)
-}
-
-func TestCertFailedReconcileRetriesTenantBundleCleanupBeforeReadmission(t *testing.T) {
-	ctx := context.Background()
-	certPEM, keyPEM := buildTestCert(t, time.Now().Add(48*time.Hour))
-	acme := &fakeACMEClient{resource: &certificate.Resource{Certificate: certPEM, PrivateKey: keyPEM}}
-	fakeStore := &fakeStore{
-		getTenantAliasFunc: func(context.Context, string) (*store.TenantAlias, error) {
-			return &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued", AuthorityVersion: 8}, nil
-		},
-		listTenantCustomDomainsFunc: func(context.Context, string) ([]store.TenantCustomDomain, error) {
-			return []store.TenantCustomDomain{
-				{TenantID: "tenant-1", Domain: "poisoned.example.test", Status: "cert_failed"},
-				{TenantID: "tenant-1", Domain: "healthy.example.test", Status: "cert_issued"},
-			}, nil
-		},
-		getTLSBundleFunc: func(context.Context, string) (*store.TLSBundle, error) { return nil, store.ErrNotFound },
-		getAccountFunc: func(context.Context, string, string, string) (*store.ACMEAccount, error) {
-			return nil, store.ErrNotFound
-		},
-		saveAccountFunc: func(context.Context, string, *store.ACMEAccount) error { return nil },
-		saveTLSBundleFunc: func(_ context.Context, bundle *store.TLSBundle) error {
-			require.NotContains(t, bundle.Domains, "poisoned.example.test")
-			require.Contains(t, bundle.Domains, "healthy.example.test")
-			return nil
-		},
-	}
-	manager := NewCertManager(fakeStore)
-	manager.acmeClientFactory = func(*lego.Config) (acmeClient, error) { return acme, nil }
-	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) { return &fakeDNSProvider{}, nil }
-
-	require.NoError(t, manager.refreshTenantBundleAfterCustomDomainFailure(ctx, "tenant-1", "frameworks.network", "ops@frameworks.network"))
-	require.Equal(t, 1, fakeStore.saveBundleCalled)
+	require.ElementsMatch(t, []string{"issuing.example.test", "issued.example.test"}, domains)
 }
 
 func (f *fakeStore) ReleaseCertificateIssuanceLease(context.Context, string, string) error {
@@ -314,34 +247,123 @@ func (f *fakeStore) EnsureTenantCustomDomain(_ context.Context, tenantID, domain
 	return &store.TenantCustomDomain{TenantID: tenantID, Domain: domain, AcmeDNSSubdomain: acmeDNSSubdomain, Status: "pending_verification"}, nil
 }
 
-func (f *fakeStore) GetTenantCustomDomain(_ context.Context, _, _ string) (*store.TenantCustomDomain, error) {
-	return nil, store.ErrNotFound
+func (f *fakeStore) customDomain(tenantID, domain string) *store.TenantCustomDomain {
+	row := f.customDomains[domain]
+	if row == nil || row.TenantID != tenantID {
+		return nil
+	}
+	return row
 }
 
-func (f *fakeStore) ListTenantCustomDomainsByStatus(_ context.Context, _ []string) ([]store.TenantCustomDomain, error) {
-	return nil, nil
+func (f *fakeStore) sortedCustomDomains() []*store.TenantCustomDomain {
+	names := make([]string, 0, len(f.customDomains))
+	for name := range f.customDomains {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	rows := make([]*store.TenantCustomDomain, 0, len(names))
+	for _, name := range names {
+		rows = append(rows, f.customDomains[name])
+	}
+	return rows
+}
+
+func (f *fakeStore) GetTenantCustomDomain(_ context.Context, tenantID, domain string) (*store.TenantCustomDomain, error) {
+	row := f.customDomain(tenantID, domain)
+	if row == nil {
+		return nil, store.ErrNotFound
+	}
+	copied := *row
+	return &copied, nil
+}
+
+func (f *fakeStore) ListTenantCustomDomainsByStatus(_ context.Context, statuses []string) ([]store.TenantCustomDomain, error) {
+	var out []store.TenantCustomDomain
+	for _, row := range f.sortedCustomDomains() {
+		if slices.Contains(statuses, row.Status) {
+			out = append(out, *row)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error) {
 	if f.listTenantCustomDomainsFunc != nil {
 		return f.listTenantCustomDomainsFunc(ctx, tenantID)
 	}
-	return nil, nil
+	var out []store.TenantCustomDomain
+	for _, row := range f.sortedCustomDomains() {
+		if row.TenantID == tenantID {
+			out = append(out, *row)
+		}
+	}
+	return out, nil
 }
 
-func (f *fakeStore) SetTenantCustomDomainStatus(_ context.Context, _, _, _, _, _ string) (bool, error) {
-	return true, nil
-}
-
-func (f *fakeStore) SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, _ string, issuerID string, certExpiresAt sql.NullTime) (bool, error) {
-	f.setCustomDomainMetadataCalled++
-	if f.setTenantCustomDomainCertMetadataFn != nil {
-		return true, f.setTenantCustomDomainCertMetadataFn(ctx, tenantID, domain, issuerID, certExpiresAt)
+func (f *fakeStore) SetTenantCustomDomainStatus(_ context.Context, tenantID, domain, expectedStatus, status, errMsg string) (bool, error) {
+	if f.customDomains == nil {
+		return true, nil
+	}
+	row := f.customDomain(tenantID, domain)
+	if row == nil || (status != "tearing_down" && row.Status != expectedStatus) {
+		return false, nil
+	}
+	row.Status = status
+	row.LastError = sql.NullString{String: errMsg, Valid: errMsg != ""}
+	if status != "cert_failed" {
+		row.NextAttemptAt = sql.NullTime{}
 	}
 	return true, nil
 }
 
-func (f *fakeStore) FinalizeTenantCustomDomainRemoval(_ context.Context, _, _ string) (bool, error) {
+func (f *fakeStore) CompleteTenantCustomDomainIssuance(_ context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) (bool, error) {
+	row := f.customDomain(tenantID, domain)
+	if row == nil || row.Status != "cert_issuing" {
+		return false, nil
+	}
+	row.Status = "cert_issued"
+	row.IssuerID = sql.NullString{String: issuerID, Valid: issuerID != ""}
+	row.CertExpiresAt = expiresAt
+	row.LastError, row.LastRenewalError = sql.NullString{}, sql.NullString{}
+	row.NextAttemptAt, row.LastRenewalErrorAt = sql.NullTime{}, sql.NullTime{}
+	return true, nil
+}
+
+func (f *fakeStore) FailTenantCustomDomainIssuance(_ context.Context, tenantID, domain, errMsg string, retryAfter time.Duration) (bool, error) {
+	row := f.customDomain(tenantID, domain)
+	if row == nil || row.Status != "cert_issuing" {
+		return false, nil
+	}
+	row.Status = "cert_failed"
+	row.LastError = sql.NullString{String: errMsg, Valid: errMsg != ""}
+	row.NextAttemptAt = sql.NullTime{Valid: true, Time: time.Now().Add(retryAfter)}
+	return true, nil
+}
+
+func (f *fakeStore) RefreshTenantCustomDomainServedCertificate(_ context.Context, tenantID string, domains []string, issuerID string, expiresAt sql.NullTime) (int64, error) {
+	f.servedCertificateRefreshes++
+	var updated int64
+	for _, row := range f.customDomains {
+		if row.TenantID != tenantID || !store.CustomDomainParticipatesInTenantBundle(row.Status) || !slices.Contains(domains, row.Domain) {
+			continue
+		}
+		row.IssuerID = sql.NullString{String: issuerID, Valid: issuerID != ""}
+		row.CertExpiresAt = expiresAt
+		row.LastRenewalError, row.LastRenewalErrorAt = sql.NullString{}, sql.NullTime{}
+		updated++
+	}
+	return updated, nil
+}
+
+func (f *fakeStore) FinalizeTenantCustomDomainRemoval(_ context.Context, tenantID, domain string) (bool, error) {
+	if f.customDomains == nil {
+		return true, nil
+	}
+	row := f.customDomain(tenantID, domain)
+	if row == nil || row.Status != "tearing_down" {
+		return false, nil
+	}
+	delete(f.customDomains, domain)
 	return true, nil
 }
 
@@ -829,81 +851,234 @@ func TestEnsureTLSBundleRenewsTenantCustomDomainBundleWithBunnyProvider(t *testi
 	require.Equal(t, "tenant:tenant-123", bundle.BundleID)
 	require.Equal(t, 0, standardProvider.presentCalls)
 	require.Equal(t, 1, bunnyProvider.presentCalls)
-	require.Equal(t, 0, fakeStore.setCustomDomainMetadataCalled, "bundle persistence owns metadata atomically")
 }
 
-func TestIssueCustomDomainCertificateIssuesRequestedDomain(t *testing.T) {
-	ctx := context.Background()
-	notAfter := time.Now().Add(48 * time.Hour)
+const (
+	customDomainTestRoot  = "frameworks.network"
+	customDomainTestEmail = "ops@frameworks.network"
+)
+
+var tenantAliasTestSANs = []string{"*.acme.cdn.frameworks.network", "acme.cdn.frameworks.network"}
+
+// customDomainHarness drives the real CertManager lifecycle over a stateful
+// fake store. Any exact per-domain certificate read or write fails the test:
+// the tenant bundle is the only certificate that may serve a custom domain.
+type customDomainHarness struct {
+	store    *fakeStore
+	manager  *CertManager
+	acme     *fakeACMEClient
+	alias    *store.TenantAlias
+	saved    []*store.TLSBundle
+	notAfter time.Time
+}
+
+func newCustomDomainHarness(t *testing.T, aliasStatus string, rows ...store.TenantCustomDomain) *customDomainHarness {
+	t.Helper()
+	notAfter := time.Now().Add(80 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, keyPEM := buildTestCert(t, notAfter)
-
-	bunnyProvider := &fakeDNSProvider{}
-	acme := &fakeACMEClient{
-		resource: &certificate.Resource{
-			Certificate: certPEM,
-			PrivateKey:  keyPEM,
-		},
+	h := &customDomainHarness{
+		acme:     &fakeACMEClient{resource: &certificate.Resource{Certificate: certPEM, PrivateKey: keyPEM}},
+		alias:    &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: aliasStatus, AuthorityVersion: 3},
+		notAfter: notAfter,
 	}
-	fakeStore := &fakeStore{
-		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
-			require.Equal(t, "tenant-123", tenantID)
-			require.Equal(t, "media.example.com", domain)
-			return nil, store.ErrNotFound
+	h.store = &fakeStore{
+		customDomains: map[string]*store.TenantCustomDomain{},
+		getTenantAliasFunc: func(context.Context, string) (*store.TenantAlias, error) {
+			copied := *h.alias
+			return &copied, nil
 		},
-		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
-			require.Equal(t, "tenant-123", tenantID)
-			require.Equal(t, "media.example.com", cert.Domain)
-			require.NotEmpty(t, cert.IssuerCA)
+		getCertFunc: func(context.Context, string, string) (*store.Certificate, error) {
+			t.Fatal("custom-domain lifecycle read an exact per-domain certificate")
+			return nil, nil
+		},
+		saveCertFunc: func(context.Context, string, *store.Certificate) error {
+			t.Fatal("custom-domain lifecycle saved an exact per-domain certificate")
 			return nil
 		},
-		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+		getTLSBundleFunc: func(context.Context, string) (*store.TLSBundle, error) { return nil, store.ErrNotFound },
+		getAccountFunc: func(context.Context, string, string, string) (*store.ACMEAccount, error) {
 			return nil, store.ErrNotFound
 		},
-		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
-			return nil
-		},
-		setTenantCustomDomainCertMetadataFn: func(ctx context.Context, tenantID, domain, issuerID string, certExpiresAt sql.NullTime) error {
-			require.Equal(t, "tenant-123", tenantID)
-			require.Equal(t, "media.example.com", domain)
-			require.NotEmpty(t, issuerID)
-			require.True(t, certExpiresAt.Valid)
-			return nil
-		},
-		getTenantAliasFunc: func(_ context.Context, tenantID string) (*store.TenantAlias, error) {
-			return &store.TenantAlias{TenantID: tenantID, Subdomain: "acme", Status: "cert_issued", AuthorityVersion: 1}, nil
-		},
-		listTenantCustomDomainsFunc: func(_ context.Context, tenantID string) ([]store.TenantCustomDomain, error) {
-			return []store.TenantCustomDomain{{TenantID: tenantID, Domain: "media.example.com", Status: "cert_issuing"}}, nil
-		},
-		getTLSBundleFunc: func(context.Context, string) (*store.TLSBundle, error) {
-			return nil, store.ErrNotFound
-		},
+		saveAccountFunc: func(context.Context, string, *store.ACMEAccount) error { return nil },
 		saveTLSBundleFunc: func(_ context.Context, bundle *store.TLSBundle) error {
-			require.Equal(t, int64(1), bundle.AuthorityVersion)
+			h.saved = append(h.saved, bundle)
 			return nil
 		},
 	}
-
-	manager := NewCertManager(fakeStore)
-	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
-		return acme, nil
+	for _, row := range rows {
+		if row.TenantID == "" {
+			row.TenantID = h.alias.TenantID
+		}
+		h.store.customDomains[row.Domain] = &row
 	}
-	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) {
-		return bunnyProvider, nil
-	}
+	h.manager = NewCertManager(h.store)
+	h.manager.acmeClientFactory = func(*lego.Config) (acmeClient, error) { return h.acme, nil }
+	provider := func() (challenge.Provider, error) { return &fakeDNSProvider{}, nil }
+	h.manager.dnsProviderFactory = provider
+	h.manager.bunnyDNSProviderFactory = provider
+	return h
+}
 
-	err := manager.IssueCustomDomainCertificate(ctx, store.TenantCustomDomain{
-		TenantID: "tenant-123",
-		Domain:   "media.example.com",
-		Status:   "verified",
-	}, "frameworks.network", "ops@frameworks.network")
+func (h *customDomainHarness) row(domain string) *store.TenantCustomDomain {
+	return h.store.customDomains[domain]
+}
+
+func (h *customDomainHarness) reconcile(t *testing.T, lookup func(context.Context, string) (string, error)) int {
+	t.Helper()
+	processed, err := h.manager.ProcessPendingCustomDomains(context.Background(), customDomainTestRoot, customDomainTestEmail, lookup)
 	require.NoError(t, err)
-	require.Equal(t, []string{"*.acme.cdn.frameworks.network", "acme.cdn.frameworks.network", "media.example.com"}, acme.obtainedDomains)
-	require.Equal(t, 2, acme.obtainCalled)
-	require.Equal(t, 2, bunnyProvider.presentCalls)
-	require.Equal(t, 1, fakeStore.saveCertCalled)
-	require.Equal(t, 1, fakeStore.saveBundleCalled)
-	require.Equal(t, 1, fakeStore.setCustomDomainMetadataCalled)
+	return processed
+}
+
+func TestIssueCustomDomainCertificateServesThroughTenantBundleOnly(t *testing.T) {
+	h := newCustomDomainHarness(t, "cert_issued", store.TenantCustomDomain{Domain: "media.example.com", Status: "verified"})
+
+	err := h.manager.IssueCustomDomainCertificate(context.Background(), *h.row("media.example.com"), customDomainTestRoot, customDomainTestEmail)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, h.acme.obtainCalled, "the tenant bundle is the only ACME order")
+	require.Equal(t, append(slices.Clone(tenantAliasTestSANs), "media.example.com"), h.acme.obtainedDomains)
+	require.Equal(t, 0, h.store.saveCertCalled)
+	require.Len(t, h.saved, 1)
+	require.Equal(t, int64(3), h.saved[0].AuthorityVersion)
+	require.NotEmpty(t, h.saved[0].IssuerCA)
+
+	row := h.row("media.example.com")
+	require.Equal(t, "cert_issued", row.Status)
+	require.Equal(t, h.saved[0].IssuerCA, row.IssuerID.String)
+	require.True(t, row.CertExpiresAt.Valid)
+	require.WithinDuration(t, h.notAfter, row.CertExpiresAt.Time, time.Second)
+	require.False(t, row.LastError.Valid)
+	require.False(t, row.NextAttemptAt.Valid)
+}
+
+func TestCustomDomainWaitsForIssuedAliasBeforeJoiningTenantBundle(t *testing.T) {
+	ctx := context.Background()
+	h := newCustomDomainHarness(t, "cert_issuing", store.TenantCustomDomain{Domain: "media.example.com", Status: "verified"})
+	lookup := func(context.Context, string) (string, error) { return "acme", nil }
+
+	require.NoError(t, h.manager.IssueCustomDomainCertificate(ctx, *h.row("media.example.com"), customDomainTestRoot, customDomainTestEmail))
+	require.Equal(t, "pending_alias", h.row("media.example.com").Status)
+	require.Equal(t, 0, h.acme.obtainCalled, "no ACME order before the alias bundle is issued")
+
+	// The alias's own first issuance runs without the waiting domain's SAN.
+	_, err := h.manager.EnsureTenantWildcardCertificate(ctx, "tenant-1", "acme", TenantAliasZoneLabel, customDomainTestRoot, customDomainTestEmail)
+	require.NoError(t, err)
+	require.Equal(t, tenantAliasTestSANs, h.acme.obtainedDomains)
+
+	require.Zero(t, h.reconcile(t, lookup))
+	require.Equal(t, "pending_alias", h.row("media.example.com").Status)
+	require.Equal(t, 1, h.acme.obtainCalled)
+
+	h.alias.Status = "cert_issued"
+	require.Equal(t, 1, h.reconcile(t, lookup))
+	require.Equal(t, "cert_issued", h.row("media.example.com").Status)
+	require.Equal(t, 2, h.acme.obtainCalled)
+	require.Equal(t, append(slices.Clone(tenantAliasTestSANs), "media.example.com"), h.acme.obtainedDomains)
+}
+
+func TestCustomDomainIssuanceFailureDefersRetryWithoutBundleRebuild(t *testing.T) {
+	h := newCustomDomainHarness(t, "cert_issued",
+		store.TenantCustomDomain{Domain: "broken.example.com", Status: "verified"},
+		store.TenantCustomDomain{Domain: "healthy.example.com", Status: "cert_issued"},
+	)
+	h.acme.obtainErr = errors.New("acme: authorization failed for broken.example.com")
+	lookups := 0
+	lookup := func(context.Context, string) (string, error) {
+		lookups++
+		return "", nil
+	}
+
+	before := time.Now()
+	err := h.manager.IssueCustomDomainCertificate(context.Background(), *h.row("broken.example.com"), customDomainTestRoot, customDomainTestEmail)
+	require.ErrorContains(t, err, "authorization failed")
+
+	broken := h.row("broken.example.com")
+	require.Equal(t, "cert_failed", broken.Status)
+	require.Contains(t, broken.LastError.String, "authorization failed")
+	require.True(t, broken.NextAttemptAt.Valid)
+	require.WithinDuration(t, before.Add(customDomainIssueRetryDelay), broken.NextAttemptAt.Time, 5*time.Second)
+	require.Equal(t, 1, h.acme.obtainCalled, "a failed SAN must not trigger a bundle rebuild")
+	require.Empty(t, h.saved)
+	require.Equal(t, "cert_issued", h.row("healthy.example.com").Status)
+
+	require.Zero(t, h.reconcile(t, lookup))
+	require.Zero(t, lookups, "cert_failed domain was re-verified before next_attempt_at")
+	require.Equal(t, "cert_failed", broken.Status)
+	require.Equal(t, 1, h.acme.obtainCalled)
+
+	broken.NextAttemptAt = sql.NullTime{Valid: true, Time: time.Now().Add(-time.Second)}
+	h.reconcile(t, lookup)
+	require.Equal(t, 1, lookups, "cert_failed domain was not re-verified after next_attempt_at")
+	require.Equal(t, 1, h.acme.obtainCalled)
+}
+
+func TestTenantBundleKeepsRenewalFailedDomainAndClearsErrorOnSuccess(t *testing.T) {
+	failedAt := time.Now().Add(-time.Hour)
+	h := newCustomDomainHarness(t, "cert_issued",
+		store.TenantCustomDomain{
+			Domain: "media.example.com", Status: "cert_issued",
+			IssuerID:         sql.NullString{String: "old-ca", Valid: true},
+			CertExpiresAt:    sql.NullTime{Time: time.Now().Add(5 * 24 * time.Hour), Valid: true},
+			LastRenewalError: sql.NullString{String: "acme: order rejected", Valid: true}, LastRenewalErrorAt: sql.NullTime{Time: failedAt, Valid: true},
+		},
+		store.TenantCustomDomain{Domain: "waiting.example.com", Status: "pending_alias"},
+		store.TenantCustomDomain{Domain: "failed.example.com", Status: "cert_failed"},
+	)
+
+	bundle, err := h.manager.EnsureTenantWildcardCertificate(context.Background(), "tenant-1", "acme", TenantAliasZoneLabel, customDomainTestRoot, customDomainTestEmail)
+	require.NoError(t, err)
+	require.Equal(t, append(slices.Clone(tenantAliasTestSANs), "media.example.com"), h.acme.obtainedDomains,
+		"a renewal failure must not drop the still-served SAN from the next bundle order")
+
+	row := h.row("media.example.com")
+	require.Equal(t, "cert_issued", row.Status)
+	require.False(t, row.LastRenewalError.Valid)
+	require.False(t, row.LastRenewalErrorAt.Valid)
+	require.Equal(t, bundle.IssuerCA, row.IssuerID.String)
+	require.WithinDuration(t, h.notAfter, row.CertExpiresAt.Time, time.Second)
+	require.False(t, h.row("waiting.example.com").IssuerID.Valid)
+	require.False(t, h.row("failed.example.com").IssuerID.Valid)
+}
+
+func TestConfirmedTenantBundleRefreshesServedCustomDomainMetadata(t *testing.T) {
+	existing := &store.TLSBundle{
+		BundleID: "tenant:tenant-1", Domains: append(slices.Clone(tenantAliasTestSANs), "media.example.com"),
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour), IssuerCA: "google-trust",
+		AuthoritySubdomain: "acme", AuthorityVersion: 3,
+	}
+	h := newCustomDomainHarness(t, "cert_issued", store.TenantCustomDomain{
+		Domain: "media.example.com", Status: "cert_issued",
+		IssuerID:         sql.NullString{String: "old-ca", Valid: true},
+		LastRenewalError: sql.NullString{String: "acme: order rejected", Valid: true}, LastRenewalErrorAt: sql.NullTime{Time: time.Now(), Valid: true},
+	})
+	h.store.getTLSBundleForIssuanceFunc = func(context.Context, string) (*store.TLSBundle, error) { return existing, nil }
+	h.manager.acmeClientFactory = func(*lego.Config) (acmeClient, error) {
+		t.Fatal("fresh tenant bundle placed an ACME order")
+		return nil, nil
+	}
+
+	got, err := h.manager.EnsureTenantWildcardCertificate(context.Background(), "tenant-1", "acme", TenantAliasZoneLabel, customDomainTestRoot, customDomainTestEmail)
+	require.NoError(t, err)
+	require.Same(t, existing, got)
+	require.Equal(t, 1, h.store.servedCertificateRefreshes)
+	row := h.row("media.example.com")
+	require.Equal(t, "google-trust", row.IssuerID.String)
+	require.WithinDuration(t, existing.ExpiresAt, row.CertExpiresAt.Time, time.Second)
+	require.False(t, row.LastRenewalError.Valid)
+}
+
+func TestRemovedCustomDomainLeavesTenantBundleSANs(t *testing.T) {
+	h := newCustomDomainHarness(t, "cert_issued",
+		store.TenantCustomDomain{Domain: "gone.example.com", Status: "cert_issued"},
+		store.TenantCustomDomain{Domain: "kept.example.com", Status: "cert_issued"},
+	)
+	require.NoError(t, h.manager.RemoveCustomDomain(context.Background(), "tenant-1", "gone.example.com"))
+
+	require.Equal(t, 1, h.reconcile(t, func(context.Context, string) (string, error) { return "acme", nil }))
+	require.Equal(t, append(slices.Clone(tenantAliasTestSANs), "kept.example.com"), h.acme.obtainedDomains)
+	require.Nil(t, h.row("gone.example.com"))
+	require.Equal(t, "cert_issued", h.row("kept.example.com").Status)
 }
 
 func TestCertificateNeedsBunnyProvider(t *testing.T) {

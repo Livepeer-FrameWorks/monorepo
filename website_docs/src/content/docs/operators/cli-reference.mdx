@@ -327,6 +327,7 @@ Database initialization (baseline schema + expand migrations, behind the baselin
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
+- `--version string` - Target release (`stable`, `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -563,7 +564,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag.                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
@@ -1034,9 +1035,10 @@ frameworks cluster upgrade --all --yes
 
 ### frameworks cluster release
 
-Run a full cluster release as one ordered, resumable plan: expand migrations → service
+Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
+(Privateer seeds, declared Kafka topics, MirrorMaker2 workers) → expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
-dependency points → postdeploy migrations. Contract migrations are printed as a deferred
+dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;
 `cluster migrate`, `cluster upgrade`, and the low-level reconciliation subcommands remain
 recovery tools.
@@ -1052,7 +1054,8 @@ frameworks cluster release apply [flags]
 manifest topology, classifies platform artifacts, independently pinned dependencies, and host
 infrastructure, and prints schema/reconciliation ordering. It does not decrypt secrets, open SSH,
 or dial the control plane. `cluster release apply --dry-run` is the live preflight: it additionally
-runs database, artifact, health, and reconciliation checks against the cluster.
+runs database, artifact, required operator input, host convergence, health, and reconciliation
+checks against the cluster.
 
 A reconciliation transition is a constrained **Check → Apply → Verify** node registered by
 a compiled handler id (never a shell command); an unknown handler or an outdated CLI fails
@@ -1068,6 +1071,7 @@ prints the planned transitions without mutating anything.
 - `--yes` - Skip the confirmation prompt
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
+- `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
 
 **Examples:**
 
@@ -1533,6 +1537,8 @@ List and manage clusters.
 - `invites` - Manage invites (`frameworks admin clusters invites create`, `frameworks admin clusters invites list`, `frameworks admin clusters invites revoke`, `frameworks admin clusters invites list-mine`, `frameworks admin clusters invites accept`)
 - `subscriptions` - List cluster subscriptions (`frameworks admin clusters subscriptions list`)
 - `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
+- `reassign-control-cell` - Move a tenant-private cluster to another Foghorn control cell (`--to`, `--timeout`)
+- `control-cell` - Show a tenant-private cluster's control cell, reassignment state, and edges not yet moved
 
 ```bash
 # List all clusters (shows name and ID)
@@ -1582,6 +1588,11 @@ frameworks admin clusters subscriptions list --tenant-id <tenant-id>
 frameworks admin clusters migrate-artifacts \
   --tenant-id <tenant-id> \
   --from-cluster <source-cluster-id>
+
+# Move a tenant-private cluster to another Foghorn control cell, then follow
+# its edges moving; reassigning back to the previous cell is the rollback
+frameworks admin clusters reassign-control-cell <cluster-id> --to <control-cell-id> --timeout 30m
+frameworks admin clusters control-cell <cluster-id>
 ```
 
 **Sample output:**

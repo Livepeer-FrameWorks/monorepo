@@ -19,7 +19,7 @@ func TestListTenantClusterAccessPageExcludesInactiveGrants(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery(`SELECT c\.cluster_id.*a\.tenant_id = \$1 AND a\.is_active = true AND c\.is_active = true`).
 		WithArgs("tenant-1", 21).
-		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "cluster_name", "access_level", "resource_limits", "created_at", "id"}))
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "cluster_name", "access_level", "resource_limits", "allow_private_pull_sources", "created_at", "id"}))
 
 	rows, total, err := New(db).ListTenantClusterAccessPage(context.Background(), SimplePageFilter{ScopeID: "tenant-1", Limit: 21})
 	if err != nil {

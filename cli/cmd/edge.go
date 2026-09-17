@@ -224,6 +224,7 @@ func newEdgeInitCmd() *cobra.Command {
 	var initTargetOS string
 	var telemetryURL string
 	var telemetryToken string
+	var initRegion string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := fwcfg.Load()
 		if err != nil {
@@ -242,6 +243,7 @@ func newEdgeInitCmd() *cobra.Command {
 		// PreRegisterEdge: if enrollment token is provided but domain is not,
 		// call Foghorn to get an assigned domain.
 		var preRegNodeID string
+		var preRegClusterID string
 		var preRegFoghornAddr string
 		var preRegCABundle string
 		if enrollmentToken != "" {
@@ -263,6 +265,7 @@ func newEdgeInitCmd() *cobra.Command {
 				domain = resp.GetEdgeDomain()
 			}
 			preRegNodeID = resp.GetNodeId()
+			preRegClusterID = resp.GetClusterId()
 			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
 			preRegCABundle = string(resp.GetInternalCaBundle())
 			if telemetry := resp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
@@ -311,6 +314,8 @@ func newEdgeInitCmd() *cobra.Command {
 			MistAPIPassword: mistPassword,
 			TelemetryURL:    telemetryURL,
 			TelemetryToken:  telemetryToken,
+			ClusterID:       preRegClusterID,
+			Region:          initRegion,
 		}
 
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
@@ -335,6 +340,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().StringVar(&initMode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
+	cmd.Flags().StringVar(&initRegion, "region", "", "Region of this edge (e.g., eu-west); set as the region label on edge telemetry")
 	cmd.Flags().StringVar(&initTargetOS, "target-os", runtime.GOOS, "Target OS for the compose flavor: linux (host networking) or darwin (published ports + VM tuning). Defaults to THIS machine's OS — set explicitly when rendering for a different host")
 	return cmd
 }

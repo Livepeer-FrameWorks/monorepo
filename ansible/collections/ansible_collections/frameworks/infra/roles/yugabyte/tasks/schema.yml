@@ -2,6 +2,10 @@
 # Baseline schema SQL runs locally as the built-in Yugabyte admin role. The CLI
 # passes local temp file paths; Ansible copies those bytes and executes them via
 # community.postgresql.postgresql_script so SQL text is never Jinja-rendered.
+# A baseline is applied to a schema without tables, or to any item with
+# reapply=true: the CLI sets it when completing a schema whose baseline apply
+# was interrupted and for the scratch reference database that completion is
+# verified against.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml
@@ -64,7 +68,7 @@
   when:
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
-    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))
+    - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
 - name: Apply baseline schemas via YSQL
   community.postgresql.postgresql_script:
@@ -81,7 +85,7 @@
   when:
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
-    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))
+    - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
 - name: Grant baseline schema ownership to application role
   community.postgresql.postgresql_query:
@@ -227,4 +231,4 @@
   when:
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
-    - not (yugabyte_schema_has_tables_by_db[item.db] | default(false))
+    - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)

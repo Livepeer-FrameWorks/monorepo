@@ -65,9 +65,12 @@ type NotificationDispatcher interface {
 	Notify(ctx context.Context, report notify.Report) error
 }
 
-func (r *Reporter) Send(ctx context.Context, tenantID string, report Report) error {
+// Send persists the report and notifies the tenant. It returns the persisted
+// report ID, which is empty when no store is configured or persistence failed;
+// the ID is returned alongside a notification error because the report exists.
+func (r *Reporter) Send(ctx context.Context, tenantID string, report Report) (string, error) {
 	if r == nil {
-		return nil
+		return "", nil
 	}
 
 	record := ReportRecord{
@@ -98,14 +101,14 @@ func (r *Reporter) Send(ctx context.Context, tenantID string, report Report) err
 			if r.Logger != nil {
 				r.Logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to send heartbeat notifications")
 			}
-			return err
+			return record.ID, err
 		}
 	}
 
 	if r.Logger != nil {
 		r.Logger.WithField("tenant_id", tenantID).Debug("Heartbeat report prepared")
 	}
-	return nil
+	return record.ID, nil
 }
 
 func (r *Reporter) buildNotification(ctx context.Context, record ReportRecord, report Report) notify.Report {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"frameworks/api_control/internal/placementpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
@@ -52,10 +53,10 @@ func ReconcileMistNativeStreams(
 	desiredByTenant := make(map[string]map[string]struct{})
 
 	for _, ms := range streams {
-		if err := validateMistNativeShape(ms); err != nil {
+		location, err := validateMistNativeShape(ms)
+		if err != nil {
 			return Result{}, err
 		}
-		ms.AllowedClusterIDs = normalizeAllowedClusterIDs(ms.AllowedClusterIDs)
 
 		alias, err := AliasFromRef(ms.OwnerTenant.Ref)
 		if err != nil {
@@ -71,7 +72,7 @@ func ReconcileMistNativeStreams(
 		}
 		desiredByTenant[tenantID][strings.ToLower(ms.PlaybackID)] = struct{}{}
 
-		action, err := reconcileMistNativeStream(ctx, exec, tenantID, alias, ms)
+		action, _, err := reconcileMistNativeStream(ctx, exec, tenantID, alias, ms, location.ClusterIDs())
 		if err != nil {
 			return Result{}, fmt.Errorf("mist_native_stream %q: %w", ms.PlaybackID, err)
 		}
@@ -159,12 +160,15 @@ func pruneAbsentMistNativeStreams(ctx context.Context, exec DBTX, tenantID strin
 	return out, nil
 }
 
-func validateMistNativeShape(m MistNativeStream) error {
+// validateMistNativeShape runs the offline checks and returns the canonical
+// source location.
+func validateMistNativeShape(m MistNativeStream) (placementpolicy.SourceLocation, error) {
+	none := placementpolicy.SourceLocation{}
 	if m.PlaybackID == "" {
-		return errors.New("playback_id required")
+		return none, errors.New("playback_id required")
 	}
 	if m.OwnerTenant.Ref == "" {
-		return fmt.Errorf("mist_native_stream %q: owner_tenant.ref required", m.PlaybackID)
+		return none, fmt.Errorf("mist_native_stream %q: owner_tenant.ref required", m.PlaybackID)
 	}
 	// mist_native streams are operator-tenant-only: customer-owned managed
 	// streams would bypass the free-tier-load and per-tenant stream-cap
@@ -173,53 +177,50 @@ func validateMistNativeShape(m MistNativeStream) error {
 	// stale rendered files) must hit the same gate here so the row never
 	// lands in DB violating the invariant.
 	if !isSystemTenantRef(m.OwnerTenant.Ref) {
-		return fmt.Errorf("mist_native_stream %q: owner_tenant must be the operator/system tenant (got %q)", m.PlaybackID, m.OwnerTenant.Ref)
+		return none, fmt.Errorf("mist_native_stream %q: owner_tenant must be the operator/system tenant (got %q)", m.PlaybackID, m.OwnerTenant.Ref)
 	}
 	if m.Title == "" {
-		return fmt.Errorf("mist_native_stream %q: title required", m.PlaybackID)
+		return none, fmt.Errorf("mist_native_stream %q: title required", m.PlaybackID)
 	}
 	if m.Source == "" {
-		return fmt.Errorf("mist_native_stream %q: source required", m.PlaybackID)
+		return none, fmt.Errorf("mist_native_stream %q: source required", m.PlaybackID)
 	}
 	switch m.SourceKind {
 	case "exec":
 		if !strings.HasPrefix(m.Source, "ts-exec:") {
-			return fmt.Errorf("mist_native_stream %q: source_kind=exec requires source to start with 'ts-exec:'", m.PlaybackID)
+			return none, fmt.Errorf("mist_native_stream %q: source_kind=exec requires source to start with 'ts-exec:'", m.PlaybackID)
 		}
 	case "file":
 		if !strings.HasPrefix(m.Source, "file://") && !strings.HasPrefix(m.Source, "/") {
-			return fmt.Errorf("mist_native_stream %q: source_kind=file requires source to start with 'file://' or '/'", m.PlaybackID)
+			return none, fmt.Errorf("mist_native_stream %q: source_kind=file requires source to start with 'file://' or '/'", m.PlaybackID)
 		}
 	case "playlist":
 		if !strings.HasPrefix(m.Source, "playlist:") &&
 			!strings.HasSuffix(m.Source, ".pls") &&
 			!strings.HasSuffix(m.Source, ".m3u") &&
 			!strings.HasSuffix(m.Source, ".m3u8") {
-			return fmt.Errorf("mist_native_stream %q: source_kind=playlist requires source prefix 'playlist:' or a .pls/.m3u/.m3u8 path", m.PlaybackID)
+			return none, fmt.Errorf("mist_native_stream %q: source_kind=playlist requires source prefix 'playlist:' or a .pls/.m3u/.m3u8 path", m.PlaybackID)
 		}
 	default:
-		return fmt.Errorf("mist_native_stream %q: source_kind %q is not supported (file | playlist | exec)", m.PlaybackID, m.SourceKind)
+		return none, fmt.Errorf("mist_native_stream %q: source_kind %q is not supported (file | playlist | exec)", m.PlaybackID, m.SourceKind)
 	}
 	if m.PlacementCount < 0 {
-		return fmt.Errorf("mist_native_stream %q: placement_count must be >= 0 (0 ⇒ default 1), got %d", m.PlaybackID, m.PlacementCount)
+		return none, fmt.Errorf("mist_native_stream %q: placement_count must be >= 0 (0 ⇒ default 1), got %d", m.PlaybackID, m.PlacementCount)
 	}
-	// allowed_cluster_ids currently names exactly one source cluster
-	// Foghorn elects within. Federation still handles cross-cluster viewer
-	// routing from that active source, but there is no cross-cluster source
-	// election authority.
-	if len(m.AllowedClusterIDs) == 0 {
-		return fmt.Errorf("mist_native_stream %q: allowed_cluster_ids must contain at least one cluster", m.PlaybackID)
+	if m.LegacyAllowedClusterIDs != nil {
+		return none, fmt.Errorf("mist_native_stream %q: %w", m.PlaybackID, errLegacyAllowedClusterIDs)
 	}
-	for i, id := range m.AllowedClusterIDs {
-		if strings.TrimSpace(id) == "" {
-			return fmt.Errorf("mist_native_stream %q: allowed_cluster_ids[%d] must be non-empty", m.PlaybackID, i)
-		}
+	location, err := m.SourceLocation.placement()
+	if err != nil {
+		return none, fmt.Errorf("mist_native_stream %q: %w", m.PlaybackID, err)
 	}
-	allowedClusters := normalizeAllowedClusterIDs(m.AllowedClusterIDs)
-	if len(allowedClusters) != 1 {
-		return fmt.Errorf("mist_native_stream %q: allowed_cluster_ids currently supports exactly one source cluster (got %d); cross-cluster source election is not implemented", m.PlaybackID, len(allowedClusters))
+	// A managed stream names exactly one source cluster Foghorn elects within.
+	// Federation still handles cross-cluster viewer routing from that active
+	// source, but there is no cross-cluster source election authority.
+	if len(location.Clusters) != 1 {
+		return none, fmt.Errorf("mist_native_stream %q: source_location must name exactly one source cluster (got %d); cross-cluster source election is not implemented", m.PlaybackID, len(location.Clusters))
 	}
-	return nil
+	return location, nil
 }
 
 // isSystemTenantRef matches the same alias paths the CLI render layer
@@ -247,20 +248,23 @@ func monitoringNullBool(monitoring string) (sql.NullBool, error) {
 	}
 }
 
-func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream) (string, error) {
+// reconcileMistNativeStream reconciles the stream, managed-source and process
+// rows and returns the action with the stream ID. pins is the single source
+// cluster mirrored into the legacy pin column.
+func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream, pins []string) (string, string, error) {
 	queries := commodoredb.New(exec)
 	current, err := queries.GetBootstrapMistNativeStream(ctx, commodoredb.GetBootstrapMistNativeStreamParams{
 		TenantID: tenantID, PlaybackID: m.PlaybackID,
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return createMistNativeStream(ctx, queries, tenantID, alias, m)
+		return createMistNativeStream(ctx, queries, tenantID, alias, m, pins)
 	case err != nil:
-		return "", fmt.Errorf("probe stream: %w", err)
+		return "", "", fmt.Errorf("probe stream: %w", err)
 	}
 
 	if current.IngestMode != "mist_native" {
-		return "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", m.PlaybackID, current.IngestMode)
+		return "", "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", m.PlaybackID, current.IngestMode)
 	}
 
 	placement := m.PlacementCount
@@ -270,16 +274,16 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 
 	wantLocalAssetsJSON, err := encodeLocalAssetPaths(m.LocalAssets)
 	if err != nil {
-		return "", fmt.Errorf("encode local_assets: %w", err)
+		return "", "", fmt.Errorf("encode local_assets: %w", err)
 	}
 	wantProcessesLiveJSON, err := encodeProcessPolicy(m.ProcessPolicy)
 	if err != nil {
-		return "", fmt.Errorf("encode process_policy: %w", err)
+		return "", "", fmt.Errorf("encode process_policy: %w", err)
 	}
 
 	wantMonitoring, err := monitoringNullBool(m.Monitoring)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	streamFieldsEq := current.Title == m.Title &&
 		current.Description == m.Description &&
@@ -289,12 +293,12 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 	mistFieldsEq := current.SourceSpec.Valid && current.SourceSpec.String == m.Source &&
 		current.SourceKind.Valid && current.SourceKind.String == m.SourceKind &&
 		current.PlacementCount.Valid && int(current.PlacementCount.Int32) == placement &&
-		slices.Equal(current.AllowedClusterIds, m.AllowedClusterIDs) &&
+		slices.Equal(normalizeAllowedClusterIDs(current.AllowedClusterIds), pins) &&
 		jsonStringsEqual(current.LocalAssetPathsJson, wantLocalAssetsJSON)
 	processFieldsEq := jsonStringsEqual(current.ProcessesLiveJson, wantProcessesLiveJSON)
 
 	if streamFieldsEq && mistFieldsEq && processFieldsEq {
-		return "noop", nil
+		return "noop", current.StreamID, nil
 	}
 
 	if !streamFieldsEq {
@@ -303,38 +307,38 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 			IsRecordingEnabled: sql.NullBool{Bool: m.IsRecordingEnabled, Valid: true},
 			MonitoringEnabled:  wantMonitoring, StreamID: current.StreamID,
 		}); err != nil {
-			return "", fmt.Errorf("update stream: %w", err)
+			return "", "", fmt.Errorf("update stream: %w", err)
 		}
 	}
 	if !mistFieldsEq {
 		if err := queries.UpsertBootstrapMistSource(ctx, commodoredb.UpsertBootstrapMistSourceParams{
 			StreamID: current.StreamID, SourceSpec: m.Source, SourceKind: m.SourceKind,
-			PlacementCount: int32(placement), AllowedClusterIds: m.AllowedClusterIDs,
+			PlacementCount: int32(placement), AllowedClusterIds: pins,
 			LocalAssetPaths: json.RawMessage(wantLocalAssetsJSON),
 		}); err != nil {
-			return "", fmt.Errorf("upsert stream_mist_sources: %w", err)
+			return "", "", fmt.Errorf("upsert stream_mist_sources: %w", err)
 		}
 	}
 	if !processFieldsEq {
 		if err := upsertStreamProcessingConfig(ctx, queries, current.StreamID, wantProcessesLiveJSON); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return "updated", nil
+	return "updated", current.StreamID, nil
 }
 
-func createMistNativeStream(ctx context.Context, queries *commodoredb.Queries, tenantID, alias string, m MistNativeStream) (string, error) {
+func createMistNativeStream(ctx context.Context, queries *commodoredb.Queries, tenantID, alias string, m MistNativeStream, pins []string) (string, string, error) {
 	monitoringEnabled, monErr := monitoringNullBool(m.Monitoring)
 	if monErr != nil {
-		return "", monErr
+		return "", "", monErr
 	}
 
 	ownerID, err := queries.GetBootstrapOwnerUser(ctx, tenantID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("tenant %s has no owner user — provision owners before mist_native streams", alias)
+		return "", "", fmt.Errorf("tenant %s has no owner user — provision owners before mist_native streams", alias)
 	case err != nil:
-		return "", fmt.Errorf("lookup owner user: %w", err)
+		return "", "", fmt.Errorf("lookup owner user: %w", err)
 	}
 
 	// stream_key + internal_name follow the same convention as pull streams:
@@ -347,7 +351,7 @@ func createMistNativeStream(ctx context.Context, queries *commodoredb.Queries, t
 		MonitoringEnabled:  monitoringEnabled,
 	})
 	if err != nil {
-		return "", fmt.Errorf("insert stream: %w", err)
+		return "", "", fmt.Errorf("insert stream: %w", err)
 	}
 
 	placement := m.PlacementCount
@@ -356,26 +360,26 @@ func createMistNativeStream(ctx context.Context, queries *commodoredb.Queries, t
 	}
 	localAssetsJSON, err := encodeLocalAssetPaths(m.LocalAssets)
 	if err != nil {
-		return "", fmt.Errorf("encode local_assets: %w", err)
+		return "", "", fmt.Errorf("encode local_assets: %w", err)
 	}
 	if err := queries.CreateBootstrapMistSource(ctx, commodoredb.CreateBootstrapMistSourceParams{
 		StreamID: streamID, SourceSpec: m.Source, SourceKind: m.SourceKind,
-		PlacementCount: int32(placement), AllowedClusterIds: m.AllowedClusterIDs,
+		PlacementCount: int32(placement), AllowedClusterIds: pins,
 		LocalAssetPaths: json.RawMessage(localAssetsJSON),
 	}); err != nil {
-		return "", fmt.Errorf("insert stream_mist_sources: %w", err)
+		return "", "", fmt.Errorf("insert stream_mist_sources: %w", err)
 	}
 
 	if m.ProcessPolicy != nil {
 		processPolicyJSON, err := encodeProcessPolicy(m.ProcessPolicy)
 		if err != nil {
-			return "", fmt.Errorf("encode process_policy: %w", err)
+			return "", "", fmt.Errorf("encode process_policy: %w", err)
 		}
 		if err := upsertStreamProcessingConfig(ctx, queries, streamID, processPolicyJSON); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return "created", nil
+	return "created", streamID, nil
 }
 
 func upsertStreamProcessingConfig(ctx context.Context, queries *commodoredb.Queries, streamID, processesLiveJSON string) error {

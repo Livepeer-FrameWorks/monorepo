@@ -540,9 +540,10 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 	byClusterID := make(map[string]*model.ClusterAccess)
 	for _, c := range resp.Clusters {
 		item := &model.ClusterAccess{
-			ClusterID:   c.ClusterId,
-			ClusterName: c.ClusterName,
-			AccessLevel: c.AccessLevel,
+			ClusterID:               c.ClusterId,
+			ClusterName:             c.ClusterName,
+			AccessLevel:             c.AccessLevel,
+			AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
 		}
 		if c.ResourceLimits != nil {
 			item.ResourceLimits = c.ResourceLimits.AsMap()
@@ -563,15 +564,17 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 		}
 		if item, ok := byClusterID[c.GetClusterId()]; ok {
 			item.AccessLevel = "owner"
+			item.AllowPrivatePullSources = c.GetAllowPrivatePullSources()
 			if item.ClusterName == "" {
 				item.ClusterName = c.GetClusterName()
 			}
 			continue
 		}
 		item := &model.ClusterAccess{
-			ClusterID:   c.GetClusterId(),
-			ClusterName: c.GetClusterName(),
-			AccessLevel: "owner",
+			ClusterID:               c.GetClusterId(),
+			ClusterName:             c.GetClusterName(),
+			AccessLevel:             "owner",
+			AllowPrivatePullSources: c.GetAllowPrivatePullSources(),
 		}
 		byClusterID[item.ClusterID] = item
 		out = append(out, item)
@@ -750,7 +753,7 @@ func ingestModeToWire(mode model.IngestMode) string {
 }
 
 // DoUpdateStream updates stream settings
-func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*commodorepb.Stream, error) {
+func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (model.UpdateStreamResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -817,10 +820,23 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		monitoring := monitoringToggleToProto(*input.Monitoring)
 		req.Monitoring = &monitoring
 	}
+	if input.SourceLocation != nil {
+		location, validationErr := SourceLocationInputToProto(input.SourceLocation)
+		if validationErr != nil {
+			return validationErr, nil
+		}
+		req.SourceLocation = location
+	}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	stream, err := r.Clients.Commodore.UpdateStream(ctx, req)
 	if err != nil {
+		if vErr := streamPlacementValidationError(err); vErr != nil {
+			return vErr, nil
+		}
+		if nfErr := mapNotFound(err); nfErr != nil {
+			return nfErr, nil
+		}
 		r.Logger.WithError(err).Error("Failed to update stream")
 		return nil, fmt.Errorf("failed to update stream: %w", err)
 	}
@@ -2863,12 +2879,11 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 	rtmpPort := config.GetEnvInt("STREAMING_RTMP_PORT", 1935)
 
 	cfg := &model.StreamingConfig{
-		IngestDomain:   strPtr(streamingConfigDomain("edge-ingest", slug, baseURL)),
-		EdgeDomain:     strPtr(streamingConfigDomain("edge-egress", slug, baseURL)),
-		PlayDomain:     strPtr(streamingConfigDomain("foghorn", slug, baseURL)),
-		ChandlerDomain: strPtr(streamingConfigDomain("chandler", slug, baseURL)),
-		SrtPort:        &srtPort,
-		RtmpPort:       &rtmpPort,
+		IngestDomain: strPtr(streamingConfigDomain("edge-ingest", slug, baseURL)),
+		EdgeDomain:   strPtr(streamingConfigDomain("edge-egress", slug, baseURL)),
+		PlayDomain:   strPtr(streamingConfigDomain("foghorn", slug, baseURL)),
+		SrtPort:      &srtPort,
+		RtmpPort:     &rtmpPort,
 	}
 
 	if name := resp.GetClusterName(); name != "" {
@@ -2881,7 +2896,6 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		cfg.OfficialIngestDomain = strPtr(streamingConfigDomain("edge-ingest", offSlug, offBase))
 		cfg.OfficialEdgeDomain = strPtr(streamingConfigDomain("edge-egress", offSlug, offBase))
 		cfg.OfficialPlayDomain = strPtr(streamingConfigDomain("foghorn", offSlug, offBase))
-		cfg.OfficialChandlerDomain = strPtr(streamingConfigDomain("chandler", offSlug, offBase))
 		if name := resp.GetOfficialClusterName(); name != "" {
 			cfg.OfficialClusterLabel = strPtr(name)
 		}
@@ -2903,7 +2917,6 @@ func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *mode
 	cfg.GlobalIngestDomain = strPtr("edge-ingest." + rootDomain)
 	cfg.GlobalEdgeDomain = strPtr("edge-egress." + rootDomain)
 	cfg.GlobalPlayDomain = strPtr("foghorn." + rootDomain)
-	cfg.GlobalChandlerDomain = strPtr("chandler." + rootDomain)
 	cfg.GlobalLivepeerDomain = strPtr("livepeer." + rootDomain)
 
 	if r == nil || r.Clients == nil || r.Clients.Navigator == nil {
@@ -2927,7 +2940,6 @@ func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *mode
 	cfg.TenantIngestDomain = strPtr("edge-ingest." + apex)
 	cfg.TenantEdgeDomain = strPtr("edge-egress." + apex)
 	cfg.TenantPlayDomain = strPtr("foghorn." + apex)
-	cfg.TenantChandlerDomain = strPtr("chandler." + apex)
 	cfg.TenantLivepeerDomain = strPtr("livepeer." + apex)
 }
 

@@ -1,0 +1,12 @@
+# Changes to incidents the current user can see: the tenant's, or every incident for platform operators
+subscription IncidentUpdates {
+  liveIncidentUpdates {
+    incidentId
+    clusterId
+    status
+    severity
+    title
+    change
+    updatedAt
+  }
+}

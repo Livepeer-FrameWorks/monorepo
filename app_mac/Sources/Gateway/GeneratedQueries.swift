@@ -180,6 +180,32 @@ enum GQL {
   }
   """
 
+  static let IncidentFields = """
+  fragment IncidentFields on Incident {
+    id
+    scope
+    tenantId
+    clusterId
+    region
+    alertname
+    severity
+    status
+    resolution
+    title
+    summary
+    firingAlertCount
+    startedAt
+    lastAlertAt
+    acknowledgedAt
+    acknowledgedBy
+    assignedTo
+    resolvedAt
+    resolvedBy
+    createdAt
+    updatedAt
+  }
+  """
+
   static let LiveUsageSummaryFields = """
   fragment LiveUsageSummaryFields on LiveUsageSummary {
     periodStart
@@ -364,6 +390,7 @@ enum GQL {
   static let MediaPlacementSelectorFields = """
   fragment MediaPlacementSelectorFields on MediaPlacementSelector {
     clusterIds
+    nodeIds
     ownerIds
     regions
     classes
@@ -633,13 +660,19 @@ enum GQL {
       sourceUriRedacted
       enabled
       class
-      allowedClusterIds
     }
     managedSource {
       sourceKind
       alwaysOn
       placementCount
-      allowedClusterIds
+    }
+    sourceLocation {
+      mode
+      clusters {
+        clusterId
+        nodeIds
+      }
+      avoidNodeIds
     }
     thumbnailAssets {
       posterUrl
@@ -1350,6 +1383,7 @@ enum GQL {
       clusterName
       accessLevel
       resourceLimits
+      allowPrivatePullSources
     }
   }
   """
@@ -1621,6 +1655,55 @@ enum GQL {
   }
   """
 
+  static let GetIncident = """
+  # One incident with its alerts and timeline
+  query GetIncident($id: ID!) {
+    incident(id: $id) {
+      incident {
+        ...IncidentFields
+      }
+      alerts {
+        fingerprint
+        status
+        labels
+        annotations
+        startsAt
+        endsAt
+        generatorUrl
+      }
+      timeline {
+        id
+        kind
+        actorUserId
+        createdAt
+        note
+        assignedTo
+        reportId
+        channel
+        resolution
+        alertFingerprint
+        alertname
+      }
+    }
+  }
+  """
+
+  static let GetIncidents = """
+  # Incidents on clusters the current tenant owns, newest first
+  query GetIncidents($first: Int = 50, $after: String, $filter: IncidentFilterInput) {
+    incidentsConnection(page: { first: $first, after: $after }, filter: $filter) {
+      nodes {
+        ...IncidentFields
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      totalCount
+    }
+  }
+  """
+
   static let GetInfrastructureMetrics = """
   # Fetch infrastructure node metrics (aggregated + hourly time-series)
   # Split from GetInfrastructureOverview to stay within query complexity limits
@@ -1854,6 +1937,7 @@ enum GQL {
           clusterClass
           region
           ownerId
+          clusterId
           eligible
           reason
         }
@@ -2466,6 +2550,25 @@ enum GQL {
           subdomain
         }
         tenantCount
+      }
+    }
+  }
+  """
+
+  static let GetPlatformIncidents = """
+  # Platform-operator incident list across platform and tenant scopes.
+  # Requires the platform_operator grant.
+  query GetPlatformIncidents($first: Int = 50, $after: String, $filter: PlatformIncidentFilterInput) {
+    platform {
+      incidents(page: { first: $first, after: $after }, filter: $filter) {
+        nodes {
+          ...IncidentFields
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
       }
     }
   }
@@ -3941,21 +4044,17 @@ enum GQL {
       ingestDomain
       edgeDomain
       playDomain
-      chandlerDomain
       officialClusterLabel
       officialIngestDomain
       officialEdgeDomain
       officialPlayDomain
-      officialChandlerDomain
       globalIngestDomain
       globalEdgeDomain
       globalPlayDomain
-      globalChandlerDomain
       globalLivepeerDomain
       tenantIngestDomain
       tenantEdgeDomain
       tenantPlayDomain
-      tenantChandlerDomain
       tenantLivepeerDomain
       srtPort
       rtmpPort
@@ -4109,13 +4208,19 @@ enum GQL {
       pullSource {
         enabled
         class
-        allowedClusterIds
       }
       managedSource {
         sourceKind
         alwaysOn
         placementCount
-        allowedClusterIds
+      }
+      sourceLocation {
+        mode
+        clusters {
+          clusterId
+          nodeIds
+        }
+        avoidNodeIds
       }
     }
   }
@@ -4742,6 +4847,46 @@ enum GQL {
   }
   """
 
+  static let AcknowledgeIncident = """
+  mutation AcknowledgeIncident($id: ID!) {
+    acknowledgeIncident(id: $id) {
+      __typename
+      ... on Incident {
+        ...IncidentFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let AddIncidentNote = """
+  mutation AddIncidentNote($id: ID!, $body: String!) {
+    addIncidentNote(id: $id, body: $body) {
+      __typename
+      ... on Incident {
+        ...IncidentFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let ApplyClusterMediaConsentChange = """
   mutation ApplyClusterMediaConsentChange($input: ApplyMediaCapacityConsentInput!) {
     applyClusterMediaConsentChange(input: $input) {
@@ -4806,6 +4951,26 @@ enum GQL {
       ... on AuthError {
         message
         code
+      }
+    }
+  }
+  """
+
+  static let AssignIncident = """
+  mutation AssignIncident($id: ID!, $assigneeUserId: ID) {
+    assignIncident(id: $id, assigneeUserId: $assigneeUserId) {
+      __typename
+      ... on Incident {
+        ...IncidentFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
       }
     }
   }
@@ -5591,6 +5756,26 @@ enum GQL {
   }
   """
 
+  static let ResolveIncident = """
+  mutation ResolveIncident($id: ID!) {
+    resolveIncident(id: $id) {
+      __typename
+      ... on Incident {
+        ...IncidentFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let RevokeAPIToken = """
   # Revoke a developer API token by its ID
   mutation RevokeAPIToken($id: ID!) {
@@ -6070,6 +6255,21 @@ enum GQL {
       stream {
         streamId
       }
+    }
+  }
+  """
+
+  static let IncidentUpdates = """
+  # Changes to incidents the current user can see: the tenant's, or every incident for platform operators
+  subscription IncidentUpdates {
+    liveIncidentUpdates {
+      incidentId
+      clusterId
+      status
+      severity
+      title
+      change
+      updatedAt
     }
   }
   """

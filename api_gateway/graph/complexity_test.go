@@ -54,7 +54,7 @@ query GetStreamsConnection($first: Int = 50, $after: String) {
         playbackId
         record
         ingestMode
-        pullSource { sourceUriRedacted enabled class allowedClusterIds }
+        pullSource { sourceUriRedacted enabled class }
         thumbnailAssets { posterUrl spriteVttUrl spriteJpgUrl assetKey }
         dvrChapterMode
         dvrChapterIntervalSeconds

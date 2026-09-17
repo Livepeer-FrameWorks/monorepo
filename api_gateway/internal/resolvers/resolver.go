@@ -24,13 +24,14 @@ import (
 )
 
 // GraphQLMetrics holds all Prometheus metrics for GraphQL operations.
-// SignalmanClients tracks live bridge→Signalman gRPC fan-out clients
-// (not browser WebSocket connections); SubscriptionsActive tracks live
-// GraphQL subscription goroutines.
+// SignalmanStreams tracks upstream bridge→Signalman subscription streams per
+// tenant (one per tenant and channel with live subscribers, not browser
+// WebSocket connections); SubscriptionsActive tracks served GraphQL
+// subscriptions.
 type GraphQLMetrics struct {
 	Operations          *prometheus.CounterVec
 	Duration            *prometheus.HistogramVec
-	SignalmanClients    *prometheus.GaugeVec
+	SignalmanStreams    *prometheus.GaugeVec
 	WebSocketMessages   *prometheus.CounterVec
 	SubscriptionsActive *prometheus.GaugeVec
 	CacheLoadsActive    *prometheus.GaugeVec
@@ -55,41 +56,20 @@ type Resolver struct {
 
 // NewResolver creates a new GraphQL resolver
 func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, serviceToken string) *Resolver {
-	// Initialize gRPC subscription manager. SIGNALMAN_GRPC_ADDRS /
-	// SIGNALMAN_GRPC_ADDRS_BY_REGION carry the multi-replica lists used for
-	// failover; the single-addr fields provide the required local target.
-	signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR")
+	// Bridge serves every GraphQL subscription from its own region's Signalman.
+	// SIGNALMAN_GRPC_ADDRS optionally lists replica targets; otherwise the
+	// required SIGNALMAN_GRPC_ADDR service alias spreads streams across the local
+	// replicas.
 	signalmanAddrs := parseSignalmanAddrs(config.GetEnv("SIGNALMAN_GRPC_ADDRS", ""))
-	signalmanByRegion := parseSignalmanAddrByRegion(config.GetEnv("SIGNALMAN_GRPC_ADDR_BY_REGION", ""))
-	signalmanAddrsByRegion := parseSignalmanAddrsByRegion(config.GetEnv("SIGNALMAN_GRPC_ADDRS_BY_REGION", ""))
-	maxConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
-	subManager := NewSubscriptionManager(logger, SubscriptionManagerConfig{
-		SignalmanAddr:           signalmanAddr,
-		SignalmanAddrsLocal:     signalmanAddrs,
-		SignalmanAddrByRegion:   signalmanByRegion,
-		SignalmanAddrsByRegion:  signalmanAddrsByRegion,
-		ServiceToken:            serviceToken,
-		MaxConnectionsPerTenant: maxConnections,
-		Metrics:                 metrics,
-	})
-	// Wire stream-origin lookup so stream-scoped subscriptions attach to the
-	// origin-region Signalman. Commodore's Stream proto carries
-	// stream_origin_region (derived from active_ingest_cluster_id's
-	// infrastructure_clusters.region_id). Resolver-level failures are
-	// swallowed in connectionAddrForStream so the local Signalman remains
-	// the always-available fallback.
-	if serviceClients != nil && serviceClients.Commodore != nil {
-		subManager.SetStreamOriginResolver(func(ctx context.Context, streamID string) (string, error) {
-			stream, err := serviceClients.Commodore.GetStream(ctx, streamID)
-			if err != nil {
-				return "", err
-			}
-			if stream == nil {
-				return "", nil
-			}
-			return stream.GetStreamOriginRegion(), nil
-		})
+	if signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR"); len(signalmanAddrs) == 0 {
+		signalmanAddrs = []string{signalmanAddr}
 	}
+	subManager := NewSubscriptionManager(logger, SubscriptionManagerConfig{
+		SignalmanAddrs:            signalmanAddrs,
+		ServiceToken:              serviceToken,
+		MaxSubscriptionsPerTenant: config.GetEnvInt("WS_MAX_SUBSCRIPTIONS_PER_TENANT", 100),
+		Metrics:                   metrics,
+	})
 
 	periscopeTTL := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_TTL_SECONDS", 30)) * time.Second
 	periscopeSWR := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_SWR_SECONDS", 15)) * time.Second

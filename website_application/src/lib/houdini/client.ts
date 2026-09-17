@@ -3,6 +3,7 @@ import { fetch as houdiniFetch, subscription, type RequestHandlerArgs } from "$h
 import { createClient } from "graphql-ws";
 import { browser } from "$app/environment";
 import { refreshAuthSession } from "$lib/auth/refresh";
+import { notifyRealtimeReconnected } from "$lib/houdini/reconnect";
 
 const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
 const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL ?? "";
@@ -163,6 +164,7 @@ export default new HoudiniClient({
               connected: (_socket, _payload, wasRetry) => {
                 if (wasRetry) {
                   console.info("[WebSocket] Reconnected");
+                  notifyRealtimeReconnected();
                 }
               },
               error: (error) => {

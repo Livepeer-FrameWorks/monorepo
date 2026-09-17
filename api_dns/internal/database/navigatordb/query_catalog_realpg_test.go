@@ -131,30 +131,57 @@ func verifyNavigatorAutomaticMigrationPhasesConverge(t *testing.T, db *sql.DB) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	seedNavigatorCredentialCleanupProof(t, ctx, db)
-	for _, phase := range []string{"expand", "postdeploy"} {
-		dir := "migrations/navigator/v0.3.0/" + phase
-		entries, err := fs.ReadDir(dbsql.Content, dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-				continue
-			}
-			migration, err := dbsql.Content.ReadFile(dir + "/" + entry.Name())
+	for _, version := range []string{"v0.3.0", "v0.3.5"} {
+		for _, phase := range []string{"expand", "postdeploy"} {
+			dir := "migrations/navigator/" + version + "/" + phase
+			entries, err := fs.ReadDir(dbsql.Content, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.ExecContext(ctx, string(migration)); err != nil {
-				t.Fatalf("apply automatic %s migration %s: %v", phase, entry.Name(), err)
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+					continue
+				}
+				migration, err := dbsql.Content.ReadFile(dir + "/" + entry.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(ctx, string(migration)); err != nil {
+					t.Fatalf("apply automatic %s %s migration %s: %v", version, phase, entry.Name(), err)
+				}
+			}
+			if phase == "expand" {
+				assertNoUnvalidatedNavigatorConstraints(t, ctx, db, "fresh baseline plus "+version+" expand")
 			}
 		}
-		if phase == "expand" {
-			assertNoUnvalidatedNavigatorConstraints(t, ctx, db, "fresh baseline plus expand")
+		if version == "v0.3.0" {
+			assertNavigatorCredentialCleanupProof(t, ctx, db)
 		}
 	}
 	assertNoUnvalidatedNavigatorConstraints(t, ctx, db, "fresh baseline plus automatic postdeploy")
-	assertNavigatorCredentialCleanupProof(t, ctx, db)
+	assertNavigatorCustomDomainExactCertificatesRetired(t, ctx, db)
+}
+
+// assertNavigatorCustomDomainExactCertificatesRetired proves the v0.3.5
+// postdeploy removed the retained cert_failed domain's exact certificate while
+// the domain row and platform certificate survive.
+func assertNavigatorCustomDomainExactCertificatesRetired(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	var exactCerts, platformCerts, customDomainRows int
+	if err := db.QueryRowContext(ctx, `
+SELECT
+  COUNT(*) FILTER (WHERE domain = 'custom.example.test'),
+  COUNT(*) FILTER (WHERE tenant_id IS NULL AND domain = 'platform.example.test')
+FROM navigator.certificates`).Scan(&exactCerts, &platformCerts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM navigator.tenant_custom_domains WHERE domain = 'custom.example.test'`).Scan(&customDomainRows); err != nil {
+		t.Fatal(err)
+	}
+	if exactCerts != 0 || platformCerts != 1 || customDomainRows != 1 {
+		t.Fatalf("v0.3.5 exact-certificate cleanup exact_certs=%d platform_certs=%d custom_domain_rows=%d", exactCerts, platformCerts, customDomainRows)
+	}
 }
 
 func seedNavigatorCredentialCleanupProof(t *testing.T, ctx context.Context, db *sql.DB) {
@@ -1102,8 +1129,8 @@ func assertNoTenantEdgeRows(t *testing.T, ctx context.Context, db *sql.DB, tenan
 func prepareNavigatorQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := navigatorGeneratedQueries(t)
-	if len(queries) != 55 {
-		t.Fatalf("found %d generated Navigator queries, want 55", len(queries))
+	if len(queries) != 58 {
+		t.Fatalf("found %d generated Navigator queries, want 58", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)

@@ -49,11 +49,16 @@ type CellPlacementCapability struct {
 	SupportedSchemaVersions []uint32
 	EnforcementReady        bool
 	LiveReplicas            int64
+	NodePlacementReady      bool
 }
 
 // CellPlacementCapability reads the replica ledger. A cell with no live rows,
 // any live replica below schema 2, any non-enforcing replica, or a local
-// process that has not itself installed enforcement is not ready.
+// process that has not itself installed enforcement is not ready. Node
+// placement (schema 3) is attested only when every live replica heartbeats it:
+// a replica on an older release rejects node selectors as unknown fields. It is
+// a separate flag, never a supported version, because Commodore releases
+// without node placement reject version 3 and would mark the cell not ready.
 func (s *Store) CellPlacementCapability(ctx context.Context) (CellPlacementCapability, error) {
 	if s == nil || s.db == nil {
 		return CellPlacementCapability{}, errors.New("media authority store is unavailable")
@@ -65,6 +70,7 @@ func (s *Store) CellPlacementCapability(ctx context.Context) (CellPlacementCapab
 	capability := CellPlacementCapability{
 		SupportedSchemaVersions: []uint32{sharedauthority.SchemaVersion, sharedauthority.PlacementSchemaVersion},
 		LiveReplicas:            row.LiveReplicas,
+		NodePlacementReady:      row.LiveReplicas > 0 && row.MinSchemaVersion >= int32(sharedauthority.NodePlacementSchemaVersion),
 	}
 	capability.EnforcementReady = PlacementEnforced() && row.LiveReplicas > 0 && row.AllEnforced &&
 		row.MinSchemaVersion >= int32(sharedauthority.PlacementSchemaVersion)
@@ -84,7 +90,7 @@ func (s *Store) RecordReplicaHeartbeat(ctx context.Context, replicaID, release s
 	}
 	return foghorndb.New(s.db).UpsertControlReplicaHeartbeat(ctx, foghorndb.UpsertControlReplicaHeartbeatParams{
 		ReplicaID: replicaID, ReleaseVersion: strings.TrimSpace(release),
-		PlacementSchemaVersion: int32(sharedauthority.PlacementSchemaVersion), PlacementEnforced: PlacementEnforced(),
+		PlacementSchemaVersion: int32(sharedauthority.NodePlacementSchemaVersion), PlacementEnforced: PlacementEnforced(),
 	})
 }
 
@@ -124,13 +130,13 @@ func (s *Store) RunReplicaHeartbeat(ctx context.Context, replicaID, release stri
 	}
 }
 
-// promotePlacementReadiness marks a schema-2 authority locally ready on apply.
-// Commodore only issues schema 2 to a cell after that cell attested enforcement,
+// promotePlacementReadiness marks a placement-schema authority locally ready on
+// apply. Commodore only issues schema 2 or 3 to a cell after that cell attested it,
 // so an enforcing replica has already proven what shadow comparison proves for
 // schema 1. Promotion at apply avoids the bootstrap deadlock where routing needs a
 // ready pair before any connected admission could have compared it.
 func promotePlacementReadiness(ctx context.Context, queries *foghorndb.Queries, verified *sharedauthority.Verified) error {
-	if !PlacementEnforced() || verified == nil || verifiedPlacementSchema(verified) != sharedauthority.PlacementSchemaVersion {
+	if !PlacementEnforced() || verified == nil || !sharedauthority.IsPlacementSchema(verifiedPlacementSchema(verified)) {
 		return nil
 	}
 	version := int64(verified.Envelope.GetAuthorityVersion())

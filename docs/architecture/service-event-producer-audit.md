@@ -69,10 +69,11 @@ Counts derive from a `grep` of `decklogClient.Send*` / `decklog.Emit*` / `SendSe
 
 ### Purser (`api_billing`)
 
-| Site                             | Event class                     | Classification    | Migration target                                                                                                                                                                                                           |
-| -------------------------------- | ------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `internal/grpc/server.go:4564`   | `ServiceEvent` (billing event)  | **state-coupled** | Migrate to `purser.service_event_outbox`. Plan changes, invoice transitions, refund/clawback events all require durability.                                                                                                |
-| `internal/handlers/events.go:43` | Payment-provider webhook ingest | **state-coupled** | Migrate. Webhook receipts are the only signal for some provider state transitions; loss = silent payment-state divergence. Note Stripe meter ingestion already uses a Stripe-specific outbox; this is a different surface. |
+| Site                                                              | Event class                                                   | Classification    | Migration target                                                                                                                                       |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `internal/grpc/billing_event_outbox.go` (`EnqueueBillingEventTx`) | gRPC billing mutations (subscription, payment, top-up)        | **state-coupled** | **Migrated.** Writes `purser.billing_event_outbox` inside the gRPC mutation's transaction; `runBillingOutboxWorker` dispatches to Decklog.             |
+| `internal/handlers/events.go` (`emitBillingEventTx`)              | Webhook, checkout, crypto, and x402 settlement billing events | **state-coupled** | **Migrated.** Writes `purser.billing_event_outbox` inside the webhook or reconciler mutation's transaction; an insert failure rolls the mutation back. |
+| `internal/handlers/events.go` (`emitBillingTelemetryEvent`)       | x402 accounting anomaly, x402 RPC error limit                 | **telemetry**     | Standalone `purser.billing_event_outbox` insert; a failure is logged. The event reports an observed condition, not a state mutation.                   |
 
 ### Foghorn (`api_balancing`)
 

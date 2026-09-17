@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"frameworks/api_control/internal/placementpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
 
@@ -43,10 +44,13 @@ type ClusterCapabilityResolver interface {
 // encrypts plaintext SourceURI before INSERT/UPDATE.
 //
 // ClusterCapabilityResolver is the eligibility gate: private/multicast sources
-// require explicit allowed_cluster_ids, and each listed cluster must be an edge
+// require source_location clusters, and each listed cluster must be an edge
 // cluster with allow_private_pull_sources=true. Defense-in-depth — the CLI
 // render path enforces the same rule earlier, but stale rendered files /
 // out-of-band callers must still fail closed here.
+//
+// The source location's clusters are mirrored into the legacy pin column;
+// ReconcileStreamSourceLocations writes the location itself as placement rules.
 func ReconcilePullStreams(
 	ctx context.Context,
 	exec DBTX,
@@ -75,14 +79,16 @@ func ReconcilePullStreams(
 
 	res := Result{}
 	for _, ps := range streams {
-		class, shapeErr := validatePullStreamShape(ps)
+		class, location, shapeErr := validatePullStreamShape(ps)
 		if shapeErr != nil {
 			return Result{}, shapeErr
 		}
-		// Normalise in place so downstream INSERT/UPDATE and idempotent
-		// compare use the same canonical form (sorted, deduped).
-		ps.AllowedClusterIDs = normalizeAllowedClusterIDs(ps.AllowedClusterIDs)
-		if placementErr := validatePullStreamPlacement(ps, class, candidates); placementErr != nil {
+		// The pin column is NOT NULL; an unrestricted source stores an empty list.
+		pins := location.ClusterIDs()
+		if pins == nil {
+			pins = []string{}
+		}
+		if placementErr := validatePullStreamPlacement(ps, class, pins, candidates); placementErr != nil {
 			return Result{}, placementErr
 		}
 		alias, err := AliasFromRef(ps.OwnerTenant.Ref)
@@ -94,7 +100,7 @@ func ReconcilePullStreams(
 			return Result{}, fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
 		}
 
-		action, err := reconcilePullStream(ctx, exec, tenantID, alias, ps, cipher)
+		action, _, err := reconcilePullStream(ctx, exec, tenantID, alias, ps, pins, cipher)
 		if err != nil {
 			return Result{}, fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
 		}
@@ -111,38 +117,46 @@ func ReconcilePullStreams(
 }
 
 // validatePullStreamShape exercises the offline checks: required fields,
-// URI parseability, scheme + always-blocked host set. Returns the URI class
-// so the apply path can layer cluster eligibility on top.
-func validatePullStreamShape(p PullStream) (pullsource.Class, error) {
+// URI parseability, scheme + always-blocked host set, and the source location
+// shape. Returns the URI class and canonical location so the apply path can
+// layer cluster eligibility on top.
+func validatePullStreamShape(p PullStream) (pullsource.Class, placementpolicy.SourceLocation, error) {
+	none := placementpolicy.SourceLocation{}
 	if p.PlaybackID == "" {
-		return pullsource.ClassBlocked, errors.New("playback_id required")
+		return pullsource.ClassBlocked, none, errors.New("playback_id required")
 	}
 	if p.OwnerTenant.Ref == "" {
-		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: owner_tenant.ref required", p.PlaybackID)
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: owner_tenant.ref required", p.PlaybackID)
 	}
 	if p.Title == "" {
-		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: title required", p.PlaybackID)
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: title required", p.PlaybackID)
 	}
 	if p.SourceURI == "" {
-		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: source_uri required (resolver should have resolved any source_uri_ref)", p.PlaybackID)
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: source_uri required (resolver should have resolved any source_uri_ref)", p.PlaybackID)
+	}
+	if p.LegacyAllowedClusterIDs != nil {
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: %w", p.PlaybackID, errLegacyAllowedClusterIDs)
 	}
 	class, classErr := pullsource.Classify(p.SourceURI)
 	if class == pullsource.ClassBlocked {
-		return pullsource.ClassBlocked, fmt.Errorf("pull_stream %q: source_uri: %w", p.PlaybackID, classErr)
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: source_uri: %w", p.PlaybackID, classErr)
 	}
-	return class, nil
+	location, err := p.SourceLocation.placement()
+	if err != nil {
+		return pullsource.ClassBlocked, none, fmt.Errorf("pull_stream %q: %w", p.PlaybackID, err)
+	}
+	return class, location, nil
 }
 
 // validatePullStreamPlacement layers placement validation on top of shape
-// validation. Combines the per-source allowed_cluster_ids list with the
-// capability gate via the shared pullsource.FilterPlacementClusters helper.
-// Apply path only — `--check` skips this since it's offline and has no
-// Quartermaster access.
-func validatePullStreamPlacement(p PullStream, class pullsource.Class, candidates []pullsource.ClusterCapability) error {
+// validation. Combines the source location's clusters with the capability gate
+// via the shared pullsource.FilterPlacementClusters helper. Apply path only —
+// `--check` skips this since it's offline and has no Quartermaster access.
+func validatePullStreamPlacement(p PullStream, class pullsource.Class, clusters []string, candidates []pullsource.ClusterCapability) error {
 	if len(candidates) == 0 {
 		return fmt.Errorf("pull_stream %q: no media (edge) cluster is registered", p.PlaybackID)
 	}
-	eligible, rejects := pullsource.FilterPlacementClusters(class, p.AllowedClusterIDs, candidates)
+	eligible, rejects := pullsource.FilterPlacementClusters(class, clusters, candidates)
 	if err := formatPlacementRejects(p.PlaybackID, pullsource.Redact(p.SourceURI), rejects); err != nil {
 		return err
 	}
@@ -164,15 +178,15 @@ func formatPlacementRejects(playbackID, redactedURI string, rejects []pullsource
 		switch r.Reason {
 		case pullsource.PlacementRejectEmptyForPrivate:
 			parts = append(parts, fmt.Sprintf(
-				"source_uri %s is private/multicast and requires explicit allowed_cluster_ids", redactedURI))
+				"source_uri %s is private/multicast and requires source_location clusters", redactedURI))
 		case pullsource.PlacementRejectUnknownCluster:
 			parts = append(parts, fmt.Sprintf(
-				"allowed_cluster_ids entry %q is not a registered media (edge) cluster", r.ClusterID))
+				"source_location cluster %q is not a registered media (edge) cluster", r.ClusterID))
 		case pullsource.PlacementRejectMissingPrivateCapability:
 			parts = append(parts, fmt.Sprintf(
-				"allowed_cluster_ids entry %q does not have allow_private_pull_sources=true", r.ClusterID))
+				"source_location cluster %q does not have allow_private_pull_sources=true", r.ClusterID))
 		default:
-			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q rejected: %s", r.ClusterID, r.Reason))
+			parts = append(parts, fmt.Sprintf("source_location cluster %q rejected: %s", r.ClusterID, r.Reason))
 		}
 	}
 	return fmt.Errorf("pull_stream %q: %s", playbackID, strings.Join(parts, "; "))
@@ -198,20 +212,23 @@ func normalizeAllowedClusterIDs(in []string) []string {
 	return out
 }
 
-func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string, p PullStream, cipher SourceURICipher) (string, error) {
+// reconcilePullStream reconciles the stream and pull-source rows and returns the
+// action with the stream ID. pins is the canonical cluster list mirrored into
+// the legacy pin column.
+func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string, p PullStream, pins []string, cipher SourceURICipher) (string, string, error) {
 	queries := commodoredb.New(exec)
 	current, err := queries.GetBootstrapPullStream(ctx, commodoredb.GetBootstrapPullStreamParams{
 		TenantID: tenantID, PlaybackID: p.PlaybackID,
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return createPullStream(ctx, queries, tenantID, alias, p, cipher)
+		return createPullStream(ctx, queries, tenantID, alias, p, pins, cipher)
 	case err != nil:
-		return "", fmt.Errorf("probe stream: %w", err)
+		return "", "", fmt.Errorf("probe stream: %w", err)
 	}
 
 	if current.IngestMode != "pull" {
-		return "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", p.PlaybackID, current.IngestMode)
+		return "", "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", p.PlaybackID, current.IngestMode)
 	}
 
 	curURI := ""
@@ -219,55 +236,55 @@ func reconcilePullStream(ctx context.Context, exec DBTX, tenantID, alias string,
 		var err error
 		curURI, err = cipher.Decrypt(current.SourceUriEnc.String)
 		if err != nil {
-			return "", fmt.Errorf("decrypt current source_uri: %w", err)
+			return "", "", fmt.Errorf("decrypt current source_uri: %w", err)
 		}
 	}
 
 	streamFieldsEq := current.Title == p.Title && current.Description == p.Description
 	pullFieldsEq := current.SourceUriEnc.Valid && curURI == p.SourceURI &&
 		current.Enabled.Valid && current.Enabled.Bool == p.Enabled &&
-		slices.Equal(current.AllowedClusterIds, p.AllowedClusterIDs)
+		slices.Equal(normalizeAllowedClusterIDs(current.AllowedClusterIds), pins)
 
 	if streamFieldsEq && pullFieldsEq {
-		return "noop", nil
+		return "noop", current.StreamID, nil
 	}
 
 	if !streamFieldsEq {
 		if err := queries.UpdateBootstrapPullStream(ctx, commodoredb.UpdateBootstrapPullStreamParams{
 			Title: p.Title, Description: p.Description, StreamID: current.StreamID,
 		}); err != nil {
-			return "", fmt.Errorf("update stream: %w", err)
+			return "", "", fmt.Errorf("update stream: %w", err)
 		}
 	}
 	if !pullFieldsEq {
 		encURI, err := cipher.Encrypt(p.SourceURI)
 		if err != nil {
-			return "", fmt.Errorf("encrypt source_uri: %w", err)
+			return "", "", fmt.Errorf("encrypt source_uri: %w", err)
 		}
 		if err := queries.UpsertBootstrapPullSource(ctx, commodoredb.UpsertBootstrapPullSourceParams{
-			StreamID: current.StreamID, SourceUriEnc: encURI, Enabled: p.Enabled, AllowedClusterIds: p.AllowedClusterIDs,
+			StreamID: current.StreamID, SourceUriEnc: encURI, Enabled: p.Enabled, AllowedClusterIds: pins,
 		}); err != nil {
-			return "", fmt.Errorf("upsert stream_pull_sources: %w", err)
+			return "", "", fmt.Errorf("upsert stream_pull_sources: %w", err)
 		}
 	}
-	return "updated", nil
+	return "updated", current.StreamID, nil
 }
 
-func createPullStream(ctx context.Context, queries *commodoredb.Queries, tenantID, alias string, p PullStream, cipher SourceURICipher) (string, error) {
+func createPullStream(ctx context.Context, queries *commodoredb.Queries, tenantID, alias string, p PullStream, pins []string, cipher SourceURICipher) (string, string, error) {
 	// streams.user_id is NOT NULL with no FK to users. A pull stream needs an
 	// owner user in its tenant; resolve it before the INSERT so the missing-
 	// owner case fails with a tenant-named precondition error.
 	ownerID, err := queries.GetBootstrapOwnerUser(ctx, tenantID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("tenant %s has no owner user — provision owners before pull streams", alias)
+		return "", "", fmt.Errorf("tenant %s has no owner user — provision owners before pull streams", alias)
 	case err != nil:
-		return "", fmt.Errorf("lookup owner user: %w", err)
+		return "", "", fmt.Errorf("lookup owner user: %w", err)
 	}
 
 	encURI, err := cipher.Encrypt(p.SourceURI)
 	if err != nil {
-		return "", fmt.Errorf("encrypt source_uri: %w", err)
+		return "", "", fmt.Errorf("encrypt source_uri: %w", err)
 	}
 
 	// commodore.streams: stream_key + internal_name are auto-generated by the
@@ -279,13 +296,13 @@ func createPullStream(ctx context.Context, queries *commodoredb.Queries, tenantI
 		Title: p.Title, Description: p.Description,
 	})
 	if err != nil {
-		return "", fmt.Errorf("insert stream: %w", err)
+		return "", "", fmt.Errorf("insert stream: %w", err)
 	}
 
 	if err := queries.CreateBootstrapPullSource(ctx, commodoredb.CreateBootstrapPullSourceParams{
-		StreamID: streamID, SourceUriEnc: encURI, Enabled: p.Enabled, AllowedClusterIds: p.AllowedClusterIDs,
+		StreamID: streamID, SourceUriEnc: encURI, Enabled: p.Enabled, AllowedClusterIds: pins,
 	}); err != nil {
-		return "", fmt.Errorf("insert stream_pull_sources: %w", err)
+		return "", "", fmt.Errorf("insert stream_pull_sources: %w", err)
 	}
-	return "created", nil
+	return "created", streamID, nil
 }

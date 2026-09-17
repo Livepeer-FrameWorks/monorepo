@@ -14,14 +14,16 @@ func tenantCustomDomainFromDB(row navigatordb.NavigatorTenantCustomDomain) Tenan
 	return TenantCustomDomain{
 		TenantID: row.TenantID, Domain: row.Domain, Status: row.Status, AcmeDNSSubdomain: row.AcmeDnsSubdomain,
 		IssuerID: row.IssuerID, LastVerifiedAt: row.LastVerifiedAt, CertIssuedAt: row.CertIssuedAt,
-		CertExpiresAt: row.CertExpiresAt, LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		CertExpiresAt: row.CertExpiresAt, LastError: row.LastError,
+		LastRenewalError: row.LastRenewalError, LastRenewalErrorAt: row.LastRenewalErrorAt, NextAttemptAt: row.NextAttemptAt,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 
 // EnsureTenantCustomDomain inserts or updates the custom-domain row. On
 // conflict the worker-driven status is preserved unless teardown is being
 // reactivated. Reactivation keeps the stable ACME-DNS slug but restarts
-// verification and clears stale certificate metadata.
+// verification and clears stale certificate, renewal, and retry metadata.
 func (s *Store) EnsureTenantCustomDomain(ctx context.Context, tenantID, domain, acmeDNSSubdomain string) (*TenantCustomDomain, error) {
 	var row navigatordb.NavigatorTenantCustomDomain
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -99,7 +101,8 @@ func (s *Store) ListTenantCustomDomains(ctx context.Context, tenantID string) ([
 
 // SetTenantCustomDomainStatus transitions the lifecycle. cert_issued and
 // last_verified_at timestamps are stamped automatically on the matching
-// transition; last_error is cleared unless errMsg is non-empty.
+// transition; last_error is cleared unless errMsg is non-empty, and
+// next_attempt_at survives only while the row stays cert_failed.
 func (s *Store) SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, expectedStatus, status, errMsg string) (bool, error) {
 	var n int64
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -115,21 +118,69 @@ func (s *Store) SetTenantCustomDomainStatus(ctx context.Context, tenantID, domai
 	return n == 1, err
 }
 
-// SetTenantCustomDomainCertMetadata records the issuer and cert expiry
-// after a successful ACME issuance. Called from the cert-issuance worker.
-func (s *Store) SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, expectedStatus, issuerID string, expiresAt sql.NullTime) (bool, error) {
+// CompleteTenantCustomDomainIssuance moves a cert_issuing domain to
+// cert_issued with the serving tenant bundle's issuer and expiry, clearing
+// issuance and renewal errors. Returns false when the row left cert_issuing.
+func (s *Store) CompleteTenantCustomDomainIssuance(ctx context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) (bool, error) {
 	var n int64
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
-		n, queryErr = s.q.SetTenantCustomDomainCertMetadata(ctx, navigatordb.SetTenantCustomDomainCertMetadataParams{
-			TenantID: tenantID, Domain: domain, ExpectedStatus: expectedStatus, IssuerID: issuerID, CertExpiresAt: expiresAt,
+		n, queryErr = s.q.CompleteTenantCustomDomainIssuance(ctx, navigatordb.CompleteTenantCustomDomainIssuanceParams{
+			TenantID: tenantID, Domain: domain, IssuerID: issuerID, CertExpiresAt: expiresAt,
 		})
 		return queryErr
 	})
 	if err != nil {
 		return false, err
 	}
-	return n == 1, err
+	return n == 1, nil
+}
+
+// FailTenantCustomDomainIssuance moves a cert_issuing domain to cert_failed
+// and schedules its next attempt retryAfter from the database clock.
+func (s *Store) FailTenantCustomDomainIssuance(ctx context.Context, tenantID, domain, errMsg string, retryAfter time.Duration) (bool, error) {
+	var n int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		n, queryErr = s.q.FailTenantCustomDomainIssuance(ctx, navigatordb.FailTenantCustomDomainIssuanceParams{
+			TenantID: tenantID, Domain: domain, ErrMsg: errMsg, RetryAfterSeconds: int64(retryAfter / time.Second),
+		})
+		return queryErr
+	})
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// RefreshTenantCustomDomainServedCertificate records the tenant bundle that
+// now serves each participating custom domain of the tenant listed in
+// domains, and clears any recorded renewal failure. Returns the rows updated.
+func (s *Store) RefreshTenantCustomDomainServedCertificate(ctx context.Context, tenantID string, domains []string, issuerID string, expiresAt sql.NullTime) (int64, error) {
+	var n int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		n, queryErr = s.q.RefreshTenantCustomDomainServedCertificate(ctx, navigatordb.RefreshTenantCustomDomainServedCertificateParams{
+			TenantID: tenantID, Domains: domains, IssuerID: issuerID, CertExpiresAt: expiresAt,
+		})
+		return queryErr
+	})
+	return n, err
+}
+
+// RecordTenantCustomDomainRenewalFailure stamps a failed tenant bundle
+// renewal on the tenant's participating custom domains without changing their
+// status: the previous bundle is still valid and keeps serving the SANs.
+func (s *Store) RecordTenantCustomDomainRenewalFailure(ctx context.Context, tenantID, errMsg string) (int64, error) {
+	var n int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		n, queryErr = s.q.RecordTenantCustomDomainRenewalFailure(ctx, navigatordb.RecordTenantCustomDomainRenewalFailureParams{
+			TenantID: tenantID, ErrMsg: errMsg,
+		})
+		return queryErr
+	})
+	return n, err
 }
 
 // FinalizeTenantCustomDomainRemoval atomically removes a still-tearing-down

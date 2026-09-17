@@ -58,6 +58,26 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 	if pg.IsYugabyte() {
 		databases = yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
 	}
+	// A database the release introduces has no migrations, so the ledger checks
+	// below would pass for it while it does not exist. Its presence with a
+	// baseline is checked first; creating it is the release expand step's job.
+	serviceDatabases, err := manifestServiceDatabases(manifest, []inventory.DatabaseConfig{{Name: dbName}})
+	if err != nil {
+		return fmt.Errorf("[gate] collect %s databases: %w", serviceName, err)
+	}
+	if len(serviceDatabases) > 0 {
+		states, probeErr := readServiceDatabaseStatesFn(ctx, sshPool, dbHost, pg, serviceDatabases)
+		if probeErr != nil {
+			return fmt.Errorf("[gate] probe %s databases: %w", serviceName, probeErr)
+		}
+		pending, planErr := provisioner.PlanServiceDatabaseBootstrap(serviceDatabases, states)
+		if planErr != nil {
+			return fmt.Errorf("[gate] %w", planErr)
+		}
+		if len(pending) > 0 {
+			return serviceDatabaseBootstrapRefusal(serviceName, target, pending, states)
+		}
+	}
 	missingExpand, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "expand", target)
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres expand migrations: %w", err)

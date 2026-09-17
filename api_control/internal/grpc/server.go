@@ -25,6 +25,7 @@ import (
 
 	"frameworks/api_control/internal/clusterurls"
 	"frameworks/api_control/internal/database/commodoredb"
+	"frameworks/api_control/internal/placementpolicy"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
@@ -159,6 +160,7 @@ type CommodoreServer struct {
 	authorityCommercialSource mediaAuthorityCommercialSource
 	placementCapacitySource   mediaPlacementCapacityRead
 	placementPushSource       mediaPlacementPushSourceRead
+	placementInventorySource  mediaPlacementInventorySource
 	mediaAuthorityKeyID       string
 	mediaAuthorityPrivateKey  ed25519.PrivateKey
 	// placementSweepCursor pages the activation backlog so a permanently
@@ -772,6 +774,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	// make mediaAuthorityEnabled report true and panic in the reconciler.
 	if cfg.QuartermasterClient != nil {
 		srv.authorityTenantSource = cfg.QuartermasterClient
+		srv.placementInventorySource = cfg.QuartermasterClient
 	}
 	if cfg.PurserClient != nil {
 		srv.streamAdmissionBilling = cfg.PurserClient
@@ -2902,41 +2905,6 @@ func pullSourceEnabled(input *commodorepb.PullSourceInput) bool {
 	return input.GetEnabled()
 }
 
-// validatePullSourceEligibility validates a runtime CRUD pull-source input:
-// classifies the URI, then enforces per-source placement via
-// FilterPlacementClusters against Quartermaster's tenant-entitled edge clusters.
-// Returns the canonical (sorted, deduped) allowed_cluster_ids the caller
-// should persist.
-func (s *CommodoreServer) validatePullSourceEligibility(ctx context.Context, rawURI string, allowedClusterIDs []string) (pullsource.Class, []string, error) {
-	class, err := pullsource.Classify(rawURI)
-	if class == pullsource.ClassBlocked {
-		if err == nil {
-			err = errors.New("source_uri rejected")
-		}
-		return class, nil, status.Errorf(codes.InvalidArgument, "invalid pull source: %v", err)
-	}
-	if s.quartermasterClient == nil {
-		return class, nil, status.Error(codes.FailedPrecondition, "cannot validate pull source eligibility: Quartermaster unavailable")
-	}
-	tenantID := strings.TrimSpace(ctxkeys.GetTenantID(ctx))
-	if tenantID == "" {
-		return class, nil, status.Error(codes.Unauthenticated, "tenant identity required")
-	}
-	candidates, err := s.listPullSourceClusterCapabilities(ctx, tenantID)
-	if err != nil {
-		return class, nil, err
-	}
-	if len(candidates) == 0 {
-		return class, nil, status.Error(codes.FailedPrecondition, "no eligible edge cluster is registered for pull streams")
-	}
-	normalized := normalizeAllowedClusterIDs(allowedClusterIDs)
-	_, rejects := pullsource.FilterPlacementClusters(class, normalized, candidates)
-	if len(rejects) > 0 {
-		return class, nil, status.Errorf(codes.InvalidArgument, "pull source placement rejected: %s", formatRuntimePlacementRejects(rejects, pullsource.Redact(rawURI)))
-	}
-	return class, normalized, nil
-}
-
 func (s *CommodoreServer) listPullSourceClusterCapabilities(ctx context.Context, tenantID string) ([]pullsource.ClusterCapability, error) {
 	resp, err := s.quartermasterClient.GetTenantEntitlement(ctx, tenantID)
 	if err != nil {
@@ -2978,26 +2946,6 @@ func (s *CommodoreServer) loadPullSourceState(ctx context.Context, streamID, use
 		return "", false, nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
 	}
 	return plain, state.Enabled, state.AllowedClusterIds, nil
-}
-
-// formatRuntimePlacementRejects renders FilterPlacementClusters rejects as a
-// single API error string for CreateStream/UpdateStream callers.
-func formatRuntimePlacementRejects(rejects []pullsource.PlacementReject, redactedURI string) string {
-	parts := make([]string, 0, len(rejects))
-	for _, r := range rejects {
-		switch r.Reason {
-		case pullsource.PlacementRejectEmptyForPrivate:
-			parts = append(parts, fmt.Sprintf("source_uri %s is private/multicast and requires explicit allowed_cluster_ids", redactedURI))
-		case pullsource.PlacementRejectUnknownCluster, pullsource.PlacementRejectMissingPrivateCapability:
-			// Keep unknown, foreign, and capability-disabled clusters
-			// indistinguishable to callers. Entitlement and fleet topology are
-			// authorization data, not validation diagnostics.
-			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q is not eligible for pull source placement", r.ClusterID))
-		default:
-			parts = append(parts, fmt.Sprintf("allowed_cluster_ids entry %q rejected: %s", r.ClusterID, r.Reason))
-		}
-	}
-	return strings.Join(parts, "; ")
 }
 
 // normalizeAllowedClusterIDs mirrors the bootstrap reconciler helper. Kept
@@ -6313,24 +6261,25 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 		ingestMode = "push"
 	}
 	var pullClass pullsource.Class
-	var pullAllowedClusterIDs []string
+	var legacyPins *commodorepb.PullSourceAllowedClustersInput
 	if ingestMode == "pull" {
 		if req.GetPullSource() == nil || strings.TrimSpace(req.GetPullSource().GetSourceUri()) == "" {
 			return nil, status.Error(codes.InvalidArgument, "pull_source.source_uri required for pull streams")
 		}
-		// CreateStream: unwrap allowed_clusters; nil ⇒ no pin (rejected later
-		// by FilterPlacementClusters for private/multicast classes).
-		var requestedAllowed []string
-		if w := req.GetPullSource().GetAllowedClusters(); w != nil {
-			requestedAllowed = w.GetClusterIds()
-		}
-		pullClass, pullAllowedClusterIDs, err = s.validatePullSourceEligibility(ctx, req.GetPullSource().GetSourceUri(), requestedAllowed)
-		if err != nil {
+		if pullClass, err = classifyPullSourceURI(req.GetPullSource().GetSourceUri()); err != nil {
 			return nil, err
 		}
+		legacyPins = req.GetPullSource().GetAllowedClusters()
 	} else if ingestMode != "push" {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported ingest_mode %q", req.GetIngestMode())
 	}
+	placementPlan, err := s.prepareStreamPlacement(ctx, tenantID, req.GetSourceLocation(), legacyPins, ingestMode == "pull" && pullClass == pullsource.ClassPrivate)
+	if err != nil {
+		return nil, err
+	}
+	// The legacy pin column mirrors the restricted clusters so replicas that
+	// still read pins enforce the same cluster set.
+	pullAllowedClusterIDs := legacyPinColumn(placementPlan.location)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -6370,6 +6319,12 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 			return nil, status.Errorf(codes.Internal, "failed to persist pull source: %v", err)
 		}
 	}
+	var placementResult placementpolicy.SystemApplyResult
+	if placementPlan.needsApply() {
+		if placementResult, err = applyStreamPlacement(ctx, tx, tenantID, created.StreamID, userID, placementPlan); err != nil {
+			return nil, err
+		}
+	}
 
 	// Update description if provided
 	if req.GetDescription() != "" {
@@ -6403,16 +6358,23 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	if ingestMode == "pull" {
 		changedFields = append(changedFields, "ingest_mode", "pull_source")
 	}
+	if placementResult.Changed {
+		changedFields = append(changedFields, "source_location")
+	}
 	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, created.StreamID, changedFields)
 
 	resp := &commodorepb.CreateStreamResponse{
-		Id:          created.StreamID,
-		StreamKey:   created.StreamKey,
-		PlaybackId:  created.PlaybackID,
-		Title:       title,
-		Description: req.GetDescription(),
-		Status:      "offline",
-		IngestMode:  ingestMode,
+		Id:             created.StreamID,
+		StreamKey:      created.StreamKey,
+		PlaybackId:     created.PlaybackID,
+		Title:          title,
+		Description:    req.GetDescription(),
+		Status:         "offline",
+		IngestMode:     ingestMode,
+		SourceLocation: sourceLocationToProto(placementpolicy.SourceLocationOf(placementResult.Policy)),
+	}
+	if placementResult.Changed {
+		resp.SourceLocationWarnings = mediaPlacementWarnings(placementResult.Previous, placementResult.Policy)
 	}
 	if ingestMode == "pull" {
 		resp.PullSource = buildPullSourceView(req.GetPullSource().GetSourceUri(), pullSourceEnabled(req.GetPullSource()), pullClass, pullAllowedClusterIDs)
@@ -6468,12 +6430,10 @@ func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID st
 	gIngest := "edge-ingest." + rootDomain
 	gEdge := "edge-egress." + rootDomain
 	gPlay := "foghorn." + rootDomain
-	gChandler := "chandler." + rootDomain
 	gLivepeer := "livepeer." + rootDomain
 	resp.GlobalIngestDomain = &gIngest
 	resp.GlobalEdgeDomain = &gEdge
 	resp.GlobalPlayDomain = &gPlay
-	resp.GlobalChandlerDomain = &gChandler
 	resp.GlobalLivepeerDomain = &gLivepeer
 
 	// Tenant alias entrypoints are only safe once Navigator has at
@@ -6493,12 +6453,10 @@ func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID st
 	tIngest := "edge-ingest." + apex
 	tEdge := "edge-egress." + apex
 	tPlay := "foghorn." + apex
-	tChandler := "chandler." + apex
 	tLivepeer := "livepeer." + apex
 	resp.TenantIngestDomain = &tIngest
 	resp.TenantEdgeDomain = &tEdge
 	resp.TenantPlayDomain = &tPlay
-	resp.TenantChandlerDomain = &tChandler
 	resp.TenantLivepeerDomain = &tLivepeer
 }
 
@@ -6645,6 +6603,9 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 			streams[i], streams[j] = streams[j], streams[i]
 		}
 	}
+	if err := s.attachStreamSourceLocations(ctx, tenantID, streams); err != nil {
+		return nil, err
+	}
 
 	// Build cursors from results
 	var startCursor, endCursor string
@@ -6713,10 +6674,17 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 
 	pullSource := req.GetPullSource()
+	locationInput := req.GetSourceLocation()
+	if pullSource != nil && currentState.IngestMode != "pull" {
+		return nil, status.Error(codes.InvalidArgument, "pull_source can only be updated on pull streams")
+	}
+	if locationInput != nil && currentState.IngestMode == "mist_native" {
+		return nil, status.Error(codes.InvalidArgument, "a managed stream's source location is declared by bootstrap")
+	}
 	// Pull-source update intent: we resolve the target state by per-field
 	// preserve-or-replace, so the gRPC + GraphQL surface can express "only
-	// change enabled" without wiping placement, "only repin clusters" without
-	// touching the URI, etc.
+	// change enabled" without wiping placement, "only change the location"
+	// without touching the URI, etc.
 	type pullSourceWritePlan struct {
 		writeURI        bool
 		encryptedURI    string
@@ -6726,14 +6694,11 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		allowedClusters []string
 	}
 	var pullPlan pullSourceWritePlan
-	if pullSource != nil {
-		if currentState.IngestMode != "pull" {
-			return nil, status.Error(codes.InvalidArgument, "pull_source can only be updated on pull streams")
-		}
-
+	var placementPlan *streamPlacementPlan
+	if currentState.IngestMode == "pull" && (pullSource != nil || locationInput != nil) {
 		// Load current pull-source row once so every "field unset = preserve"
 		// branch can fall back to a real stored value.
-		currentURI, currentEnabled, currentAllowed, loadErr := s.loadPullSourceState(ctx, streamID, userID, tenantID)
+		currentURI, currentEnabled, _, loadErr := s.loadPullSourceState(ctx, streamID, userID, tenantID)
 		if loadErr != nil {
 			return nil, loadErr
 		}
@@ -6747,26 +6712,22 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 
 		newEnabled := currentEnabled
 		enabledChanged := false
-		if pullSource.Enabled != nil && pullSource.GetEnabled() != currentEnabled {
+		if pullSource != nil && pullSource.Enabled != nil && pullSource.GetEnabled() != currentEnabled {
 			newEnabled = pullSource.GetEnabled()
 			enabledChanged = true
 		}
 
-		newAllowed := currentAllowed
-		allowedChanged := false
-		if w := pullSource.GetAllowedClusters(); w != nil {
-			newAllowed = w.GetClusterIds()
-			allowedChanged = true
-		}
-
-		// Re-validate placement only when URI or pin actually changes. A
-		// pure enabled toggle never re-runs Quartermaster lookups.
-		if sourceURIChanged || allowedChanged {
-			_, normalized, vErr := s.validatePullSourceEligibility(ctx, newURI, newAllowed)
-			if vErr != nil {
-				return nil, vErr
+		// Placement is revalidated when the URI or the location changes. A pure
+		// enabled toggle never re-runs Quartermaster lookups.
+		legacyPins := pullSource.GetAllowedClusters()
+		if sourceURIChanged || legacyPins != nil || locationInput != nil {
+			class, classErr := classifyPullSourceURI(newURI)
+			if classErr != nil {
+				return nil, classErr
 			}
-			newAllowed = normalized
+			if placementPlan, err = s.prepareStreamPlacement(ctx, tenantID, locationInput, legacyPins, class == pullsource.ClassPrivate); err != nil {
+				return nil, err
+			}
 		}
 
 		if sourceURIChanged {
@@ -6781,9 +6742,14 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 			pullPlan.writeEnabled = true
 			pullPlan.enabledValue = newEnabled
 		}
-		if allowedChanged {
+		if placementPlan != nil && placementPlan.write {
+			// The legacy pin column mirrors the restricted clusters.
 			pullPlan.writeAllowed = true
-			pullPlan.allowedClusters = newAllowed
+			pullPlan.allowedClusters = legacyPinColumn(placementPlan.location)
+		}
+	} else if locationInput != nil {
+		if placementPlan, err = s.prepareStreamPlacement(ctx, tenantID, locationInput, nil, false); err != nil {
+			return nil, err
 		}
 	}
 
@@ -6870,7 +6836,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		changedFields = append(changedFields, "monitoring_enabled")
 	}
 
-	if !applyStreamUpdate && pullSource == nil {
+	if !applyStreamUpdate && pullSource == nil && placementPlan == nil {
 		return s.queryStream(ctx, streamID, userID, tenantID)
 	}
 
@@ -6880,6 +6846,18 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
 	txQueries := commodoredb.New(tx)
+
+	// Placement locks the tenant policy before the stream row, the same order a
+	// reviewed placement apply uses, so it runs before the stream row update.
+	var placementResult placementpolicy.SystemApplyResult
+	if placementPlan.needsApply() {
+		if placementResult, err = applyStreamPlacement(ctx, tx, tenantID, streamID, userID, placementPlan); err != nil {
+			return nil, err
+		}
+		if placementResult.Changed {
+			changedFields = append(changedFields, "source_location")
+		}
+	}
 
 	if applyStreamUpdate {
 		var rows int64
@@ -6892,7 +6870,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		}
 	}
 
-	if pullSource != nil {
+	if currentState.IngestMode == "pull" {
 		if pullPlan.writeURI || pullPlan.writeEnabled || pullPlan.writeAllowed {
 			var rows int64
 			rows, err = txQueries.UpdatePullSourceFields(ctx, commodoredb.UpdatePullSourceFieldsParams{
@@ -6914,8 +6892,8 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit stream update: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit stream update: %v", commitErr)
 	}
 
 	if len(changedFields) > 0 {
@@ -6926,7 +6904,11 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		go s.startDVRAfterStreamUpdate(userID, tenantID, streamID, currentState.InternalName)
 	}
 
-	return s.queryStream(ctx, streamID, userID, tenantID)
+	stream, err := s.queryStream(ctx, streamID, userID, tenantID)
+	if err == nil && placementResult.Changed {
+		stream.SourceLocationWarnings = mediaPlacementWarnings(placementResult.Previous, placementResult.Policy)
+	}
+	return stream, err
 }
 
 func (s *CommodoreServer) startDVRAfterStreamUpdate(userID, tenantID, streamID, internalName string) {
@@ -8361,6 +8343,9 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 		}
 		streams = append(streams, stream)
 	}
+	if err := s.attachStreamSourceLocations(ctx, tenantID, streams); err != nil {
+		return nil, err
+	}
 	return &commodorepb.GetStreamsBatchResponse{Streams: streams}, nil
 }
 
@@ -8379,6 +8364,9 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	stream, err := s.streamFromConfigRow(row.Config())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "map stream: %v", err)
+	}
+	if err := s.attachStreamSourceLocations(ctx, tenantID, []*commodorepb.Stream{stream}); err != nil {
+		return nil, err
 	}
 	s.populateStreamOriginRegion(ctx, tenantID, stream, nil)
 	return stream, nil

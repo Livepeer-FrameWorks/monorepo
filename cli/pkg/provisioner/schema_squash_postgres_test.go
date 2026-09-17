@@ -511,8 +511,7 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 
 	pgCreateDB(t, name, "sv_upgraded")
 	for _, file := range baselines {
-		taggedSQL := repositoryFileAtTag(t, fromTag, "pkg/database/sql/"+file)
-		pgApply(t, name, "sv_upgraded", taggedSQL)
+		pgApply(t, name, "sv_upgraded", baselineAtTagOrRelease(t, fromTag, file, migrations))
 	}
 	for _, migration := range migrations {
 		pgApply(t, name, "sv_upgraded", migration.content)

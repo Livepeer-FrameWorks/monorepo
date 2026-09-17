@@ -11,6 +11,7 @@ func TestCapabilityCatalogServices(t *testing.T) {
 	want := []string{
 		"commodore",
 		"foghorn",
+		"lookout",
 		"navigator",
 		"periscope-ingest",
 		"periscope-metering",

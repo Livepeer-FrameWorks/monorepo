@@ -8,6 +8,8 @@ export interface NavigationItem {
   badge?: string;
   external?: boolean;
   children?: Record<string, NavigationItem>;
+  /** Live count rendered as the item's badge instead of the static `badge`. */
+  countBadge?: "firingIncidents";
   /**
    * Hide the item unless the signed-in user is a platform operator
    * (the platform_operator grant). Cosmetic only — the
@@ -57,6 +59,26 @@ const dynamicRoutes: Array<{
       { name: "Platform Admin" },
       { name: "Tenants", href: "/admin" },
       { name: "Tenant Detail" },
+    ],
+  },
+  {
+    pattern: /^\/admin\/incidents\/[^/]+$/,
+    route: { name: "Incident", parent: "Platform Admin" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Platform Admin" },
+      { name: "Incidents", href: "/admin/incidents" },
+      { name: "Incident" },
+    ],
+  },
+  {
+    pattern: /^\/infrastructure\/incidents\/[^/]+$/,
+    route: { name: "Incident", parent: "Infrastructure" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Infrastructure" },
+      { name: "Incidents", href: "/infrastructure/incidents" },
+      { name: "Incident" },
     ],
   },
   {
@@ -273,6 +295,14 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Manage cluster connections and browse the marketplace",
       },
+      incidents: {
+        name: "Incidents",
+        href: "/infrastructure/incidents",
+        icon: "AlertTriangle",
+        active: true,
+        countBadge: "firingIncidents",
+        description: "Alerts from platform monitoring on clusters you own",
+      },
       devices: {
         name: "Devices",
         href: "/devices",
@@ -464,6 +494,14 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         requiresPlatformOperator: true,
         description: "Cluster pivot: live stats and resident tenants",
+      },
+      incidents: {
+        name: "Incidents",
+        href: "/admin/incidents",
+        icon: "AlertTriangle",
+        active: true,
+        requiresPlatformOperator: true,
+        description: "Platform and tenant incidents across all clusters",
       },
     },
   },

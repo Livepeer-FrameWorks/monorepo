@@ -834,11 +834,26 @@ func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *quartermasterp
 // refreshes infrastructure_nodes.last_heartbeat, syncs service_instances
 // health_status from capabilities, and fires Navigator wakeups for any
 // (cluster, edge-service) pair whose DNS-visible set changes.
-func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodes []*quartermasterpb.NodeAliveness) error {
+// reporterCellID is the reporting Foghorn's CLUSTER_ID; Quartermaster records
+// it as each node's control cell when the node's observed_at is newest.
+func (c *GRPCClient) ReportAliveNodes(ctx context.Context, reporterCellID string, nodes []*quartermasterpb.NodeAliveness) error {
 	_, err := c.node.ReportAliveNodes(ctx, &quartermasterpb.ReportAliveNodesRequest{
-		Nodes: nodes,
+		Nodes:          nodes,
+		ReporterCellId: reporterCellID,
 	})
 	return err
+}
+
+// ReassignClusterControlCell moves a tenant-private cluster to another
+// platform control cell.
+func (c *GRPCClient) ReassignClusterControlCell(ctx context.Context, req *quartermasterpb.ReassignClusterControlCellRequest) (*quartermasterpb.ClusterControlCellReassignment, error) {
+	return c.cluster.ReassignClusterControlCell(ctx, req)
+}
+
+// GetClusterControlCellReassignment returns a cluster's control cell and its
+// open or failed reassignment.
+func (c *GRPCClient) GetClusterControlCellReassignment(ctx context.Context, clusterID string) (*quartermasterpb.ClusterControlCellReassignment, error) {
+	return c.cluster.GetClusterControlCellReassignment(ctx, &quartermasterpb.GetClusterControlCellReassignmentRequest{ClusterId: clusterID})
 }
 
 // ============================================================================

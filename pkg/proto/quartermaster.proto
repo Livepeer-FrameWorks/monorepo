@@ -176,6 +176,12 @@ service ClusterService {
 
   // Create a private cluster (self-hosted edge)
   rpc CreatePrivateCluster(CreatePrivateClusterRequest) returns (CreatePrivateClusterResponse);
+  // Moves a tenant-private cluster to another platform control cell. Its edges
+  // reconnect as the previous cell releases them; the reassignment completes
+  // when no live edge is observed by another cell and fails at its deadline.
+  // Reassigning back to the previous cell is the rollback.
+  rpc ReassignClusterControlCell(ReassignClusterControlCellRequest) returns (ClusterControlCellReassignment);
+  rpc GetClusterControlCellReassignment(GetClusterControlCellReassignmentRequest) returns (ClusterControlCellReassignment);
 
   // Invite management (cluster owner)
   rpc CreateClusterInvite(CreateClusterInviteRequest) returns (ClusterInvite);
@@ -820,6 +826,8 @@ message ClusterAccessEntry {
   string cluster_name = 2;              // json:"cluster_name"
   string access_level = 3;              // json:"access_level"
   google.protobuf.Struct resource_limits = 4; // json:"resource_limits"
+  // The cluster may pull from private (RFC 1918) and multicast sources.
+  bool allow_private_pull_sources = 5;
 }
 
 message ClustersAccessResponse {
@@ -1396,6 +1404,9 @@ message ReportAliveNodesRequest {
   // sends this on its 60s heartbeat AND on every detected DNS-relevant
   // delta.
   repeated NodeAliveness nodes = 2;
+  // CLUSTER_ID of the reporting Foghorn cell. Quartermaster records it as a
+  // node's control cell when the node's observed_at is its newest observation.
+  string reporter_cell_id = 3;
 }
 
 // NodeAliveness carries the per-node fields Quartermaster needs to maintain
@@ -1961,6 +1972,35 @@ message ListServiceClusterAssignmentsRequest {
 
 message ListServiceClusterAssignmentsResponse {
   repeated string cluster_ids = 1;  // distinct actively-assigned cluster IDs
+  // Tenant-private clusters whose control moved away from a cell this
+  // instance serves. The instance releases and refuses their edges.
+  repeated string released_cluster_ids = 2;
+}
+
+message ReassignClusterControlCellRequest {
+  string cluster_id = 1;
+  string target_control_cell_id = 2;
+  // Zero selects the default of 30 minutes.
+  int64 timeout_seconds = 3;
+}
+
+message GetClusterControlCellReassignmentRequest {
+  string cluster_id = 1;
+}
+
+message ClusterControlCellReassignment {
+  string cluster_id = 1;
+  string control_cell_id = 2;
+  string previous_control_cell_id = 3;
+  // Empty when no reassignment is open, "switching" while edges move to
+  // control_cell_id, "failed" when edges were still observed by another cell
+  // at deadline_at.
+  string state = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp deadline_at = 6;
+  string error = 7;
+  // Live edge nodes last observed by a cell other than control_cell_id.
+  repeated string pending_node_ids = 8;
 }
 
 message ListServicesHealthRequest {

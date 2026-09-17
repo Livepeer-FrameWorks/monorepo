@@ -200,7 +200,6 @@ Actions the agent can perform.
 | `review_media_placement_change`       | Review exact policy updates without applying       | Owner/Admin + placement:write                                                         |
 | `apply_media_placement_change`        | Apply a reviewed, idempotent policy change         | Owner/Admin + placement:write; API tokens also need mcp:high-risk                     |
 | `get_media_placement_change`          | Recover a change with its original idempotency key | Auth + placement:read                                                                 |
-| `get_media_placement_legacy_pins`     | Read stream pin migration restrictions             | Auth + placement:read                                                                 |
 | `get_cluster_media_consent`           | Read cluster-owner media consent                   | Auth + placement:read + cluster ownership                                             |
 | `review_cluster_media_consent_change` | Review owner consent without applying              | Owner/Admin + placement:write + cluster ownership                                     |
 | `apply_cluster_media_consent_change`  | Apply reviewed, idempotent owner consent           | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
@@ -283,6 +282,12 @@ Actions the agent can perform.
 | `manage_node`                         | Activate/deactivate/drain/restart a node           | Owner/Admin + Infrastructure                                                          |
 | `set_node_mode`                       | Set node mode (normal/draining/maintenance)        | Owner/Admin + Infrastructure                                                          |
 | `get_node_health`                     | Node health and metrics summary                    | Owner/Admin + Infrastructure                                                          |
+| `list_incidents`                      | Incidents on clusters the tenant owns              | Owner/Admin + Infrastructure                                                          |
+| `get_incident`                        | One incident with alerts and timeline              | Owner/Admin + Infrastructure                                                          |
+| `acknowledge_incident`                | Acknowledge a firing incident                      | Owner/Admin + Infrastructure                                                          |
+| `assign_incident`                     | Assign an incident to yourself, or unassign it     | Owner/Admin + Infrastructure                                                          |
+| `resolve_incident`                    | Resolve an incident manually                       | Owner/Admin + Infrastructure                                                          |
+| `add_incident_note`                   | Add a note to an incident timeline                 | Owner/Admin + Infrastructure                                                          |
 | `create_edge_cluster`                 | Create edge cluster (returns token and Foghorn)    | Owner/Admin + Infrastructure                                                          |
 
 <Aside type="tip" title="CLI Alternative">
@@ -377,6 +382,14 @@ fetches and validates the tenant's mandate before creating the subscription.
 
 - `name` (required): Stream display name
 - `description`, `record`, `public`: Optional
+- `ingest_mode`: `push` (default) or `pull`
+- `pull_source`: `{ source_uri, enabled }`, required for `pull`
+- `source_location`: Optional `{ mode: any | restricted, clusters: [{ cluster_id, node_ids }], avoid_node_ids }`.
+  Omitted means `any`; private (LAN) and multicast pull sources require `restricted` with clusters
+  that allow private pull sources. Node IDs are accepted only for clusters the tenant owns. The
+  result returns the stream's `source_location`, with mode `custom` when its placement rules hold
+  more than a location. `update_stream` takes the same field; omitting it keeps the current
+  location. See [Pull-input streams](/builders/pull-streams#source-location).
 
 **create_clip**
 

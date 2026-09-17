@@ -77,12 +77,10 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 
 ### Analytics & Observability
 
-Planned items in this area are detailed on the [Roadmap](/roadmap#analytics--observability).
-
 | Capability | Availability | Surfaces | What it does |
 | --- | --- | --- | --- |
 | **Analytics** | Expanding | API, Agents (MCP), Dashboard, Docs | Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention) — with cross-player coverage still expanding. |
-| **Incidents and alerts** | Planned | — | Tenant-scoped incident feed aggregating node-health, certificate, DNS, capacity, and cluster alerts with acknowledge/resolve and realtime delivery. |
+| **Incidents and alerts** | Available | API, Agents (MCP), Dashboard, Docs | Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents. |
 
 ### Infrastructure & BYOC
 
@@ -96,6 +94,8 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
 | ↳ Federated network status *(foundation)* | Available | API, Dashboard, Docs | Cross-cluster routing visibility and orchestrator vantage points. |
+| ↳ Cluster ingest protocol allowlist *(foundation)* | Planned | — | Per-cluster allowlist of ingest protocols (WHIP, RTMP, SRT) enforced at placement and publisher admission. |
+| ↳ Regional edge redundancy *(foundation)* | Planned | — | More than one edge node per region per cluster, so a single node failure does not take a region's media offline. |
 | ↳ Edge auto-update *(foundation)* | Available | CLI, Docs | Automatic edge component updates — Quartermaster owns the release catalog and per-cluster targets; Foghorn's release reconciler applies them to Helmsman, MistServer, and Caddy over the Helmsman control stream — native and single-image container nodes alike. |
 | ↳ Edge ISO and cloud images *(foundation)* | Planned | — | Bootable FrameWorks Edge ISO and prebuilt cloud/marketplace images for on-demand media-cluster scaling. |
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |

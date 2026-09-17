@@ -318,7 +318,7 @@ func (a *Agent) processTenant(ctx context.Context, tm tenantMonitoring) error {
 
 	switch result.Action {
 	case diagnostics.TriageInvestigate:
-		report, tokens, err := a.Investigate(ctx, tenantID, result.Trigger, result.Reason, snapshot, &result, streamAnomalies)
+		report, _, tokens, err := a.Investigate(ctx, tenantID, result.Trigger, result.Reason, snapshot, &result, streamAnomalies)
 		if logErr := a.logUsage(ctx, tenantID, tokens, err != nil); logErr != nil {
 			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
 		}
@@ -336,7 +336,9 @@ func (a *Agent) processTenant(ctx context.Context, tm tenantMonitoring) error {
 					RootCause:       "pending review",
 					Recommendations: []Recommendation{},
 				}
-				_ = a.reporter.Send(ctx, tenantID, flagReport)
+				if _, sendErr := a.reporter.Send(ctx, tenantID, flagReport); sendErr != nil {
+					a.logger.WithError(sendErr).WithField("tenant_id", tenantID).Warn("Failed to store heartbeat flag report")
+				}
 			}
 			a.logger.WithField("tenant_id", tenantID).WithField("reason", result.Reason).Info("HEARTBEAT_FLAG")
 		}
@@ -527,9 +529,11 @@ func (a *Agent) loadSnapshot(ctx context.Context, tm tenantMonitoring) (*healthS
 	}, nil
 }
 
-func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason string, snapshot *healthSnapshot, triage *diagnostics.TriageResult, streamAnomalies []diagnostics.StreamAnomaly) (Report, chat.TokenCounts, error) {
+// Investigate runs the LLM investigation and persists the report through the
+// reporter. The returned report ID is empty when no report was persisted.
+func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason string, snapshot *healthSnapshot, triage *diagnostics.TriageResult, streamAnomalies []diagnostics.StreamAnomaly) (Report, string, chat.TokenCounts, error) {
 	if a.orchestrator == nil {
-		return Report{}, chat.TokenCounts{}, errors.New("orchestrator unavailable")
+		return Report{}, "", chat.TokenCounts{}, errors.New("orchestrator unavailable")
 	}
 	prompt := buildInvestigationPrompt(snapshot, trigger, reason, triage, streamAnomalies)
 	messages := []llm.Message{
@@ -538,7 +542,7 @@ func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason strin
 	}
 	result, err := a.orchestrator.Run(ctx, messages, nil)
 	if err != nil {
-		return Report{}, result.TokenCounts, err
+		return Report{}, "", result.TokenCounts, err
 	}
 	report, err := parseReport(result.Content)
 	if err != nil {
@@ -551,10 +555,17 @@ func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason strin
 		}
 	}
 	report.Trigger = trigger
+	reportID := ""
 	if a.reporter != nil {
-		_ = a.reporter.Send(ctx, tenantID, report)
+		// A report that failed to store has no ID, so no incident gets a link to it.
+		sentID, sendErr := a.reporter.Send(ctx, tenantID, report)
+		if sendErr != nil {
+			a.logger.WithError(sendErr).WithField("tenant_id", tenantID).Warn("Failed to store investigation report")
+		} else {
+			reportID = sentID
+		}
 	}
-	return report, result.TokenCounts, nil
+	return report, reportID, result.TokenCounts, nil
 }
 
 func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.TokenCounts, hadError bool) error {

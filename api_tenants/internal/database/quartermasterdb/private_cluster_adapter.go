@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -107,35 +108,114 @@ func (q *Queries) GrantPrivateClusterOwnerAccess(ctx context.Context, arg GrantP
 	return err
 }
 
-type AssignRuntimeFoghornToPrivateClusterParams struct {
-	ServiceInstanceID string
-	ClusterID         string
-}
-
-func (q *Queries) AssignRuntimeFoghornToPrivateCluster(ctx context.Context, arg AssignRuntimeFoghornToPrivateClusterParams) error {
-	_, err := q.db.ExecContext(ctx, `
+// AssignControlCellFoghornsToPrivateCluster assigns every running Foghorn that
+// serves the cluster's platform control cell to the cluster, so any replica in
+// the cell can serve its edges and deliver ConfigSeed. It returns how many
+// instances are assigned.
+func (q *Queries) AssignControlCellFoghornsToPrivateCluster(ctx context.Context, clusterID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
-		SELECT si.id, $2, 'runtime'
-		FROM quartermaster.service_instances si
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.id = $1::uuid AND svc.type = 'foghorn'
+		SELECT DISTINCT cell_sca.service_instance_id, owned.cluster_id, 'runtime'
+		FROM quartermaster.infrastructure_clusters owned
+		JOIN quartermaster.infrastructure_clusters cell
+		  ON cell.cluster_id = owned.control_cell_id
+		 AND cell.cluster_class = 'platform_official'
+		 AND cell.is_active = true
+		JOIN quartermaster.service_cluster_assignments cell_sca
+		  ON cell_sca.cluster_id = cell.cluster_id AND cell_sca.is_active = true
+		JOIN quartermaster.service_instances si
+		  ON si.id = cell_sca.service_instance_id AND si.status = 'running'
+		JOIN quartermaster.services svc
+		  ON svc.service_id = si.service_id AND svc.type = 'foghorn'
+		WHERE owned.cluster_id = $1
 		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
-	`, arg.ServiceInstanceID, arg.ClusterID)
-	return err
+	`, clusterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
-type AssignFoghornToPrivateClusterParams struct {
-	ServiceInstanceID string
-	ClusterID         string
-}
-
-func (q *Queries) AssignFoghornToPrivateCluster(ctx context.Context, arg AssignFoghornToPrivateClusterParams) error {
-	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
-		VALUES ($1::uuid, $2)
+// ReconcilePrivateClusterControlCellFoghorns keeps each active tenant-private
+// cluster assigned to exactly the running Foghorns of its control cell and
+// returns the clusters whose assignments changed. A runtime assignment is
+// removed only when its instance stopped or now serves a different platform
+// cell; an instance that briefly holds no platform assignment, as while a
+// provision run re-seeds cells, keeps it. An empty clusterID reconciles every
+// tenant-private cluster.
+func (q *Queries) ReconcilePrivateClusterControlCellFoghorns(ctx context.Context, clusterID string) ([]string, error) {
+	assignedRows, err := q.db.QueryContext(ctx, `
+		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
+		SELECT DISTINCT cell_sca.service_instance_id, owned.cluster_id, 'runtime'
+		FROM quartermaster.infrastructure_clusters owned
+		JOIN quartermaster.infrastructure_clusters cell
+		  ON cell.cluster_id = owned.control_cell_id
+		 AND cell.cluster_class = 'platform_official'
+		 AND cell.is_active = true
+		JOIN quartermaster.service_cluster_assignments cell_sca
+		  ON cell_sca.cluster_id = cell.cluster_id AND cell_sca.is_active = true
+		JOIN quartermaster.service_instances si
+		  ON si.id = cell_sca.service_instance_id AND si.status = 'running'
+		JOIN quartermaster.services svc
+		  ON svc.service_id = si.service_id AND svc.type = 'foghorn'
+		WHERE owned.cluster_class = 'tenant_private' AND owned.is_active = true
+		  AND ($1::text = '' OR owned.cluster_id = $1)
 		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
-	`, arg.ServiceInstanceID, arg.ClusterID)
-	return err
+		  WHERE quartermaster.service_cluster_assignments.is_active = false
+		RETURNING cluster_id
+	`, clusterID)
+	assigned, _, err := collectDeletedClusters(assignedRows, err)
+	if err != nil {
+		return nil, fmt.Errorf("assign control-cell Foghorns: %w", err)
+	}
+
+	removedRows, err := q.db.QueryContext(ctx, `
+		DELETE FROM quartermaster.service_cluster_assignments stale
+		USING quartermaster.infrastructure_clusters owned,
+		      quartermaster.service_instances si,
+		      quartermaster.services svc
+		WHERE stale.cluster_id = owned.cluster_id
+		  AND owned.cluster_class = 'tenant_private'
+		  AND stale.source = 'runtime'
+		  AND ($1::text = '' OR owned.cluster_id = $1)
+		  AND si.id = stale.service_instance_id
+		  AND svc.service_id = si.service_id
+		  AND svc.type = 'foghorn'
+		  AND (
+		        si.status <> 'running'
+		     OR (
+		            EXISTS (
+		                SELECT 1
+		                FROM quartermaster.service_cluster_assignments platform_sca
+		                JOIN quartermaster.infrastructure_clusters platform
+		                  ON platform.cluster_id = platform_sca.cluster_id
+		                WHERE platform_sca.service_instance_id = si.id
+		                  AND platform_sca.is_active = true
+		                  AND platform.cluster_class = 'platform_official'
+		            )
+		        AND NOT EXISTS (
+		                SELECT 1
+		                FROM quartermaster.service_cluster_assignments cell_sca
+		                WHERE cell_sca.service_instance_id = si.id
+		                  AND cell_sca.is_active = true
+		                  AND cell_sca.cluster_id = owned.control_cell_id
+		            )
+		     )
+		  )
+		RETURNING stale.cluster_id
+	`, clusterID)
+	removed, _, err := collectDeletedClusters(removedRows, err)
+	if err != nil {
+		return nil, fmt.Errorf("remove stale control-cell Foghorns: %w", err)
+	}
+
+	changed := assigned
+	for _, clusterID := range removed {
+		if !slices.Contains(changed, clusterID) {
+			changed = append(changed, clusterID)
+		}
+	}
+	return changed, nil
 }
 
 type CreateEdgeBootstrapTokenRecordParams struct {

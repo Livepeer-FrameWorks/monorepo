@@ -25,7 +25,12 @@ type InfraDependency struct {
 }
 
 const (
+	// DNSScopeGlobal resolves the target's replicas in every provider cluster.
 	DNSScopeGlobal = "global"
+	// DNSScopeAggregatorRegion resolves the target's replicas in the aggregator
+	// Kafka region only, so central state writers publish into the Kafka
+	// cluster the aggregate consumers read.
+	DNSScopeAggregatorRegion = "aggregator_region"
 
 	InfraDatabase   = "database"
 	InfraKafka      = "kafka"
@@ -39,6 +44,9 @@ const (
 )
 
 var serviceDependencies = map[string][]ServiceDependency{
+	"alertmanager": {
+		{TargetServiceID: "lookout", EnvKey: "ALERTMANAGER_LOOKOUT_URL", Transport: "http", DNSScope: DNSScopeAggregatorRegion, Purpose: "incident webhook delivery"},
+	},
 	"bridge": {
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream, playback, account, and control APIs"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Purpose: "analytics GraphQL, loaders, QoE MCP tools"},
@@ -50,6 +58,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS/certificate operator paths"},
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_SPOKE_URL", Transport: "mcp-http", Optional: true, Purpose: "ask_consultant spoke proxy"},
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "AI consultant APIs"},
+		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "incident APIs"},
 	},
 	"chandler": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap and storage cluster lookup"},
@@ -57,13 +66,13 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"commodore": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant aliases, cluster capabilities, and cluster URL cache"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing and entitlement checks"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS/certificate operations"},
 	},
 	"deckhand": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and bootstrap lookups"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "support billing context"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "support service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "support service events"},
 	},
 	"decklog": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
@@ -79,6 +88,10 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"livepeer-gateway": {
 		{TargetServiceID: "decklog", EnvKey: "FRAMEWORKS_DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "gateway telemetry events"},
 		{TargetServiceID: "foghorn", EnvKey: "auth_webhook_url", Transport: "http", Purpose: "playback auth webhook"},
+	},
+	"lookout": {
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "cluster owner lookup for incident scope and service bootstrap"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant incident realtime service events"},
 	},
 	"navigator": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "edge address and tenant/cluster authorization lookups"},
@@ -98,12 +111,12 @@ var serviceDependencies = map[string][]ServiceDependency{
 	},
 	"purser": {
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream termination and account state updates"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "billing service events"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "invoice enrichment with unique counts and geo"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and cluster access lookups"},
 	},
 	"quartermaster": {
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant and infrastructure service events"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant and infrastructure service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS and certificate workflows"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "billing-tier reconciliation"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "self-bootstrap service registration"},
@@ -114,7 +127,8 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"skipper": {
 		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", DNSScope: DNSScopeGlobal, Purpose: "platform MCP tools"},
 		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "primary-user notifications"},
-		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "consultant usage events and notifications"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "consultant usage events and notifications"},
+		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "attach investigation reports to tenant incidents"},
 		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "tier gating and billing checks"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "cluster and infrastructure diagnostics"},
@@ -126,12 +140,17 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"vmauth": {
 		{TargetServiceID: "victoriametrics", EnvKey: "VMAUTH_UPSTREAM_WRITE_URL", Transport: "http", Purpose: "metrics write upstream"},
 	},
+	"vmalert": {
+		{TargetServiceID: "victoriametrics", EnvKey: "VMALERT_DATASOURCE_URL", Transport: "http", DNSScope: DNSScopeGlobal, Purpose: "alert rule queries and alert state persistence"},
+		{TargetServiceID: "alertmanager", EnvKey: "VMALERT_NOTIFIER_URL", Transport: "http", DNSScope: DNSScopeGlobal, Purpose: "alert notification delivery"},
+	},
 }
 
 var infraDependencies = map[string][]InfraDependency{
 	"commodore": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
 	"decklog":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
 	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
+	"lookout":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "incident, timeline, and notification outbox state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "tenant incident publication for Skipper and cluster ownership changes from service events"}},
 	"navigator": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
 	"periscope-ingest": {
 		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "distributed ledger-worker leases"},
@@ -218,9 +237,31 @@ func DNSDependenciesForServices(serviceIDs []string) []string {
 // GlobalDNSServiceDependencies returns service aliases that must resolve across
 // provider clusters instead of only within the consumer's cluster context.
 func GlobalDNSServiceDependencies(serviceID string) []string {
+	return scopedDNSServiceDependencies(serviceID, DNSScopeGlobal)
+}
+
+// AggregatorRegionDNSServiceDependencies returns service aliases serviceID
+// reaches through the target's replicas in the aggregator Kafka region.
+func AggregatorRegionDNSServiceDependencies(serviceID string) []string {
+	return scopedDNSServiceDependencies(serviceID, DNSScopeAggregatorRegion)
+}
+
+// ServiceDependencyScope returns the DNS scope of serviceID's dependency on
+// targetServiceID through envKey, or "" when that edge is cluster-local or not
+// declared.
+func ServiceDependencyScope(serviceID, targetServiceID, envKey string) string {
+	for _, dep := range serviceDependencies[serviceID] {
+		if dep.TargetServiceID == targetServiceID && dep.EnvKey == envKey {
+			return dep.DNSScope
+		}
+	}
+	return ""
+}
+
+func scopedDNSServiceDependencies(serviceID, scope string) []string {
 	seen := map[string]struct{}{}
 	for _, dep := range serviceDependencies[serviceID] {
-		if dep.TargetServiceID != "" && dep.DNSScope == DNSScopeGlobal {
+		if dep.TargetServiceID != "" && dep.DNSScope == scope {
 			seen[dep.TargetServiceID] = struct{}{}
 		}
 	}

@@ -163,26 +163,3 @@ func capacityConsentChangeOutput(in *quartermasterpb.ClusterMediaConsentChange, 
 	}
 	return &model.MediaCapacityConsentChange{ClusterID: clusterID, IdempotencyKey: key, Revision: strconv.FormatUint(in.GetRevision(), 10), Digest: in.GetDigest(), CreatedAt: in.GetCreatedAt().AsTime(), Rollout: rollout}, nil
 }
-
-func (r *Resolver) DoMediaPlacementLegacyPins(ctx context.Context, streamID string) (model.MediaPlacementLegacyPinsResult, error) {
-	if denied := r.placementAccess(ctx, false); denied != nil {
-		return denied, nil
-	}
-	if middleware.IsDemoMode(ctx) {
-		if err := demo.ValidateMediaPlacementScope(&placementpb.Scope{Kind: placementpb.ScopeKind_SCOPE_KIND_STREAM, StreamId: streamID}); err != nil {
-			return placementFailure(err), nil
-		}
-		return &model.MediaPlacementLegacyPins{StreamID: streamID, ClusterIds: []string{}}, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	defer cancel()
-	stream, err := r.Clients.Commodore.GetStream(ctx, streamID)
-	if err != nil {
-		return placementFailure(err), nil
-	}
-	if stream == nil || stream.GetStreamId() != streamID {
-		return placementFailure(status.Error(codes.Internal, "legacy placement scope mismatch")), nil
-	}
-	pins := append([]string{}, stream.GetPullSource().GetAllowedClusterIds()...)
-	return &model.MediaPlacementLegacyPins{StreamID: streamID, ClusterIds: pins, CurrentlyEnforced: len(pins) > 0}, nil
-}

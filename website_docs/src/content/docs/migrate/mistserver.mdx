@@ -76,10 +76,7 @@ mutation CreateMistPullStream {
     input: {
       name: "Existing Mist origin"
       ingestMode: PULL
-      pullSource: {
-        sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret"
-        allowedClusters: { clusterIds: [] }
-      }
+      pullSource: { sourceUri: "dtsc://mist-origin.example.com:4200/main?pass=shared-secret" }
     }
   ) {
     ... on Stream {

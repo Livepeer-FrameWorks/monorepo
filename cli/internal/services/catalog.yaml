@@ -11,6 +11,7 @@ profiles:
     - decklog
     - signalman
     - navigator
+    - lookout
     - helmsman
     - steward
     - skipper
@@ -24,6 +25,7 @@ profiles:
     - purser
     - skipper
     - navigator
+    - lookout
     - steward
     - decklog
     - signalman
@@ -56,6 +58,8 @@ profiles:
     - victoriametrics
     - vmauth
     - vmagent
+    - vmalert
+    - alertmanager
     - grafana
     - metabase
   support:
@@ -172,6 +176,16 @@ services:
       protocol: http
       path: /health
       port: 18010
+  lookout:
+    name: lookout
+    title: Lookout (Incidents)
+    role: infra
+    image: ghcr.io/livepeer-frameworks/frameworks-lookout:latest
+    ports: ["18022:18022", "19008:19008"]
+    health:
+      protocol: http
+      path: /health
+      port: 18022
   helmsman:
     name: helmsman
     title: Helmsman (Sidecar)
@@ -303,6 +317,26 @@ services:
       protocol: http
       path: /health
       port: 8429
+  vmalert:
+    name: vmalert
+    title: VMAlert (Alert Rules)
+    role: observability
+    image: victoriametrics/vmalert:v1.143.0
+    ports: ["8880:8880"]
+    health:
+      protocol: http
+      path: /health
+      port: 8880
+  alertmanager:
+    name: alertmanager
+    title: Alertmanager (Alert Routing)
+    role: observability
+    image: prom/alertmanager:v0.34.0
+    ports: ["9093:9093"]
+    health:
+      protocol: http
+      path: /-/healthy
+      port: 9093
   grafana:
     name: grafana
     title: Grafana (Dashboards)

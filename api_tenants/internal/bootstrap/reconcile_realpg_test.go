@@ -57,10 +57,34 @@ func TestBootstrapRepositoryReplay_RealPG(t *testing.T) {
 		len(first.Ingress.Created) != 2 || len(first.ServiceRegistry.Created) != 1 || len(first.SystemTenantAccess.Created) != 1 {
 		t.Fatalf("unexpected first reconcile: %+v", first)
 	}
+	// Replaying identical desired state is a noop for every section, including
+	// the default cluster, so it emits no cluster events.
 	second := reconcileQuartermasterInTransaction(t, ctx, db, desired)
-	if len(second.Tenants.Noop) != 1 || len(second.Clusters.Updated) != 1 || len(second.Nodes.Noop) != 1 ||
+	if len(second.Tenants.Noop) != 1 || len(second.Clusters.Noop) != 1 || len(second.Nodes.Noop) != 1 ||
 		len(second.Ingress.Noop) != 2 || len(second.ServiceRegistry.Noop) != 1 || len(second.SystemTenantAccess.Noop) != 1 {
 		t.Fatalf("unexpected replay reconcile: %+v", second)
+	}
+	changed := desired
+	changed.Clusters = append([]Cluster(nil), desired.Clusters...)
+	changed.Clusters[0].IsPlatformOfficial = false
+	changed.Clusters[0].Class = "tenant_private"
+	if third := reconcileQuartermasterInTransaction(t, ctx, db, changed); len(third.Clusters.Updated) != 1 {
+		t.Fatalf("unexpected changed-cluster reconcile: %+v", third.Clusters)
+	}
+	// Bootstrap writes cluster events through the outbox like the gRPC handlers:
+	// one per created or updated cluster, none for a noop.
+	var created, updated int
+	if err := db.QueryRowContext(ctx, `
+		SELECT
+			count(*) FILTER (WHERE event_type = 'cluster_created'),
+			count(*) FILTER (WHERE event_type = 'cluster_updated')
+		FROM quartermaster.service_event_outbox
+		WHERE resource_type = 'cluster' AND resource_id = 'core-test' AND scope = 'tenant' AND tenant_id IS NOT NULL
+	`).Scan(&created, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || updated != 1 {
+		t.Fatalf("cluster outbox events: created=%d updated=%d, want 1 and 1", created, updated)
 	}
 
 	var tenantCount, clusterCount, nodeCount, serviceCount int

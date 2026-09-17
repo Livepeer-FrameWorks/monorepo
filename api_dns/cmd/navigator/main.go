@@ -535,50 +535,6 @@ func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *dnspb.Issue
 	}, nil
 }
 
-// GetCertificate implements the gRPC GetCertificate method
-func (s *NavigatorServer) GetCertificate(ctx context.Context, req *dnspb.GetCertificateRequest) (*dnspb.GetCertificateResponse, error) {
-	// Extract optional tenant_id from request
-	tenantID := ""
-	if req.TenantId != nil {
-		tenantID = *req.TenantId
-	}
-
-	log := s.Logger.WithField("domain", req.GetDomain())
-	if tenantID != "" {
-		log = log.WithField("tenant_id", tenantID)
-	}
-	log.Info("Received GetCertificate request")
-
-	cert, err := s.CertManager.GetCertificate(ctx, tenantID, req.GetDomain())
-	if err != nil {
-		absent, msg := lookupAbsence(err)
-		if absent {
-			log.Info("Certificate not found")
-		} else {
-			log.WithError(err).Warn("Certificate lookup failed")
-		}
-		return &dnspb.GetCertificateResponse{
-			Found: false,
-			Error: msg,
-		}, nil
-	}
-
-	// Return tenant_id if set
-	var respTenantID *string
-	if cert.TenantID.Valid {
-		respTenantID = &cert.TenantID.String
-	}
-
-	return &dnspb.GetCertificateResponse{
-		Found:     true,
-		TenantId:  respTenantID,
-		Domain:    cert.Domain,
-		CertPem:   cert.CertPEM,
-		KeyPem:    cert.KeyPEM,
-		ExpiresAt: cert.ExpiresAt.Unix(),
-	}, nil
-}
-
 func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error) {
 	log := s.Logger.WithField("bundle_id", req.GetBundleId())
 	log.Info("Received GetTLSBundle request")
@@ -1155,6 +1111,15 @@ func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *dnspb.
 	}
 	if row.LastError.Valid {
 		resp.LastError = row.LastError.String
+	}
+	if row.LastRenewalError.Valid {
+		resp.LastRenewalError = row.LastRenewalError.String
+	}
+	if row.LastRenewalErrorAt.Valid {
+		resp.LastRenewalErrorAt = row.LastRenewalErrorAt.Time.Unix()
+	}
+	if row.NextAttemptAt.Valid {
+		resp.NextAttemptAt = row.NextAttemptAt.Time.Unix()
 	}
 	return resp, nil
 }

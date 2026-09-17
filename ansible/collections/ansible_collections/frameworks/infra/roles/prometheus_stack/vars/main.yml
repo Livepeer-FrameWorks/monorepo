@@ -10,3 +10,10 @@ vmagent_install_identity: "{{ vmagent_artifact_checksum ~ ':' ~ vmagent_artifact
 vmagent_install_sentinel: "/usr/local/bin/.frameworks-vmagent-installed-{{ vmagent_install_identity | hash('sha256') }}"
 vmauth_install_identity: "{{ vmauth_artifact_checksum ~ ':' ~ vmauth_artifact_url }}"
 vmauth_install_sentinel: "/usr/local/bin/.frameworks-vmauth-installed-{{ vmauth_install_identity | hash('sha256') }}"
+vmalert_bin: /usr/local/bin/vmalert
+vmalert_install_identity: "{{ vmalert_artifact_checksum ~ ':' ~ vmalert_artifact_url }}"
+vmalert_install_sentinel: "/usr/local/bin/.frameworks-vmalert-installed-{{ vmalert_install_identity | hash('sha256') }}"
+alertmanager_bin: /usr/local/bin/alertmanager
+amtool_bin: /usr/local/bin/amtool
+alertmanager_install_identity: "{{ alertmanager_artifact_checksum ~ ':' ~ alertmanager_artifact_url }}"
+alertmanager_install_sentinel: "/usr/local/bin/.frameworks-alertmanager-installed-{{ alertmanager_install_identity | hash('sha256') }}"

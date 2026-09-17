@@ -132,3 +132,32 @@
   when:
     - not ansible_check_mode
     - kafka_mm_reinstall_required | default(true)
+
+- name: Assert JMX exporter javaagent artifact is pinned
+  ansible.builtin.assert:
+    that:
+      - kafka_mm_jmx_exporter_artifact_url | length > 0
+      - kafka_mm_jmx_exporter_artifact_checksum | length > 0
+    fail_msg: "frameworks.infra.kafka_mirrormaker requires the pinned JMX exporter javaagent URL and checksum"
+
+- name: Ensure JMX exporter directory
+  ansible.builtin.file:
+    path: "{{ kafka_mm_jmx_exporter_dir }}"
+    state: directory
+    owner: root
+    group: "{{ kafka_mm_group }}"
+    mode: "0755"
+
+# get_url re-downloads whenever the on-disk jar no longer matches the pinned
+# checksum, so a version bump replaces the jar in place.
+- name: Download JMX exporter javaagent
+  ansible.builtin.get_url:
+    url: "{{ kafka_mm_jmx_exporter_artifact_url }}"
+    dest: "{{ kafka_mm_jmx_exporter_jar }}"
+    checksum: "{{ kafka_mm_jmx_exporter_artifact_checksum }}"
+    owner: root
+    group: "{{ kafka_mm_group }}"
+    mode: "0644"
+    timeout: 120
+  notify: kafka_mirrormaker restart
+  when: not ansible_check_mode

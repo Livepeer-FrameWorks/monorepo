@@ -210,29 +210,13 @@ func (s *Store) Apply(ctx context.Context, input ApplyInput, validateReview func
 	}
 	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		q := commodoredb.New(tx)
-		tenantScope := Scope{TenantID: input.Scope.TenantID, Kind: "tenant", ID: input.Scope.TenantID}
-		parentRow, lockErr := lockScope(ctx, q, tenantScope)
+		parentRow, ownRow, lockErr := lockScopes(ctx, q, input.Scope)
 		if lockErr != nil {
 			return lockErr
 		}
-		ownRow := parentRow
-		if input.Scope.Kind == "stream" {
-			if _, lockErr = q.LockMediaPlacementStream(ctx, commodoredb.LockMediaPlacementStreamParams{TenantID: input.Scope.TenantID, StreamID: input.Scope.ID}); lockErr != nil {
-				if errors.Is(lockErr, sql.ErrNoRows) {
-					return ErrNotFound
-				}
-				return lockErr
-			}
-			ownRow, lockErr = lockScope(ctx, q, input.Scope)
-			if lockErr != nil {
-				return lockErr
-			}
-		} else {
-			parentRow = commodoredb.CommodoreMediaPlacementPolicy{}
-		}
 		previous, queryErr := q.GetMediaPlacementChange(ctx, commodoredb.GetMediaPlacementChangeParams{TenantID: input.Scope.TenantID, ScopeKind: input.Scope.Kind, ScopeID: input.Scope.ID, IdempotencyKey: input.IdempotencyKey})
 		if queryErr == nil {
-			if !bytes.Equal(previous.RequestSha256, requestDigest[:]) {
+			if !equalDigest(previous.RequestSha256, requestDigest) {
 				return ErrIdempotencyConflict
 			}
 			receipt = previous
@@ -251,44 +235,10 @@ func (s *Store) Apply(ctx context.Context, input ApplyInput, validateReview func
 		if reviewErr := validateReview(snapshot); reviewErr != nil {
 			return reviewErr
 		}
-		tenant, stream := canonical, (*placementpb.PolicySet)(nil)
-		if input.Scope.Kind == "stream" {
-			tenant, stream = snapshot.Parent, canonical
-		}
-		policyDigest, policyErr := placement.PolicySetsDigest(tenant, stream)
-		if policyErr != nil {
-			return policyErr
-		}
-		changed, updateErr := q.UpdateMediaPlacementPolicy(ctx, commodoredb.UpdateMediaPlacementPolicyParams{
-			TenantID: input.Scope.TenantID, ScopeKind: input.Scope.Kind, ScopeID: input.Scope.ID,
-			Revision: int64(canonical.GetRevision()), ParentRevision: int64(input.ExpectedParentRevision), PolicyPayload: encoded, ExpectedRevision: int64(input.ExpectedRevision),
-		})
-		if updateErr != nil {
-			return updateErr
-		}
-		if changed != 1 {
-			return ErrRevisionConflict
-		}
-		receipt, queryErr = q.InsertMediaPlacementChange(ctx, commodoredb.InsertMediaPlacementChangeParams{
-			TenantID: input.Scope.TenantID, ScopeKind: input.Scope.Kind, ScopeID: input.Scope.ID, IdempotencyKey: input.IdempotencyKey,
-			RequestSha256: requestDigest[:], Revision: int64(canonical.GetRevision()), ParentRevision: int64(input.ExpectedParentRevision),
-			PolicyDigest: policyDigest, PreviousPolicyPayload: ownRow.PolicyPayload, PolicyPayload: encoded, ActorID: input.ActorID,
-			ReviewDigest: input.ReviewDigest,
-		})
-		if queryErr != nil {
-			return queryErr
-		}
-		if queryErr = q.SupersedeMediaPlacementChanges(ctx, commodoredb.SupersedeMediaPlacementChangesParams{TenantID: input.Scope.TenantID, ScopeKind: input.Scope.Kind, ScopeID: input.Scope.ID, Revision: receipt.Revision}); queryErr != nil {
-			return queryErr
-		}
-		reason := "media_placement_changed"
-		if input.Scope.Kind == "stream" {
-			reason = "media_object:live_stream:" + input.Scope.ID + ":media_placement_changed"
-		}
-		_, queryErr = q.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-			SourceService: "commodore", SourceEventID: fmt.Sprintf("placement:%s:%s:%d", input.Scope.Kind, input.Scope.ID, receipt.Revision), TenantID: input.Scope.TenantID, Reason: reason,
-		})
-		return queryErr
+		input.Policy = canonical
+		var commitErr error
+		receipt, commitErr = commitChange(ctx, q, input, encoded, requestDigest, ownRow)
+		return commitErr
 	})
 	if err != nil {
 		return commodoredb.CommodoreMediaPlacementChange{}, err
@@ -352,6 +302,12 @@ func decodePolicy(encoded []byte, revision int64) (*placementpb.PolicySet, error
 		return nil, fmt.Errorf("placement revision/payload mismatch")
 	}
 	return placement.CanonicalPolicySet(policy)
+}
+
+var errNoRows = sql.ErrNoRows
+
+func equalDigest(stored []byte, digest [32]byte) bool {
+	return bytes.Equal(stored, digest[:])
 }
 
 func validIdentifier(value string, maximum int) bool {

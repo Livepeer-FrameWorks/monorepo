@@ -564,6 +564,9 @@ const (
 	OptionKind_OPTION_KIND_CLUSTER     OptionKind = 1
 	OptionKind_OPTION_KIND_OPERATOR    OptionKind = 2
 	OptionKind_OPTION_KIND_REGION      OptionKind = 3
+	// Nodes of clusters the consuming tenant owns. Platform and marketplace
+	// node IDs are never offered.
+	OptionKind_OPTION_KIND_NODE OptionKind = 4
 )
 
 // Enum value maps for OptionKind.
@@ -573,12 +576,14 @@ var (
 		1: "OPTION_KIND_CLUSTER",
 		2: "OPTION_KIND_OPERATOR",
 		3: "OPTION_KIND_REGION",
+		4: "OPTION_KIND_NODE",
 	}
 	OptionKind_value = map[string]int32{
 		"OPTION_KIND_UNSPECIFIED": 0,
 		"OPTION_KIND_CLUSTER":     1,
 		"OPTION_KIND_OPERATOR":    2,
 		"OPTION_KIND_REGION":      3,
+		"OPTION_KIND_NODE":        4,
 	}
 )
 
@@ -943,12 +948,16 @@ func (x *PushSourcePreviewObservation) GetConsent() *CapacityConsent {
 
 // Fields intersect; values within each field are alternatives. Empty matches all.
 type Selector struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClusterIds    []string               `protobuf:"bytes,1,rep,name=cluster_ids,json=clusterIds,proto3" json:"cluster_ids,omitempty"`
-	OwnerIds      []string               `protobuf:"bytes,2,rep,name=owner_ids,json=ownerIds,proto3" json:"owner_ids,omitempty"`
-	Regions       []string               `protobuf:"bytes,3,rep,name=regions,proto3" json:"regions,omitempty"`
-	Classes       []ClusterClass         `protobuf:"varint,4,rep,packed,name=classes,proto3,enum=media_placement.ClusterClass" json:"classes,omitempty"`
-	Charging      []Charging             `protobuf:"varint,5,rep,packed,name=charging,proto3,enum=media_placement.Charging" json:"charging,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ClusterIds []string               `protobuf:"bytes,1,rep,name=cluster_ids,json=clusterIds,proto3" json:"cluster_ids,omitempty"`
+	OwnerIds   []string               `protobuf:"bytes,2,rep,name=owner_ids,json=ownerIds,proto3" json:"owner_ids,omitempty"`
+	Regions    []string               `protobuf:"bytes,3,rep,name=regions,proto3" json:"regions,omitempty"`
+	Classes    []ClusterClass         `protobuf:"varint,4,rep,packed,name=classes,proto3,enum=media_placement.ClusterClass" json:"classes,omitempty"`
+	Charging   []Charging             `protobuf:"varint,5,rep,packed,name=charging,proto3,enum=media_placement.Charging" json:"charging,omitempty"`
+	// Registered node IDs. A signed authority carrying node IDs requires media
+	// authority placement schema 3; a candidate without a node identity cannot
+	// satisfy or escape a node selector.
+	NodeIds       []string `protobuf:"bytes,6,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1014,6 +1023,13 @@ func (x *Selector) GetClasses() []ClusterClass {
 func (x *Selector) GetCharging() []Charging {
 	if x != nil {
 		return x.Charging
+	}
+	return nil
+}
+
+func (x *Selector) GetNodeIds() []string {
+	if x != nil {
+		return x.NodeIds
 	}
 	return nil
 }
@@ -3198,10 +3214,13 @@ func (x *Preview) GetActiveIngestClusterId() string {
 }
 
 type OptionsFilter struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
-	Kind          OptionKind             `protobuf:"varint,2,opt,name=kind,proto3,enum=media_placement.OptionKind" json:"kind,omitempty"`
-	Classes       []ClusterClass         `protobuf:"varint,3,rep,packed,name=classes,proto3,enum=media_placement.ClusterClass" json:"classes,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Query   string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	Kind    OptionKind             `protobuf:"varint,2,opt,name=kind,proto3,enum=media_placement.OptionKind" json:"kind,omitempty"`
+	Classes []ClusterClass         `protobuf:"varint,3,rep,packed,name=classes,proto3,enum=media_placement.ClusterClass" json:"classes,omitempty"`
+	// Only options derived from this cluster: the cluster itself, its nodes, its
+	// owner and its region. Empty means every entitled cluster.
+	ClusterId     string `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3255,6 +3274,13 @@ func (x *OptionsFilter) GetClasses() []ClusterClass {
 		return x.Classes
 	}
 	return nil
+}
+
+func (x *OptionsFilter) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
 }
 
 type GetOptionsRequest struct {
@@ -3327,15 +3353,17 @@ func (x *GetOptionsRequest) GetFirst() int32 {
 
 // Authorized selector targets, not node capacity or placement admission.
 type Option struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Kind          OptionKind             `protobuf:"varint,3,opt,name=kind,proto3,enum=media_placement.OptionKind" json:"kind,omitempty"`
-	ClusterClass  ClusterClass           `protobuf:"varint,4,opt,name=cluster_class,json=clusterClass,proto3,enum=media_placement.ClusterClass" json:"cluster_class,omitempty"`
-	Region        string                 `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
-	OwnerId       string                 `protobuf:"bytes,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
-	Eligible      bool                   `protobuf:"varint,7,opt,name=eligible,proto3" json:"eligible,omitempty"`
-	Reason        string                 `protobuf:"bytes,8,opt,name=reason,proto3" json:"reason,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Kind         OptionKind             `protobuf:"varint,3,opt,name=kind,proto3,enum=media_placement.OptionKind" json:"kind,omitempty"`
+	ClusterClass ClusterClass           `protobuf:"varint,4,opt,name=cluster_class,json=clusterClass,proto3,enum=media_placement.ClusterClass" json:"cluster_class,omitempty"`
+	Region       string                 `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
+	OwnerId      string                 `protobuf:"bytes,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	Eligible     bool                   `protobuf:"varint,7,opt,name=eligible,proto3" json:"eligible,omitempty"`
+	Reason       string                 `protobuf:"bytes,8,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Owning cluster of a NODE option; empty for other kinds.
+	ClusterId     string `protobuf:"bytes,9,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3422,6 +3450,13 @@ func (x *Option) GetEligible() bool {
 func (x *Option) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *Option) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
 	}
 	return ""
 }
@@ -4921,14 +4956,15 @@ const file_media_placement_proto_rawDesc = "" +
 	"observedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12:\n" +
-	"\aconsent\x18\b \x01(\v2 .media_placement.CapacityConsentR\aconsent\"\xd2\x01\n" +
+	"\aconsent\x18\b \x01(\v2 .media_placement.CapacityConsentR\aconsent\"\xed\x01\n" +
 	"\bSelector\x12\x1f\n" +
 	"\vcluster_ids\x18\x01 \x03(\tR\n" +
 	"clusterIds\x12\x1b\n" +
 	"\towner_ids\x18\x02 \x03(\tR\bownerIds\x12\x18\n" +
 	"\aregions\x18\x03 \x03(\tR\aregions\x127\n" +
 	"\aclasses\x18\x04 \x03(\x0e2\x1d.media_placement.ClusterClassR\aclasses\x125\n" +
-	"\bcharging\x18\x05 \x03(\x0e2\x19.media_placement.ChargingR\bcharging\":\n" +
+	"\bcharging\x18\x05 \x03(\x0e2\x19.media_placement.ChargingR\bcharging\x12\x19\n" +
+	"\bnode_ids\x18\x06 \x03(\tR\anodeIds\":\n" +
 	"\vSelectorSet\x12+\n" +
 	"\x03any\x18\x01 \x03(\v2\x19.media_placement.SelectorR\x03any\"p\n" +
 	"\vConstraints\x122\n" +
@@ -5132,16 +5168,18 @@ const file_media_placement_proto_rawDesc = "" +
 	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1a\n" +
 	"\bcomplete\x18\f \x01(\bR\bcomplete\x12)\n" +
 	"\x10source_evaluated\x18\r \x01(\bR\x0fsourceEvaluated\x127\n" +
-	"\x18active_ingest_cluster_id\x18\x0e \x01(\tR\x15activeIngestClusterId\"\x8f\x01\n" +
+	"\x18active_ingest_cluster_id\x18\x0e \x01(\tR\x15activeIngestClusterId\"\xae\x01\n" +
 	"\rOptionsFilter\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.media_placement.OptionKindR\x04kind\x127\n" +
-	"\aclasses\x18\x03 \x03(\x0e2\x1d.media_placement.ClusterClassR\aclasses\"\xa5\x01\n" +
+	"\aclasses\x18\x03 \x03(\x0e2\x1d.media_placement.ClusterClassR\aclasses\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x04 \x01(\tR\tclusterId\"\xa5\x01\n" +
 	"\x11GetOptionsRequest\x12,\n" +
 	"\x05scope\x18\x01 \x01(\v2\x16.media_placement.ScopeR\x05scope\x126\n" +
 	"\x06filter\x18\x02 \x01(\v2\x1e.media_placement.OptionsFilterR\x06filter\x12\x14\n" +
 	"\x05after\x18\x03 \x01(\tR\x05after\x12\x14\n" +
-	"\x05first\x18\x04 \x01(\x05R\x05first\"\x88\x02\n" +
+	"\x05first\x18\x04 \x01(\x05R\x05first\"\xa7\x02\n" +
 	"\x06Option\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12/\n" +
@@ -5150,7 +5188,9 @@ const file_media_placement_proto_rawDesc = "" +
 	"\x06region\x18\x05 \x01(\tR\x06region\x12\x19\n" +
 	"\bowner_id\x18\x06 \x01(\tR\aownerId\x12\x1a\n" +
 	"\beligible\x18\a \x01(\bR\beligible\x12\x16\n" +
-	"\x06reason\x18\b \x01(\tR\x06reason\"\xf8\x01\n" +
+	"\x06reason\x18\b \x01(\tR\x06reason\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\t \x01(\tR\tclusterId\"\xf8\x01\n" +
 	"\aOptions\x12,\n" +
 	"\x05scope\x18\x01 \x01(\v2\x16.media_placement.ScopeR\x05scope\x12-\n" +
 	"\x05nodes\x18\x02 \x03(\v2\x17.media_placement.OptionR\x05nodes\x12\"\n" +
@@ -5355,13 +5395,14 @@ const file_media_placement_proto_rawDesc = "" +
 	"\x16ROLLOUT_STATUS_PENDING\x10\x02\x12\x1c\n" +
 	"\x18ROLLOUT_STATUS_EFFECTIVE\x10\x03\x12\x1a\n" +
 	"\x16ROLLOUT_STATUS_BLOCKED\x10\x04\x12\x1d\n" +
-	"\x19ROLLOUT_STATUS_SUPERSEDED\x10\x05*t\n" +
+	"\x19ROLLOUT_STATUS_SUPERSEDED\x10\x05*\x8a\x01\n" +
 	"\n" +
 	"OptionKind\x12\x1b\n" +
 	"\x17OPTION_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13OPTION_KIND_CLUSTER\x10\x01\x12\x18\n" +
 	"\x14OPTION_KIND_OPERATOR\x10\x02\x12\x16\n" +
-	"\x12OPTION_KIND_REGION\x10\x03*\x84\x01\n" +
+	"\x12OPTION_KIND_REGION\x10\x03\x12\x14\n" +
+	"\x10OPTION_KIND_NODE\x10\x04*\x84\x01\n" +
 	"\bCapacity\x12\x18\n" +
 	"\x14CAPACITY_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CAPACITY_AVAILABLE\x10\x01\x12\x16\n" +

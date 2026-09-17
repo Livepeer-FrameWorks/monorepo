@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 	"github.com/google/uuid"
 )
 
@@ -77,12 +79,12 @@ func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, m
 func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, cfg DecklogServerConfig) *DecklogServer {
 	topic := cfg.ServiceEventsTopic
 	if topic == "" {
-		topic = "service_events"
+		topic = topology.TopicServiceEvents
 	}
 	rawTopic := cfg.RawTriggersTopic
 	switch rawTopic {
 	case "":
-		rawTopic = "analytics.raw_mist_triggers"
+		rawTopic = topology.TopicRawMistTriggers
 	case "-":
 		rawTopic = ""
 	}
@@ -212,7 +214,8 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *ipcpb.Servi
 	}
 
 	tenantID := event.GetTenantId()
-	if tenantID == "" || !isValidUUID(tenantID) {
+	platformScoped := tenantID == "" && serviceevents.PlatformScoped(eventType)
+	if !platformScoped && (tenantID == "" || !isValidUUID(tenantID)) {
 		if s.metrics != nil && s.metrics.EventsIngested != nil {
 			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
 		}
@@ -344,6 +347,8 @@ func serviceEventPayloadToMap(event *ipcpb.ServiceEvent) (map[string]any, error)
 		return protoMessageToMap(payload.ArtifactEvent)
 	case *ipcpb.ServiceEvent_ArtifactNodeCopyEvent:
 		return protoMessageToMap(payload.ArtifactNodeCopyEvent)
+	case *ipcpb.ServiceEvent_IncidentEvent:
+		return protoMessageToMap(payload.IncidentEvent)
 	default:
 		return map[string]any{}, nil
 	}

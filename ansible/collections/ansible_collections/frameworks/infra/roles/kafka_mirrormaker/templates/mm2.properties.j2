@@ -1,4 +1,6 @@
-{# MirrorMaker2 dedicated worker config. #}
+{# MirrorMaker2 dedicated worker config. The worker drives only flows into
+   kafka_mm_target (see --clusters in the systemd unit). Java properties
+   parsing consumes backslashes, so regex backslashes are doubled. #}
 {% set target_rf = kafka_mm_target.replicas | default(1) %}
 clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
 
@@ -11,15 +13,24 @@ rest.port = {{ kafka_mm_rest_port }}
 
 {% for src in kafka_mm_sources %}
 {% set source_rf = src.replicas | default(1) %}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.enabled = true
-{{ src.alias }}->{{ kafka_mm_target.alias }}.topics = {{ src.topics }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.groups = .*
-{{ src.alias }}->{{ kafka_mm_target.alias }}.replication.factor = {{ target_rf }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.checkpoints.topic.replication.factor = {{ target_rf }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.heartbeats.topic.replication.factor = {{ source_rf }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.offset-syncs.topic.replication.factor = {{ source_rf }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.tasks.max = {{ kafka_mm_task_count }}
-{{ src.alias }}->{{ kafka_mm_target.alias }}.sync.topic.acls.enabled = false
+{% set flow = src.alias ~ '->' ~ kafka_mm_target.alias %}
+{{ flow }}.enabled = true
+{{ flow }}.topics = {{ src.topics }}
+{% if kafka_mm_exclude_pattern | length > 0 %}
+{{ flow }}.topics.exclude = .*[\\-\\.]internal,.*\\.replica,__.*,{{ kafka_mm_exclude_pattern | replace('\\', '\\\\') }}
+{% endif %}
+{% if src.emit_checkpoints | default(true) %}
+{{ flow }}.groups = .*
+{% else %}
+{{ flow }}.emit.checkpoints.enabled = false
+{{ flow }}.sync.group.offsets.enabled = false
+{% endif %}
+{{ flow }}.replication.factor = {{ target_rf }}
+{{ flow }}.checkpoints.topic.replication.factor = {{ target_rf }}
+{{ flow }}.heartbeats.topic.replication.factor = {{ source_rf }}
+{{ flow }}.offset-syncs.topic.replication.factor = {{ source_rf }}
+{{ flow }}.tasks.max = {{ src.tasks_max | default(kafka_mm_task_count) }}
+{{ flow }}.sync.topic.acls.enabled = false
 {% endfor %}
 offset.storage.replication.factor = {{ target_rf }}
 status.storage.replication.factor = {{ target_rf }}

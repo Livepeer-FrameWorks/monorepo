@@ -358,28 +358,45 @@ describe("placement editor interactions", () => {
     expect(screen.queryByLabelText("Longitude")).toBeNull();
   });
 
-  it.each(["PULL", "MANAGED"] as const)(
-    "keeps %s streams on viewer policy and hides false publisher/preview paths",
-    async (sourceMode) => {
-      const base = policy();
-      vi.mocked(placementAPI.policy).mockResolvedValue({
-        ...base,
-        scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
-      });
-      render(MediaPlacementEditor, {
-        scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
-        sourceMode,
-        initialVerb: "INGEST",
-      });
-      await screen.findByText("Viewer preview is not available for this source yet");
-      expect(screen.getByRole("button", { name: "Viewers" }).getAttribute("aria-pressed")).toBe(
-        "true"
-      );
-      expect(screen.queryByRole("button", { name: "Publishing" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Preview this draft" })).toBeNull();
-      expect(screen.getByText(/Saving viewer rules still affects live routing/)).toBeTruthy();
-    }
-  );
+  it("keeps managed streams on viewer policy and hides false publisher/preview paths", async () => {
+    const base = policy();
+    vi.mocked(placementAPI.policy).mockResolvedValue({
+      ...base,
+      scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+    });
+    render(MediaPlacementEditor, {
+      scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+      sourceMode: "MANAGED",
+      initialVerb: "INGEST",
+    });
+    await screen.findByText("Viewer preview is not available for this source yet");
+    expect(screen.getByRole("button", { name: "Viewers" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.queryByRole("button", { name: "Publishing" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Preview this draft" })).toBeNull();
+    expect(screen.getByText(/Saving viewer rules still affects live routing/)).toBeTruthy();
+  });
+
+  it("offers pull streams their source rules without a publisher preview", async () => {
+    const base = policy();
+    vi.mocked(placementAPI.policy).mockResolvedValue({
+      ...base,
+      scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+    });
+    render(MediaPlacementEditor, {
+      scope: { kind: "STREAM", streamId: "5eedfeed-11fe-ca57-feed-11feca570001" },
+      sourceMode: "PULL",
+      initialVerb: "INGEST",
+    });
+    await screen.findByText("Viewer preview is not available for this source yet");
+    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.queryByRole("button", { name: "Publishing" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Preview this draft" })).toBeNull();
+  });
 
   it("does not present zero-recipient pending rollout as active", async () => {
     render(PlacementRollout, { rollout: policy().rollout, revision: "7" });

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
 func TestEffectivePrivateerHosts_FiltersEdge(t *testing.T) {
@@ -162,6 +164,91 @@ func TestEffectiveVMAgentHostsDefaultsToAllHosts(t *testing.T) {
 	}
 }
 
+// The MirrorMaker2 JMX exporter binds loopback, so every worker host needs a
+// local vmagent even when vmagent hosts are listed explicitly.
+func TestEffectiveVMAgentHostsAddsMirrorMakerWorkers(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1":     {ExternalIP: "10.0.0.1"},
+			"regional-eu-1": {ExternalIP: "10.0.0.2"},
+			"regional-us-1": {ExternalIP: "10.0.1.2"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Kafka: &inventory.KafkaConfig{
+				Enabled: true,
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
+					Enabled: true,
+					Links: []inventory.KafkaMirrorLink{
+						{Source: "us-east", Target: "eu-west", Hosts: []string{"regional-eu-1"}},
+						{Source: "eu-west", Target: "us-east", Hosts: []string{"regional-us-1"}},
+					},
+				},
+			},
+		},
+	}
+
+	got := EffectiveVMAgentHosts(inventory.ServiceConfig{Hosts: []string{"central-1"}}, manifest)
+	want := []string{"central-1", "regional-eu-1", "regional-us-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("EffectiveVMAgentHosts = %v, want %v", got, want)
+	}
+
+	manifest.Infrastructure.Kafka.MirrorMaker.Enabled = false
+	if got := KafkaMirrorMakerHosts(manifest); len(got) != 0 {
+		t.Fatalf("KafkaMirrorMakerHosts with MirrorMaker disabled = %v, want none", got)
+	}
+}
+
+func TestPlan_VMAlertWaitsForVictoriaMetricsAndAlertmanager(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.1"},
+			"ops-1":     {ExternalIP: "10.0.0.2"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {Enabled: true, Host: "central-1"},
+			"alertmanager":    {Enabled: true, Host: "central-1"},
+			"vmalert":         {Enabled: true, Hosts: []string{"central-1", "ops-1"}},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseAll})
+	if err != nil {
+		t.Fatalf("Plan() failed: %v", err)
+	}
+	tasks := map[string]*Task{}
+	for _, task := range plan.AllTasks {
+		tasks[task.Name] = task
+	}
+	for _, name := range []string{"vmalert@central-1", "vmalert@ops-1"} {
+		task, ok := tasks[name]
+		if !ok {
+			t.Fatalf("plan has no %s task; tasks=%v", name, sortedTaskNames(tasks))
+		}
+		for _, dep := range []string{"victoriametrics", "alertmanager"} {
+			if !slices.Contains(task.DependsOn, dep) {
+				t.Fatalf("%s DependsOn = %v, want %s", name, task.DependsOn, dep)
+			}
+		}
+	}
+	for _, name := range []string{"victoriametrics", "alertmanager"} {
+		for _, dep := range tasks[name].DependsOn {
+			if strings.HasPrefix(dep, "vmalert") {
+				t.Fatalf("%s must not depend on vmalert; DependsOn = %v", name, tasks[name].DependsOn)
+			}
+		}
+	}
+}
+
+func sortedTaskNames(tasks map[string]*Task) []string {
+	names := make([]string, 0, len(tasks))
+	for name := range tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func TestPlan_RedisDuplicateNamesAreClusterScoped(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
@@ -201,6 +288,54 @@ func TestPlan_RedisDuplicateNamesAreClusterScoped(t *testing.T) {
 		if !names[name] {
 			t.Fatalf("missing Redis task %s; got %#v", name, names)
 		}
+	}
+}
+
+func TestRedisTaskNamesWaitForWholeSentinelTopologyInCell(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{
+						Name: "foghorn", Cluster: "media-eu-1", Mode: "sentinel", Host: "regional-eu-1",
+						ReplicaHosts: []string{"regional-eu-2", "regional-eu-3"},
+						Sentinels:    []inventory.RedisSentinelNode{{Host: "regional-eu-1"}, {Host: "regional-eu-2"}, {Host: "regional-eu-3"}},
+					},
+					{
+						Name: "foghorn", Cluster: "media-us-1", Mode: "sentinel", Host: "regional-us-1",
+						ReplicaHosts: []string{"regional-us-2", "regional-us-3"},
+						Sentinels:    []inventory.RedisSentinelNode{{Host: "regional-us-1"}, {Host: "regional-us-2"}, {Host: "regional-us-3"}},
+					},
+					{Name: "cache", Host: "central-eu-1"},
+				},
+			},
+		},
+	}
+	planner := NewPlanner(manifest)
+	foghornRedis := topology.InfraDependency{Kind: topology.InfraRedis, Provider: topology.InfraProviderNamed, Name: "foghorn"}
+
+	got := planner.redisTaskNames(foghornRedis, inventory.ServiceConfig{}, "media-us-1")
+	want := []string{
+		"redis-foghorn-media-us-1",
+		"redis-foghorn-media-us-1-replica-regional-us-2",
+		"redis-foghorn-media-us-1-replica-regional-us-3",
+		"redis-foghorn-media-us-1-sentinel-regional-us-1",
+		"redis-foghorn-media-us-1-sentinel-regional-us-2",
+		"redis-foghorn-media-us-1-sentinel-regional-us-3",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("US Foghorn Redis deps = %v, want primary, replicas, and Sentinels of media-us-1 %v", got, want)
+	}
+	for _, name := range got {
+		if strings.Contains(name, "media-eu-1") {
+			t.Fatalf("US Foghorn waits on EU Redis task %s", name)
+		}
+	}
+
+	cache := topology.InfraDependency{Kind: topology.InfraRedis, Provider: topology.InfraProviderNamed, Name: "cache"}
+	if got := planner.redisTaskNames(cache, inventory.ServiceConfig{}, ""); !slices.Equal(got, []string{"redis-cache"}) {
+		t.Fatalf("single-mode Redis deps = %v, want only the primary", got)
 	}
 }
 
@@ -402,13 +537,14 @@ func TestPlan_DatabaseConsumerOrderedAfterVanillaPostgres(t *testing.T) {
 	}
 }
 
-func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
-	manifest := &inventory.Manifest{
+func mirrorMakerLinkManifest(links []inventory.KafkaMirrorLink) *inventory.Manifest {
+	return &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {ExternalIP: "10.0.0.1", Labels: map[string]string{"region": "eu-west"}},
 			"regional-eu-2": {ExternalIP: "10.0.0.2", Labels: map[string]string{"region": "eu-west"}},
 			"regional-eu-3": {ExternalIP: "10.0.0.3", Labels: map[string]string{"region": "eu-west"}},
 			"regional-us-1": {ExternalIP: "10.0.1.1", Labels: map[string]string{"region": "us-east"}},
+			"regional-us-2": {ExternalIP: "10.0.1.2", Labels: map[string]string{"region": "us-east"}},
 		},
 		Infrastructure: inventory.InfrastructureConfig{
 			Kafka: &inventory.KafkaConfig{
@@ -426,15 +562,21 @@ func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
 						Brokers:  []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11}},
 					},
 				},
-				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
-					Enabled: true,
-					Hosts:   []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"},
-				},
+				MirrorMaker: &inventory.KafkaMirrorMakerConfig{Enabled: true, Links: links},
 			},
 		},
 	}
+}
 
-	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+func bidirectionalMirrorLinks() []inventory.KafkaMirrorLink {
+	return []inventory.KafkaMirrorLink{
+		{Source: "us-east", Target: "eu-west", Hosts: []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"}},
+		{Source: "eu-west", Target: "us-east", Hosts: []string{"regional-us-1", "regional-us-2"}},
+	}
+}
+
+func TestPlan_KafkaMirrorMakerLinksPlaceWorkersInTargetRegions(t *testing.T) {
+	plan, err := NewPlanner(mirrorMakerLinkManifest(bidirectionalMirrorLinks())).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
 	if err != nil {
 		t.Fatalf("Plan() failed: %v", err)
 	}
@@ -445,7 +587,11 @@ func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
 			got[task.Host] = task
 		}
 	}
-	for _, host := range []string{"regional-eu-1", "regional-eu-2", "regional-eu-3"} {
+	wantHosts := []string{"regional-eu-1", "regional-eu-2", "regional-eu-3", "regional-us-1", "regional-us-2"}
+	if len(got) != len(wantHosts) {
+		t.Fatalf("MirrorMaker tasks on %v, want one per worker host %v", got, wantHosts)
+	}
+	for _, host := range wantHosts {
 		task := got[host]
 		if task == nil {
 			t.Fatalf("missing MirrorMaker task on %s; got %#v", host, got)
@@ -477,38 +623,55 @@ func TestPlan_KafkaMirrorMakerHostsFanOut(t *testing.T) {
 	}
 }
 
-func TestPlan_KafkaMirrorMakerRejectsNonAggregatorHost(t *testing.T) {
-	manifest := &inventory.Manifest{
-		Hosts: map[string]inventory.Host{
-			"regional-eu-1": {ExternalIP: "10.0.0.1", Labels: map[string]string{"region": "eu-west"}},
-			"regional-us-1": {ExternalIP: "10.0.1.1", Labels: map[string]string{"region": "us-east"}},
+func TestPlan_KafkaMirrorMakerRejectsInvalidLinks(t *testing.T) {
+	eu := []string{"regional-eu-1"}
+	us := []string{"regional-us-1"}
+	cases := map[string]struct {
+		links []inventory.KafkaMirrorLink
+		want  string
+	}{
+		"no links": {
+			links: nil,
+			want:  "declares no links",
 		},
-		Infrastructure: inventory.InfrastructureConfig{
-			Kafka: &inventory.KafkaConfig{
-				Enabled:  true,
-				RegionID: "eu-west",
-				Role:     "aggregator",
-				Brokers:  []inventory.KafkaBroker{{Host: "regional-eu-1", ID: 1}},
-				Regional: []inventory.RegionalKafkaCluster{
-					{
-						RegionID: "us-east",
-						Brokers:  []inventory.KafkaBroker{{Host: "regional-us-1", ID: 11}},
-					},
-				},
-				MirrorMaker: &inventory.KafkaMirrorMakerConfig{
-					Enabled: true,
-					Hosts:   []string{"regional-us-1"},
-				},
+		"worker outside target region": {
+			links: []inventory.KafkaMirrorLink{
+				{Source: "us-east", Target: "eu-west", Hosts: us},
+				{Source: "eu-west", Target: "us-east", Hosts: us},
 			},
+			want: `want target region "eu-west"`,
+		},
+		"missing reverse link": {
+			links: []inventory.KafkaMirrorLink{{Source: "us-east", Target: "eu-west", Hosts: eu}},
+			want:  "no link eu-west->us-east",
+		},
+		"unknown region": {
+			links: append(bidirectionalMirrorLinks(), inventory.KafkaMirrorLink{Source: "ap-south", Target: "eu-west", Hosts: eu}),
+			want:  `source "ap-south" is not a declared Kafka region`,
+		},
+		"duplicate link": {
+			links: append(bidirectionalMirrorLinks(), inventory.KafkaMirrorLink{Source: "us-east", Target: "eu-west", Hosts: eu}),
+			want:  "declared more than once",
+		},
+		"self link": {
+			links: []inventory.KafkaMirrorLink{{Source: "eu-west", Target: "eu-west", Hosts: eu}},
+			want:  "into itself",
+		},
+		"no worker hosts": {
+			links: []inventory.KafkaMirrorLink{
+				{Source: "us-east", Target: "eu-west"},
+				{Source: "eu-west", Target: "us-east", Hosts: us},
+			},
+			want: "declares no worker hosts",
 		},
 	}
-
-	_, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
-	if err == nil {
-		t.Fatal("Plan() succeeded with MirrorMaker outside aggregator region")
-	}
-	if !strings.Contains(err.Error(), "want aggregator region \"eu-west\"") {
-		t.Fatalf("Plan() error = %v", err)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := NewPlanner(mirrorMakerLinkManifest(tc.links)).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Plan() error = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -655,6 +818,43 @@ func TestPlan_PeriscopeMeteringCutoverOrder(t *testing.T) {
 	}
 	if position["periscope-query"] >= position["purser"] || position["purser"] >= position["periscope-metering"] {
 		t.Fatalf("cutover order positions = query:%d purser:%d metering:%d", position["periscope-query"], position["purser"], position["periscope-metering"])
+	}
+}
+
+func TestPlan_BridgeDeploysAfterEverySignalman(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.1"},
+			"regional-us-1": {ExternalIP: "10.0.1.1"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge":    {Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}},
+			"signalman": {Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}},
+		},
+	}
+	for _, phase := range []Phase{PhaseApplications, PhaseAll} {
+		plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: phase})
+		if err != nil {
+			t.Fatalf("plan %s: %v", phase, err)
+		}
+		batchOf := map[string]int{}
+		for i, batch := range plan.Batches {
+			for _, task := range batch {
+				batchOf[task.Name] = i
+			}
+		}
+		for _, bridge := range []string{"bridge@regional-eu-1", "bridge@regional-us-1"} {
+			for _, signalman := range []string{"signalman@regional-eu-1", "signalman@regional-us-1"} {
+				bridgeBatch, bridgeOK := batchOf[bridge]
+				signalmanBatch, signalmanOK := batchOf[signalman]
+				if !bridgeOK || !signalmanOK {
+					t.Fatalf("%s plan missing %s or %s: %v", phase, bridge, signalman, batchOf)
+				}
+				if bridgeBatch <= signalmanBatch {
+					t.Fatalf("%s plan runs %s in batch %d, not after %s in batch %d", phase, bridge, bridgeBatch, signalman, signalmanBatch)
+				}
+			}
+		}
 	}
 }
 

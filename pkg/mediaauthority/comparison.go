@@ -21,12 +21,13 @@ func LegacyShadowComparable(tenant *mediaauthoritypb.TenantAuthority, object *me
 		tenant.GetMediaPlacement() == nil && object.GetMediaPlacement() == nil && object.GetPlacementTenantRevision() == 0
 }
 
-// PlacementShadowComparable identifies a coherent schema-2 pair: both sides
-// carry policy and the object was compiled against the tenant's current policy
-// revision. It says nothing about whether the comparing replica enforces that
-// policy; callers combine it with their own enforcement state.
+// PlacementShadowComparable identifies a coherent placement pair: both sides
+// use the same placement schema, carry policy, and the object was compiled
+// against the tenant's current policy revision. It says nothing about whether
+// the comparing replica enforces that policy; callers combine it with their own
+// enforcement state.
 func PlacementShadowComparable(tenant *mediaauthoritypb.TenantAuthority, object *mediaauthoritypb.MediaObjectAuthority) bool {
-	return tenant.GetSchemaVersion() == PlacementSchemaVersion && object.GetSchemaVersion() == PlacementSchemaVersion &&
+	return IsPlacementSchema(tenant.GetSchemaVersion()) && tenant.GetSchemaVersion() == object.GetSchemaVersion() &&
 		tenant.GetMediaPlacement() != nil && object.GetMediaPlacement() != nil &&
 		tenant.GetMediaPlacement().GetRevision() == object.GetPlacementTenantRevision()
 }

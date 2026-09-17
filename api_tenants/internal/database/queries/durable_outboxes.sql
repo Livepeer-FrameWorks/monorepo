@@ -1,9 +1,10 @@
 -- name: EnqueueServiceEvent :one
 INSERT INTO quartermaster.service_event_outbox (
-    event_type, tenant_id, user_id, resource_type, resource_id, payload
+    event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
 ) VALUES (
     sqlc.arg(event_type)::text,
-    sqlc.arg(tenant_id)::uuid,
+    NULLIF(sqlc.arg(tenant_id)::text, '')::uuid,
+    sqlc.arg(scope)::text,
     sqlc.arg(user_id)::text,
     sqlc.arg(resource_type)::text,
     sqlc.arg(resource_id)::text,
@@ -25,27 +26,31 @@ LIMIT sqlc.arg(batch_size)::integer;
 
 -- name: MarkServiceEventOutboxClaimed :exec
 UPDATE quartermaster.service_event_outbox
-SET claimed_at = NOW()
+SET claimed_at = NOW(),
+    lease_token = sqlc.arg(lease_token)::uuid
 WHERE id = ANY(sqlc.arg(ids)::uuid[]);
 
 -- name: CompleteServiceEventOutbox :exec
 UPDATE quartermaster.service_event_outbox
 SET completed_at = NOW(),
     last_error = NULL
-WHERE id = sqlc.arg(id)::uuid;
+WHERE id = sqlc.arg(id)::uuid
+  AND lease_token = NULLIF(sqlc.arg(lease_token)::text, '')::uuid;
 
 -- name: FailServiceEventOutbox :exec
 WITH input AS (
     SELECT sqlc.arg(id)::uuid AS id,
            sqlc.arg(attempts)::integer AS attempts,
-           sqlc.arg(last_error)::text AS last_error
+           sqlc.arg(last_error)::text AS last_error,
+           NULLIF(sqlc.arg(lease_token)::text, '')::uuid AS lease_token
 )
 UPDATE quartermaster.service_event_outbox
 SET attempts = input.attempts,
     last_error = input.last_error,
     claimed_at = NULL
 FROM input
-WHERE service_event_outbox.id = input.id;
+WHERE service_event_outbox.id = input.id
+  AND service_event_outbox.lease_token = input.lease_token;
 
 -- name: EnqueueNavigatorCustomDomain :one
 INSERT INTO quartermaster.navigator_custom_domain_outbox (

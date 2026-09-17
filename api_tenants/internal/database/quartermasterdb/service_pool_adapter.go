@@ -88,15 +88,23 @@ func (q *Queries) ReleaseOldestServicePoolInstances(ctx context.Context, arg Rel
 
 type ServicePoolInstanceParams struct{ InstanceID, ServiceType string }
 
+// DrainServicePoolInstance removes the instance from the clusters it serves and
+// returns them. Tenant-private assignments are left in place: the control-cell
+// reconciler owns them and removes them only when the instance stops or leaves
+// its cell, so draining a cell replica during a provision run does not strand
+// the private clusters it serves.
 func (q *Queries) DrainServicePoolInstance(ctx context.Context, arg ServicePoolInstanceParams) ([]string, int64, error) {
 	rows, err := q.db.QueryContext(ctx, `
-		DELETE FROM quartermaster.service_cluster_assignments
-		WHERE service_instance_id = (
+		DELETE FROM quartermaster.service_cluster_assignments sca
+		USING quartermaster.infrastructure_clusters ic
+		WHERE sca.cluster_id = ic.cluster_id
+		  AND COALESCE(ic.cluster_class, '') <> 'tenant_private'
+		  AND sca.service_instance_id = (
 			SELECT si.id FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
 			WHERE si.id = $1 AND svc.type = $2
-		)
-		RETURNING cluster_id
+		  )
+		RETURNING sca.cluster_id
 	`, arg.InstanceID, arg.ServiceType)
 	return collectDeletedClusters(rows, err)
 }

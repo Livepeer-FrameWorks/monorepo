@@ -3,8 +3,10 @@
 `mist_native` streams reconcile through Foghorn's managed-stream reconciler.
 
 Public stream reads project this internal mode as GraphQL `MANAGED`. They expose a
-`ManagedSourceView` containing only `source_kind`, `always_on`, `placement_count`, and
-`allowed_cluster_ids`; the literal source specification is never returned. Managed streams do not
+`ManagedSourceView` containing only `source_kind`, `always_on`, and `placement_count`; the
+literal source specification is never returned. Where the source may run is read from
+`Stream.sourceLocation`, which bootstrap declares and `updateStream` refuses to change for a
+managed stream. Managed streams do not
 accept publisher credentials: GraphQL returns a null `streamKey`, and Commodore rejects primary or
 secondary stream-key management for every non-push mode.
 The implementation uses Foghorn's existing HA primitives — Redis-backed
@@ -14,14 +16,22 @@ operating constraint.
 
 ## Cluster-wide placement + ownership
 
-`mist_native` source placement is cluster-local today. The schema keeps
-`allowed_cluster_ids` as an array for pull-stream symmetry, but bootstrap,
-Commodore, and the DB require
-exactly one source cluster for `mist_native`. `eligibleNodesAcrossClusters`
-returns every healthy non-stale `(node_id, cluster_id)` pair from the
-Redis-backed node state in that allowed cluster. `placementPickWithCluster`
-then runs a deterministic stable-hash on `stream_id` against that node set,
-so every Foghorn in the cluster computes the same elected pair.
+`mist_native` source placement is cluster-local. A managed stream's bootstrap
+`source_location` names exactly one source cluster, optionally narrowed to
+nodes of that cluster and with avoided nodes. Bootstrap writes it as the
+stream's own ingest placement rules and mirrors the cluster into
+`stream_mist_sources.allowed_cluster_ids`, which the signed source definition
+still carries until the pin columns are retired (see
+[media placement](media-placement-policy.md#pull-source-pin-conversion-and-retirement)).
+`eligibleNodesAcrossClusters` returns every healthy non-stale
+`(node_id, cluster_id)` pair from the Redis-backed node state in that cluster.
+The reconciler then drops every node the signed ingest policy denies for that
+exact node; a node whose verdict lacks facts makes the tick transient for the
+stream instead of shrinking the pool. `placementPickWithCluster` runs a
+deterministic stable-hash on `stream_id` against the remaining node set, so
+every Foghorn in the cluster computes the same elected pair. Materialization
+and `ApplyManagedStream` dispatch check the ingest policy again for the elected
+node.
 
 Viewer routing is still cross-cluster: once the source is placed, Foghorn
 records `active_ingest_cluster_id`. Policy may route a viewer back to that

@@ -339,6 +339,7 @@ export default defineConfig({
             { slug: "builders/playback-access-control" },
             { slug: "builders/api-reference" },
             { slug: "builders/analytics-api" },
+            { slug: "builders/incidents" },
             { slug: "builders/billing" },
             { slug: "builders/wallet-and-crypto" },
             { slug: "builders/troubleshooting" },
@@ -390,6 +391,7 @@ export default defineConfig({
               label: "Operations",
               items: [
                 { slug: "operators/operations" },
+                { slug: "operators/alerting" },
                 { slug: "operators/media-storage" },
                 { slug: "operators/dvr" },
                 { slug: "operators/external-services" },

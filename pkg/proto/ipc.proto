@@ -83,6 +83,7 @@ message ServiceEvent {
     MessageLifecycleData support_event = 27;
     ArtifactEvent artifact_event = 28;
     ArtifactNodeCopyEvent artifact_node_copy_event = 29;
+    IncidentEvent incident_event = 30;
   }
 
   // ===== Envelope v2 =====
@@ -206,6 +207,27 @@ message ArtifactNodeCopyEvent {
   int64 size_bytes = 8;
   int64 timestamp_ms = 9;     // when the transition was observed
   uint64 version = 10;        // Foghorn-assigned monotonic revision (ordering)
+}
+
+// IncidentEvent is the realtime projection of a Lookout incident change. Lookout
+// sends it twice per change: as service event "incident_updated" to the tenant
+// that can see a tenant-scope incident (the envelope tenant), and as the
+// tenantless "platform_incident_updated" for the platform operator audience,
+// including platform-scope incidents.
+message IncidentEvent {
+  string incident_id = 1;
+  // The receiving tenant on "incident_updated"; the incident's owning tenant,
+  // empty for a platform-scope incident, on "platform_incident_updated".
+  string tenant_id = 2;
+  string cluster_id = 3;
+  string status = 4;    // firing | acknowledged | resolved
+  string severity = 5;
+  string title = 6;
+  // Timeline kind that produced this update: opened, alert_firing,
+  // alert_resolved, acknowledged, assigned, note, resolved,
+  // investigation_attached.
+  string change = 7;
+  int64 updated_at_ms = 8;
 }
 
 message ControlMessage {

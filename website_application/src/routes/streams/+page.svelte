@@ -18,6 +18,11 @@
   import type { StreamEvents$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import CreateStreamModal from "$lib/components/stream-details/CreateStreamModal.svelte";
+  import {
+    anySourceLocation,
+    sourceLocationInput,
+    type SourceLocationDraft,
+  } from "$lib/source-location";
   import DeleteStreamModal from "$lib/components/stream-details/DeleteStreamModal.svelte";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
@@ -94,6 +99,8 @@
     ($clustersAccessStore.data?.clustersAccess ?? []).map((cluster) => ({
       clusterId: cluster.clusterId,
       clusterName: cluster.clusterName,
+      accessLevel: cluster.accessLevel,
+      allowPrivatePullSources: cluster.allowPrivatePullSources,
     }))
   );
   // Unmask pageInfo to access hasNextPage
@@ -119,7 +126,7 @@
   let newStreamIngestMode = $state<"PUSH" | "PULL">("PUSH");
   let newStreamPullSourceUri = $state("");
   let newStreamPullSourceEnabled = $state(true);
-  let newStreamPullSourceAllowedClusterIds = $state("");
+  let newStreamSourceLocation = $state<SourceLocationDraft>(anySourceLocation());
 
   // Stream deletion
   let deletingStreamId = $state("");
@@ -294,10 +301,6 @@
 
     try {
       creatingStream = true;
-      const clusterIds = newStreamPullSourceAllowedClusterIds
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
       const input = {
         name: newStreamTitle.trim(),
         description: newStreamDescription.trim() || undefined,
@@ -308,11 +311,10 @@
             ? {
                 sourceUri: newStreamPullSourceUri.trim(),
                 enabled: newStreamPullSourceEnabled,
-                // Always send the wrapper on create — server interprets
-                // unset wrapper as "no pin" (rejected for private sources).
-                allowedClusters: { clusterIds },
               }
             : undefined,
+        sourceLocation:
+          newStreamIngestMode === "PULL" ? sourceLocationInput(newStreamSourceLocation) : undefined,
       };
       const result = await createStreamMutation.mutate({
         input,
@@ -335,7 +337,7 @@
         newStreamIngestMode = "PUSH";
         newStreamPullSourceUri = "";
         newStreamPullSourceEnabled = true;
-        newStreamPullSourceAllowedClusterIds = "";
+        newStreamSourceLocation = anySourceLocation();
 
         toast.success("Stream created successfully!");
 
@@ -900,7 +902,7 @@
   bind:ingestMode={newStreamIngestMode}
   bind:pullSourceUri={newStreamPullSourceUri}
   bind:pullSourceEnabled={newStreamPullSourceEnabled}
-  bind:pullSourceAllowedClusterIds={newStreamPullSourceAllowedClusterIds}
+  bind:sourceLocation={newStreamSourceLocation}
   {clusterOptions}
   creating={creatingStream}
   onSubmit={createStream}
@@ -912,7 +914,7 @@
     newStreamIngestMode = "PUSH";
     newStreamPullSourceUri = "";
     newStreamPullSourceEnabled = true;
-    newStreamPullSourceAllowedClusterIds = "";
+    newStreamSourceLocation = anySourceLocation();
   }}
 />
 

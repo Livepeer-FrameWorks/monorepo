@@ -1,10 +1,29 @@
 <script lang="ts">
   import MediaCapacityConsentEditor from "$lib/components/placement/MediaCapacityConsentEditor.svelte";
   import MediaPlacementEditor from "$lib/components/placement/MediaPlacementEditor.svelte";
-  import PullSourceClusterPicker from "$lib/components/stream-details/PullSourceClusterPicker.svelte";
+  import SourceLocationControl from "$lib/components/stream-details/SourceLocationControl.svelte";
   import StreamSetupPanel from "$lib/components/stream-details/StreamSetupPanel.svelte";
+  import type { SourceLocationDraft } from "$lib/source-location";
 
-  let pullClusters = $state("fixture-eu");
+  const clusters = [
+    {
+      clusterId: "fixture-eu",
+      clusterName: "My EU production cluster",
+      accessLevel: "owner",
+      allowPrivatePullSources: true,
+    },
+    {
+      clusterId: "fixture-us",
+      clusterName: "Marketplace US cluster",
+      accessLevel: "subscriber",
+      allowPrivatePullSources: false,
+    },
+  ];
+  let pullLocation = $state<SourceLocationDraft>({
+    mode: "RESTRICTED",
+    clusters: [{ clusterId: "fixture-eu", nodeIds: [] }],
+    avoidNodeIds: [],
+  });
 </script>
 
 <main class="h-screen overflow-hidden">
@@ -27,10 +46,7 @@
         </summary>
         <div class="mt-3 space-y-4">
           <StreamSetupPanel
-            clusterOptions={[
-              { clusterId: "fixture-eu", clusterName: "My EU production cluster" },
-              { clusterId: "fixture-us", clusterName: "My US contribution cluster" },
-            ]}
+            clusterOptions={clusters}
             stream={{
               ingestMode: "PULL",
               pullSource: {
@@ -38,27 +54,30 @@
                 enabled: true,
                 class: "private",
               },
+              sourceLocation: pullLocation,
             }}
           />
           <div class="slab p-4">
-            <PullSourceClusterPicker
-              bind:selectedIds={pullClusters}
-              required
-              options={[
-                { clusterId: "fixture-eu", clusterName: "My EU production cluster" },
-                { clusterId: "fixture-us", clusterName: "My US contribution cluster" },
-              ]}
+            <SourceLocationControl
+              value={pullLocation}
+              {clusters}
+              sourceClass="private"
+              onchange={(next) => (pullLocation = next)}
             />
           </div>
           <StreamSetupPanel
-            clusterOptions={[{ clusterId: "fixture-eu", clusterName: "My EU production cluster" }]}
+            clusterOptions={clusters}
             stream={{
               ingestMode: "MANAGED",
               managedSource: {
                 sourceKind: "playlist",
                 alwaysOn: true,
                 placementCount: 1,
-                allowedClusterIds: ["fixture-eu"],
+              },
+              sourceLocation: {
+                mode: "RESTRICTED",
+                clusters: [{ clusterId: "fixture-eu", nodeIds: [] }],
+                avoidNodeIds: [],
               },
             }}
           />

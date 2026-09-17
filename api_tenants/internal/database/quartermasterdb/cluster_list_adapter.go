@@ -128,6 +128,7 @@ func (q *Queries) ListClustersPage(ctx context.Context, filter ClusterListFilter
 type TenantClusterAccessRow struct {
 	ClusterID, ClusterName, AccessLevel string
 	ResourceLimits                      sql.NullString
+	AllowPrivatePullSources             bool
 	CreatedAt                           time.Time
 	ID                                  string
 }
@@ -156,7 +157,7 @@ func (q *Queries) ListTenantClusterAccessPage(ctx context.Context, filter Simple
 		where += fmt.Sprintf(" AND (a.created_at, a.id) %s ($2, $3)", op)
 		args = append(args, *filter.CursorTime, filter.CursorID)
 	}
-	query := fmt.Sprintf(`SELECT c.cluster_id, c.cluster_name, a.access_level, a.resource_limits, a.created_at, a.id
+	query := fmt.Sprintf(`SELECT c.cluster_id, c.cluster_name, a.access_level, a.resource_limits, c.allow_private_pull_sources, a.created_at, a.id
 		FROM quartermaster.infrastructure_clusters c JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id
 		%s ORDER BY a.created_at %s, a.id %s LIMIT $%d`, where, direction, direction, len(args)+1)
 	args = append(args, filter.Limit)
@@ -168,7 +169,7 @@ func (q *Queries) ListTenantClusterAccessPage(ctx context.Context, filter Simple
 	var result []TenantClusterAccessRow
 	for rows.Next() {
 		var row TenantClusterAccessRow
-		if err := rows.Scan(&row.ClusterID, &row.ClusterName, &row.AccessLevel, &row.ResourceLimits, &row.CreatedAt, &row.ID); err != nil {
+		if err := rows.Scan(&row.ClusterID, &row.ClusterName, &row.AccessLevel, &row.ResourceLimits, &row.AllowPrivatePullSources, &row.CreatedAt, &row.ID); err != nil {
 			return nil, 0, err
 		}
 		result = append(result, row)

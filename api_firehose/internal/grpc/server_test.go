@@ -1112,6 +1112,47 @@ func TestServiceEventPayloadToMapNilEvent(t *testing.T) {
 	}
 }
 
+func TestServiceEventPayloadToMapIncidentEvent(t *testing.T) {
+	event := &ipcpb.ServiceEvent{
+		EventType:    "incident_updated",
+		Source:       "lookout",
+		TenantId:     "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		ResourceType: "incident",
+		ResourceId:   "11111111-2222-3333-4444-555555555555",
+		Payload: &ipcpb.ServiceEvent_IncidentEvent{
+			IncidentEvent: &ipcpb.IncidentEvent{
+				IncidentId:  "11111111-2222-3333-4444-555555555555",
+				TenantId:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+				ClusterId:   "cluster-eu",
+				Status:      "acknowledged",
+				Severity:    "critical",
+				Title:       "EdgeDown",
+				Change:      "acknowledged",
+				UpdatedAtMs: 1757930000123,
+			},
+		},
+	}
+	result, err := serviceEventPayloadToMap(event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]any{
+		"incident_id":   "11111111-2222-3333-4444-555555555555",
+		"tenant_id":     "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"cluster_id":    "cluster-eu",
+		"status":        "acknowledged",
+		"severity":      "critical",
+		"title":         "EdgeDown",
+		"change":        "acknowledged",
+		"updated_at_ms": "1757930000123",
+	}
+	for key, value := range want {
+		if result[key] != value {
+			t.Errorf("payload[%q] = %#v, want %#v (keys %v)", key, result[key], value, mapKeys(result))
+		}
+	}
+}
+
 func TestServiceEventPayloadToMapNoPayload(t *testing.T) {
 	event := &ipcpb.ServiceEvent{
 		EventType: "test",

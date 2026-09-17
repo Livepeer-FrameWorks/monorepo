@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -10,10 +11,24 @@ import (
 // The durable baseline marker's floor literal (written into the baseline schema
 // files) must stay in sync with schemaMigrationBaselineFloor, or a fresh cluster
 // would be marked at the wrong floor and the guard would mis-skip/mis-check.
+// Every PostgreSQL service baseline carries the marker: release bootstrap only
+// treats a database created from a baseline as initialized when it has one.
 func TestBaselineMarkerFloorMatchesConst(t *testing.T) {
-	files := []string{
-		"schema/commodore.sql", "schema/foghorn.sql", "schema/navigator.sql",
-		"schema/purser.sql", "schema/quartermaster.sql", "clickhouse/periscope.sql",
+	files := []string{"clickhouse/periscope.sql"}
+	entries, err := fs.ReadDir(dbsql.Content, "schema")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		source, isSQL := strings.CutSuffix(entry.Name(), ".sql")
+		if entry.IsDir() || !isSQL {
+			continue
+		}
+		if _, serviceBaseline, readErr := embeddedBaselineSQL(source); readErr != nil {
+			t.Fatal(readErr)
+		} else if serviceBaseline {
+			files = append(files, "schema/"+entry.Name())
+		}
 	}
 	for _, f := range files {
 		b, err := dbsql.Content.ReadFile(f)

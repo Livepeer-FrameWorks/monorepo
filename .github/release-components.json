@@ -109,6 +109,14 @@
       "darwin_binary": true
     },
     {
+      "name": "lookout",
+      "context": "api_incidents",
+      "cmd": "./cmd/lookout",
+      "dockerfile": "api_incidents/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
       "name": "deckhand",
       "context": "api_ticketing",
       "cmd": "./cmd/deckhand",

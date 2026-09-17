@@ -9,7 +9,7 @@
   tags: [install, configure, service]
   when: >-
     prometheus_stack_components
-    | intersect(['victoriametrics', 'vmagent', 'vmauth'])
+    | intersect(['victoriametrics', 'vmagent', 'vmauth', 'vmalert', 'alertmanager'])
     | length > 0
 
 - name: Prometheus_stack | victoriametrics
@@ -26,6 +26,16 @@
   ansible.builtin.import_tasks: vmauth.yml
   tags: [install, configure, service]
   when: "'vmauth' in prometheus_stack_components"
+
+- name: Prometheus_stack | alertmanager
+  ansible.builtin.import_tasks: alertmanager.yml
+  tags: [install, configure, service]
+  when: "'alertmanager' in prometheus_stack_components"
+
+- name: Prometheus_stack | vmalert
+  ansible.builtin.import_tasks: vmalert.yml
+  tags: [install, configure, service]
+  when: "'vmalert' in prometheus_stack_components"
 
 - name: Prometheus_stack | flush handlers before validate
   ansible.builtin.meta: flush_handlers

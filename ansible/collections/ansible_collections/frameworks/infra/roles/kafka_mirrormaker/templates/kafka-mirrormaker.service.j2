@@ -8,6 +8,9 @@ User={{ kafka_mm_user }}
 Group={{ kafka_mm_group }}
 Environment="KAFKA_HEAP_OPTS={{ kafka_mm_heap_opts }}"
 Environment="LOG_DIR={{ kafka_mm_log_dir }}"
+{# kafka-run-class.sh passes KAFKA_OPTS to the JVM. The exporter listens on
+   loopback because only the vmagent on this host scrapes it. #}
+Environment="KAFKA_OPTS=-javaagent:{{ kafka_mm_jmx_exporter_jar }}=127.0.0.1:{{ kafka_mm_jmx_port }}:{{ kafka_mm_jmx_exporter_config_path }}"
 {% if kafka_mm_local_cluster_alias | length > 0 %}
 ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }} --clusters {{ kafka_mm_local_cluster_alias }}
 {% else %}

@@ -64,41 +64,46 @@ func ConfiguredIngestMode(mode string) bool {
 // describe re-reads the signed pair behind an already compiled authority and opens
 // the sealed input. The re-read is fenced on both authority versions so a refresh
 // between policy compilation and source observation cannot substitute a different
-// configuration under the same generation.
-func (reader *ConfiguredSourcePlacementPaths) describe(ctx context.Context, authority balancer.PlacementAuthority) (control.MediaSourceDescriptor, error) {
+// configuration under the same generation. It also returns the ingest policy a
+// node must satisfy to dial that input; nil means no node may dial it.
+func (reader *ConfiguredSourcePlacementPaths) describe(ctx context.Context, authority balancer.PlacementAuthority) (control.MediaSourceDescriptor, *balancer.PlacementAuthority, error) {
 	if reader == nil || reader.CellID == "" || reader.Authority == nil || reader.Secrets == nil || reader.Snapshot == nil {
-		return control.MediaSourceDescriptor{}, errors.New("configured source reader is unavailable")
+		return control.MediaSourceDescriptor{}, nil, errors.New("configured source reader is unavailable")
 	}
 	if authority.ObjectKind != mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM || !ConfiguredIngestMode(authority.IngestMode) ||
 		authority.TenantAuthorityVersion <= 0 || authority.ObjectAuthorityVersion <= 0 {
-		return control.MediaSourceDescriptor{}, errors.New("configured source authority is not a managed live input")
+		return control.MediaSourceDescriptor{}, nil, errors.New("configured source authority is not a managed live input")
 	}
 	readCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	pair, err := reader.Authority.Placement(readCtx, authority.TenantID, authority.ObjectID, authority.InternalName)
 	if err != nil {
-		return control.MediaSourceDescriptor{}, err
+		return control.MediaSourceDescriptor{}, nil, err
 	}
 	if err = readCtx.Err(); err != nil {
-		return control.MediaSourceDescriptor{}, err
+		return control.MediaSourceDescriptor{}, nil, err
 	}
 	if pair.Tenant.Version != authority.TenantAuthorityVersion || pair.Object.Version != authority.ObjectAuthorityVersion {
-		return control.MediaSourceDescriptor{}, errors.New("configured source authority changed during observation")
+		return control.MediaSourceDescriptor{}, nil, errors.New("configured source authority changed during observation")
 	}
 	descriptor, err := control.DescribeMediaSource(pair, reader.Secrets)
 	if err != nil {
-		return control.MediaSourceDescriptor{}, err
+		return control.MediaSourceDescriptor{}, nil, err
 	}
 	if descriptor.TenantID != authority.TenantID || descriptor.ObjectID != authority.ObjectID || descriptor.InternalName != authority.InternalName ||
 		descriptor.Kind != authority.IngestMode || descriptor.Generation == "" || descriptor.RuntimeName == "" {
-		return control.MediaSourceDescriptor{}, errors.New("configured source identity differs from authority")
+		return control.MediaSourceDescriptor{}, nil, errors.New("configured source identity differs from authority")
 	}
 	// A Mist-native input is elected to exactly one cluster, so an empty list
 	// there is a broken election rather than an unpinned source.
 	if authority.IngestMode == "mist_native" && len(descriptor.AllowedClusters) != 1 {
-		return control.MediaSourceDescriptor{}, errors.New("native source election is invalid")
+		return control.MediaSourceDescriptor{}, nil, errors.New("native source election is invalid")
 	}
-	return descriptor, nil
+	var dial *balancer.PlacementAuthority
+	if compiled, dialErr := balancer.CompileSourceDialAuthority(pair, reader.now()); dialErr == nil {
+		dial = &compiled
+	}
+	return descriptor, dial, nil
 }
 
 // ResolveSourceGeneration returns the configuration generation. A configured input
@@ -112,7 +117,7 @@ func (reader *ConfiguredSourcePlacementPaths) ResolveSourceGeneration(ctx contex
 	if now.IsZero() || !now.Before(authority.ExpiresAt) {
 		return "", time.Time{}, errors.New("configured source authority is expired")
 	}
-	descriptor, err := reader.describe(ctx, authority)
+	descriptor, _, err := reader.describe(ctx, authority)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -131,7 +136,7 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 	if authority.Verb == placement.Ingest {
 		return PlacementPathObservation{}, errors.New("configured sources have no publisher admission")
 	}
-	descriptor, err := reader.describe(ctx, authority)
+	descriptor, dial, err := reader.describe(ctx, authority)
 	if err != nil {
 		return PlacementPathObservation{}, err
 	}
@@ -161,7 +166,7 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 	if req.GetSourceGeneration() != descriptor.Generation {
 		return result, nil
 	}
-	source, err := reader.liveSource(ctx, descriptor, authority)
+	source, err := reader.liveSource(ctx, descriptor, authority, dial)
 	if err != nil {
 		return PlacementPathObservation{}, err
 	}
@@ -169,7 +174,7 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 		result.ExpiresAt = minPlacementExpiry(result.ExpiresAt, source.expiresAt)
 	}
 	for _, node := range destinations.Nodes {
-		result.Paths[node.NodeID] = reader.nodePath(descriptor, authority, node, source, now)
+		result.Paths[node.NodeID] = reader.nodePath(descriptor, authority, dial, node, source, now)
 	}
 	return result, nil
 }
@@ -177,13 +182,13 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 // nodePath decides one destination's evidence. Presence is this node's own live
 // copy; feasibility is either signed consent to dial the configured input or an
 // existing copy the destination may relay under its external-source consent.
-func (reader *ConfiguredSourcePlacementPaths) nodePath(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, node state.EnhancedBalancerNodeSnapshot, source *configuredSource, now time.Time) balancer.PlacementNodePath {
+func (reader *ConfiguredSourcePlacementPaths) nodePath(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority, node state.EnhancedBalancerNodeSnapshot, source *configuredSource, now time.Time) balancer.PlacementNodePath {
 	path := balancer.PlacementNodePath{Presence: placement.Absent}
 	if reader.livesOn(node, descriptor, authority, now) {
 		path.Presence = placement.Present
 		return path
 	}
-	if reader.mayOriginate(descriptor, authority, node.ClusterID) {
+	if reader.mayOriginate(descriptor, authority, dial, node.ClusterID, node.NodeID, now) {
 		path.SourceFeasible = true
 		return path
 	}
@@ -196,13 +201,14 @@ func (reader *ConfiguredSourcePlacementPaths) nodePath(descriptor control.MediaS
 	return path
 }
 
-// mayOriginate reports signed consent for a cluster to dial the configured input
-// itself: the input's own cluster pin, the cluster's ingest consent and, for a
-// private upstream, that cluster's private-source consent. An empty pin is an
+// mayOriginate reports signed consent for a node to dial the configured input
+// itself: the input's own cluster pin, the cluster's ingest consent, for a
+// private upstream that cluster's private-source consent, and the stream's
+// ingest placement policy evaluated for this exact node. An empty pin is an
 // unpinned public source, which any entitled cluster may dial; the control plane
 // refuses to create a private or multicast source without a pin, and the private
 // consent check below still applies if one ever arrives unpinned.
-func (reader *ConfiguredSourcePlacementPaths) mayOriginate(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, clusterID string) bool {
+func (reader *ConfiguredSourcePlacementPaths) mayOriginate(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority, clusterID, nodeID string, now time.Time) bool {
 	if clusterID == "" || (len(descriptor.AllowedClusters) > 0 && !slices.Contains(descriptor.AllowedClusters, clusterID)) {
 		return false
 	}
@@ -210,7 +216,20 @@ func (reader *ConfiguredSourcePlacementPaths) mayOriginate(descriptor control.Me
 	if !found || grant.CellID != reader.CellID || !grant.AllowIngest {
 		return false
 	}
-	return !descriptor.PrivateSource || grant.AllowPrivatePullSources
+	if descriptor.PrivateSource && !grant.AllowPrivatePullSources {
+		return false
+	}
+	return nodeMayDial(dial, clusterID, nodeID, now)
+}
+
+// nodeMayDial is the signed ingest-policy check for one dialing node. Anything
+// but an explicit Eligible, including missing policy facts, refuses the node.
+func nodeMayDial(dial *balancer.PlacementAuthority, clusterID, nodeID string, now time.Time) bool {
+	if dial == nil {
+		return false
+	}
+	reason, err := dial.IngestNodeReason(clusterID, nodeID, now)
+	return err == nil && reason == placement.Eligible
 }
 
 // livesOn reports this node's own ready copy of the configured input. A relayed
@@ -231,7 +250,7 @@ func (reader *ConfiguredSourcePlacementPaths) livesOn(node state.EnhancedBalance
 // caller's: a node that goes live during that fetch is stamped later than any
 // earlier reading, and freshPlacementEvidence refuses evidence stamped after its
 // reference instant, so an earlier reading would hide a usable relay source.
-func (reader *ConfiguredSourcePlacementPaths) liveSource(ctx context.Context, descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority) (*configuredSource, error) {
+func (reader *ConfiguredSourcePlacementPaths) liveSource(ctx context.Context, descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority) (*configuredSource, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -244,7 +263,7 @@ func (reader *ConfiguredSourcePlacementPaths) liveSource(ctx context.Context, de
 	for _, node := range snapshot.Nodes {
 		stream, running := node.Streams[descriptor.InternalName]
 		if !running || stream.Replicated || !reader.livesOn(node, descriptor, authority, now) ||
-			!reader.mayOriginate(descriptor, authority, node.ClusterID) || !freshPlacementEvidence(node.OutputsObservedAt, now) {
+			!reader.mayOriginate(descriptor, authority, dial, node.ClusterID, node.NodeID, now) || !freshPlacementEvidence(node.OutputsObservedAt, now) {
 			continue
 		}
 		candidate := &configuredSource{cellID: reader.CellID, clusterID: node.ClusterID, nodeID: node.NodeID,
@@ -261,13 +280,13 @@ func (reader *ConfiguredSourcePlacementPaths) liveSource(ctx context.Context, de
 	if best != nil {
 		return best, nil
 	}
-	return reader.federatedSource(ctx, descriptor, authority)
+	return reader.federatedSource(ctx, descriptor, authority, dial)
 }
 
 // federatedSource reads its own clock after the registry read for the same
 // reason liveSource does: an advertisement that lands during the read carries a
 // timestamp later than any reading taken before it.
-func (reader *ConfiguredSourcePlacementPaths) federatedSource(ctx context.Context, descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority) (*configuredSource, error) {
+func (reader *ConfiguredSourcePlacementPaths) federatedSource(ctx context.Context, descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority) (*configuredSource, error) {
 	if reader.Registry == nil {
 		return nil, nil
 	}
@@ -302,6 +321,7 @@ func (reader *ConfiguredSourcePlacementPaths) federatedSource(ctx context.Contex
 		for _, edge := range location.EdgeCandidates {
 			grant, granted := authority.SourceGrants[edge.ClusterID]
 			if !granted || grant.CellID != cellID || !grant.AllowIngest || !edge.IsOrigin || edge.NodeID == "" || !edge.Playable ||
+				!nodeMayDial(dial, edge.ClusterID, edge.NodeID, now) ||
 				!freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) || !validPlacementDTSC(edge.DTSCURL, descriptor.RuntimeName) {
 				continue
 			}

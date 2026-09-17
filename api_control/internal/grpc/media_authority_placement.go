@@ -6,6 +6,7 @@ import (
 
 	"frameworks/api_control/internal/placementpolicy"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/protobuf/proto"
@@ -13,16 +14,18 @@ import (
 
 // An object follows the tenant's activated wire schema. Its requested policy is
 // read with its parent in one snapshot; a different signed parent must be refreshed
-// before this object can be issued, never flattened into legacy defaults.
+// before this object can be issued, never flattened into legacy defaults. Stream
+// rules that name nodes wait for a schema-3 tenant authority rather than being
+// issued without them.
 func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *mediapb.TenantAuthority, object *mediapb.MediaObjectAuthority) error {
 	if tenant.GetSchemaVersion() == sharedauthority.SchemaVersion {
 		return nil
 	}
-	if tenant.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion || tenant.GetMediaPlacement() == nil || tenant.GetTenantId() != object.GetTenantId() {
+	if !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetMediaPlacement() == nil || tenant.GetTenantId() != object.GetTenantId() {
 		return errors.New("unsupported object placement parent")
 	}
 	if object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
-		object.SchemaVersion = sharedauthority.PlacementSchemaVersion
+		object.SchemaVersion = tenant.GetSchemaVersion()
 		object.PlacementTenantRevision = tenant.GetMediaPlacement().GetRevision()
 		object.MediaPlacement = &pb.PolicySet{}
 		return nil
@@ -57,11 +60,15 @@ func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *me
 	if !proto.Equal(parent, tenant.GetMediaPlacement()) {
 		return errors.New("object placement parent differs from current signed tenant policy")
 	}
-	object.SchemaVersion = sharedauthority.PlacementSchemaVersion
-	object.PlacementTenantRevision = tenant.GetMediaPlacement().GetRevision()
-	object.MediaPlacement = &pb.PolicySet{}
+	own := &pb.PolicySet{}
 	if scope.Kind == "stream" {
-		object.MediaPlacement = proto.CloneOf(snapshot.Own)
+		own = proto.CloneOf(snapshot.Own)
 	}
+	if tenant.GetSchemaVersion() != sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(own) {
+		return errors.New("stream placement names nodes but the tenant authority has not reached node placement schema")
+	}
+	object.SchemaVersion = tenant.GetSchemaVersion()
+	object.PlacementTenantRevision = tenant.GetMediaPlacement().GetRevision()
+	object.MediaPlacement = own
 	return nil
 }

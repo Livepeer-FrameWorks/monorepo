@@ -11,7 +11,22 @@ import (
 )
 
 func supportedSchema(version uint32) bool {
-	return version == SchemaVersion || version == PlacementSchemaVersion
+	return version == SchemaVersion || IsPlacementSchema(version)
+}
+
+// IsPlacementSchema reports whether a payload schema carries placement policy.
+// Schema 3 differs from schema 2 only in admitting node selectors.
+func IsPlacementSchema(version uint32) bool {
+	return version == PlacementSchemaVersion || version == NodePlacementSchemaVersion
+}
+
+// validateNodeSelectorSchema keeps node IDs out of schema-2 payloads: a reader
+// that attested only schema 2 rejects the unknown selector field outright.
+func validateNodeSelectorSchema(version uint32, set *placementpb.PolicySet) error {
+	if version != NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(set) {
+		return fmt.Errorf("%w: node placement selectors require schema %d", ErrUnknownSchema, NodePlacementSchemaVersion)
+	}
+	return nil
 }
 
 func validateTenantPlacement(envelope *mediaauthoritypb.AuthorityEnvelope, tenant *mediaauthoritypb.TenantAuthority) error {
@@ -31,6 +46,9 @@ func validateTenantPlacement(envelope *mediaauthoritypb.AuthorityEnvelope, tenan
 	}
 	if err := placement.ValidatePolicySet(tenant.GetMediaPlacement()); err != nil {
 		return fmt.Errorf("%w: tenant placement: %w", ErrMalformed, err)
+	}
+	if err := validateNodeSelectorSchema(tenant.GetSchemaVersion(), tenant.GetMediaPlacement()); err != nil {
+		return err
 	}
 	for _, grant := range tenant.GetEffectiveClusterGrants() {
 		if grant.GetMediaConsent() == nil || grant.GetMediaConsent().GetRevision() > math.MaxInt64 {
@@ -73,6 +91,9 @@ func validateObjectPlacement(envelope *mediaauthoritypb.AuthorityEnvelope, objec
 	if err := placement.ValidatePolicySet(object.GetMediaPlacement()); err != nil {
 		return fmt.Errorf("%w: object placement: %w", ErrMalformed, err)
 	}
+	if err := validateNodeSelectorSchema(object.GetSchemaVersion(), object.GetMediaPlacement()); err != nil {
+		return err
+	}
 	return validateObjectCommercialQuotes(envelope, object)
 }
 
@@ -85,7 +106,7 @@ func EffectivePlacement(tenant *mediaauthoritypb.TenantAuthority, object *mediaa
 	if tenant.GetSchemaVersion() != object.GetSchemaVersion() || !supportedSchema(tenant.GetSchemaVersion()) {
 		return nil, fmt.Errorf("%w: placement authorities use different schemas", ErrUnknownSchema)
 	}
-	if tenant.GetSchemaVersion() == PlacementSchemaVersion && (tenant.GetMediaPlacement() == nil || object.GetMediaPlacement() == nil ||
+	if IsPlacementSchema(tenant.GetSchemaVersion()) && (tenant.GetMediaPlacement() == nil || object.GetMediaPlacement() == nil ||
 		tenant.GetMediaPlacement().GetRevision() != object.GetPlacementTenantRevision()) {
 		return nil, fmt.Errorf("%w: placement parent revision mismatch", ErrMalformed)
 	}

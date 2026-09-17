@@ -1,0 +1,159 @@
+---
+- name: Validate vmalert configuration
+  ansible.builtin.assert:
+    that:
+      - vmalert_artifact_url | length > 0
+      - vmalert_artifact_checksum | length > 0
+      - vmalert_datasource_url | length > 0
+      - vmalert_notifier_urls | length > 0
+      - vmalert_rule_files | length > 0
+    fail_msg: "vmalert requires artifact URL/checksum, a datasource URL, at least one notifier URL, and at least one rule file"
+
+- name: Set vmalert extract directory
+  ansible.builtin.set_fact:
+    vmalert_extract_dir: "/tmp/frameworks-vmalert-{{ vmalert_artifact_checksum | hash('sha1') }}"
+
+- name: Ensure vmalert extract directory
+  ansible.builtin.file:
+    path: "{{ vmalert_extract_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Stat vmalert binary
+  ansible.builtin.stat:
+    path: "{{ vmalert_bin }}"
+  register: vmalert_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat vmalert install sentinel
+  ansible.builtin.stat:
+    path: "{{ vmalert_install_sentinel }}"
+  register: vmalert_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether vmalert reinstall is required
+  ansible.builtin.set_fact:
+    vmalert_reinstall_required: >-
+      {{
+        not (vmalert_bin_stat.stat.exists | default(false)) or
+        not (vmalert_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending vmalert reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      vmalert would reinstall:
+      binary_exists={{ vmalert_bin_stat.stat.exists | default(false) }},
+      sentinel={{ vmalert_install_sentinel }}
+  changed_when: vmalert_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Download vmalert binary
+  ansible.builtin.get_url:
+    url: "{{ vmalert_artifact_url }}"
+    dest: /tmp/vmalert.tar.gz
+    checksum: "{{ vmalert_artifact_checksum }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - vmalert_reinstall_required | default(true)
+
+- name: Extract vmalert
+  ansible.builtin.unarchive:
+    src: /tmp/vmalert.tar.gz
+    dest: "{{ vmalert_extract_dir }}"
+    remote_src: true
+    mode: "0755"
+    creates: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
+  when:
+    - not ansible_check_mode
+    - vmalert_reinstall_required | default(true)
+
+- name: Install vmalert binary
+  ansible.builtin.copy:
+    src: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
+    dest: "{{ vmalert_bin }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: vmalert restart
+  when:
+    - not ansible_check_mode
+    - vmalert_reinstall_required | default(true)
+
+- name: Record vmalert install sentinel
+  ansible.builtin.file:
+    path: "{{ vmalert_install_sentinel }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - vmalert_reinstall_required | default(true)
+
+- name: Ensure vmalert rules directory
+  ansible.builtin.file:
+    path: "{{ vmalert_rules_dir }}"
+    state: directory
+    owner: root
+    group: "{{ prometheus_stack_group }}"
+    mode: "0755"
+
+# vmalert -dryRun parses every rule and its MetricsQL expression, so an invalid
+# rule file is rejected before it replaces the running set.
+- name: Render vmalert rule files
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ vmalert_rules_dir }}/{{ item.name }}"
+    owner: root
+    group: "{{ prometheus_stack_group }}"
+    mode: "0644"
+    validate: "{{ vmalert_bin }} -dryRun -rule=%s"
+  loop: "{{ vmalert_rule_files }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify: vmalert restart
+
+- name: Find rendered vmalert rule files
+  ansible.builtin.find:
+    paths: "{{ vmalert_rules_dir }}"
+    patterns: "*.yml"
+  register: vmalert_present_rule_files
+  check_mode: false
+
+- name: Remove vmalert rule files that are no longer shipped
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{
+      vmalert_present_rule_files.files
+      | map(attribute='path')
+      | difference(vmalert_rule_files | map(attribute='name') | map('regex_replace', '^', vmalert_rules_dir ~ '/') | list)
+    }}
+  notify: vmalert restart
+
+- name: Render vmalert systemd unit
+  ansible.builtin.template:
+    src: vmalert.service.j2
+    dest: /etc/systemd/system/vmalert.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: vmalert restart
+
+- name: Ensure vmalert service
+  ansible.builtin.systemd:
+    name: vmalert
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

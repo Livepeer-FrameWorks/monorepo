@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/bootstrap"
+	commodoregrpc "frameworks/api_control/internal/grpc"
+	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
@@ -99,6 +103,14 @@ func runBootstrapCommand(args []string) int {
 			fmt.Fprintf(os.Stderr, "commodore bootstrap --check: %v\n", checkErr)
 			return 1
 		}
+		requirements, reqErr := bootstrap.NodeSourceLocationRequirements(desired.Commodore)
+		if reqErr != nil {
+			fmt.Fprintf(os.Stderr, "commodore bootstrap --check: %v\n", reqErr)
+			return 1
+		}
+		for _, requirement := range requirements {
+			fmt.Fprintf(os.Stdout, "commodore bootstrap --check: requires node placement: %s\n", requirement)
+		}
 		fmt.Fprintf(os.Stdout, "commodore bootstrap --check: %s OK (parse + intra-file references)\n", *file)
 		return 0
 	}
@@ -119,6 +131,10 @@ func runBootstrapCommand(args []string) int {
 	defer resolver.Close()
 
 	ctx := context.Background()
+	if nodeErr := requireSourceLocationNodePlacement(ctx, desired.Commodore, db, resolver, logger); nodeErr != nil {
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", nodeErr)
+		return 1
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "commodore bootstrap: begin tx: %v\n", err)
@@ -138,17 +154,17 @@ func runBootstrapCommand(args []string) int {
 		len(res.Created), len(res.Updated), len(res.Noop))
 
 	if streams := desired.Commodore.PullStreams; len(streams) > 0 {
-		encrypter, err := newSourceURIEncrypter()
-		if err != nil {
+		encrypter, encrypterErr := newSourceURIEncrypter()
+		if encrypterErr != nil {
 			_ = tx.Rollback() //nolint:errcheck // already in error path
-			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", err)
+			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
 			return 1
 		}
 		clusterResolver := &grpcClusterResolver{client: resolver.client}
-		psRes, err := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
-		if err != nil {
+		psRes, reconcileErr := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
+		if reconcileErr != nil {
 			_ = tx.Rollback() //nolint:errcheck // already in error path
-			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
+			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", reconcileErr)
 			return 1
 		}
 		fmt.Fprintf(os.Stdout, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
@@ -180,6 +196,17 @@ func runBootstrapCommand(args []string) int {
 	fmt.Fprintf(os.Stdout, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
 		len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
 
+	// Source locations become the declared streams' own ingest placement rules
+	// once every declared stream row exists in this transaction.
+	locationRes, err := bootstrap.ReconcileStreamSourceLocations(ctx, tx, desired.Commodore, resolver)
+	if err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already in error path
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "commodore bootstrap stream source_locations: updated=%d noop=%d\n",
+		len(locationRes.Updated), len(locationRes.Noop))
+
 	if *dryRun {
 		if err := tx.Rollback(); err != nil {
 			fmt.Fprintf(os.Stderr, "commodore bootstrap [dry-run] rollback: %v\n", err)
@@ -193,6 +220,52 @@ func runBootstrapCommand(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// requireSourceLocationNodePlacement runs Commodore's node selector gate for
+// declared source locations that name nodes. It runs before the bootstrap
+// transaction opens, so a refusal writes nothing in apply or --dry-run, and the
+// capability refresh it may trigger never waits on bootstrap's row locks.
+func requireSourceLocationNodePlacement(ctx context.Context, section bootstrap.CommodoreSection, db *sql.DB, resolver *grpcTenantResolver, logger logging.Logger) error {
+	requirements, err := bootstrap.NodeSourceLocationRequirements(section)
+	if err != nil || len(requirements) == 0 {
+		return err
+	}
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:           config.GetEnv("PURSER_GRPC_ADDR", "purser:19003"),
+		Timeout:            10 * time.Second,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+	})
+	if err != nil {
+		return fmt.Errorf("node placement readiness: dial purser: %w", err)
+	}
+	defer func() { _ = purserClient.Close() }()
+	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
+		ServiceToken:  serviceToken,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		MaxIdleTime:   time.Minute,
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+	})
+	defer func() { _ = foghornPool.Close() }()
+	checker := commodoregrpc.NewPlacementNodeChecker(commodoregrpc.PlacementNodeCheckerConfig{
+		DB:                  db,
+		Logger:              logger,
+		QuartermasterClient: resolver.client,
+		PurserClient:        purserClient,
+		FoghornPool:         foghornPool,
+	})
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return bootstrap.RequireSourceLocationNodePlacement(checkCtx, section, resolver, checker)
 }
 
 // grpcTenantResolver dials Quartermaster's TenantService and resolves

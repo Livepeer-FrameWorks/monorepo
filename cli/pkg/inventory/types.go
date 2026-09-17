@@ -338,38 +338,44 @@ type KafkaConfig struct {
 
 	// Regional declares additional Kafka clusters in other regions, keyed
 	// by region_id. Each entry is an independent KRaft deployment. Role
-	// marks which cluster aggregates mirrored topics; empty on a regional
-	// entry means "regional". MirrorMaker2 mirrors topics between regional
-	// and aggregator clusters.
+	// marks which cluster aggregates the durable analytics and billing
+	// topics; empty on a regional entry means "regional".
 	Regional []RegionalKafkaCluster `yaml:"regional,omitempty"`
 
-	// MirrorMaker declares the dedicated MM2 workers that mirror
-	// RegionalKafkaCluster entries (Role="regional") into the aggregator
-	// cluster. When absent or disabled, no mirroring is provisioned regardless
-	// of Regional declarations.
+	// MirrorMaker declares the MirrorMaker2 links between Kafka regions. When
+	// absent or disabled, no mirroring is provisioned regardless of Regional
+	// declarations.
 	MirrorMaker *KafkaMirrorMakerConfig `yaml:"mirrormaker,omitempty"`
 }
 
-// KafkaMirrorMakerConfig declares the hosts running the dedicated MM2 workers.
-// Source clusters are derived from KafkaConfig.Regional with Role!="aggregator"
-// (or empty Role). The aggregator target is the first Role="aggregator" entry,
-// or the primary KafkaConfig when none is marked.
+// KafkaMirrorMakerConfig declares MirrorMaker2 replication links. When enabled,
+// every ordered pair of Kafka regions needs a link: links into the aggregator
+// carry the durable analytics and billing topics, and all other links carry the
+// realtime topics each regional Signalman consumes.
 type KafkaMirrorMakerConfig struct {
-	Enabled   bool     `yaml:"enabled"`
-	Mode      string   `yaml:"mode,omitempty"`      // native (default; same Kafka tarball)
-	Host      string   `yaml:"host,omitempty"`      // Optional single worker host; prefer Hosts.
-	Hosts     []string `yaml:"hosts,omitempty"`     // Hosts running the dedicated MM2 worker cluster.
-	HeapOpts  string   `yaml:"heap_opts,omitempty"` // JVM heap (default -Xmx1G -Xms1G)
-	Replicas  int      `yaml:"replicas,omitempty"`  // Source-cluster replication factor for mirrored topics; default 1
-	TaskCount int      `yaml:"task_count,omitempty"`
+	Enabled   bool              `yaml:"enabled"`
+	Mode      string            `yaml:"mode,omitempty"`       // native (default; same Kafka tarball)
+	HeapOpts  string            `yaml:"heap_opts,omitempty"`  // JVM heap (default -Xmx1G -Xms1G)
+	Replicas  int               `yaml:"replicas,omitempty"`   // Target-cluster replication factor for mirrored topics; default is the target broker count
+	TaskCount int               `yaml:"task_count,omitempty"` // Default tasks.max for links that do not set one
+	Links     []KafkaMirrorLink `yaml:"links,omitempty"`
+}
+
+// KafkaMirrorLink is one MirrorMaker2 flow from a source Kafka region into a
+// target Kafka region. Its workers run in the target region so replicated
+// writes stay local to the cluster they land in.
+type KafkaMirrorLink struct {
+	Source    string   `yaml:"source"`               // Source Kafka region_id
+	Target    string   `yaml:"target"`               // Target Kafka region_id
+	Hosts     []string `yaml:"hosts"`                // Worker hosts; every host must be in the target region
+	Topics    []string `yaml:"topics,omitempty"`     // Empty = the canonical topic set for the link direction
+	TaskCount int      `yaml:"task_count,omitempty"` // tasks.max for this link; 0 = KafkaMirrorMakerConfig.TaskCount
 }
 
 // RegionalKafkaCluster is an additional Kafka cluster pinned to a region.
-// Each cluster carries its own KRaft ID, controller/broker hosts, and
-// topic list. When Role="regional", topics in MirrorTopics are mirrored
-// to the cluster whose Role="aggregator" (or the primary KafkaConfig if
-// no aggregator is declared); aggregator-side topic names are prefixed
-// with "{region_id}." per MM2 default.
+// Each cluster carries its own KRaft ID, controller/broker hosts, and topic
+// list. MirrorMaker2 links name clusters by region_id; mirrored topic names
+// are prefixed with the source "{region_id}." per MM2 default.
 type RegionalKafkaCluster struct {
 	RegionID                             string            `yaml:"region_id"`      // e.g. "us-east"
 	Role                                 string            `yaml:"role,omitempty"` // "regional" (default) | "aggregator"
@@ -383,11 +389,6 @@ type RegionalKafkaCluster struct {
 	OffsetsTopicReplicationFactor        int               `yaml:"offsets_topic_replication_factor,omitempty"`
 	TransactionStateLogReplicationFactor int               `yaml:"transaction_state_log_replication_factor,omitempty"`
 	TransactionStateLogMinISR            int               `yaml:"transaction_state_log_min_isr,omitempty"`
-	// MirrorTopics names the topics MirrorMaker2 mirrors from this
-	// regional cluster into the aggregator. Empty = mirror the canonical
-	// set: analytics_events, service_events, billing.usage_reports,
-	// decklog_events_dlq. Other topics stay regional-only.
-	MirrorTopics []string `yaml:"mirror_topics,omitempty"`
 }
 
 // KafkaController represents a dedicated KRaft controller node.

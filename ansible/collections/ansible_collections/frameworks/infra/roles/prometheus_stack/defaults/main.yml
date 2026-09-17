@@ -32,6 +32,9 @@ vmagent_env_path: /etc/vmagent/vmagent.env
 vmagent_tmp_data_path: /var/lib/vmagent/remotewrite-data
 vmagent_scrape_interval: "30s"
 vmagent_scrape_targets: []
+# Labels added to every scraped series, including up; the CLI sets region and
+# cluster from the host's manifest placement.
+vmagent_external_labels: {}
 vmagent_remote_write_url: ""
 vmagent_remote_write_basic_auth_username: ""
 vmagent_remote_write_basic_auth_password: ""
@@ -46,6 +49,33 @@ vmauth_username: ""
 vmauth_password: ""
 vmauth_upstream_url: ""
 vmauth_edge_jwt_public_key_pem_b64: ""
+
+# vmalert evaluates the CLI-embedded rule files against VictoriaMetrics and
+# writes alert state back to it, so firing alerts survive restarts.
+vmalert_artifact_url: ""
+vmalert_artifact_checksum: ""
+vmalert_artifact_binary: vmalert-prod
+vmalert_version: ""
+vmalert_port: 8880
+vmalert_rules_dir: /etc/vmalert/rules
+vmalert_rule_files: []
+vmalert_datasource_url: ""
+vmalert_notifier_urls: []
+
+alertmanager_artifact_url: ""
+alertmanager_artifact_checksum: ""
+alertmanager_version: ""
+alertmanager_port: 9093
+alertmanager_config_path: /etc/alertmanager/alertmanager.yml
+alertmanager_storage_path: /var/lib/alertmanager
+alertmanager_lookout_url: ""
+alertmanager_lookout_token: ""
+alertmanager_heartbeat_url: ""
+alertmanager_email_to: ""
+alertmanager_smtp_smarthost: ""
+alertmanager_smtp_from: ""
+alertmanager_smtp_auth_username: ""
+alertmanager_smtp_auth_password: ""
 
 # Select which components to install on this host. Override from manifest.
 prometheus_stack_components: [prometheus, node_exporter]

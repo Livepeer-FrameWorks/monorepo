@@ -7,6 +7,10 @@ import (
 	"fmt"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
+	"frameworks/api_tenants/internal/serviceeventoutbox"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // ReconcileClusters reconciles every Cluster row into
@@ -31,9 +35,11 @@ func ReconcileClusters(ctx context.Context, exec DBTX, clusters []Cluster, alias
 
 	res := Result{}
 	defaultsRequested := 0
+	defaultClusterID := ""
 	for _, c := range clusters {
 		if c.IsDefault {
 			defaultsRequested++
+			defaultClusterID = c.ID
 		}
 	}
 	if defaultsRequested > 1 {
@@ -43,7 +49,7 @@ func ReconcileClusters(ctx context.Context, exec DBTX, clusters []Cluster, alias
 	if defaultsRequested == 1 {
 		// Clear any other row's default flag inside the same tx so the post-commit
 		// state has exactly one default. The matching SET happens in upsertCluster.
-		if err := quartermasterdb.New(exec).ClearBootstrapDefaultCluster(ctx); err != nil {
+		if err := quartermasterdb.New(exec).ClearBootstrapDefaultCluster(ctx, defaultClusterID); err != nil {
 			return Result{}, fmt.Errorf("clear default cluster: %w", err)
 		}
 	}
@@ -68,9 +74,39 @@ func ReconcileClusters(ctx context.Context, exec DBTX, clusters []Cluster, alias
 		case "noop":
 			res.Noop = append(res.Noop, c.ID)
 		}
+		if action == "created" || action == "updated" {
+			if err := enqueueBootstrapClusterEvent(ctx, exec, action, c.ID, ownerID); err != nil {
+				return Result{}, fmt.Errorf("cluster %q: %w", c.ID, err)
+			}
+		}
 	}
 
 	return res, nil
+}
+
+// enqueueBootstrapClusterEvent records cluster_created / cluster_updated in the
+// service-event outbox inside the bootstrap transaction, as the gRPC handlers
+// do. Consumers such as Lookout re-read the cluster on cluster_updated, so a
+// bootstrap change to is_platform_official or cluster class reaches them. A
+// dry run rolls the event back with the rest of the transaction.
+func enqueueBootstrapClusterEvent(ctx context.Context, exec DBTX, action, clusterID, ownerID string) error {
+	eventType := "cluster_updated"
+	if action == "created" {
+		eventType = "cluster_created"
+	}
+	event := &ipcpb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "quartermaster",
+		TenantId:     ownerID,
+		ResourceType: "cluster",
+		ResourceId:   clusterID,
+		Payload:      &ipcpb.ServiceEvent_ClusterEvent{ClusterEvent: &ipcpb.ClusterEvent{ClusterId: clusterID, TenantId: ownerID}},
+	}
+	if _, err := serviceeventoutbox.Enqueue(ctx, exec, event); err != nil {
+		return fmt.Errorf("enqueue %s: %w", eventType, err)
+	}
+	return nil
 }
 
 func validateCluster(c Cluster) error {

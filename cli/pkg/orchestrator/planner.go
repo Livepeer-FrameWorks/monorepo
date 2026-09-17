@@ -65,33 +65,6 @@ func (p *Planner) kafkaClusters() []kafkaPlannerCluster {
 	return out
 }
 
-func (p *Planner) kafkaAggregatorRegion() string {
-	if p.manifest == nil || p.manifest.Infrastructure.Kafka == nil {
-		return ""
-	}
-	k := p.manifest.Infrastructure.Kafka
-	if k.Role == "aggregator" || k.Role == "" {
-		if k.RegionID != "" {
-			return k.RegionID
-		}
-		if region := p.kafkaNodeRegion(k.Controllers, k.Brokers); region != "" {
-			return region
-		}
-	}
-	for _, rc := range k.Regional {
-		if rc.Role != "aggregator" {
-			continue
-		}
-		if rc.RegionID != "" {
-			return rc.RegionID
-		}
-		if region := p.kafkaNodeRegion(rc.Controllers, rc.Brokers); region != "" {
-			return region
-		}
-	}
-	return ""
-}
-
 func (p *Planner) kafkaNodeRegion(controllers []inventory.KafkaController, brokers []inventory.KafkaBroker) string {
 	region := ""
 	record := func(hostName string) {
@@ -375,6 +348,18 @@ func (p *Planner) redisTaskNames(dep topology.InfraDependency, _ inventory.Servi
 			continue
 		}
 		out = append(out, redisPrimaryTaskName(inst))
+		if !strings.EqualFold(inst.Mode, "sentinel") {
+			continue
+		}
+		// Sentinel-mode clients connect through the Sentinel quorum and fail
+		// over to replicas, so they wait for the whole topology, not only the
+		// primary.
+		for _, replicaHost := range inst.ReplicaHosts {
+			out = append(out, redisReplicaTaskName(inst, replicaHost))
+		}
+		for _, sn := range inst.Sentinels {
+			out = append(out, redisSentinelTaskName(inst, sn.Host))
+		}
 	}
 	return out
 }
@@ -587,29 +572,17 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// MirrorMaker2 workers. They depend on every broker across every declared
-	// Kafka cluster so the worker cluster only starts once source + aggregator
-	// clusters are live. Multiple hosts run the same dedicated MM2 config and
-	// coordinate task ownership through Kafka Connect/MM2 internals.
+	// MirrorMaker2 workers. One worker process per host drives every link into
+	// that host's Kafka region. Workers depend on every broker across every
+	// declared Kafka cluster so they only start once source and target clusters
+	// are live; hosts serving the same target coordinate task ownership through
+	// Kafka Connect/MM2 internals.
 	if mm := p.manifest.Infrastructure.Kafka; mm != nil && mm.Enabled && mm.MirrorMaker != nil && mm.MirrorMaker.Enabled {
-		aggregatorRegion := p.kafkaAggregatorRegion()
-		hosts := mm.MirrorMaker.Hosts
-		if len(hosts) == 0 && mm.MirrorMaker.Host != "" {
-			hosts = []string{mm.MirrorMaker.Host}
+		hosts, err := p.kafkaMirrorMakerWorkerHosts(mm.MirrorMaker.Links)
+		if err != nil {
+			return err
 		}
 		for _, host := range hosts {
-			if strings.TrimSpace(host) == "" {
-				continue
-			}
-			if aggregatorRegion != "" {
-				hostRegion := p.hostRegion(host)
-				if hostRegion == "" {
-					return fmt.Errorf("kafka mirrormaker host %q has no region; MM2 workers must run in aggregator region %q", host, aggregatorRegion)
-				}
-				if hostRegion != aggregatorRegion {
-					return fmt.Errorf("kafka mirrormaker host %q is in region %q, want aggregator region %q", host, hostRegion, aggregatorRegion)
-				}
-			}
 			task := NewTask("kafka-mirrormaker", "kafka-mirrormaker", host, host, PhaseInfrastructure)
 			task.DependsOn = withMesh(task.DependsOn)
 			if len(hosts) == 1 {
@@ -707,6 +680,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if purserErr != nil {
 		return purserErr
 	}
+	signalmanTasks, signalmanErr := p.taskNamesForDeploy("signalman")
+	if signalmanErr != nil {
+		return signalmanErr
+	}
 
 	for name, svc := range p.manifest.Services {
 		if !svc.Enabled {
@@ -739,6 +716,12 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			if deploy == "periscope-metering" {
 				task.DependsOn = append(task.DependsOn, periscopeQueryTasks...)
 				task.DependsOn = append(task.DependsOn, purserTasks...)
+			}
+			// Bridge subscribes only to its local Signalman, which carries the
+			// other regions' events once it consumes their mirrored topics, so
+			// every Signalman is current before any Bridge rolls.
+			if deploy == "bridge" {
+				task.DependsOn = append(task.DependsOn, signalmanTasks...)
 			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
@@ -849,10 +832,39 @@ func EffectivePrivateerHostsForManifest(svc inventory.ServiceConfig, manifest *i
 	return result
 }
 
+// KafkaMirrorMakerHosts returns the sorted worker hosts of every link of an
+// enabled MirrorMaker2 config. It does not validate the links; the planner does
+// that when it emits the worker tasks.
+func KafkaMirrorMakerHosts(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	kafka := manifest.Infrastructure.Kafka
+	if kafka == nil || !kafka.Enabled || kafka.MirrorMaker == nil || !kafka.MirrorMaker.Enabled {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, link := range kafka.MirrorMaker.Links {
+		for _, host := range link.Hosts {
+			if host = strings.TrimSpace(host); host != "" {
+				seen[host] = struct{}{}
+			}
+		}
+	}
+	hosts := make([]string, 0, len(seen))
+	for host := range seen {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
 // EffectiveVMAgentHosts returns the hosts that should run vmagent.
 // Uses explicit hosts if specified, otherwise all manifest hosts. Native
 // metrics infrastructure is additive so operators don't have to manually keep
-// vmagent placement in sync with Yugabyte/ClickHouse placement.
+// vmagent placement in sync with Yugabyte/ClickHouse/MirrorMaker2 placement;
+// the MirrorMaker2 JMX exporter is loopback-only, so its worker hosts need a
+// local vmagent.
 func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
 	if manifest == nil {
 		return nil
@@ -882,6 +894,9 @@ func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Mani
 		for _, host := range ch.AllHosts() {
 			seen[host] = struct{}{}
 		}
+	}
+	for _, host := range KafkaMirrorMakerHosts(manifest) {
+		seen[host] = struct{}{}
 	}
 	result := make([]string, 0, len(seen))
 	for name := range seen {
@@ -940,7 +955,11 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 	}
 
-	// Observability stack (treated as interfaces for ordering)
+	// Observability stack (treated as interfaces for ordering). Each component
+	// also waits for the observability services it calls in pkg/topology, so
+	// vmalert starts only after VictoriaMetrics and Alertmanager are provisioned.
+	var obsTasks []*Task
+	obsTaskNames := map[string][]string{}
 	for name, obs := range p.manifest.Observability {
 		if !obs.Enabled {
 			continue
@@ -961,9 +980,21 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			}
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseInterfaces)
 			task.ClusterID = effectiveServiceCluster(obs, hostName, p.manifest)
-			task.DependsOn = appDeps
-			graph.AddTask(task)
+			obsTasks = append(obsTasks, task)
+			obsTaskNames[deploy] = append(obsTaskNames[deploy], task.Name)
 		}
+	}
+	for _, task := range obsTasks {
+		deps := append([]string(nil), appDeps...)
+		for _, dep := range topology.ServiceDependencies(task.Type) {
+			for _, depName := range obsTaskNames[dep.TargetServiceID] {
+				if !slices.Contains(deps, depName) {
+					deps = append(deps, depName)
+				}
+			}
+		}
+		task.DependsOn = deps
+		graph.AddTask(task)
 	}
 
 	return nil

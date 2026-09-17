@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
@@ -112,6 +114,28 @@ type CreateStreamInput struct {
 	Public      bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
 	IngestMode  string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
 	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
+	// Private and multicast pull sources need a restricted location.
+	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Where the source may be ingested. Omit for any cluster FrameWorks chooses; required as restricted for private (LAN) or multicast pull sources."`
+}
+
+// SourceLocationToolInput mirrors the GraphQL SourceLocationInput.
+type SourceLocationToolInput struct {
+	Mode         string                           `json:"mode" jsonschema:"any or restricted"`
+	Clusters     []SourceLocationClusterToolInput `json:"clusters,omitempty" jsonschema:"Clusters the source may run on; required for restricted"`
+	AvoidNodeIDs []string                         `json:"avoid_node_ids,omitempty" jsonschema:"Nodes the source must never run on, only on clusters the tenant owns"`
+}
+
+type SourceLocationClusterToolInput struct {
+	ClusterID string   `json:"cluster_id" jsonschema:"Cluster ID from the tenant's cluster access list"`
+	NodeIDs   []string `json:"node_ids,omitempty" jsonschema:"Nodes of this cluster the source may run on; omit for any node. Only on clusters the tenant owns."`
+}
+
+// SourceLocationToolResult reports a stream's source location. mode custom
+// means the stream's own ingest placement rules hold more than a location.
+type SourceLocationToolResult struct {
+	Mode         string                           `json:"mode"`
+	Clusters     []SourceLocationClusterToolInput `json:"clusters,omitempty"`
+	AvoidNodeIDs []string                         `json:"avoid_node_ids,omitempty"`
 }
 
 type PullSourceToolInput struct {
@@ -134,7 +158,9 @@ type CreateStreamResult struct {
 	Name       string                `json:"name"`
 	IngestMode string                `json:"ingest_mode"`
 	PullSource *PullSourceToolResult `json:"pull_source,omitempty"`
-	Message    string                `json:"message"`
+	// Absent when Commodore did not report a location.
+	SourceLocation *SourceLocationToolResult `json:"source_location,omitempty"`
+	Message        string                    `json:"message"`
 }
 
 func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -147,14 +173,20 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		return toolError("Stream name is required")
 	}
 
+	location, locationErr := toProtoSourceLocation(args.SourceLocation)
+	if locationErr != "" {
+		return toolError(locationErr)
+	}
+
 	// Call Commodore to create stream (tenantID is in context metadata)
 	resp, err := clients.Commodore.CreateStream(ctx, &commodorepb.CreateStreamRequest{
-		Title:       args.Name,
-		Description: args.Description,
-		IsPublic:    args.Public,
-		IsRecording: args.Record,
-		IngestMode:  args.IngestMode,
-		PullSource:  toProtoPullSource(args.PullSource),
+		Title:          args.Name,
+		Description:    args.Description,
+		IsPublic:       args.Public,
+		IsRecording:    args.Record,
+		IngestMode:     args.IngestMode,
+		PullSource:     toProtoPullSource(args.PullSource),
+		SourceLocation: location,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create stream")
@@ -168,14 +200,15 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		streamKey = ""
 	}
 	result := CreateStreamResult{
-		ID:         globalid.Encode(globalid.TypeStream, resp.Id),
-		StreamID:   resp.Id,
-		StreamKey:  streamKey,
-		PlaybackID: resp.PlaybackId,
-		Name:       resp.Title,
-		IngestMode: resp.IngestMode,
-		PullSource: fromProtoPullSource(resp.PullSource),
-		Message:    message,
+		ID:             globalid.Encode(globalid.TypeStream, resp.Id),
+		StreamID:       resp.Id,
+		StreamKey:      streamKey,
+		PlaybackID:     resp.PlaybackId,
+		Name:           resp.Title,
+		IngestMode:     resp.IngestMode,
+		PullSource:     fromProtoPullSource(resp.PullSource),
+		SourceLocation: fromProtoSourceLocation(resp.GetSourceLocation()),
+		Message:        message,
 	}
 
 	return toolSuccess(result)
@@ -189,16 +222,19 @@ type UpdateStreamInput struct {
 	Record      *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
 	IngestMode  *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
 	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
+	// Omitted keeps the current location.
+	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Replacement source location. Omit to keep the current one. Custom placement rules are edited with the media placement tools."`
 }
 
 // UpdateStreamResult represents the result of updating a stream.
 type UpdateStreamResult struct {
-	ID         string                `json:"id"`
-	StreamID   string                `json:"stream_id"`
-	Name       string                `json:"name"`
-	IngestMode string                `json:"ingest_mode"`
-	PullSource *PullSourceToolResult `json:"pull_source,omitempty"`
-	Message    string                `json:"message"`
+	ID             string                    `json:"id"`
+	StreamID       string                    `json:"stream_id"`
+	Name           string                    `json:"name"`
+	IngestMode     string                    `json:"ingest_mode"`
+	PullSource     *PullSourceToolResult     `json:"pull_source,omitempty"`
+	SourceLocation *SourceLocationToolResult `json:"source_location,omitempty"`
+	Message        string                    `json:"message"`
 }
 
 func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -214,14 +250,20 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 		return toolError(err.Error())
 	}
 
+	location, locationErr := toProtoSourceLocation(args.SourceLocation)
+	if locationErr != "" {
+		return toolError(locationErr)
+	}
+
 	// Call Commodore to update stream
 	stream, err := clients.Commodore.UpdateStream(ctx, &commodorepb.UpdateStreamRequest{
-		StreamId:    streamID,
-		Name:        args.Name,
-		Description: args.Description,
-		Record:      args.Record,
-		IngestMode:  args.IngestMode,
-		PullSource:  toProtoPullSource(args.PullSource),
+		StreamId:       streamID,
+		Name:           args.Name,
+		Description:    args.Description,
+		Record:         args.Record,
+		IngestMode:     args.IngestMode,
+		PullSource:     toProtoPullSource(args.PullSource),
+		SourceLocation: location,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to update stream")
@@ -229,15 +271,63 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 	}
 
 	result := UpdateStreamResult{
-		ID:         globalid.Encode(globalid.TypeStream, stream.StreamId),
-		StreamID:   stream.StreamId,
-		Name:       stream.Title,
-		IngestMode: stream.IngestMode,
-		PullSource: fromProtoPullSource(stream.PullSource),
-		Message:    fmt.Sprintf("Stream '%s' updated.", stream.Title),
+		ID:             globalid.Encode(globalid.TypeStream, stream.StreamId),
+		StreamID:       stream.StreamId,
+		Name:           stream.Title,
+		IngestMode:     stream.IngestMode,
+		PullSource:     fromProtoPullSource(stream.PullSource),
+		SourceLocation: fromProtoSourceLocation(stream.GetSourceLocation()),
+		Message:        fmt.Sprintf("Stream '%s' updated.", stream.Title),
 	}
 
 	return toolSuccess(result)
+}
+
+// toProtoSourceLocation converts the tool input through the same shape rules
+// as GraphQL; Commodore checks entitlement, node ownership and private-source
+// consent.
+func toProtoSourceLocation(input *SourceLocationToolInput) (*commodorepb.StreamSourceLocation, string) {
+	if input == nil {
+		return nil, ""
+	}
+	gql := &model.SourceLocationInput{AvoidNodeIds: input.AvoidNodeIDs}
+	switch strings.ToLower(strings.TrimSpace(input.Mode)) {
+	case "any":
+		gql.Mode = model.SourceLocationModeAny
+	case "restricted":
+		gql.Mode = model.SourceLocationModeRestricted
+	default:
+		return nil, "source_location.mode must be any or restricted"
+	}
+	for _, cluster := range input.Clusters {
+		gql.Clusters = append(gql.Clusters, &model.SourceLocationClusterInput{ClusterID: cluster.ClusterID, NodeIds: cluster.NodeIDs})
+	}
+	location, validationErr := resolvers.SourceLocationInputToProto(gql)
+	if validationErr != nil {
+		return nil, validationErr.Message
+	}
+	return location, ""
+}
+
+func fromProtoSourceLocation(location *commodorepb.StreamSourceLocation) *SourceLocationToolResult {
+	if location == nil {
+		return nil
+	}
+	out := &SourceLocationToolResult{AvoidNodeIDs: location.GetAvoidNodeIds()}
+	switch location.GetMode() {
+	case commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_ANY:
+		out.Mode = "any"
+	case commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_RESTRICTED:
+		out.Mode = "restricted"
+	case commodorepb.SourceLocationMode_SOURCE_LOCATION_MODE_CUSTOM:
+		out.Mode = "custom"
+	default:
+		return nil
+	}
+	for _, cluster := range location.GetClusters() {
+		out.Clusters = append(out.Clusters, SourceLocationClusterToolInput{ClusterID: cluster.GetClusterId(), NodeIDs: cluster.GetNodeIds()})
+	}
+	return out
 }
 
 func toProtoPullSource(input *PullSourceToolInput) *commodorepb.PullSourceInput {

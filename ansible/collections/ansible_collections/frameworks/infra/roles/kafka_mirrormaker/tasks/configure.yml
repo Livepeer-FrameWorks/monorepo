@@ -8,6 +8,15 @@
     mode: "0640"
   notify: kafka_mirrormaker restart
 
+- name: Render JMX exporter config
+  ansible.builtin.template:
+    src: jmx-exporter.yml.j2
+    dest: "{{ kafka_mm_jmx_exporter_config_path }}"
+    owner: root
+    group: "{{ kafka_mm_group }}"
+    mode: "0644"
+  notify: kafka_mirrormaker restart
+
 - name: Render systemd unit
   ansible.builtin.template:
     src: kafka-mirrormaker.service.j2

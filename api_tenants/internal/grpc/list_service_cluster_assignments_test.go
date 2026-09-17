@@ -66,6 +66,9 @@ func TestListServiceClusterAssignments_ReturnsClusterIDs(t *testing.T) {
 	mock.ExpectQuery(`(?s)service_cluster_assignments.*instance_id = \$1.*svc\.type = \$2.*status = 'running'.*is_active = true`).
 		WithArgs("inst-1", "foghorn").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-a").AddRow("cluster-b"))
+	mock.ExpectQuery(`(?s)owned\.previous_control_cell_id = cell_sca\.cluster_id.*si\.instance_id = \$1.*NOT EXISTS`).
+		WithArgs("inst-1").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("private-moved"))
 
 	resp, err := server.ListServiceClusterAssignments(serviceCtx(), &quartermasterpb.ListServiceClusterAssignmentsRequest{
 		InstanceId:  "inst-1",
@@ -76,6 +79,9 @@ func TestListServiceClusterAssignments_ReturnsClusterIDs(t *testing.T) {
 	}
 	if len(resp.GetClusterIds()) != 2 || resp.GetClusterIds()[0] != "cluster-a" {
 		t.Fatalf("unexpected cluster IDs: %v", resp.GetClusterIds())
+	}
+	if released := resp.GetReleasedClusterIds(); len(released) != 1 || released[0] != "private-moved" {
+		t.Fatalf("unexpected released cluster IDs: %v", released)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

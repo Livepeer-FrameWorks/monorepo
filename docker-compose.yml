@@ -51,7 +51,7 @@ services:
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       SIGNALMAN_GRPC_ADDR: ${SIGNALMAN_GRPC_ADDR}
       SKIPPER_GRPC_ADDR: ${SKIPPER_GRPC_ADDR:-skipper:19007}
-      WS_MAX_CONNECTIONS_PER_TENANT: ${WS_MAX_CONNECTIONS_PER_TENANT}
+      WS_MAX_SUBSCRIPTIONS_PER_TENANT: ${WS_MAX_SUBSCRIPTIONS_PER_TENANT}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       USAGE_HASH_SECRET: ${USAGE_HASH_SECRET}
@@ -462,6 +462,7 @@ services:
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${SERVICE_EVENTS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${DECKLOG_DLQ_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic lookout.incidents --partitions 3 --replication-factor 1 --config retention.ms=604800000
       echo 'Topics created successfully'
       "
     networks:
@@ -1030,6 +1031,7 @@ services:
       COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      LOOKOUT_GRPC_ADDR: ${LOOKOUT_GRPC_ADDR:-lookout:19008}
       SKIPPER_HOST: ${SKIPPER_HOST:-skipper}
       CLUSTER_ID: central-primary
       LLM_PROVIDER: ${LLM_PROVIDER}
@@ -1089,6 +1091,70 @@ services:
     healthcheck:
       test:
         ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18018/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Lookout (Incidents)
+  lookout:
+    <<: *default-env
+    container_name: frameworks-lookout
+    build:
+      context: .
+      dockerfile: api_incidents/Dockerfile
+    ports:
+      - "18022:18022"
+      - "19008:19008"
+    environment:
+      DATABASE_URL: postgresql://lookout:${POSTGRES_PASSWORD}@postgres:5432/lookout?sslmode=disable
+      LOOKOUT_PORT: ${LOOKOUT_PORT:-18022}
+      LOOKOUT_GRPC_PORT: ${LOOKOUT_GRPC_PORT:-19008}
+      LOOKOUT_HOST: ${LOOKOUT_HOST:-lookout}
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR:-decklog:18006}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      LOOKOUT_ALERTMANAGER_TOKEN: ${LOOKOUT_ALERTMANAGER_TOKEN:-dev-lookout-alertmanager-token}
+      LOOKOUT_NOTIFY_EMAIL_TO: ${LOOKOUT_NOTIFY_EMAIL_TO:-}
+      LOOKOUT_SLACK_WEBHOOK_URL: ${LOOKOUT_SLACK_WEBHOOK_URL:-}
+      LOOKOUT_DISCORD_WEBHOOK_URL: ${LOOKOUT_DISCORD_WEBHOOK_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      FROM_EMAIL: ${FROM_EMAIL}
+      FROM_NAME: ${FROM_NAME}
+      WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
+      CLUSTER_ID: central-primary
+      NODE_ID: central-node-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+      decklog:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18022/health"]
       interval: 10s
       timeout: 5s
       retries: 3

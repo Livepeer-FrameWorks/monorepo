@@ -150,6 +150,16 @@ func TestDemoMediaPlacementOptionsPaginationAndFilterBinding(t *testing.T) {
 			t.Fatalf("aggregate options failed: %+v, %v", page, err)
 		}
 	}
+	req.Filter, req.First = &placementpb.OptionsFilter{Kind: placementpb.OptionKind_OPTION_KIND_NODE, ClusterId: DemoSelfHostedCluster}, 100
+	page, err = GenerateMediaPlacementOptions(req)
+	if err != nil || len(page.Nodes) != 2 || page.Nodes[0].GetClusterId() != DemoSelfHostedCluster {
+		t.Fatalf("demo node options for the owned cluster: %+v, %v", page, err)
+	}
+	req.Filter = &placementpb.OptionsFilter{Kind: placementpb.OptionKind_OPTION_KIND_NODE, ClusterId: "cluster_demo_us_west"}
+	page, err = GenerateMediaPlacementOptions(req)
+	if err != nil || len(page.Nodes) != 0 {
+		t.Fatalf("demo offered nodes of a platform cluster: %+v, %v", page, err)
+	}
 }
 
 func TestDemoMediaPlacementReviewIsNonMutatingAndNotAnApplyCredential(t *testing.T) {

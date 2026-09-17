@@ -111,6 +111,82 @@ path and the placement status surface reports no confirmed enforcement. Actual m
 cells remains under development; schema/player support alone does not establish end-to-end
 enforcement. The read-only API demo supports only formats in its synthetic fixture.
 
+## Restrict placement to clusters and nodes
+
+A selector combines `clusterIds`, `nodeIds`, `ownerIds`, `regions`, `classes` and `charging`:
+fields combine with AND, values within a field with OR. `nodeIds` names individual nodes and is
+accepted only for nodes of media clusters your account owns. List them with
+`mediaPlacementOptions` using `filter: { kind: NODE }`, optionally with `clusterId` to limit the
+list to one cluster; each NODE option carries its `clusterId`. Nodes of platform or marketplace
+clusters are never offered.
+
+Node selectors are accepted once every media cell serving your account supports node placement;
+until then, review and apply refuse rules that name nodes. Ingest rules are checked against the
+exact node that admits a publisher or dials a pull or managed source, and serve rules against the
+exact node chosen for a viewer.
+
+For a pull stream, the simplest way to express "only this cluster" or "only these nodes" is the
+stream's [source location](/builders/pull-streams#source-location), which writes the same ingest
+rules. Use the placement rules below when you need more, such as preferences or selectors on
+region or owner. A stream whose own ingest rules go beyond a location reports
+`sourceLocation.mode: CUSTOM` and is edited here.
+
+This review restricts ingest for one stream to two nodes of an owned cluster:
+
+```graphql
+query ReviewNodeRestriction($streamId: ID!, $revision: String!, $parentRevision: String!) {
+  reviewMediaPlacementChange(
+    input: {
+      scope: { kind: STREAM, streamId: $streamId }
+      expectedRevision: $revision
+      expectedParentRevision: $parentRevision
+      updates: [
+        {
+          verb: INGEST
+          kind: SET
+          rules: {
+            constraints: {
+              allow: {
+                any: [
+                  {
+                    clusterIds: ["warehouse-edge"]
+                    nodeIds: ["warehouse-edge-1", "warehouse-edge-2"]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ) {
+    __typename
+    ... on MediaPlacementReview {
+      reviewToken
+      expiresAt
+      differences {
+        label
+        before
+        after
+      }
+      warnings {
+        id
+        message
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+  }
+}
+```
+
+Apply it with `applyMediaPlacementChange` using the same updates and revisions, the returned
+`reviewToken`, the acknowledged warning IDs and a stable `idempotencyKey`. Through MCP,
+`get_media_placement_options` accepts `filter: { "kind": "NODE", "clusterId": "..." }` and the
+placement review/apply tools accept `nodeIds` in selectors.
+
 ## Preview saved rules
 
 The MCP tools expose the same typed inputs and resolver checks as GraphQL. Nested fields use

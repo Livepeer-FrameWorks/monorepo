@@ -1,5 +1,6 @@
 fragment MediaPlacementSelectorFields on MediaPlacementSelector {
   clusterIds
+  nodeIds
   ownerIds
   regions
   classes

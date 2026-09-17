@@ -1,0 +1,16 @@
+{# A manifest declares a single Alertmanager host, so HA gossip is disabled by
+   an empty cluster listen address. #}
+[Unit]
+Description=Prometheus Alertmanager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ prometheus_stack_user }}
+Group={{ prometheus_stack_group }}
+ExecStart={{ alertmanager_bin }} --config.file={{ alertmanager_config_path }} --storage.path={{ alertmanager_storage_path }} --web.listen-address=:{{ alertmanager_port }} --cluster.listen-address=
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

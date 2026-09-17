@@ -576,13 +576,7 @@ VALUES
     ('total_viewers', 'viewer', 'sum', 'Viewers', '{}', FALSE),
     ('unique_users', 'user', 'max', 'Unique users', '{}', FALSE),
     ('media_seconds', 'second', 'sum', 'Historical media processing', '{execution_backend,output_codec,track_type}', FALSE)
-ON CONFLICT (meter) DO UPDATE SET
-    unit = EXCLUDED.unit,
-    aggregation = EXCLUDED.aggregation,
-    display_name = EXCLUDED.display_name,
-    allowed_dimensions = EXCLUDED.allowed_dimensions,
-    default_priceable = EXCLUDED.default_priceable,
-    active = TRUE;
+ON CONFLICT (meter) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1941,20 +1935,20 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER billing_invoices_retention_guard
+CREATE OR REPLACE TRIGGER billing_invoices_retention_guard
     BEFORE DELETE ON purser.billing_invoices
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
-CREATE TRIGGER billing_payments_retention_guard
+CREATE OR REPLACE TRIGGER billing_payments_retention_guard
     BEFORE DELETE ON purser.billing_payments
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
-CREATE TRIGGER simplified_invoices_retention_guard
+CREATE OR REPLACE TRIGGER simplified_invoices_retention_guard
     BEFORE DELETE ON purser.simplified_invoices
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
 
-CREATE TRIGGER crypto_invoices_retention_guard
+CREATE OR REPLACE TRIGGER crypto_invoices_retention_guard
     BEFORE DELETE ON purser.crypto_invoices
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
-CREATE TRIGGER credit_notes_retention_guard
+CREATE OR REPLACE TRIGGER credit_notes_retention_guard
     BEFORE DELETE ON purser.credit_notes
     FOR EACH ROW EXECUTE FUNCTION purser.prevent_billing_document_early_delete();
 
@@ -2250,6 +2244,8 @@ ALTER TABLE purser.webhook_events
     ADD COLUMN IF NOT EXISTS provider_object_id VARCHAR(255);
 
 ALTER TABLE purser.webhook_events
+    DROP CONSTRAINT IF EXISTS chk_webhook_events_status;
+ALTER TABLE purser.webhook_events
     ADD CONSTRAINT chk_webhook_events_status CHECK (status IN (
         'claimed', 'processed', 'failed_retryable', 'failed_terminal', 'blocked'
     )) NOT VALID;
@@ -2311,6 +2307,8 @@ ALTER TABLE purser.balance_transactions
     ADD COLUMN IF NOT EXISTS evidence_ref TEXT,
     ADD COLUMN IF NOT EXISTS reverses_transaction_id UUID REFERENCES purser.balance_transactions(id);
 
+ALTER TABLE purser.balance_transactions
+    DROP CONSTRAINT IF EXISTS chk_balance_transactions_actor_kind;
 ALTER TABLE purser.balance_transactions
     ADD CONSTRAINT chk_balance_transactions_actor_kind CHECK (
         actor_kind IS NULL OR actor_kind IN ('user', 'system', 'webhook', 'job')

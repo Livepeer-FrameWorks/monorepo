@@ -44,10 +44,16 @@ func (s *CommodoreServer) GetMediaPlacementOptions(ctx context.Context, req *pla
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "placement entitlement is unavailable")
 	}
+	var ownedNodes map[string]string
+	if kind := req.GetFilter().GetKind(); kind == placementpb.OptionKind_OPTION_KIND_UNSPECIFIED || kind == placementpb.OptionKind_OPTION_KIND_NODE {
+		if ownedNodes, err = s.ownedPlacementNodes(ctx, scope.TenantID, entitlement); err != nil {
+			return nil, err
+		}
+	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, status.FromContextError(contextErr).Err()
 	}
-	return projectPlacementOptions(scope, req, entitlement, time.Now())
+	return projectPlacementOptions(scope, req, entitlement, ownedNodes, time.Now())
 }
 
 func validatePlacementOptionsRequest(req *placementpb.GetOptionsRequest) error {
@@ -56,8 +62,11 @@ func validatePlacementOptionsRequest(req *placementpb.GetOptionsRequest) error {
 		return status.Error(codes.InvalidArgument, "invalid placement options bounds")
 	}
 	filter := req.GetFilter()
-	if filter != nil && len(filter.ProtoReflect().GetUnknown()) != 0 || filter.GetKind() < placementpb.OptionKind_OPTION_KIND_UNSPECIFIED || filter.GetKind() > placementpb.OptionKind_OPTION_KIND_REGION {
+	if filter != nil && len(filter.ProtoReflect().GetUnknown()) != 0 || filter.GetKind() < placementpb.OptionKind_OPTION_KIND_UNSPECIFIED || filter.GetKind() > placementpb.OptionKind_OPTION_KIND_NODE {
 		return status.Error(codes.InvalidArgument, "unsupported placement options filter")
+	}
+	if clusterID := filter.GetClusterId(); clusterID != "" && !placementOptionID(clusterID) {
+		return status.Error(codes.InvalidArgument, "invalid placement options cluster filter")
 	}
 	for _, class := range filter.GetClasses() {
 		if class < placementpb.ClusterClass_CLUSTER_CLASS_PLATFORM_OFFICIAL || class > placementpb.ClusterClass_CLUSTER_CLASS_THIRD_PARTY_MARKETPLACE {
@@ -74,7 +83,10 @@ type placementOptionsCursor struct {
 	After   string `json:"after"`
 }
 
-func projectPlacementOptions(scope placementpolicy.Scope, req *placementpb.GetOptionsRequest, entitlement *quartermasterpb.GetTenantEntitlementResponse, now time.Time) (*placementpb.Options, error) {
+// ownedNodes maps node ID to cluster ID for clusters the consuming tenant owns.
+// Node options are offered only for clusters private to that tenant, so
+// platform and marketplace node identities never appear.
+func projectPlacementOptions(scope placementpolicy.Scope, req *placementpb.GetOptionsRequest, entitlement *quartermasterpb.GetTenantEntitlementResponse, ownedNodes map[string]string, now time.Time) (*placementpb.Options, error) {
 	if err := validatePlacementOptionsRequest(req); err != nil {
 		return nil, err
 	}
@@ -111,6 +123,11 @@ func projectPlacementOptions(scope placementpolicy.Scope, req *placementpb.GetOp
 		if peer.GetClusterType() != "edge" {
 			continue
 		}
+		// The census above still covers every entitled cluster; the cluster
+		// filter only narrows which clusters contribute options.
+		if filter.GetClusterId() != "" && peer.GetClusterId() != filter.GetClusterId() {
+			continue
+		}
 		class, err := placementOptionClass(scope.TenantID, peer)
 		if err != nil {
 			return nil, err
@@ -144,6 +161,18 @@ func projectPlacementOptions(scope placementpolicy.Scope, req *placementpb.GetOp
 		if region := peer.GetRegionId(); region != "" {
 			addPlacementOption(options, &placementpb.Option{Id: region, Name: region, Kind: placementpb.OptionKind_OPTION_KIND_REGION, ClusterClass: class, Region: region, Eligible: eligible, Reason: reason})
 		}
+		if class != placementpb.ClusterClass_CLUSTER_CLASS_TENANT_PRIVATE {
+			continue
+		}
+		for nodeID, clusterID := range ownedNodes {
+			if clusterID != peer.GetClusterId() {
+				continue
+			}
+			if !placementOptionID(nodeID) {
+				return nil, status.Error(codes.Unavailable, "placement option identity is invalid")
+			}
+			addPlacementOption(options, &placementpb.Option{Id: nodeID, Name: nodeID, Kind: placementpb.OptionKind_OPTION_KIND_NODE, ClusterClass: class, Region: peer.GetRegionId(), OwnerId: peer.GetOwnerTenantId(), ClusterId: clusterID, Eligible: eligible, Reason: reason})
+		}
 	}
 	if len(seen) != len(allowed) {
 		return nil, status.Error(codes.Unavailable, "placement entitlement census is incomplete")
@@ -153,7 +182,7 @@ func projectPlacementOptions(scope placementpolicy.Scope, req *placementpb.GetOp
 		if filter.GetKind() != placementpb.OptionKind_OPTION_KIND_UNSPECIFIED && option.GetKind() != filter.GetKind() {
 			continue
 		}
-		text := strings.ToLower(option.GetId() + " " + option.GetName() + " " + option.GetRegion() + " " + option.GetOwnerId())
+		text := strings.ToLower(option.GetId() + " " + option.GetName() + " " + option.GetRegion() + " " + option.GetOwnerId() + " " + option.GetClusterId())
 		if filter.GetQuery() != "" && !strings.Contains(text, filter.GetQuery()) {
 			continue
 		}

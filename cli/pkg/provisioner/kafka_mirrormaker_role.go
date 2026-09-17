@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,10 +11,21 @@ import (
 	"frameworks/cli/pkg/ssh"
 )
 
-// kafkaMirrorMakerRoleVars renders vars for a dedicated MM2 worker. Source
-// clusters and the aggregator target are derived from the manifest's
-// KafkaConfig.Regional list (passed via metadata at task-build time).
+// KafkaMirrorMakerJMXPort is the loopback port each MirrorMaker2 worker's JMX
+// exporter serves connector metrics on; the host-local vmagent scrapes it.
+const KafkaMirrorMakerJMXPort = 9404
+
+// kafkaMirrorMakerJMXExporterArtifact is the release-manifest infrastructure
+// entry pinning the Prometheus JMX exporter javaagent jar.
+const kafkaMirrorMakerJMXExporterArtifact = "jmx-prometheus-javaagent"
+
+// kafkaMirrorMakerRoleVars renders vars for a dedicated MM2 worker. The target
+// is the worker host's own Kafka region and the sources are the links declared
+// into it (passed via metadata at task-build time).
 func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
+	if metaBool(config.Metadata, "_cleanup_only", false) {
+		return map[string]any{}, nil
+	}
 	_, arch, err := helpers.DetectRemoteOS(ctx, host)
 	if err != nil {
 		return nil, err
@@ -24,14 +36,21 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 	if err != nil {
 		return nil, err
 	}
+	jmxExporter, err := helpers.ResolveArtifact(kafkaMirrorMakerJMXExporterArtifact, archKey, channel, config.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("kafka-mirrormaker: resolve JMX exporter artifact: %w", err)
+	}
 
 	vars := map[string]any{
-		"kafka_mm_artifact_url":      art.URL,
-		"kafka_mm_artifact_checksum": art.Checksum,
-		"kafka_mm_version":           releaseVersion(config.Version, art.Version),
-		"kafka_mm_heap_opts":         "-Xmx1G -Xms1G",
-		"kafka_mm_rest_port":         8083,
-		"kafka_mm_task_count":        2,
+		"kafka_mm_artifact_url":                   art.URL,
+		"kafka_mm_artifact_checksum":              art.Checksum,
+		"kafka_mm_version":                        releaseVersion(config.Version, art.Version),
+		"kafka_mm_heap_opts":                      "-Xmx1G -Xms1G",
+		"kafka_mm_rest_port":                      8083,
+		"kafka_mm_task_count":                     2,
+		"kafka_mm_jmx_exporter_artifact_url":      jmxExporter.URL,
+		"kafka_mm_jmx_exporter_artifact_checksum": jmxExporter.Checksum,
+		"kafka_mm_jmx_port":                       KafkaMirrorMakerJMXPort,
 	}
 	if config.Port > 0 {
 		vars["kafka_mm_rest_port"] = config.Port
@@ -51,10 +70,27 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 	if alias, ok := config.Metadata["local_cluster_alias"].(string); ok && alias != "" {
 		vars["kafka_mm_local_cluster_alias"] = alias
 	}
-	if topics, ok := config.Metadata["topics_pattern"].(string); ok && topics != "" {
-		vars["kafka_mm_topics_pattern"] = topics
+	if pattern, ok := config.Metadata["exclude_pattern"].(string); ok && pattern != "" {
+		vars["kafka_mm_exclude_pattern"] = pattern
 	}
 	return vars, nil
+}
+
+// KafkaMirrorMakerCleanupPlaybook removes a worker without the install inputs
+// the role's main entry point validates, so a host that is no longer a link
+// worker can be cleaned up from its host name alone.
+const KafkaMirrorMakerCleanupPlaybook = "playbooks/kafka_mirrormaker_cleanup.yml"
+
+// kafkaMirrorMakerUnitPath is the worker's systemd unit. Worker presence is
+// keyed on this unit, not on connect-mirror-maker.sh: MirrorMaker2 shares the
+// /opt/kafka install with brokers, so every broker host carries the script.
+const kafkaMirrorMakerUnitPath = "/etc/systemd/system/frameworks-kafka-mirrormaker.service"
+
+func kafkaMirrorMakerPlaybookSelector(config ServiceConfig) string {
+	if metaBool(config.Metadata, "_cleanup_only", false) {
+		return KafkaMirrorMakerCleanupPlaybook
+	}
+	return "playbooks/kafka_mirrormaker.yml"
 }
 
 func kafkaMirrorMakerRoleDetect(ctx context.Context, host inventory.Host, _ ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
@@ -70,7 +106,10 @@ func kafkaMirrorMakerRoleDetect(ctx context.Context, host inventory.Host, _ Serv
 	svc := "frameworks-kafka-mirrormaker"
 	result, runErr := runner.Run(ctx, "systemctl is-active "+svc+" 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
 	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
-	bin, binErr := runner.Run(ctx, "test -x /opt/kafka/bin/connect-mirror-maker.sh && echo EXISTS")
-	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
+	unit, unitErr := runner.Run(ctx, "test -f "+kafkaMirrorMakerUnitPath+" && echo EXISTS || echo MISSING")
+	if unitErr != nil {
+		return nil, fmt.Errorf("kafka-mirrormaker: probe worker unit on %s: %w", host.Name, unitErr)
+	}
+	exists := unit != nil && strings.Contains(unit.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
 }

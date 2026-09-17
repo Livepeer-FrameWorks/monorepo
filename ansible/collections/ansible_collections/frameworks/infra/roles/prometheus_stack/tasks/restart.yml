@@ -10,4 +10,6 @@
     - victoriametrics
     - vmagent
     - vmauth
+    - vmalert
+    - alertmanager
   when: prometheus_stack_components is defined and item in prometheus_stack_components

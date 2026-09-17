@@ -1,0 +1,14 @@
+---
+# Removes a MirrorMaker2 worker from a host that is no longer a link worker.
+# The cleanup entry point declares no install inputs, so this runs without the
+# artifact and link variables the role's main entry point requires.
+- name: Remove Kafka MirrorMaker 2 worker
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Remove Kafka MirrorMaker 2 worker
+      ansible.builtin.import_role:
+        name: frameworks.infra.kafka_mirrormaker
+        tasks_from: cleanup
+      tags: [cleanup]

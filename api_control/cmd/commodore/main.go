@@ -14,6 +14,7 @@ import (
 	"frameworks/api_control/internal/clusterurls"
 	commodoremigrations "frameworks/api_control/internal/datamigrations"
 	commodoregrpc "frameworks/api_control/internal/grpc"
+	"frameworks/api_control/internal/placementpolicy"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
@@ -43,6 +44,7 @@ func main() {
 		logger := logging.NewLoggerWithService("commodore")
 		config.LoadEnv(logger)
 		commodoremigrations.Register()
+		placementpolicy.RegisterPullSourcePinsToStreamRules()
 		dbConfig := database.DefaultConfig()
 		dbConfig.ServiceName = "commodore"
 		dbConfig.URL = config.RequireEnv("DATABASE_URL")

@@ -953,7 +953,7 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 	if !refreshAfter.Before(validUntil) {
 		refreshAfter = issuedAt
 	}
-	if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
+	if sharedauthority.IsPlacementSchema(payload.GetSchemaVersion()) {
 		refreshAfter = mediaAuthorityRefreshAfter(issuedAt, validUntil)
 		deadlineCtx, cancel := context.WithDeadline(ctx, validUntil)
 		defer cancel()
@@ -985,11 +985,12 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 		if placementErr := guardTenantPlacementPublication(ctx, queries, payload); placementErr != nil {
 			return placementErr
 		}
-		// Schema 2 is monotonic once published, so a cell that cannot enforce it
-		// must be refused as a target here rather than rolled back later. Prior
-		// cells only receive the revocation they already hold state for.
-		if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
-			ready, readyErr := placementCellsReady(ctx, queries, targets)
+		// Placement schemas are monotonic once published, so a cell that cannot
+		// enforce this schema must be refused as a target here rather than rolled
+		// back later. Prior cells only receive the revocation they already hold
+		// state for.
+		if sharedauthority.IsPlacementSchema(payload.GetSchemaVersion()) {
+			ready, readyErr := placementCellsReadyFor(ctx, queries, targets, payload.GetSchemaVersion())
 			if readyErr != nil {
 				return readyErr
 			}
@@ -1059,7 +1060,7 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 				return fmt.Errorf("enqueue tenant authority for cell %q: rows=%d: %w", cell, rows, err)
 			}
 		}
-		if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
+		if sharedauthority.IsPlacementSchema(payload.GetSchemaVersion()) {
 			return scheduleTenantMediaAuthorityRefresh(ctx, queries, payload, version, refreshAfter)
 		}
 		return nil
@@ -1068,7 +1069,7 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 
 func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, authorityID string, payload *mediaauthoritypb.MediaObjectAuthority, targets []string, revisions []*mediaauthoritypb.AuthoritySourceRevision, issuedAt, validUntil time.Time) error {
 	var commercial *mediaObjectCommercialSnapshot
-	if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion && payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+	if sharedauthority.IsPlacementSchema(payload.GetSchemaVersion()) && payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
 		var err error
 		commercial, err = s.prepareMediaObjectCommercial(ctx, payload, targets)
 		if err != nil {

@@ -201,6 +201,9 @@ func (s *Server) registerTools() {
 	// Infrastructure tools (marketplace, cluster lifecycle)
 	tools.RegisterInfrastructureTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
+	// Incident tools (Lookout incidents on owned clusters)
+	tools.RegisterIncidentTools(s.mcpServer, s.resolver)
+
 	// QoE diagnostic tools (for video consultant)
 	tools.RegisterQoETools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
@@ -1023,8 +1026,6 @@ func mcpToolGraphQLOp(toolName string) string {
 		return "applyMediaPlacementChange"
 	case "get_media_placement_change":
 		return "mediaPlacementChange"
-	case "get_media_placement_legacy_pins":
-		return "mediaPlacementLegacyPins"
 	case "get_cluster_media_consent":
 		return "clusterMediaConsent"
 	case "review_cluster_media_consent_change":
@@ -1057,6 +1058,18 @@ func mcpToolGraphQLOp(toolName string) string {
 		return "abortVodUpload"
 	case "delete_vod_asset":
 		return "deleteVodAsset"
+	case "list_incidents":
+		return "incidentsConnection"
+	case "get_incident":
+		return "incident"
+	case "acknowledge_incident":
+		return "acknowledgeIncident"
+	case "assign_incident":
+		return "assignIncident"
+	case "resolve_incident":
+		return "resolveIncident"
+	case "add_incident_note":
+		return "addIncidentNote"
 	default:
 		return ""
 	}

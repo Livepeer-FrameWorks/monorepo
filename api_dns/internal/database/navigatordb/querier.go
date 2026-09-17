@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	CompleteTenantCustomDomainIssuance(ctx context.Context, arg CompleteTenantCustomDomainIssuanceParams) (int64, error)
 	DeleteExpiredCertificateIssuanceLeases(ctx context.Context) (int64, error)
 	DeletePlatformCertificate(ctx context.Context, domain string) error
 	DeleteTenantAlias(ctx context.Context, tenantID string) (int64, error)
@@ -21,6 +22,7 @@ type Querier interface {
 	DeleteTenantEdgeApplyStateForRevokedCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForRevokedClusterParams) (int64, error)
 	EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (EnsureTenantAliasRow, error)
 	EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenantCustomDomainParams) (NavigatorTenantCustomDomain, error)
+	FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (int64, error)
 	FinalizeTenantCustomDomainRemoval(ctx context.Context, arg FinalizeTenantCustomDomainRemovalParams) (int64, error)
 	GetInternalCA(ctx context.Context, role string) (NavigatorInternalCa, error)
 	GetInternalCertificate(ctx context.Context, arg GetInternalCertificateParams) (NavigatorInternalCertificate, error)
@@ -50,6 +52,8 @@ type Querier interface {
 	MarkTenantEdgeInDNS(ctx context.Context, arg MarkTenantEdgeInDNSParams) (int64, error)
 	MarkTenantEdgeNotInDNS(ctx context.Context, arg MarkTenantEdgeNotInDNSParams) (int64, error)
 	RecordTenantAliasRetirementFailure(ctx context.Context, arg RecordTenantAliasRetirementFailureParams) error
+	RecordTenantCustomDomainRenewalFailure(ctx context.Context, arg RecordTenantCustomDomainRenewalFailureParams) (int64, error)
+	RefreshTenantCustomDomainServedCertificate(ctx context.Context, arg RefreshTenantCustomDomainServedCertificateParams) (int64, error)
 	ReleaseCertificateIssuanceLease(ctx context.Context, arg ReleaseCertificateIssuanceLeaseParams) error
 	RenewCertificateIssuanceLease(ctx context.Context, arg RenewCertificateIssuanceLeaseParams) (bool, error)
 	// Tombstone only. The edge delete runs as its own later statement
@@ -70,7 +74,6 @@ type Querier interface {
 	SaveTenantACMEAccount(ctx context.Context, arg SaveTenantACMEAccountParams) (SaveTenantACMEAccountRow, error)
 	SaveTenantCertificate(ctx context.Context, arg SaveTenantCertificateParams) (SaveTenantCertificateRow, error)
 	SetTenantAliasStatus(ctx context.Context, arg SetTenantAliasStatusParams) (int64, error)
-	SetTenantCustomDomainCertMetadata(ctx context.Context, arg SetTenantCustomDomainCertMetadataParams) (int64, error)
 	SetTenantCustomDomainStatus(ctx context.Context, arg SetTenantCustomDomainStatusParams) (int64, error)
 	TenantAliasClusterAuthorityState(ctx context.Context, arg TenantAliasClusterAuthorityStateParams) (string, error)
 	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)

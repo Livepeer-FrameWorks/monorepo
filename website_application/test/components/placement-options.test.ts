@@ -28,7 +28,7 @@ async function openSelector() {
     scope: { kind: "TENANT" },
     onchange,
   });
-  await fireEvent.click(screen.getByText("Choose specific clusters, operators or regions"));
+  await fireEvent.click(screen.getByText("Choose specific clusters, nodes, operators or regions"));
   return { ...component, onchange };
 }
 
@@ -56,6 +56,29 @@ describe("authorized placement options", () => {
     await fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]);
     expect(onchange).toHaveBeenCalledWith(expect.objectContaining({ clusterIds: ["saved", "us"] }));
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
+  it("adds owned-cluster nodes to nodeIds", async () => {
+    fetchOptions.mockResolvedValueOnce({
+      data: {
+        mediaPlacementOptions: {
+          __typename: "MediaPlacementOptionsConnection",
+          nodes: [
+            { id: "edge-1", name: "Edge 1", kind: "NODE", clusterId: "owned", eligible: true },
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    });
+    const { onchange } = await openSelector();
+    await fireEvent.change(screen.getByRole("combobox"), { target: { value: "NODE" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Edge 1");
+    expect(fetchOptions.mock.calls[0][0].variables.filter).toEqual({ kind: "NODE", query: "" });
+    await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(onchange).toHaveBeenCalledWith(
+      expect.objectContaining({ clusterIds: ["saved"], nodeIds: ["edge-1"] })
+    );
   });
 
   it("drops stale pagination after catalogue changes but retains draft selections", async () => {

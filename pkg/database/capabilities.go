@@ -54,6 +54,11 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "artifact placement stable identity", Engine: EnginePostgres, Probe: "SELECT a.artifact_hash, a.tenant_id, n.node_id, n.last_emitted_version FROM foghorn.artifacts a LEFT JOIN foghorn.artifact_nodes n ON n.artifact_hash = a.artifact_hash LIMIT 0"},
 		{Name: "artifact reconciliation cursors", Engine: EnginePostgres, Probe: "SELECT id, last_hash FROM foghorn.active_object_key_backfill_cursor LIMIT 0"},
 	},
+	"lookout": {
+		{Name: "verified cluster owner scopes", Engine: EnginePostgres, Probe: "SELECT cluster_id, scope, tenant_id, verified, source_updated_at FROM lookout.cluster_scopes LIMIT 0"},
+		{Name: "incident scope and lifecycle", Engine: EnginePostgres, Probe: "SELECT id, scope, tenant_id, group_key, status, resolution FROM lookout.incidents LIMIT 0"},
+		{Name: "notification outbox leasing and retention", Engine: EnginePostgres, Probe: "SELECT channel, attempts, next_attempt_at, lease_token, last_error, delivered_at, failed_at FROM lookout.notification_outbox LIMIT 0"},
+	},
 	"navigator": {
 		{Name: "tenant edge apply state", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_id, node_id, bundle_id, state, last_seed_version, last_delivery_sequence FROM navigator.tenant_edge_apply_state LIMIT 0"},
 		{Name: "tenant alias retirement queue", Engine: EnginePostgres, Probe: "SELECT tenant_id, subdomain, requested_at, attempts, last_error FROM navigator.tenant_alias_retirements LIMIT 0"},

@@ -81,6 +81,13 @@ func TestAttestCellPlacementCapabilityOnlyFromLedgerReads(t *testing.T) {
 	if got == nil || !got.GetEnforcementReady() || got.GetLiveReplicas() != 3 || len(got.GetSupportedSchemaVersions()) != 2 || got.GetSupportedSchemaVersions()[1] != sharedauthority.PlacementSchemaVersion {
 		t.Fatalf("attestation = %v", got)
 	}
+	server.cellPlacementCapability = func(context.Context) (localauthority.CellPlacementCapability, error) {
+		return localauthority.CellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, EnforcementReady: true, LiveReplicas: 2, NodePlacementReady: true}, nil
+	}
+	got = server.attestCellPlacementCapability(context.Background())
+	if got == nil || !got.GetNodePlacementReady() || len(got.GetSupportedSchemaVersions()) != 2 {
+		t.Fatalf("node placement attestation = %v", got)
+	}
 }
 
 func TestGetMediaCellPlacementCapabilityUsesReplicaLedger(t *testing.T) {

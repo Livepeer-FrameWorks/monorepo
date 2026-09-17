@@ -36,6 +36,7 @@ var placementPropertyDescriptions = map[string]string{
 	"id":                     "Stable unique preference-group identifier, retained across edits and warning references.",
 	"match":                  "Selector fields combine with AND; values within each field combine with OR. Empty matches all entitled capacity.",
 	"clusterIds":             "Exact authorized cluster identifiers to match.",
+	"nodeIds":                "Node identifiers to match, only on clusters the tenant owns; list them with get_media_placement_options kind NODE.",
 	"ownerIds":               "Authorized cluster-owner tenant identifiers to match.",
 	"regions":                "Authorized region identifiers to match.",
 	"classes":                "Cluster classes to match; restrictions remain independent of charging class.",

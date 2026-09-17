@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -98,9 +99,70 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 		},
 	}
 
+	expectStripeSubscriptionActivation(mock, tenantID, subscriptionID)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := s.handleStripeSubscriptionEvent(payload); err != nil {
+		t.Fatalf("handleStripeSubscriptionEvent: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// The subscription_updated outbox row shares the activation transaction: a
+// failed insert rolls back the tier activation and intent update and returns
+// the error so the webhook is retried.
+func TestHandleStripeSubscriptionEventRollsBackActivationWhenOutboxInsertFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+
+	tenantID := "11111111-1111-1111-1111-111111111111"
+	subscriptionID := "sub_test_rollback"
+	payload := StripeWebhookPayload{
+		ID:   "evt_sub_rollback",
+		Type: "customer.subscription.updated",
+		Data: struct {
+			Object json.RawMessage `json:"object"`
+		}{
+			Object: json.RawMessage(fmt.Sprintf(`{
+				"id":"%s",
+				"customer":"cus_test",
+				"status":"active",
+				"cancel_at_period_end":false,
+				"items":{"data":[{"id":"si_test","current_period_start":1780272000,"current_period_end":1782864000}]}
+			}`, subscriptionID)),
+		},
+	}
+
+	expectStripeSubscriptionActivation(mock, tenantID, subscriptionID)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = s.handleStripeSubscriptionEvent(payload)
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func expectStripeSubscriptionActivation(mock sqlmock.Sqlmock, tenantID, subscriptionID string) {
 	mock.ExpectQuery(`SELECT tenant_id::text AS tenant_id`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
+	mock.ExpectBegin()
 	// active routes through the activation helper: applies the tier, sets
 	// payment_method=stripe, clears staged state, and backfills the period.
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = COALESCE\(\$5, billing_period_start\)[\s\S]*WHERE tenant_id = \$6::text::uuid`).
@@ -112,12 +174,80 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 	mock.ExpectQuery(`SELECT id::text AS id`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-local-1"))
-	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs(sqlmock.AnyArg(), eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+}
 
-	if err := s.handleStripeSubscriptionEvent(payload); err != nil {
-		t.Fatalf("handleStripeSubscriptionEvent: %v", err)
+func stripePaymentFailedPayload() StripeWebhookPayload {
+	var payload StripeWebhookPayload
+	payload.ID = "evt_pi_failed"
+	payload.Type = "payment_intent.payment_failed"
+	payload.Data.Object = json.RawMessage(`{"id":"pi_fail","currency":"eur","metadata":{"invoice_id":"invoice-1","tenant_id":"tenant-1"}}`)
+	return payload
+}
+
+func expectStripePaymentFailedStatusUpdate(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+		WithArgs("pi_fail", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).
+			AddRow("payment-1", "invoice-1", "tenant-1", "12.50", "EUR", "pending"))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.billing_payments`).
+		WithArgs("failed", sqlmock.AnyArg(), "pi_fail", "payment-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
+		WithArgs("failed", "pi_fail", "payment-1", "stripe").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+// The payment_failed outbox row is written inside the payment status
+// transaction, before commit; the provider-object mapping runs afterwards.
+func TestHandleStripePaymentIntentWritesPaymentEventInStatusTransaction(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+
+	expectStripePaymentFailedStatusUpdate(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventPaymentFailed, "tenant-1", "", "payment", "payment-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT invoice\.tenant_id::text AS tenant_id, invoice\.amount::float8 AS amount`).
+		WithArgs("invoice-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, invoice\.tenant_id::text AS tenant_id`).
+		WithArgs("invoice-1", "pi_fail").
+		WillReturnError(sql.ErrNoRows)
+
+	if err := s.handleStripePaymentIntentGRPC(stripePaymentFailedPayload()); err != nil {
+		t.Fatalf("handleStripePaymentIntentGRPC: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestHandleStripePaymentIntentRollsBackStatusWhenOutboxInsertFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+
+	expectStripePaymentFailedStatusUpdate(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventPaymentFailed, "tenant-1", "", "payment", "payment-1", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = s.handleStripePaymentIntentGRPC(stripePaymentFailedPayload())
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("expected outbox insert error, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -348,7 +478,7 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 		WithArgs("invoice-1").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-1", AmountCents: 1000, Currency: "EUR",
 	})
 	if err != nil {
@@ -360,6 +490,80 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+// The Mollie payment event is written by updateInvoicePaymentStatus inside the
+// status transaction, before commit.
+func TestUpdateInvoicePaymentStatusWritesMolliePaymentEventInTransaction(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+	settlement := providerSettlementEvidence{TenantID: "tenant-1", AmountCents: 1000, Currency: "EUR"}
+
+	expectMolliePartialPaymentConfirmation(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventPaymentSucceeded, "tenant-1", "", "payment", "tr_partial", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`SELECT invoice\.tenant_id::text AS tenant_id, invoice\.amount::float8 AS amount`).
+		WithArgs("invoice-1").
+		WillReturnError(sql.ErrNoRows)
+
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed",
+		molliePaymentEventWriter("tr_partial", "confirmed", settlement), settlement)
+	if err != nil || !updated {
+		t.Fatalf("updateInvoicePaymentStatus = updated %v, error %v", updated, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusRollsBackWhenMolliePaymentEventFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+	settlement := providerSettlementEvidence{TenantID: "tenant-1", AmountCents: 1000, Currency: "EUR"}
+
+	expectMolliePartialPaymentConfirmation(mock)
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), eventPaymentSucceeded, "tenant-1", "", "payment", "tr_partial", sqlmock.AnyArg()).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed",
+		molliePaymentEventWriter("tr_partial", "confirmed", settlement), settlement)
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") || updated {
+		t.Fatalf("updateInvoicePaymentStatus = updated %v, error %v; want outbox error", updated, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func expectMolliePartialPaymentConfirmation(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+		WithArgs("tr_partial", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-1", "invoice-1", "tenant-1", "10.00", "EUR", "pending"))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.billing_payments`).
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
+		WithArgs("succeeded", "tr_partial", "payment-1", "mollie").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.billing_invoices invoice[\s\S]*COALESCE\(SUM[\s\S]*currency = invoice\.currency[\s\S]*>= invoice\.amount`).
+		WithArgs(sqlmock.AnyArg(), "invoice-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
 func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmount(t *testing.T) {
@@ -403,7 +607,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 		WithArgs("invoice-2").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-2", AmountCents: 2500, Currency: "EUR",
 	})
 	if err != nil {
@@ -432,7 +636,7 @@ func TestUpdateInvoicePaymentStatusRejectsInvoiceMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-3", "invoice-real", "tenant-3", "10.00", "EUR", "pending"))
 	mock.ExpectRollback()
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-3", AmountCents: 1000, Currency: "EUR",
 	})
 	if err == nil {
@@ -474,7 +678,7 @@ func TestUpdateInvoicePaymentStatusRejectsSettlementEvidenceMismatch(t *testing.
 					AddRow("payment-1", "invoice-1", "tenant-real", "12.50", "EUR", "pending"))
 			mock.ExpectRollback()
 
-			updated, err := s.updateInvoicePaymentStatus("stripe", "pi_settlement", "invoice-1", "confirmed", tc.evidence)
+			updated, err := s.updateInvoicePaymentStatus("stripe", "pi_settlement", "invoice-1", "confirmed", nil, tc.evidence)
 			if err == nil {
 				t.Fatal("expected settlement evidence mismatch")
 			}
@@ -513,7 +717,7 @@ func TestUpdateInvoicePaymentStatusConfirmedReplayRecomputesSettlement(t *testin
 	mock.ExpectExec(`UPDATE purser\.billing_invoices`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_replay", "invoice-1", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_replay", "invoice-1", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
 	})
 	if err != nil || !updated {
@@ -539,7 +743,7 @@ func TestUpdateInvoicePaymentStatusRejectsTerminalTransition(t *testing.T) {
 			AddRow("payment-1", "invoice-1", "tenant-1", "12.50", "EUR", "failed"))
 	mock.ExpectRollback()
 
-	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_failed", "invoice-1", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_failed", "invoice-1", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
 	})
 	if err == nil || updated {
@@ -564,7 +768,7 @@ func TestUpdateInvoicePaymentStatusDoesNotFallbackForUnknownConfirmedTransaction
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_unknown", "invoice-1", "confirmed", providerSettlementEvidence{
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_unknown", "invoice-1", "confirmed", nil, providerSettlementEvidence{
 		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
 	})
 	if err != nil {

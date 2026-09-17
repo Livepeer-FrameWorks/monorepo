@@ -544,6 +544,10 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			return
 		}
 	}
+	if err = enqueueCryptoPaymentEventsTx(ctx, dbTx, wallet, tx, invoicePayment, creditedCents, creditedCurrency, overpaymentCents, overpaymentCurrency); err != nil {
+		cm.logger.WithError(err).WithField("wallet_id", wallet.ID).Error("Failed to enqueue crypto payment billing events")
+		return
+	}
 
 	if err = dbTx.Commit(); err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to commit payment confirmation")
@@ -575,40 +579,52 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		"purpose":   wallet.Purpose,
 		"tx_hash":   tx.Hash,
 	}).Info("Crypto payment confirmed successfully")
+}
 
-	if wallet.Purpose == "invoice" && wallet.InvoiceID != nil {
-		if invoicePayment != nil {
-			emitBillingEvent(cm.db, cm.logger, eventPaymentSucceeded, wallet.TenantID, "payment", invoicePayment.PaymentID, &ipcpb.BillingEvent{
-				PaymentId: invoicePayment.PaymentID,
-				InvoiceId: *wallet.InvoiceID,
-				Amount:    invoicePayment.Amount,
-				Currency:  invoicePayment.Currency,
-				Provider:  "crypto",
-				Status:    "confirmed",
-				Asset:     wallet.Asset,
-				TxHash:    tx.Hash,
-				Network:   wallet.Network,
-			})
-			emitBillingEvent(cm.db, cm.logger, eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &ipcpb.BillingEvent{
-				InvoiceId: *wallet.InvoiceID,
-				Amount:    invoicePayment.Amount,
-				Currency:  invoicePayment.Currency,
-				Provider:  "crypto",
-				Status:    "paid",
-				Asset:     wallet.Asset,
-				TxHash:    tx.Hash,
-				Network:   wallet.Network,
-			})
-			if overpaymentCents > 0 {
-				emitBillingEvent(cm.db, cm.logger, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
-					TopupId: wallet.ID, Amount: float64(overpaymentCents) / 100,
-					Currency: overpaymentCurrency, Provider: "crypto_overpayment",
-					Status: "credited", Asset: wallet.Asset, TxHash: tx.Hash, Network: wallet.Network,
-				})
-			}
+// enqueueCryptoPaymentEventsTx writes the billing events for a confirmed
+// crypto wallet through the confirmation transaction, so the ledger credit,
+// wallet completion, and their events commit together.
+func enqueueCryptoPaymentEventsTx(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, invoicePayment *confirmedInvoicePayment, creditedCents int64, creditedCurrency string, overpaymentCents int64, overpaymentCurrency string) error {
+	switch {
+	case wallet.Purpose == "invoice" && wallet.InvoiceID != nil:
+		if invoicePayment == nil {
+			return nil
 		}
-	} else if wallet.Purpose == "prepaid" {
-		emitBillingEvent(cm.db, cm.logger, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
+		if err := emitBillingEventTx(ctx, dbTx, eventPaymentSucceeded, wallet.TenantID, "payment", invoicePayment.PaymentID, &ipcpb.BillingEvent{
+			PaymentId: invoicePayment.PaymentID,
+			InvoiceId: *wallet.InvoiceID,
+			Amount:    invoicePayment.Amount,
+			Currency:  invoicePayment.Currency,
+			Provider:  "crypto",
+			Status:    "confirmed",
+			Asset:     wallet.Asset,
+			TxHash:    tx.Hash,
+			Network:   wallet.Network,
+		}); err != nil {
+			return err
+		}
+		if err := emitBillingEventTx(ctx, dbTx, eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &ipcpb.BillingEvent{
+			InvoiceId: *wallet.InvoiceID,
+			Amount:    invoicePayment.Amount,
+			Currency:  invoicePayment.Currency,
+			Provider:  "crypto",
+			Status:    "paid",
+			Asset:     wallet.Asset,
+			TxHash:    tx.Hash,
+			Network:   wallet.Network,
+		}); err != nil {
+			return err
+		}
+		if overpaymentCents > 0 {
+			return emitBillingEventTx(ctx, dbTx, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
+				TopupId: wallet.ID, Amount: float64(overpaymentCents) / 100,
+				Currency: overpaymentCurrency, Provider: "crypto_overpayment",
+				Status: "credited", Asset: wallet.Asset, TxHash: tx.Hash, Network: wallet.Network,
+			})
+		}
+		return nil
+	case wallet.Purpose == "prepaid":
+		return emitBillingEventTx(ctx, dbTx, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
 			TopupId:  wallet.ID,
 			Amount:   float64(creditedCents) / 100.0,
 			Currency: creditedCurrency,
@@ -618,6 +634,8 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			TxHash:   tx.Hash,
 			Network:  wallet.Network,
 		})
+	default:
+		return nil
 	}
 }
 

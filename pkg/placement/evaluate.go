@@ -82,7 +82,7 @@ func Validate(p *Policy) error {
 }
 
 func validateSelector(s Selector) error {
-	for _, values := range [][]string{s.ClusterIDs, s.OwnerIDs, s.Regions} {
+	for _, values := range [][]string{s.ClusterIDs, s.OwnerIDs, s.Regions, s.NodeIDs} {
 		if len(values) > maxSelectorValues {
 			return fmt.Errorf("too many selector values")
 		}
@@ -133,6 +133,15 @@ func matches(s Selector, c Candidate, r Request) match {
 	unknown := false
 	if len(s.ClusterIDs) > 0 && !slices.Contains(s.ClusterIDs, c.ClusterID) {
 		return noMatch
+	}
+	// A cluster-level candidate (no node identity) can neither satisfy an allow nor
+	// escape a deny that names nodes.
+	if len(s.NodeIDs) > 0 {
+		if c.NodeID == "" {
+			unknown = true
+		} else if !slices.Contains(s.NodeIDs, c.NodeID) {
+			return noMatch
+		}
 	}
 	if len(s.OwnerIDs) > 0 {
 		if c.OwnerTenantID == "" {

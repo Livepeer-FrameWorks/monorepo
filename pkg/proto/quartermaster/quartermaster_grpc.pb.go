@@ -799,53 +799,55 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ClusterService_GetCluster_FullMethodName                      = "/quartermaster.ClusterService/GetCluster"
-	ClusterService_ListClusters_FullMethodName                    = "/quartermaster.ClusterService/ListClusters"
-	ClusterService_CreateCluster_FullMethodName                   = "/quartermaster.ClusterService/CreateCluster"
-	ClusterService_UpdateCluster_FullMethodName                   = "/quartermaster.ClusterService/UpdateCluster"
-	ClusterService_UpdateClusterMeshConfig_FullMethodName         = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
-	ClusterService_ListClustersForTenant_FullMethodName           = "/quartermaster.ClusterService/ListClustersForTenant"
-	ClusterService_ListClustersAvailable_FullMethodName           = "/quartermaster.ClusterService/ListClustersAvailable"
-	ClusterService_GrantClusterAccess_FullMethodName              = "/quartermaster.ClusterService/GrantClusterAccess"
-	ClusterService_SubscribeToCluster_FullMethodName              = "/quartermaster.ClusterService/SubscribeToCluster"
-	ClusterService_BootstrapClusterAccess_FullMethodName          = "/quartermaster.ClusterService/BootstrapClusterAccess"
-	ClusterService_MaterializeClusterAccess_FullMethodName        = "/quartermaster.ClusterService/MaterializeClusterAccess"
-	ClusterService_RevokeMaterializedClusterAccess_FullMethodName = "/quartermaster.ClusterService/RevokeMaterializedClusterAccess"
-	ClusterService_DeactivateClusterAccess_FullMethodName         = "/quartermaster.ClusterService/DeactivateClusterAccess"
-	ClusterService_ListTenantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/ListTenantClusterAccess"
-	ClusterService_GetTenantEntitlement_FullMethodName            = "/quartermaster.ClusterService/GetTenantEntitlement"
-	ClusterService_GetMediaPlacementInventory_FullMethodName      = "/quartermaster.ClusterService/GetMediaPlacementInventory"
-	ClusterService_GetClusterMediaConsent_FullMethodName          = "/quartermaster.ClusterService/GetClusterMediaConsent"
-	ClusterService_ReviewClusterMediaConsentChange_FullMethodName = "/quartermaster.ClusterService/ReviewClusterMediaConsentChange"
-	ClusterService_ApplyClusterMediaConsentChange_FullMethodName  = "/quartermaster.ClusterService/ApplyClusterMediaConsentChange"
-	ClusterService_GetClusterMediaConsentChange_FullMethodName    = "/quartermaster.ClusterService/GetClusterMediaConsentChange"
-	ClusterService_UnsubscribeFromCluster_FullMethodName          = "/quartermaster.ClusterService/UnsubscribeFromCluster"
-	ClusterService_ListMySubscriptions_FullMethodName             = "/quartermaster.ClusterService/ListMySubscriptions"
-	ClusterService_ListMarketplaceClusters_FullMethodName         = "/quartermaster.ClusterService/ListMarketplaceClusters"
-	ClusterService_GetMarketplaceCluster_FullMethodName           = "/quartermaster.ClusterService/GetMarketplaceCluster"
-	ClusterService_UpdateClusterMarketplace_FullMethodName        = "/quartermaster.ClusterService/UpdateClusterMarketplace"
-	ClusterService_CreatePrivateCluster_FullMethodName            = "/quartermaster.ClusterService/CreatePrivateCluster"
-	ClusterService_CreateClusterInvite_FullMethodName             = "/quartermaster.ClusterService/CreateClusterInvite"
-	ClusterService_RevokeClusterInvite_FullMethodName             = "/quartermaster.ClusterService/RevokeClusterInvite"
-	ClusterService_ListClusterInvites_FullMethodName              = "/quartermaster.ClusterService/ListClusterInvites"
-	ClusterService_ListMyClusterInvites_FullMethodName            = "/quartermaster.ClusterService/ListMyClusterInvites"
-	ClusterService_RequestClusterSubscription_FullMethodName      = "/quartermaster.ClusterService/RequestClusterSubscription"
-	ClusterService_AcceptClusterInvite_FullMethodName             = "/quartermaster.ClusterService/AcceptClusterInvite"
-	ClusterService_ListPendingSubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListPendingSubscriptions"
-	ClusterService_ApproveClusterSubscription_FullMethodName      = "/quartermaster.ClusterService/ApproveClusterSubscription"
-	ClusterService_RejectClusterSubscription_FullMethodName       = "/quartermaster.ClusterService/RejectClusterSubscription"
-	ClusterService_GetClusterMetadataBatch_FullMethodName         = "/quartermaster.ClusterService/GetClusterMetadataBatch"
-	ClusterService_ListPeers_FullMethodName                       = "/quartermaster.ClusterService/ListPeers"
-	ClusterService_WatchPeers_FullMethodName                      = "/quartermaster.ClusterService/WatchPeers"
-	ClusterService_AssignServiceToCluster_FullMethodName          = "/quartermaster.ClusterService/AssignServiceToCluster"
-	ClusterService_UnassignServiceFromCluster_FullMethodName      = "/quartermaster.ClusterService/UnassignServiceFromCluster"
-	ClusterService_EnableSelfHosting_FullMethodName               = "/quartermaster.ClusterService/EnableSelfHosting"
-	ClusterService_CreateEnrollmentToken_FullMethodName           = "/quartermaster.ClusterService/CreateEnrollmentToken"
-	ClusterService_ListEdgeReleases_FullMethodName                = "/quartermaster.ClusterService/ListEdgeReleases"
-	ClusterService_UpsertEdgeRelease_FullMethodName               = "/quartermaster.ClusterService/UpsertEdgeRelease"
-	ClusterService_GetClusterReleaseTarget_FullMethodName         = "/quartermaster.ClusterService/GetClusterReleaseTarget"
-	ClusterService_ListClusterReleaseTargets_FullMethodName       = "/quartermaster.ClusterService/ListClusterReleaseTargets"
-	ClusterService_SetClusterReleaseTarget_FullMethodName         = "/quartermaster.ClusterService/SetClusterReleaseTarget"
+	ClusterService_GetCluster_FullMethodName                        = "/quartermaster.ClusterService/GetCluster"
+	ClusterService_ListClusters_FullMethodName                      = "/quartermaster.ClusterService/ListClusters"
+	ClusterService_CreateCluster_FullMethodName                     = "/quartermaster.ClusterService/CreateCluster"
+	ClusterService_UpdateCluster_FullMethodName                     = "/quartermaster.ClusterService/UpdateCluster"
+	ClusterService_UpdateClusterMeshConfig_FullMethodName           = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
+	ClusterService_ListClustersForTenant_FullMethodName             = "/quartermaster.ClusterService/ListClustersForTenant"
+	ClusterService_ListClustersAvailable_FullMethodName             = "/quartermaster.ClusterService/ListClustersAvailable"
+	ClusterService_GrantClusterAccess_FullMethodName                = "/quartermaster.ClusterService/GrantClusterAccess"
+	ClusterService_SubscribeToCluster_FullMethodName                = "/quartermaster.ClusterService/SubscribeToCluster"
+	ClusterService_BootstrapClusterAccess_FullMethodName            = "/quartermaster.ClusterService/BootstrapClusterAccess"
+	ClusterService_MaterializeClusterAccess_FullMethodName          = "/quartermaster.ClusterService/MaterializeClusterAccess"
+	ClusterService_RevokeMaterializedClusterAccess_FullMethodName   = "/quartermaster.ClusterService/RevokeMaterializedClusterAccess"
+	ClusterService_DeactivateClusterAccess_FullMethodName           = "/quartermaster.ClusterService/DeactivateClusterAccess"
+	ClusterService_ListTenantClusterAccess_FullMethodName           = "/quartermaster.ClusterService/ListTenantClusterAccess"
+	ClusterService_GetTenantEntitlement_FullMethodName              = "/quartermaster.ClusterService/GetTenantEntitlement"
+	ClusterService_GetMediaPlacementInventory_FullMethodName        = "/quartermaster.ClusterService/GetMediaPlacementInventory"
+	ClusterService_GetClusterMediaConsent_FullMethodName            = "/quartermaster.ClusterService/GetClusterMediaConsent"
+	ClusterService_ReviewClusterMediaConsentChange_FullMethodName   = "/quartermaster.ClusterService/ReviewClusterMediaConsentChange"
+	ClusterService_ApplyClusterMediaConsentChange_FullMethodName    = "/quartermaster.ClusterService/ApplyClusterMediaConsentChange"
+	ClusterService_GetClusterMediaConsentChange_FullMethodName      = "/quartermaster.ClusterService/GetClusterMediaConsentChange"
+	ClusterService_UnsubscribeFromCluster_FullMethodName            = "/quartermaster.ClusterService/UnsubscribeFromCluster"
+	ClusterService_ListMySubscriptions_FullMethodName               = "/quartermaster.ClusterService/ListMySubscriptions"
+	ClusterService_ListMarketplaceClusters_FullMethodName           = "/quartermaster.ClusterService/ListMarketplaceClusters"
+	ClusterService_GetMarketplaceCluster_FullMethodName             = "/quartermaster.ClusterService/GetMarketplaceCluster"
+	ClusterService_UpdateClusterMarketplace_FullMethodName          = "/quartermaster.ClusterService/UpdateClusterMarketplace"
+	ClusterService_CreatePrivateCluster_FullMethodName              = "/quartermaster.ClusterService/CreatePrivateCluster"
+	ClusterService_ReassignClusterControlCell_FullMethodName        = "/quartermaster.ClusterService/ReassignClusterControlCell"
+	ClusterService_GetClusterControlCellReassignment_FullMethodName = "/quartermaster.ClusterService/GetClusterControlCellReassignment"
+	ClusterService_CreateClusterInvite_FullMethodName               = "/quartermaster.ClusterService/CreateClusterInvite"
+	ClusterService_RevokeClusterInvite_FullMethodName               = "/quartermaster.ClusterService/RevokeClusterInvite"
+	ClusterService_ListClusterInvites_FullMethodName                = "/quartermaster.ClusterService/ListClusterInvites"
+	ClusterService_ListMyClusterInvites_FullMethodName              = "/quartermaster.ClusterService/ListMyClusterInvites"
+	ClusterService_RequestClusterSubscription_FullMethodName        = "/quartermaster.ClusterService/RequestClusterSubscription"
+	ClusterService_AcceptClusterInvite_FullMethodName               = "/quartermaster.ClusterService/AcceptClusterInvite"
+	ClusterService_ListPendingSubscriptions_FullMethodName          = "/quartermaster.ClusterService/ListPendingSubscriptions"
+	ClusterService_ApproveClusterSubscription_FullMethodName        = "/quartermaster.ClusterService/ApproveClusterSubscription"
+	ClusterService_RejectClusterSubscription_FullMethodName         = "/quartermaster.ClusterService/RejectClusterSubscription"
+	ClusterService_GetClusterMetadataBatch_FullMethodName           = "/quartermaster.ClusterService/GetClusterMetadataBatch"
+	ClusterService_ListPeers_FullMethodName                         = "/quartermaster.ClusterService/ListPeers"
+	ClusterService_WatchPeers_FullMethodName                        = "/quartermaster.ClusterService/WatchPeers"
+	ClusterService_AssignServiceToCluster_FullMethodName            = "/quartermaster.ClusterService/AssignServiceToCluster"
+	ClusterService_UnassignServiceFromCluster_FullMethodName        = "/quartermaster.ClusterService/UnassignServiceFromCluster"
+	ClusterService_EnableSelfHosting_FullMethodName                 = "/quartermaster.ClusterService/EnableSelfHosting"
+	ClusterService_CreateEnrollmentToken_FullMethodName             = "/quartermaster.ClusterService/CreateEnrollmentToken"
+	ClusterService_ListEdgeReleases_FullMethodName                  = "/quartermaster.ClusterService/ListEdgeReleases"
+	ClusterService_UpsertEdgeRelease_FullMethodName                 = "/quartermaster.ClusterService/UpsertEdgeRelease"
+	ClusterService_GetClusterReleaseTarget_FullMethodName           = "/quartermaster.ClusterService/GetClusterReleaseTarget"
+	ClusterService_ListClusterReleaseTargets_FullMethodName         = "/quartermaster.ClusterService/ListClusterReleaseTargets"
+	ClusterService_SetClusterReleaseTarget_FullMethodName           = "/quartermaster.ClusterService/SetClusterReleaseTarget"
 )
 
 // ClusterServiceClient is the client API for ClusterService service.
@@ -916,6 +918,12 @@ type ClusterServiceClient interface {
 	UpdateClusterMarketplace(ctx context.Context, in *UpdateClusterMarketplaceRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
 	// Create a private cluster (self-hosted edge)
 	CreatePrivateCluster(ctx context.Context, in *CreatePrivateClusterRequest, opts ...grpc.CallOption) (*CreatePrivateClusterResponse, error)
+	// Moves a tenant-private cluster to another platform control cell. Its edges
+	// reconnect as the previous cell releases them; the reassignment completes
+	// when no live edge is observed by another cell and fails at its deadline.
+	// Reassigning back to the previous cell is the rollback.
+	ReassignClusterControlCell(ctx context.Context, in *ReassignClusterControlCellRequest, opts ...grpc.CallOption) (*ClusterControlCellReassignment, error)
+	GetClusterControlCellReassignment(ctx context.Context, in *GetClusterControlCellReassignmentRequest, opts ...grpc.CallOption) (*ClusterControlCellReassignment, error)
 	// Invite management (cluster owner)
 	CreateClusterInvite(ctx context.Context, in *CreateClusterInviteRequest, opts ...grpc.CallOption) (*ClusterInvite, error)
 	RevokeClusterInvite(ctx context.Context, in *RevokeClusterInviteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -1226,6 +1234,26 @@ func (c *clusterServiceClient) CreatePrivateCluster(ctx context.Context, in *Cre
 	return out, nil
 }
 
+func (c *clusterServiceClient) ReassignClusterControlCell(ctx context.Context, in *ReassignClusterControlCellRequest, opts ...grpc.CallOption) (*ClusterControlCellReassignment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterControlCellReassignment)
+	err := c.cc.Invoke(ctx, ClusterService_ReassignClusterControlCell_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) GetClusterControlCellReassignment(ctx context.Context, in *GetClusterControlCellReassignmentRequest, opts ...grpc.CallOption) (*ClusterControlCellReassignment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterControlCellReassignment)
+	err := c.cc.Invoke(ctx, ClusterService_GetClusterControlCellReassignment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clusterServiceClient) CreateClusterInvite(ctx context.Context, in *CreateClusterInviteRequest, opts ...grpc.CallOption) (*ClusterInvite, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClusterInvite)
@@ -1513,6 +1541,12 @@ type ClusterServiceServer interface {
 	UpdateClusterMarketplace(context.Context, *UpdateClusterMarketplaceRequest) (*ClusterResponse, error)
 	// Create a private cluster (self-hosted edge)
 	CreatePrivateCluster(context.Context, *CreatePrivateClusterRequest) (*CreatePrivateClusterResponse, error)
+	// Moves a tenant-private cluster to another platform control cell. Its edges
+	// reconnect as the previous cell releases them; the reassignment completes
+	// when no live edge is observed by another cell and fails at its deadline.
+	// Reassigning back to the previous cell is the rollback.
+	ReassignClusterControlCell(context.Context, *ReassignClusterControlCellRequest) (*ClusterControlCellReassignment, error)
+	GetClusterControlCellReassignment(context.Context, *GetClusterControlCellReassignmentRequest) (*ClusterControlCellReassignment, error)
 	// Invite management (cluster owner)
 	CreateClusterInvite(context.Context, *CreateClusterInviteRequest) (*ClusterInvite, error)
 	RevokeClusterInvite(context.Context, *RevokeClusterInviteRequest) (*emptypb.Empty, error)
@@ -1640,6 +1674,12 @@ func (UnimplementedClusterServiceServer) UpdateClusterMarketplace(context.Contex
 }
 func (UnimplementedClusterServiceServer) CreatePrivateCluster(context.Context, *CreatePrivateClusterRequest) (*CreatePrivateClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreatePrivateCluster not implemented")
+}
+func (UnimplementedClusterServiceServer) ReassignClusterControlCell(context.Context, *ReassignClusterControlCellRequest) (*ClusterControlCellReassignment, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReassignClusterControlCell not implemented")
+}
+func (UnimplementedClusterServiceServer) GetClusterControlCellReassignment(context.Context, *GetClusterControlCellReassignmentRequest) (*ClusterControlCellReassignment, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterControlCellReassignment not implemented")
 }
 func (UnimplementedClusterServiceServer) CreateClusterInvite(context.Context, *CreateClusterInviteRequest) (*ClusterInvite, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateClusterInvite not implemented")
@@ -2193,6 +2233,42 @@ func _ClusterService_CreatePrivateCluster_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_ReassignClusterControlCell_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReassignClusterControlCellRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ReassignClusterControlCell(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ReassignClusterControlCell_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ReassignClusterControlCell(ctx, req.(*ReassignClusterControlCellRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_GetClusterControlCellReassignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterControlCellReassignmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetClusterControlCellReassignment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetClusterControlCellReassignment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetClusterControlCellReassignment(ctx, req.(*GetClusterControlCellReassignmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClusterService_CreateClusterInvite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateClusterInviteRequest)
 	if err := dec(in); err != nil {
@@ -2674,6 +2750,14 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreatePrivateCluster",
 			Handler:    _ClusterService_CreatePrivateCluster_Handler,
+		},
+		{
+			MethodName: "ReassignClusterControlCell",
+			Handler:    _ClusterService_ReassignClusterControlCell_Handler,
+		},
+		{
+			MethodName: "GetClusterControlCellReassignment",
+			Handler:    _ClusterService_GetClusterControlCellReassignment_Handler,
 		},
 		{
 			MethodName: "CreateClusterInvite",

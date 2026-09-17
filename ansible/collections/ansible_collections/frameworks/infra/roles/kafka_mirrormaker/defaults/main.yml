@@ -16,5 +16,14 @@ kafka_mm_validate_rest: false
 kafka_mm_task_count: 2
 kafka_mm_local_cluster_alias: ""
 
+# Prometheus JMX exporter javaagent. The worker serves MirrorMaker2 connector
+# metrics on 127.0.0.1:kafka_mm_jmx_port for the host-local vmagent; 9404
+# does not collide with Kafka (9092/9093), the MM2 REST port (8083), or the
+# VictoriaMetrics components (8427-8429, 8880).
+kafka_mm_jmx_exporter_artifact_url: ""
+kafka_mm_jmx_exporter_artifact_checksum: ""
+kafka_mm_jmx_exporter_dir: /opt/kafka-jmx-exporter
+kafka_mm_jmx_port: 9404
+
 kafka_mm_target: {}
 kafka_mm_sources: []

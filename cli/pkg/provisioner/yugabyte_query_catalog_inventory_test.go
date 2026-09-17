@@ -37,8 +37,9 @@ func TestYugabyteVerificationCoversEveryServiceQueryCatalog(t *testing.T) {
 		"quartermaster":      "yugabyte/quartermaster-query-catalog",
 		"periscope-metering": "yugabyte/periscope-metering",
 		"foghorn":            "yugabyte/foghorn-query-catalog",
+		"lookout":            "yugabyte/lookout-query-catalog",
 	} {
-		if !strings.Contains(target, marker) {
+		if !strings.Contains(string(makefile), marker) {
 			t.Errorf("Yugabyte-backed service %s lacks generated-query verification marker %q", service, marker)
 		}
 	}
@@ -48,7 +49,12 @@ func TestYugabyteVerificationCoversEveryServiceQueryCatalog(t *testing.T) {
 	if !strings.Contains(target, "verify-schema-yugabyte-schema-isolated") {
 		t.Fatal("exhaustive Yugabyte schema verification must isolate database catalogs")
 	}
-	if !strings.Contains(string(makefile), "YUGABYTE_SCHEMA_DATABASES := commodore foghorn navigator periscope purser quartermaster skipper") {
+	for _, service := range []string{"commodore", "purser", "navigator", "skipper", "quartermaster", "periscope-metering", "foghorn", "lookout"} {
+		if !strings.Contains(string(makefile), "verify-yugabyte-"+service+"-contracts") {
+			t.Errorf("exhaustive Yugabyte services batch lacks %s contracts", service)
+		}
+	}
+	if !strings.Contains(string(makefile), "YUGABYTE_SCHEMA_DATABASES := commodore foghorn lookout navigator periscope purser quartermaster skipper") {
 		t.Fatal("Yugabyte schema shard inventory must cover every service database")
 	}
 	if !strings.Contains(target, "YUGABYTE_SCHEMA_COVERAGE_NAME=\"schema-$$database\"") {
@@ -93,6 +99,7 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"make verify-yugabyte-service SERVICE=quartermaster",
 		"make verify-yugabyte-service SERVICE=periscope-metering",
 		"make verify-yugabyte-service SERVICE=foghorn",
+		"make verify-yugabyte-service SERVICE=lookout",
 	} {
 		if !strings.Contains(job, command) {
 			t.Errorf("database-yugabyte CI job lacks scoped command %q", command)
@@ -102,6 +109,7 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"schema-selection.out",
 		"schema-commodore.out",
 		"schema-foghorn.out",
+		"schema-lookout.out",
 		"schema-navigator.out",
 		"schema-periscope.out",
 		"schema-purser.out",
@@ -119,6 +127,9 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"periscope-metering.out",
 		"foghorn-query-catalog-a.out",
 		"foghorn-query-catalog-b.out",
+		"lookout-query-catalog.out",
+		"lookout-incidents.out",
+		"lookout-delivery.out",
 		"ha.out",
 	} {
 		if !strings.Contains(job, "coverage/contracts/yugabyte/"+profile) {
@@ -141,6 +152,7 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"verify-yugabyte-periscope-metering-contracts",
 		"verify-yugabyte-foghorn-contracts-a",
 		"verify-yugabyte-foghorn-contracts-b",
+		"verify-yugabyte-lookout-contracts",
 		"verify-yugabyte-ha",
 	} {
 		marker := "\n" + targetName + ":"

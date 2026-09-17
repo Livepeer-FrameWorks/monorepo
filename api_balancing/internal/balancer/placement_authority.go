@@ -54,22 +54,35 @@ type PlacementSourceGrant struct {
 }
 
 // CompilePlacementAuthority does not confer activation or grant access. It
-// requires independently promoted, schema-2 snapshots and preserves owner consent
-// and commercial provenance separately from the consuming tenant's preferences.
+// requires independently promoted placement-schema snapshots (tenant and object on
+// the same schema) and preserves owner consent and commercial provenance
+// separately from the consuming tenant's preferences.
 func CompilePlacementAuthority(pair localauthority.PlacementPair, verb placement.Verb, now time.Time) (PlacementAuthority, error) {
-	tenant, object := pair.Tenant.Authority, pair.Object.Authority
 	if verb != placement.Ingest && verb != placement.Serve {
 		return PlacementAuthority{}, ErrPlacementAuthorityInvalid
-	}
-	if tenant == nil || object == nil || tenant.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion || object.GetSchemaVersion() != sharedauthority.PlacementSchemaVersion {
-		return PlacementAuthority{}, ErrPlacementAuthorityNotReady
 	}
 	ready := pair.Tenant.Ready && pair.Object.Ready
 	if verb == placement.Ingest {
 		ready = pair.Tenant.IngestReady && pair.Object.IngestReady
-		if object.GetLiveStream().GetIngestMode() != "push" {
+		if pair.Object.Authority.GetLiveStream().GetIngestMode() != "push" {
 			ready = ready && pair.Tenant.SourceReady && pair.Object.SourceReady
 		}
+	}
+	return compilePlacementAuthority(pair, verb, now, ready)
+}
+
+// CompileSourceDialAuthority compiles the ingest policy a node must satisfy
+// before it dials a configured source. The dial paths already require source
+// readiness before they trust the sealed source, so that is the readiness this
+// projection demands; ingest readiness belongs to publisher admission.
+func CompileSourceDialAuthority(pair localauthority.PlacementPair, now time.Time) (PlacementAuthority, error) {
+	return compilePlacementAuthority(pair, placement.Ingest, now, pair.Tenant.SourceReady && pair.Object.SourceReady)
+}
+
+func compilePlacementAuthority(pair localauthority.PlacementPair, verb placement.Verb, now time.Time, ready bool) (PlacementAuthority, error) {
+	tenant, object := pair.Tenant.Authority, pair.Object.Authority
+	if tenant == nil || object == nil || !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetSchemaVersion() != object.GetSchemaVersion() {
+		return PlacementAuthority{}, ErrPlacementAuthorityNotReady
 	}
 	if !ready || now.IsZero() || pair.Tenant.Version <= 0 || pair.Object.Version <= 0 ||
 		!now.Before(pair.Tenant.ValidUntil) || !now.Before(pair.Object.ValidUntil) {

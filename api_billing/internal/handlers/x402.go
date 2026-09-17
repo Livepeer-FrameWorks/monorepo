@@ -1746,15 +1746,10 @@ func (h *X402Handler) finalizeConfirmedSettlementEffects(ctx context.Context, ro
 			"tax_document_missing", "x402_payment", row.TxHash, "tax document created")
 	}
 
-	applied, rollupErr := h.applyX402RollupOnce(ctx, row.TenantID, row.ID, row.AmountCents)
+	applied, rollupErr := h.applyX402RollupOnce(ctx, row.TenantID, row.ID, row.TxHash, row.AmountCents)
 	if rollupErr != nil {
 		h.logger.WithError(rollupErr).WithField("nonce_id", row.ID).Error("Failed to apply x402 balance rollup")
 	} else if applied {
-		emitBillingEvent(h.db, h.logger, eventX402SettlementConfirm, row.TenantID, "x402_nonce", row.TxHash, &ipcpb.BillingEvent{
-			Amount:   float64(row.AmountCents) / 100,
-			Currency: billing.DefaultCurrency(),
-			Status:   "confirmed",
-		})
 		if h.commodoreClient != nil {
 			if _, cacheErr := h.commodoreClient.InvalidateTenantCache(ctx, row.TenantID, "x402 balance top-up"); cacheErr != nil {
 				h.logger.WithError(cacheErr).WithField("tenant_id", row.TenantID).Warn("Failed to invalidate tenant cache after x402 settlement")
@@ -1764,7 +1759,10 @@ func (h *X402Handler) finalizeConfirmedSettlementEffects(ctx context.Context, ro
 	return invoiceNumber
 }
 
-func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID string, amountEurCents int64) (bool, error) {
+// applyX402RollupOnce adds a confirmed settlement to the tenant balance rollup
+// and enqueues x402_settlement_confirmed in the same transaction. It reports
+// applied=false when the rollup was already applied.
+func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID, txHash string, amountEurCents int64) (bool, error) {
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -1789,6 +1787,13 @@ func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID
 		return false, err
 	}
 	if err := queries.MarkX402RollupApplied(ctx, nonceID); err != nil {
+		return false, err
+	}
+	if err := emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+		Amount:   float64(amountEurCents) / 100,
+		Currency: billing.DefaultCurrency(),
+		Status:   "confirmed",
+	}); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
