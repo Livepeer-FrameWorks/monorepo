@@ -111,7 +111,7 @@
 # rule file is rejected before it replaces the running set.
 - name: Render vmalert rule files
   ansible.builtin.copy:
-    content: "{{ item.content }}"
+    content: "{{ item.content_b64 | b64decode }}"
     dest: "{{ vmalert_rules_dir }}/{{ item.name }}"
     owner: root
     group: "{{ prometheus_stack_group }}"

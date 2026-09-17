@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"net"
@@ -165,9 +166,9 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 	return vars, nil
 }
 
-// vmalertRuleFiles returns the embedded rule files as {name, content} entries
-// sorted by name. The role writes exactly this set, so a rule file removed
-// from the repo is removed from the vmalert host.
+// vmalertRuleFiles returns the embedded rule files as base64-encoded entries
+// sorted by name. Encoding keeps Prometheus templates opaque while Ansible
+// evaluates role variables. The role writes exactly this set.
 func vmalertRuleFiles(rules fs.FS) ([]map[string]any, error) {
 	entries, err := fs.ReadDir(rules, "rules")
 	if err != nil {
@@ -182,7 +183,10 @@ func vmalertRuleFiles(rules fs.FS) ([]map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("vmalert: read embedded rule file %s: %w", entry.Name(), err)
 		}
-		files = append(files, map[string]any{"name": entry.Name(), "content": string(content)})
+		files = append(files, map[string]any{
+			"name":        entry.Name(),
+			"content_b64": base64.StdEncoding.EncodeToString(content),
+		})
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("vmalert: no embedded rule files")

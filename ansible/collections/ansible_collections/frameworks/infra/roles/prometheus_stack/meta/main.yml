@@ -32,6 +32,13 @@ argument_specs:
         type: list
         elements: dict
         required: false
+        options:
+          name:
+            type: str
+            required: true
+          content_b64:
+            type: str
+            required: true
       vmalert_notifier_urls:
         type: list
         elements: str

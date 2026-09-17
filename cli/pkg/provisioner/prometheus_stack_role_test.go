@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,7 +78,12 @@ func TestPrometheusStackRoleVarsVMAlertShipsEmbeddedRulesAndEndpoints(t *testing
 	var found bool
 	for _, file := range files {
 		if file["name"] == "frameworks.yml" {
-			content, _ := file["content"].(string)
+			encoded, _ := file["content_b64"].(string)
+			decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
+			if decodeErr != nil {
+				t.Fatalf("decode embedded frameworks.yml: %v", decodeErr)
+			}
+			content := string(decoded)
 			for _, alert := range []string{"RegionalTelemetryStale", "MM2ReplicationLagHigh", "SignalmanConsumerLagHigh"} {
 				if !strings.Contains(content, "alert: "+alert) {
 					t.Errorf("embedded frameworks.yml missing %s", alert)
@@ -87,6 +94,13 @@ func TestPrometheusStackRoleVarsVMAlertShipsEmbeddedRulesAndEndpoints(t *testing
 	}
 	if !found {
 		t.Fatalf("vmalert_rule_files has no frameworks.yml: %#v", files)
+	}
+	serialized, err := json.Marshal(vars)
+	if err != nil {
+		t.Fatalf("marshal vmalert role vars: %v", err)
+	}
+	if strings.Contains(string(serialized), "{{") {
+		t.Fatalf("vmalert role vars contain an Ansible template delimiter: %s", serialized)
 	}
 }
 
@@ -139,6 +153,9 @@ func TestPrometheusStackRoleRendersAlertingSafeguards(t *testing.T) {
 	vmalert := readRepoFile(t, role+"tasks/vmalert.yml")
 	if !strings.Contains(vmalert, `validate: "{{ vmalert_bin }} -dryRun -rule=%s"`) {
 		t.Fatalf("vmalert rule files must be validated with vmalert -dryRun before replacing the running set:\n%s", vmalert)
+	}
+	if !strings.Contains(vmalert, `content: "{{ item.content_b64 | b64decode }}"`) {
+		t.Fatalf("vmalert rule files must decode content after Ansible argument validation:\n%s", vmalert)
 	}
 	alertmanager := readRepoFile(t, role+"tasks/alertmanager.yml")
 	if !strings.Contains(alertmanager, `validate: "{{ amtool_bin }} check-config %s"`) || !strings.Contains(alertmanager, "no_log: true") {
