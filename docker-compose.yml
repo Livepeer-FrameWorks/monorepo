@@ -1303,6 +1303,10 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       FROM_EMAIL: ${FROM_EMAIL}
       TO_EMAIL: ${TO_EMAIL}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR:-decklog:18006}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
+      REGION: ${REGION:-local}
       # Listmonk Integration
       LISTMONK_URL: http://listmonk:9000
       LISTMONK_API_USERNAME: ${LISTMONK_API_USERNAME}

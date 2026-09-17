@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_forms/internal/validation"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
 	"github.com/gin-gonic/gin"
@@ -44,6 +45,16 @@ type fakeTurnstile struct {
 	err  error
 }
 
+type activityEmitterStub struct {
+	events []string
+	err    error
+}
+
+func (s *activityEmitterStub) EmitActivity(_ context.Context, eventType string) error {
+	s.events = append(s.events, eventType)
+	return s.err
+}
+
 func (f *fakeTurnstile) Verify(ctx context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error) {
 	return f.resp, f.err
 }
@@ -60,7 +71,7 @@ func setupContactHandler(turnstileEnabled bool) *contactHandlerHarness {
 	router := gin.New()
 	sender := &emailSenderStub{}
 	logger, _ := test.NewNullLogger()
-	handler := NewContactHandler(sender, nil, "contact@example.com", "Contact Form", "Thank you!", turnstileEnabled, logger, nil)
+	handler := NewContactHandler(sender, nil, "contact@example.com", "Contact Form", "Thank you!", turnstileEnabled, logger, nil, nil)
 	router.POST("/api/contact", handler.Handle)
 	return &contactHandlerHarness{router: router, sender: sender}
 }
@@ -168,6 +179,46 @@ func TestContactHandlerAcceptsValidSubmission(t *testing.T) {
 	}
 }
 
+func TestContactHandlerEmitsOnlyAfterEmailDelivery(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	emitter := &activityEmitterStub{err: errors.New("decklog unavailable")}
+	handler := NewContactHandler(&emailSenderStub{}, nil, "contact@example.com", "Contact Form", "Thank you!", false, logger, nil, emitter)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/contact", handler.Handle)
+	payload := map[string]any{
+		"name": "Jane Doe", "email": "jane@example.com",
+		"message": "Hello there, looking forward to learning more.", "human_check": "human",
+		"behavior": map[string]any{
+			"formShownAt": float64(time.Now().Add(-10 * time.Second).UnixMilli()),
+			"submittedAt": float64(time.Now().UnixMilli()), "mouse": true, "typed": true,
+		},
+	}
+	body, _ := json.Marshal(payload)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", bytes.NewBuffer(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if len(emitter.events) != 1 || emitter.events[0] != serviceevents.MarketingContactDelivered {
+		t.Fatalf("activity events = %v", emitter.events)
+	}
+
+	failedHandler := NewContactHandler(&emailSenderStub{err: errors.New("smtp unavailable")}, nil, "contact@example.com", "Contact Form", "Thank you!", false, logger, nil, emitter)
+	failedRouter := gin.New()
+	failedRouter.POST("/api/contact", failedHandler.Handle)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", bytes.NewBuffer(body))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	failedRouter.ServeHTTP(response, request)
+	if response.Code != http.StatusBadGateway || len(emitter.events) != 1 {
+		t.Fatalf("failed email status = %d, activity events = %v", response.Code, emitter.events)
+	}
+}
+
 // --- Observability tests ---
 
 func buildContactRequest(t *testing.T, req validation.ContactRequest) *bytes.Buffer {
@@ -188,7 +239,7 @@ func TestContactHandlerRedactsLogsAndMetrics(t *testing.T) {
 		),
 	}
 
-	handler := NewContactHandler(&emailSenderStub{}, nil, "to@example.com", "Contact Form", "Thank you!", false, logger, metrics)
+	handler := NewContactHandler(&emailSenderStub{}, nil, "to@example.com", "Contact Form", "Thank you!", false, logger, metrics, nil)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/api/contact", handler.Handle)
@@ -256,6 +307,7 @@ func TestContactHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
 		true,
 		logger,
 		metrics,
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -362,6 +414,7 @@ func TestContactHandlerEmailErrorMapsToBadGateway(t *testing.T) {
 		false,
 		logger,
 		metrics,
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

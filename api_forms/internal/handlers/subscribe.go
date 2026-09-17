@@ -6,6 +6,7 @@ import (
 	"frameworks/api_forms/internal/validation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 	"net"
 	"net/http"
 	"net/mail"
@@ -31,6 +32,7 @@ type SubscribeHandler struct {
 	turnstileEnabled   bool
 	logger             logging.Logger
 	metrics            *FormMetrics
+	activityEmitter    ActivityEmitter
 }
 
 func NewSubscribeHandler(
@@ -40,6 +42,7 @@ func NewSubscribeHandler(
 	turnstileEnabled bool,
 	logger logging.Logger,
 	metrics *FormMetrics,
+	activityEmitter ActivityEmitter,
 ) *SubscribeHandler {
 	return &SubscribeHandler{
 		listmonkClient:     client,
@@ -48,6 +51,7 @@ func NewSubscribeHandler(
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
 		metrics:            metrics,
+		activityEmitter:    activityEmitter,
 	}
 }
 
@@ -153,6 +157,11 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 	}
 
 	h.metrics.IncSubscribe("success")
+	if h.activityEmitter != nil {
+		if err := h.activityEmitter.EmitActivity(c.Request.Context(), serviceevents.MarketingSubscriberCreated); err != nil {
+			h.logger.WithError(err).Warn("Failed to emit newsletter subscription activity")
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 

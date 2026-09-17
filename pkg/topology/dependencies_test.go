@@ -70,7 +70,7 @@ func TestGlobalDNSDependencies(t *testing.T) {
 }
 
 func TestCentralWritersReachDecklogInAggregatorRegion(t *testing.T) {
-	for _, serviceID := range []string{"commodore", "deckhand", "purser", "quartermaster", "lookout"} {
+	for _, serviceID := range []string{"commodore", "deckhand", "purser", "quartermaster", "lookout", "steward"} {
 		if got := AggregatorRegionDNSServiceDependencies(serviceID); !equalStrings(got, []string{"decklog"}) {
 			t.Fatalf("AggregatorRegionDNSServiceDependencies(%s) = %v, want [decklog]", serviceID, got)
 		}

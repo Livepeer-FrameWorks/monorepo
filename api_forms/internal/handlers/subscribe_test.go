@@ -13,6 +13,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,7 +62,7 @@ func setupSubscribeHandler() *subscribeHarness {
 	router := gin.New()
 	stub := &listmonkStub{}
 	logger, _ := test.NewNullLogger()
-	handler := NewSubscribeHandler(stub, nil, 99, false, logger, nil)
+	handler := NewSubscribeHandler(stub, nil, 99, false, logger, nil, nil)
 	router.POST("/api/subscribe", handler.Handle)
 	return &subscribeHarness{router: router, stub: stub}
 }
@@ -205,6 +206,48 @@ func TestSubscribeRetriesWhenUnconfirmed(t *testing.T) {
 	}
 }
 
+func TestSubscribeEmitsOnlyForNewSubscriber(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	emitter := &activityEmitterStub{err: errors.New("decklog unavailable")}
+	stub := &listmonkStub{}
+	handler := NewSubscribeHandler(stub, nil, 99, false, logger, nil, emitter)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/subscribe", handler.Handle)
+
+	body := map[string]any{
+		"email": "user@example.com", "human_check": "human",
+		"behavior": map[string]any{
+			"formShownAt": float64(time.Now().Add(-10 * time.Second).UnixMilli()),
+			"submittedAt": float64(time.Now().UnixMilli()), "mouse": true, "typed": true,
+		},
+	}
+	raw, _ := json.Marshal(body)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/subscribe", bytes.NewBuffer(raw))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if len(emitter.events) != 1 || emitter.events[0] != serviceevents.MarketingSubscriberCreated {
+		t.Fatalf("activity events = %v", emitter.events)
+	}
+	stub.subscriberOK = true
+	stub.subscriberInfo = &listmonk.SubscriberInfo{
+		Status: "enabled",
+		Lists:  []listmonk.ListSubscription{{ListID: 99, Status: "confirmed"}},
+	}
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/subscribe", bytes.NewBuffer(raw))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(emitter.events) != 1 {
+		t.Fatalf("existing subscriber status = %d, activity events = %v", response.Code, emitter.events)
+	}
+}
+
 func TestSubscribeRejectsBlocklistedSubscriber(t *testing.T) {
 	harness := setupSubscribeHandler()
 	harness.stub.subscriberOK = true
@@ -285,6 +328,7 @@ func TestSubscribeHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
 		true,
 		logger,
 		metrics,
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -320,6 +364,7 @@ func TestSubscribeHandlerListmonkErrorMapsToBadGateway(t *testing.T) {
 		false,
 		logger,
 		metrics,
+		nil,
 	)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -385,7 +430,7 @@ func TestSubscribeRetriesWithBackoff(t *testing.T) {
 	)
 	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 
@@ -447,7 +492,7 @@ func TestSubscribeSuppressesDuplicateSubmission(t *testing.T) {
 	)
 	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 
@@ -519,7 +564,7 @@ func TestSubscribeTimeoutReturnsGatewayTimeout(t *testing.T) {
 	)
 	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 

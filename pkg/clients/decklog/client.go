@@ -670,11 +670,18 @@ func (c *BatchedClient) SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent)
 
 // SendServiceEvent sends a service-plane event to Decklog (service_events topic).
 func (c *BatchedClient) SendServiceEvent(event *ipcpb.ServiceEvent) error {
+	return c.SendServiceEventContext(context.Background(), event)
+}
+
+// SendServiceEventContext sends a service-plane event with a caller-owned
+// deadline. Producers on request paths use this form so telemetry cannot hold
+// the user response open during a Decklog outage.
+func (c *BatchedClient) SendServiceEventContext(ctx context.Context, event *ipcpb.ServiceEvent) error {
 	if c.disabled() {
 		return nil
 	}
 	c.stampServiceEnvelope(event)
-	ctx := c.authContext()
+	ctx = c.authContextFrom(ctx)
 	_, err := c.client.SendServiceEvent(ctx, event)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{

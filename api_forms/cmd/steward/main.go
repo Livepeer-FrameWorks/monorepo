@@ -2,6 +2,7 @@ package main
 
 import (
 	"frameworks/api_forms/internal/handlers"
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
@@ -12,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -60,6 +62,26 @@ func main() {
 		),
 	}
 
+	var activityEmitter handlers.ActivityEmitter
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        strings.TrimSpace(config.GetEnv("DECKLOG_GRPC_ADDR", "")),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    strings.TrimSpace(config.GetEnv("GRPC_TLS_CA_PATH", "")),
+		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Timeout:       5 * time.Second,
+		Source:        "steward",
+		ServiceToken:  strings.TrimSpace(config.GetEnv("SERVICE_TOKEN", "")),
+		ClusterID:     strings.TrimSpace(config.GetEnv("CLUSTER_ID", "")),
+		SourceRegion:  strings.TrimSpace(config.GetEnv("REGION", "")),
+		Optional:      true,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to initialize optional Decklog activity emitter")
+	} else {
+		defer func() { _ = decklogClient.Close() }()
+		activityEmitter = &handlers.DecklogActivityEmitter{Client: decklogClient}
+	}
+
 	contactHandler := handlers.NewContactHandler(
 		emailSender,
 		turnstileValidator,
@@ -69,6 +91,7 @@ func main() {
 		turnstileEnabled,
 		logger,
 		formMetrics,
+		activityEmitter,
 	)
 
 	app.POST("/api/contact", contactHandler.Handle)
@@ -85,7 +108,7 @@ func main() {
 			logger.Warn("LISTMONK_URL is set but LISTMONK_API_USERNAME or LISTMONK_API_TOKEN is missing, subscribe endpoint disabled")
 		} else {
 			lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkToken)
-			subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
+			subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics, activityEmitter)
 			app.POST("/api/subscribe", subHandler.Handle)
 		}
 	} else {

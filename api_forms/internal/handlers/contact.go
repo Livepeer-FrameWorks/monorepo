@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"frameworks/api_forms/internal/validation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ type ContactHandler struct {
 	turnstileEnabled   bool
 	logger             logging.Logger
 	metrics            *FormMetrics
+	activityEmitter    ActivityEmitter
 }
 
 func NewContactHandler(
@@ -32,6 +34,7 @@ func NewContactHandler(
 	turnstileEnabled bool,
 	logger logging.Logger,
 	metrics *FormMetrics,
+	activityEmitter ActivityEmitter,
 ) *ContactHandler {
 	return &ContactHandler{
 		emailSender:        emailSender,
@@ -42,6 +45,7 @@ func NewContactHandler(
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
 		metrics:            metrics,
+		activityEmitter:    activityEmitter,
 	}
 }
 
@@ -144,6 +148,11 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 		"email":   redactEmail(req.Email),
 		"company": req.Company,
 	}).Info("Email sent successfully")
+	if h.activityEmitter != nil {
+		if err := h.activityEmitter.EmitActivity(c.Request.Context(), serviceevents.MarketingContactDelivered); err != nil {
+			h.logger.WithError(err).Warn("Failed to emit contact delivery activity")
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

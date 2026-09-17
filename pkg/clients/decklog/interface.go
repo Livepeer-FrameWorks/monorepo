@@ -23,6 +23,7 @@ type Interface interface {
 	SendFederationEvent(data *ipcpb.FederationEventData) error
 	SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent) error
 	SendServiceEvent(event *ipcpb.ServiceEvent) error
+	SendServiceEventContext(ctx context.Context, event *ipcpb.ServiceEvent) error
 }
 
 var _ Interface = (*BatchedClient)(nil)

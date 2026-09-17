@@ -8,13 +8,19 @@ package serviceevents
 // delivers it only on the operator channel.
 const PlatformIncidentUpdated = "platform_incident_updated"
 
+const (
+	MarketingContactDelivered  = "marketing_contact_delivered"
+	MarketingSubscriberCreated = "marketing_subscriber_created"
+)
+
 // PlatformScoped reports whether eventType may be produced without a tenant.
 // These events describe infrastructure no tenant owns, such as a cluster
 // created without an owner, or are addressed to platform operators. Every
 // other service event belongs to a tenant.
 func PlatformScoped(eventType string) bool {
 	switch eventType {
-	case "cluster_created", "cluster_updated", PlatformIncidentUpdated:
+	case "cluster_created", "cluster_updated", PlatformIncidentUpdated,
+		MarketingContactDelivered, MarketingSubscriberCreated:
 		return true
 	default:
 		return false

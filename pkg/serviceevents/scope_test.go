@@ -7,6 +7,8 @@ func TestPlatformScopedAllowsOnlyClusterLifecycleAndOperatorEvents(t *testing.T)
 		"cluster_created":           true,
 		"cluster_updated":           true,
 		"platform_incident_updated": true,
+		MarketingContactDelivered:   true,
+		MarketingSubscriberCreated:  true,
 		"incident_updated":          false,
 		"cluster_invite_created":    false,
 		"tenant_created":            false,

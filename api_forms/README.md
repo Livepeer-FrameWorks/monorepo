@@ -44,3 +44,5 @@ make build-bin-steward
 - SMTP email delivery for contact requests.
 - Optional Listmonk subscription with duplicate handling.
 - Request counters for contact and subscribe outcomes.
+- Optional payload-free `marketing_contact_delivered` and
+  `marketing_subscriber_created` service events for Lookout operator activity.

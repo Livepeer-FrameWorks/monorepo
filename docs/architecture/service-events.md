@@ -130,6 +130,11 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 
 - `incident_updated` (tenant-scoped incidents only; platform incidents are not emitted). See [lookout.md](lookout.md).
 
+**Marketing (Steward)**
+
+- `marketing_contact_delivered`, `marketing_subscriber_created` (platform-scoped,
+  payload-free operator activity facts)
+
 ---
 
 ## 5. Producers & Payloads
@@ -143,6 +148,7 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 | Deckhand      | `MessageLifecycleData`                                                                                               | Messaging lifecycle                           |
 | Lookout       | `IncidentEvent`                                                                                                      | Tenant incident changes                       |
 | Foghorn       | `ArtifactEvent`                                                                                                      | Artifact lifecycle (clip/DVR/VOD)             |
+| Steward       | No typed payload                                                                                                     | Successful marketing form actions             |
 
 **Notes**
 
@@ -162,6 +168,10 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 - Commodore emits `media.retention_policy.changed`, `media.retention.override_applied`, and `media.retention.override_reset` for customer-tunable storage retention changes.
 - Commodore emits `stream_updated` with `push_targets` or `playback_policy` in `changed_fields` when those stream-level controls change, and `playback_policy_changed` ArtifactEvents for clip/VOD playback policy changes.
 - Usage tracking reserves system tenant UUIDs (including an anonymous usage bucket) to avoid dropping unauthenticated traffic from rollups.
+- Lookout selects a small source-checked allowlist of direct service events for
+  Slack/Discord operator activity. It does not infer milestones or notify on
+  every service event. Steward's two marketing events are allowed without a
+  tenant because they contain no submitter data.
 
 ---
 

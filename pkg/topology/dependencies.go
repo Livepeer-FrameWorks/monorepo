@@ -133,6 +133,9 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "tier gating and billing checks"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "cluster and infrastructure diagnostics"},
 	},
+	"steward": {
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "marketing operator activity events"},
+	},
 	"vmagent": {
 		{TargetServiceID: "vmauth", EnvKey: "VMAGENT_REMOTE_WRITE_URL", Transport: "http", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "authenticated metrics remote write"},
 		{TargetServiceID: "victoriametrics", EnvKey: "VMAGENT_REMOTE_WRITE_URL", Transport: "http", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "direct metrics remote write when vmauth is absent"},
@@ -150,7 +153,7 @@ var infraDependencies = map[string][]InfraDependency{
 	"commodore": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
 	"decklog":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
 	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
-	"lookout":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "incident, timeline, and notification outbox state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "tenant incident publication for Skipper and cluster ownership changes from service events"}},
+	"lookout":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "incident, timeline, and operator notification outbox state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "tenant incident publication, cluster ownership changes, and operator activity from service events"}},
 	"navigator": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
 	"periscope-ingest": {
 		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "distributed ledger-worker leases"},

@@ -18,7 +18,11 @@ Foredeck (website_marketing)
 │    (api_forms)    │                        └──────┘
 │  Turnstile verify │   POST /api/subscribe  ┌──────────┐
 │  honeypot/behavior│───────────────────────▶│ Listmonk │ → mailing list
-└───────────────────┘   (only when           └──────────┘
+│                   │                        └──────────┘
+│                   │   successful actions  ┌─────────┐
+│                   │ - - - - - - - - - - ▶│ Decklog │ → operator activity
+└───────────────────┘   (best effort)        └─────────┘
+                        (subscribe only when
                          LISTMONK_URL set)
 ```
 
@@ -46,6 +50,22 @@ Environment shape is documented in `api_forms/env.example`; key variables:
 `PORT` (default 18032), `TURNSTILE_FORMS_SECRET_KEY`, `ALLOWED_ORIGINS` (CORS),
 `SMTP_HOST/PORT/USER/PASSWORD`, `FROM_EMAIL`, `TO_EMAIL`, `LISTMONK_URL`,
 `LISTMONK_API_USERNAME`, `LISTMONK_API_TOKEN`, `DEFAULT_MAILING_LIST_ID`.
+`DECKLOG_GRPC_ADDR` enables best-effort operator activity events and uses the
+shared `SERVICE_TOKEN` plus gRPC TLS settings. An absent address disables the
+emitter without disabling either form endpoint.
+
+## Operator activity
+
+After the primary downstream action succeeds, Steward emits a payload-free,
+platform-scoped service event:
+
+- `marketing_contact_delivered` after SMTP accepts the contact message.
+- `marketing_subscriber_created` after Listmonk creates a new subscription.
+
+Existing or conflicting Listmonk subscriptions do not emit another event.
+Contact content, email addresses, names, IP addresses, and bot signals never
+enter the event. Publishing is best effort with a one-second deadline and does
+not change the HTTP result; SMTP and Listmonk remain the primary actions.
 
 ## Key Files
 

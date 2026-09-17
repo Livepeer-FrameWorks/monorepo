@@ -18,3 +18,9 @@ type ListmonkClient interface {
 	Subscribe(ctx context.Context, email, name string, listID int, preconfirm bool) error
 	GetSubscriber(ctx context.Context, email string) (*listmonk.SubscriberInfo, bool, error)
 }
+
+// ActivityEmitter publishes a redacted fact after Steward's primary action
+// succeeds. Delivery is best-effort and never changes the HTTP result.
+type ActivityEmitter interface {
+	EmitActivity(ctx context.Context, eventType string) error
+}
