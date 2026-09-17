@@ -95,7 +95,7 @@ func main() {
 		UsageQuarantine:           metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
 		WebhookSignatureFailures:  metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
 		CryptoScannerBlocks:       metricsCollector.NewGauge("crypto_scanner_block", "Observed crypto scanner block by head kind", []string{"network", "head"}),
-		CryptoScannerErrors:       metricsCollector.NewCounter("crypto_scanner_errors_total", "Crypto scanner errors", []string{"network"}),
+		CryptoScannerErrors:       metricsCollector.NewCounter("crypto_scanner_errors_total", "Crypto scanner errors by scan stage and cause", []string{"network", "stage", "reason"}),
 		CryptoDepositReorgs:       metricsCollector.NewCounter("crypto_deposit_reorg_reversals_total", "Allocated crypto deposit reversals after canonicality failure", []string{"network", "purpose"}),
 		CryptoUnsweptBaseUnits:    metricsCollector.NewGauge("crypto_unswept_base_units", "Confirmed custody amount not yet assigned to a confirmed sweep", []string{"network", "asset"}),
 		CryptoOldestUnswept:       metricsCollector.NewGauge("crypto_oldest_unswept_age_seconds", "Age of the oldest confirmed unswept custody source", []string{"network", "asset"}),

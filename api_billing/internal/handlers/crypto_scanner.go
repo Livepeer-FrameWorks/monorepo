@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -63,11 +65,11 @@ type observedDeposit struct {
 func (cm *CryptoMonitor) scanRPCDeposits(ctx context.Context) {
 	for _, network := range DepositNetworks(cm.includeTestnets) {
 		if network.GetRPCEndpointWithDefault() == "" {
-			cm.recordScannerError(ctx, network.Name, "RPC endpoint is not configured")
+			cm.recordScannerError(ctx, network.Name, "configuration", "configuration", "RPC endpoint is not configured")
 			continue
 		}
 		if err := cm.scanRPCNetwork(ctx, network); err != nil {
-			cm.recordScannerError(ctx, network.Name, err.Error())
+			cm.recordScannerError(ctx, network.Name, cryptoScannerErrorStage(err), cryptoScannerErrorReason(err), err.Error())
 			cm.logger.WithError(err).WithField("network", network.Name).Warn("Crypto RPC scan failed")
 		}
 	}
@@ -79,28 +81,28 @@ func (cm *CryptoMonitor) scanRPCDeposits(ctx context.Context) {
 func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConfig) error {
 	latest, err := cm.rpcBlockNumber(ctx, network)
 	if err != nil {
-		return err
+		return newCryptoScannerError("latest_head", err)
 	}
 	finality, err := GetFinalityHead(ctx, cm.rpc, network)
 	if err != nil {
-		return err
+		return newCryptoScannerError("finalized_head", err)
 	}
 	if cm.metrics != nil && cm.metrics.CryptoScannerBlocks != nil {
 		cm.metrics.CryptoScannerBlocks.WithLabelValues(network.Name, "latest").Set(float64(latest))
 		cm.metrics.CryptoScannerBlocks.WithLabelValues(network.Name, "finalized").Set(float64(finality.Number))
 	}
 	if err := cm.reconcileAllocatedDepositCanonicality(ctx, network); err != nil {
-		return err
+		return newCryptoScannerError("canonicality", err)
 	}
 	safeHead := finality.Number
 	next, lastBlock, lastHash, err := cm.loadOrCreateScanCursor(ctx, network, safeHead)
 	if err != nil {
-		return err
+		return newCryptoScannerError("cursor_load", err)
 	}
 	if lastBlock.Valid && lastHash.Valid {
 		canonical, blockErr := cm.rpcBlockByNumber(ctx, network, lastBlock.Int64, false)
 		if blockErr != nil {
-			return blockErr
+			return newCryptoScannerError("canonical_head", blockErr)
 		}
 		if canonical == nil || !strings.EqualFold(canonical.Hash, lastHash.String) {
 			rewind := lastBlock.Int64 - int64(network.Confirmations)
@@ -108,13 +110,13 @@ func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConf
 				rewind = 0
 			}
 			if err := cm.rewindScanCursor(ctx, network.Name, rewind); err != nil {
-				return err
+				return newCryptoScannerError("cursor_rewind", err)
 			}
 			next = rewind
 		}
 	}
 	if next > safeHead {
-		return cm.updateScannerLag(ctx, network.Name, safeHead, latest-next)
+		return newCryptoScannerError("cursor_update", cm.updateScannerLag(ctx, network.Name, safeHead, latest-next))
 	}
 	end := next + cryptoScanBatchBlocks - 1
 	if end > safeHead {
@@ -123,23 +125,23 @@ func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConf
 
 	addresses, err := cm.knownDepositAddresses(ctx, network.Name)
 	if err != nil {
-		return err
+		return newCryptoScannerError("deposit_addresses", err)
 	}
 	if len(addresses) == 0 {
 		block, err := cm.rpcBlockByNumber(ctx, network, end, false)
 		if err != nil {
-			return err
+			return newCryptoScannerError("empty_address_head", err)
 		}
-		return cm.commitScanBatch(ctx, network.Name, next, end, safeHead, block.Hash, nil)
+		return newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, block.Hash, nil))
 	}
 
 	events, err := cm.scanUSDCLogs(ctx, network, next, end, addresses)
 	if err != nil {
-		return err
+		return newCryptoScannerError("usdc_logs", err)
 	}
 	blocks, err := cm.rpcBlocksByNumber(ctx, network, next, end, true)
 	if err != nil {
-		return err
+		return newCryptoScannerError("block_batch", err)
 	}
 	for index := range blocks {
 		blockNumber := next + int64(index)
@@ -160,7 +162,59 @@ func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConf
 			})
 		}
 	}
-	return cm.commitScanBatch(ctx, network.Name, next, end, safeHead, blocks[len(blocks)-1].Hash, events)
+	return newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, blocks[len(blocks)-1].Hash, events))
+}
+
+type cryptoScannerError struct {
+	stage string
+	err   error
+}
+
+func (e *cryptoScannerError) Error() string { return e.stage + ": " + e.err.Error() }
+func (e *cryptoScannerError) Unwrap() error { return e.err }
+
+func newCryptoScannerError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &cryptoScannerError{stage: stage, err: err}
+}
+
+func cryptoScannerErrorStage(err error) string {
+	var scanErr *cryptoScannerError
+	if errors.As(err, &scanErr) {
+		return scanErr.stage
+	}
+	return "unknown"
+}
+
+func cryptoScannerErrorReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "rpc http 429"):
+		return "rate_limited"
+	case strings.Contains(message, "rpc http 401"), strings.Contains(message, "rpc http 403"):
+		return "authentication"
+	case strings.Contains(message, "rpc http 5"):
+		return "provider_http"
+	case strings.Contains(message, "rpc error:"):
+		return "rpc_response"
+	case strings.Contains(message, "invalid character"), strings.Contains(message, "cannot unmarshal"), strings.Contains(message, "no usable"):
+		return "invalid_response"
+	case strings.Contains(message, "not configured"), strings.Contains(message, "is required in production"):
+		return "configuration"
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return "network"
+	}
+	return "internal"
 }
 
 func (cm *CryptoMonitor) loadOrCreateScanCursor(ctx context.Context, network NetworkConfig, safeHead int64) (int64, sql.NullInt64, sql.NullString, error) {
@@ -394,9 +448,9 @@ func (cm *CryptoMonitor) updateScannerLag(ctx context.Context, network string, s
 	})
 }
 
-func (cm *CryptoMonitor) recordScannerError(ctx context.Context, network, message string) {
+func (cm *CryptoMonitor) recordScannerError(ctx context.Context, network, stage, reason, message string) {
 	if cm.metrics != nil && cm.metrics.CryptoScannerErrors != nil {
-		cm.metrics.CryptoScannerErrors.WithLabelValues(network).Inc()
+		cm.metrics.CryptoScannerErrors.WithLabelValues(network, stage, reason).Inc()
 	}
 	_ = purserdb.New(cm.db).RecordCryptoScannerError(ctx, purserdb.RecordCryptoScannerErrorParams{
 		Network: network, Message: sql.NullString{String: message, Valid: true},

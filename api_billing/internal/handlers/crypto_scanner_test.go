@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,46 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestCryptoScannerErrorStage(t *testing.T) {
+	cause := errors.New("provider timed out")
+	err := newCryptoScannerError("finalized_head", cause)
+	if got := cryptoScannerErrorStage(err); got != "finalized_head" {
+		t.Fatalf("stage = %q", got)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("wrapped error does not retain cause: %v", err)
+	}
+	if got := cryptoScannerErrorStage(cause); got != "unknown" {
+		t.Fatalf("untyped stage = %q", got)
+	}
+	if err := newCryptoScannerError("batch_commit", nil); err != nil {
+		t.Fatalf("nil cause = %v", err)
+	}
+}
+
+func TestCryptoScannerErrorReason(t *testing.T) {
+	tests := map[string]struct {
+		err  error
+		want string
+	}{
+		"timeout":          {err: context.DeadlineExceeded, want: "timeout"},
+		"rate limited":     {err: errors.New("RPC HTTP 429: quota exceeded"), want: "rate_limited"},
+		"authentication":   {err: errors.New("RPC HTTP 403: denied"), want: "authentication"},
+		"provider failure": {err: errors.New("RPC HTTP 503: unavailable"), want: "provider_http"},
+		"RPC response":     {err: errors.New("RPC error: method disabled"), want: "rpc_response"},
+		"invalid response": {err: errors.New("RPC returned no usable finalized head"), want: "invalid_response"},
+		"configuration":    {err: errors.New("RPC endpoint is not configured"), want: "configuration"},
+		"internal":         {err: errors.New("database write failed"), want: "internal"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := cryptoScannerErrorReason(test.err); got != test.want {
+				t.Fatalf("reason = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestHexQuantityToDecimal(t *testing.T) {
 	got, err := hexQuantityToDecimal("0xde0b6b3a7640000")
