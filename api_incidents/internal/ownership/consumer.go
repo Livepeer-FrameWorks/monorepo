@@ -18,7 +18,8 @@ import (
 
 const (
 	// ConsumerGroup is the competing consumer group every Lookout replica joins
-	// on the aggregator service_events topic.
+	// on the aggregator service_events topic. Its legacy name is retained because
+	// changing it would replay retained activity events to operator channels.
 	ConsumerGroup = "lookout-cluster-ownership"
 
 	eventClusterCreated = "cluster_created"

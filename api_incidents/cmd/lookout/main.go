@@ -127,22 +127,32 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	webhookDispatcher := &notify.Dispatcher{
+		Channels: router,
+		HTTP:     &http.Client{Timeout: 10 * time.Second},
+		Mailer:   notify.SMTPMailer,
+		Producer: producer,
+		Topic:    cfg.IncidentsTopic,
+		Logger:   logger,
+		Metrics:  domainMetrics,
+	}
 	deliveryWorker := &outbox.Worker[notify.Delivery]{
-		Config: deliveryOutboxConfig,
-		Store:  &notify.Store{DB: db, Channels: router, Metrics: domainMetrics, Logger: logger},
-		Dispatcher: &notify.Dispatcher{
-			Channels: router,
-			HTTP:     &http.Client{Timeout: 10 * time.Second},
-			Mailer:   notify.SMTPMailer,
-			Producer: producer,
-			Topic:    cfg.IncidentsTopic,
-			Logger:   logger,
-			Metrics:  domainMetrics,
-		},
+		Config:     deliveryOutboxConfig,
+		Store:      &notify.Store{DB: db, Channels: router, Metrics: domainMetrics, Logger: logger},
+		Dispatcher: webhookDispatcher,
 		Logger:     logger,
 		AlertLabel: "lookout delivery outbox",
 	}
+	activityStore := &notify.ActivityStore{DB: db, Metrics: domainMetrics, Logger: logger}
+	activityWorker := &outbox.Worker[notify.ActivityDelivery]{
+		Config:     deliveryOutboxConfig,
+		Store:      activityStore,
+		Dispatcher: &notify.ActivityDispatcher{Webhook: webhookDispatcher},
+		Logger:     logger,
+		AlertLabel: "lookout operator activity outbox",
+	}
 	go deliveryWorker.Run(ctx)
+	go activityWorker.Run(ctx)
 	go (&notify.Retention{DB: db, Metrics: domainMetrics, Logger: logger}).Run(ctx)
 
 	ownershipConsumer, err := kafka.NewConsumer(cfg.KafkaBrokers, ownership.ConsumerGroup, cfg.KafkaClusterID, "lookout", logger,
@@ -155,7 +165,13 @@ func main() {
 	}
 	defer func() { _ = ownershipConsumer.Close() }()
 	ownershipHandler := &ownership.Consumer{Reconciler: incidentService, Logger: logger, Metrics: domainMetrics}
-	ownershipConsumer.AddHandler(cfg.ServiceEventsTopic, ownershipHandler.HandleUntilApplied)
+	activityHandler := &notify.ActivityConsumer{Sink: activityStore, Channels: router, Logger: logger, Metrics: domainMetrics}
+	ownershipConsumer.AddHandler(cfg.ServiceEventsTopic, func(ctx context.Context, msg kafka.Message) error {
+		if err := activityHandler.HandleUntilEnqueued(ctx, msg); err != nil {
+			return err
+		}
+		return ownershipHandler.HandleUntilApplied(ctx, msg)
+	})
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(ownershipConsumer.GetClient()))
 	go func() {
 		// Start returns when group membership is lost; restarting the process

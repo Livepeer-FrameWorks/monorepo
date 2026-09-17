@@ -37,8 +37,9 @@ type Config struct {
 	KafkaBrokers          []string
 	KafkaClusterID        string
 	IncidentsTopic        string
-	// ServiceEventsTopic is the aggregator's local service_events topic.
-	// Quartermaster publishes there, so mirrored regional copies are not read.
+	// ServiceEventsTopic is the aggregator's local service_events topic. Central
+	// control-plane and marketing producers publish there, so mirrored regional
+	// copies are not read.
 	ServiceEventsTopic string
 	ClusterID          string
 	NodeID             string

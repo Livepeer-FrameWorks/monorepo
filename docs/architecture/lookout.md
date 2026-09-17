@@ -2,8 +2,10 @@
 
 Lookout (`api_incidents`, binary `lookout`) turns Alertmanager notifications into incidents,
 lets platform operators and tenants act on them, notifies operator channels, and hands tenant
-incidents to Skipper for investigation. Alertmanager keeps grouping, deduplication, inhibition,
-and silences; Lookout owns everything after one grouped notification arrives.
+incidents to Skipper for investigation. The same process also delivers a small allowlist of
+direct operator-activity events to Slack and Discord, through a separate outbox that never
+creates incidents. Alertmanager keeps grouping, deduplication, inhibition, and silences;
+Lookout owns everything after one grouped notification arrives.
 
 ```
 vmalert → Alertmanager ─┬─ Watchdog ──────────────→ external heartbeat
@@ -14,6 +16,8 @@ vmalert → Alertmanager ─┬─ Watchdog ────────────
                                                         ├─ outbox → email / Slack / Discord  (platform scope)
                                                         ├─ outbox → Kafka lookout.incidents  (tenant scope) → Skipper
                                                         └─ Decklog incident_updated → Signalman CHANNEL_SYSTEM (tenant scope)
+
+service_events → allowlist/source check → operator_activity_outbox → Slack / Discord
 ```
 
 ## Service
@@ -174,13 +178,14 @@ resolves it.
 
 ## Data model
 
-| Table                         | Contents                                                                                                                                                                                                              |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lookout.cluster_scopes`      | One row per alerting cluster: scope, tenant, `verified`, Quartermaster `source_updated_at` (NULL for `NotFound`), `revision`/`applied_revision` (a pending incident move); an unverified row is always platform scope |
-| `lookout.incidents`           | Scope (`platform`/`tenant`, tenant required exactly for tenant scope), cluster, region, group key, alertname, severity, status, resolution, title, summary, alert/ack/assign/resolve timestamps and actors            |
-| `lookout.incident_alerts`     | Latest state per `(incident_id, fingerprint)`: status, labels/annotations JSONB, `starts_at`, `ends_at` (NULL while firing), generator URL                                                                            |
-| `lookout.incident_events`     | Timeline: `alert_firing`, `alert_resolved`, `acknowledged`, `assigned`, `note`, `resolved`, `investigation_attached`, `notified`; actor, JSONB body                                                                   |
-| `lookout.notification_outbox` | One row per `(event_id, channel)`: payload snapshot, attempts, `next_attempt_at`, `claimed_at`, `lease_token`, `last_error`, `delivered_at`, `failed_at` (at most one of the two settles a row)                       |
+| Table                              | Contents                                                                                                                                                                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lookout.cluster_scopes`           | One row per alerting cluster: scope, tenant, `verified`, Quartermaster `source_updated_at` (NULL for `NotFound`), `revision`/`applied_revision` (a pending incident move); an unverified row is always platform scope |
+| `lookout.incidents`                | Scope (`platform`/`tenant`, tenant required exactly for tenant scope), cluster, region, group key, alertname, severity, status, resolution, title, summary, alert/ack/assign/resolve timestamps and actors            |
+| `lookout.incident_alerts`          | Latest state per `(incident_id, fingerprint)`: status, labels/annotations JSONB, `starts_at`, `ends_at` (NULL while firing), generator URL                                                                            |
+| `lookout.incident_events`          | Timeline: `alert_firing`, `alert_resolved`, `acknowledged`, `assigned`, `note`, `resolved`, `investigation_attached`, `notified`; actor, JSONB body                                                                   |
+| `lookout.notification_outbox`      | One row per `(event_id, channel)`: payload snapshot, attempts, `next_attempt_at`, `claimed_at`, `lease_token`, `last_error`, `delivered_at`, `failed_at` (at most one of the two settles a row)                       |
+| `lookout.operator_activity_outbox` | Idempotent Slack/Discord activity deliveries keyed by `(source_event_id, channel)`; independent from incidents and their timeline                                                                                     |
 
 Check constraints tie `resolution` and `resolved_at` to `status = 'resolved'`.
 `uq_incidents_open_group_key` allows one unresolved incident per group key.
@@ -242,7 +247,8 @@ destination that rejects the delivery permanently, such as a webhook answering 4
 
 Every Lookout replica runs a retention loop hourly (first sweep at startup): delivered rows older
 than 7 days and failed rows older than 30 days are deleted in batches of 500, at most 20 batches per
-state per sweep. Deleted rows are counted in `lookout_outbox_rows_deleted_total{state}`. Pending
+state per sweep. Deleted rows are counted in `lookout_outbox_rows_deleted_total{state}`; activity
+rows use `activity_delivered` and `activity_failed`. Pending
 rows are never deleted by retention.
 
 - **Slack:** incoming webhook with Block Kit header, summary (mrkdwn-escaped), fields, and an
@@ -257,6 +263,33 @@ summary}` and headers `tenant_id`, `event_type=incident_opened`, `source=lookout
 
 Webhook transport errors are unwrapped from `*url.Error`, so webhook URLs never reach logs or
 `last_error`. A row whose channel secret was removed after it was queued is settled as skipped.
+
+## Operator activity
+
+Lookout's existing `service_events` consumer also selects direct, committed
+events for operator chat. The legacy consumer-group name remains
+`lookout-cluster-ownership` so deployment does not replay retained history when
+this capability is enabled. Enqueue is idempotent and the Kafka partition does
+not advance past a selected event until its activity rows exist.
+
+The allowlist is source-checked so API observation events cannot duplicate the
+service-of-record fact:
+
+| Source        | Events                                                                                                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quartermaster | `tenant_created`, `cluster_subscription_requested`                                                                                                 |
+| Commodore     | `stream_created`                                                                                                                                   |
+| Purser        | `subscription_created`, `subscription_canceled`, `payment_succeeded`, `payment_failed`, `invoice_payment_failed`, `topup_credited`, `topup_failed` |
+| Deckhand      | `conversation_created`                                                                                                                             |
+| Steward       | `marketing_contact_delivered`, `marketing_subscriber_created`                                                                                      |
+
+Only configured Slack and Discord destinations are enqueued. Activity rows
+retain source-event identity for deduplication; message payloads contain
+tenant/resource IDs, billing facts, and coarse signup
+attribution where present. They do not copy arbitrary event data. In particular,
+Steward emits no submitter payload, so contact content and subscriber identity
+cannot enter Kafka or the chat message. Delivered activity rows are retained for
+7 days and terminal failures for 30 days, matching incident delivery retention.
 
 ## Realtime
 
@@ -301,7 +334,8 @@ investigation.
 | `lookout_ownership_reconciles_total`                                   | `source`, `result`            | source `event` or `startup`; result `rescoped`, `unchanged`, `unverified`, `error`, `invalid` (events only)                                            |
 | `lookout_kafka_consumer_lag`                                           | `topic`, `partition`          | Uncommitted records of the `lookout-cluster-ownership` group                                                                                           |
 | `lookout_deliveries_total`                                             | `channel`, `result`           | per attempt `delivered`, `error`, `skipped`; `failed` once when a row reaches the attempt limit                                                        |
-| `lookout_outbox_rows_deleted_total`                                    | `state`                       | `delivered`, `failed` (rows removed by retention)                                                                                                      |
+| `lookout_outbox_rows_deleted_total`                                    | `state`                       | `delivered`, `failed`, `activity_delivered`, `activity_failed` (rows removed by retention)                                                             |
+| `lookout_operator_activity_events_total`                               | `event_type`, `result`        | direct allowlisted events: `enqueued`, `disabled`, `invalid`, or `error`                                                                               |
 | `lookout_realtime_events_total`                                        | `result`                      | `sent`, `error`                                                                                                                                        |
 | `lookout_grpc_requests_total`, `lookout_grpc_request_duration_seconds` | `method`, `status` / `method` | Per-RPC counts and latency, including auth rejections                                                                                                  |
 
@@ -310,8 +344,9 @@ investigation.
 The `lookout` database is created with its owner and runtime roles, and its baseline applied, by
 `frameworks cluster provision` on a new cluster and by the service-database step of
 `cluster migrate --phase expand` / `cluster release apply` on an existing one (see
-`docs/standards/schema-migrations.md`, "New service databases"). The database is new in v0.3.8 and
-has no migrations. The pre-deploy gate refuses `cluster upgrade lookout` while the database is
+`docs/standards/schema-migrations.md`, "New service databases"). The database was introduced in
+v0.3.8; the operator-activity outbox is added by the v0.3.10 expand migration. The pre-deploy gate
+refuses `cluster upgrade lookout` while the database is
 missing or empty. The release catalog maps service `lookout` to database `lookout`, and
 `pkg/database/capabilities.go` probes the incident columns and the outbox leasing and settlement
 columns. Operator setup and verification: `website_docs/src/content/docs/operators/alerting.mdx`.

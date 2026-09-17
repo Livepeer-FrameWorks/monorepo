@@ -18,6 +18,7 @@ import (
 	"frameworks/api_incidents/internal/lookouttest"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
 
 	"github.com/prometheus/client_golang/prometheus"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -90,6 +91,85 @@ func TestLookoutDeliveryRetention_RealPG(t *testing.T) {
 
 func TestLookoutDeliveryRetention_RealYugabyte(t *testing.T) {
 	runDeliveryRetention(t, lookouttest.StartYugabyte(t))
+}
+
+func TestLookoutOperatorActivityOutbox_RealPG(t *testing.T) {
+	runOperatorActivityOutbox(t, lookouttest.StartPostgres(t))
+}
+
+func TestLookoutOperatorActivityOutbox_RealYugabyte(t *testing.T) {
+	runOperatorActivityOutbox(t, lookouttest.StartYugabyte(t))
+}
+
+func runOperatorActivityOutbox(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	store := &ActivityStore{DB: db, Metrics: testMetrics()}
+	activity := OperatorActivity{
+		SourceEventID: "event-signup-1",
+		EventType:     "tenant_created",
+		TenantID:      "11111111-1111-4111-8111-111111111111",
+		Payload: ActivityPayload{
+			Headline: "New tenant signup", Category: "growth",
+		},
+	}
+	channels := []string{incidents.ChannelSlack, incidents.ChannelDiscord}
+	if err := store.EnqueueActivity(ctx, activity, channels); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnqueueActivity(ctx, activity, channels); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM lookout.operator_activity_outbox WHERE source_event_id = $1`, activity.SourceEventID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("outbox rows = %d, want one per channel", rows)
+	}
+	platformActivity := OperatorActivity{
+		SourceEventID: "event-marketing-1",
+		EventType:     serviceevents.MarketingContactDelivered,
+		Payload: ActivityPayload{
+			Headline: "Contact form delivered", Category: "growth",
+		},
+	}
+	if err := store.EnqueueActivity(ctx, platformActivity, []string{incidents.ChannelSlack}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM lookout.operator_activity_outbox WHERE source_event_id = $1 AND tenant_id IS NULL`, platformActivity.SourceEventID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("platform outbox rows = %d, want 1 with a NULL tenant", rows)
+	}
+	claims, err := store.ClaimBatch(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 3 {
+		t.Fatalf("claims = %d, want 3", len(claims))
+	}
+	for _, claim := range claims {
+		if err := store.MarkCompletedToken(ctx, claim.ID, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, errLeaseLost) {
+			t.Fatalf("wrong-token completion error = %v, want %v", err, errLeaseLost)
+		}
+		if err := store.MarkCompletedToken(ctx, claim.ID, claim.LeaseToken); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM lookout.operator_activity_outbox WHERE source_event_id = $1 AND delivered_at IS NOT NULL`, activity.SourceEventID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("delivered rows = %d, want 2", rows)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM lookout.operator_activity_outbox WHERE source_event_id = $1 AND delivered_at IS NOT NULL`, platformActivity.SourceEventID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("delivered platform rows = %d, want 1", rows)
+	}
 }
 
 func runDeliveryOutboxTokenFencing(t *testing.T, db *sql.DB) {

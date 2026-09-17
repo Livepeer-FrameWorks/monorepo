@@ -1,6 +1,8 @@
 # Lookout (Incidents)
 
-Turns Alertmanager notifications into incidents, notifies operator channels, and feeds tenant incidents to Skipper and realtime subscribers.
+Turns Alertmanager notifications into incidents, notifies operator channels,
+feeds tenant incidents to Skipper and realtime subscribers, and delivers an
+allowlist of direct platform activity through the same process.
 
 ## What it does
 
@@ -10,6 +12,9 @@ Turns Alertmanager notifications into incidents, notifies operator channels, and
 - Serves `lookout.LookoutService` over gRPC: list, get, acknowledge, assign, resolve, notes, and Skipper investigation attachment
 - Delivers platform incident notifications to email, Slack, and Discord, and tenant incidents to Kafka `lookout.incidents`, through a lease-fenced outbox
 - Publishes tenant incident updates as `incident_updated` service events for Signalman
+- Delivers source-checked signup, product, billing, support, and marketing
+  activity events to configured Slack and Discord destinations through a
+  separate lease-fenced outbox
 
 ## Ports
 

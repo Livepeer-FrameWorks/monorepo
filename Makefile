@@ -878,7 +878,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALPG_TESTS)' -count=1 -timeout 600s ./internal/store/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/lookoutdb/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-incidents -tags schema_verify -run 'TestLookoutIngestStateMachine_RealPG|TestLookoutIncidentActions_RealPG|TestLookoutIncidentRescope_RealPG|TestLookoutOwnershipIngestRace_RealPG' -count=1 -timeout 600s ./internal/incidents/
-	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealPG|TestLookoutDeliveryTerminalFailure_RealPG|TestLookoutDeliveryRetention_RealPG' -count=1 -timeout 600s ./internal/notify/
+	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealPG|TestLookoutDeliveryTerminalFailure_RealPG|TestLookoutDeliveryRetention_RealPG|TestLookoutOperatorActivityOutbox_RealPG' -count=1 -timeout 600s ./internal/notify/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-grpc -tags schema_verify -run 'TestLookoutGRPCAuthorization_RealPG' -count=1 -timeout 600s ./internal/grpcserver/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-ownership -tags schema_verify -run 'TestLookoutClusterOwnershipEvent_RealPG|TestLookoutStartupOwnershipReconcile_RealPG|TestLookoutClusterCreatedOwnership_RealPG' -count=1 -timeout 600s ./internal/ownership/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestCrawlJobCatalog_RealPG' -count=1 -timeout 600s ./internal/database/skipperdb/
@@ -929,7 +929,7 @@ verify-lookout-db:
 	@echo "Verifying Lookout's incident state machine and delivery outbox on PostgreSQL (Docker)..."
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/lookoutdb/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-incidents -tags schema_verify -run 'TestLookoutIngestStateMachine_RealPG|TestLookoutIncidentActions_RealPG|TestLookoutIncidentRescope_RealPG|TestLookoutOwnershipIngestRace_RealPG' -count=1 -timeout 600s ./internal/incidents/
-	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealPG|TestLookoutDeliveryTerminalFailure_RealPG|TestLookoutDeliveryRetention_RealPG' -count=1 -timeout 600s ./internal/notify/
+	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealPG|TestLookoutDeliveryTerminalFailure_RealPG|TestLookoutDeliveryRetention_RealPG|TestLookoutOperatorActivityOutbox_RealPG' -count=1 -timeout 600s ./internal/notify/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-grpc -tags schema_verify -run 'TestLookoutGRPCAuthorization_RealPG' -count=1 -timeout 600s ./internal/grpcserver/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-ownership -tags schema_verify -run 'TestLookoutClusterOwnershipEvent_RealPG|TestLookoutStartupOwnershipReconcile_RealPG|TestLookoutClusterCreatedOwnership_RealPG' -count=1 -timeout 600s ./internal/ownership/
 
@@ -1156,7 +1156,7 @@ verify-yugabyte-skipper-contracts: verify-yugabyte-shared-fixture
 verify-yugabyte-lookout-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_incidents yugabyte/lookout-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte' -count=1 -timeout 1200s ./internal/database/lookoutdb/
 	@$(CONTRACT_GO_TEST) api_incidents yugabyte/lookout-incidents -tags schema_verify -run 'TestLookoutIngestStateMachine_RealYugabyte|TestLookoutIncidentActions_RealYugabyte|TestLookoutIncidentRescope_RealYugabyte|TestLookoutOwnershipIngestRace_RealYugabyte' -count=1 -timeout 1200s ./internal/incidents/
-	@$(CONTRACT_GO_TEST) api_incidents yugabyte/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealYugabyte|TestLookoutDeliveryTerminalFailure_RealYugabyte|TestLookoutDeliveryRetention_RealYugabyte' -count=1 -timeout 1200s ./internal/notify/
+	@$(CONTRACT_GO_TEST) api_incidents yugabyte/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealYugabyte|TestLookoutDeliveryTerminalFailure_RealYugabyte|TestLookoutDeliveryRetention_RealYugabyte|TestLookoutOperatorActivityOutbox_RealYugabyte' -count=1 -timeout 1200s ./internal/notify/
 	@$(CONTRACT_GO_TEST) api_incidents yugabyte/lookout-ownership -tags schema_verify -run 'TestLookoutClusterOwnershipEvent_RealYugabyte|TestLookoutStartupOwnershipReconcile_RealYugabyte|TestLookoutClusterCreatedOwnership_RealYugabyte' -count=1 -timeout 1200s ./internal/ownership/
 
 verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture

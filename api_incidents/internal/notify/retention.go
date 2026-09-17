@@ -24,7 +24,8 @@ const (
 	retentionMaxBatches = 20
 )
 
-// Retention deletes settled lookout.notification_outbox rows past retention.
+// Retention deletes settled incident and operator-activity outbox rows past
+// retention.
 type Retention struct {
 	DB      *sql.DB
 	Metrics *incidents.Metrics
@@ -77,7 +78,27 @@ func (r *Retention) Sweep(ctx context.Context) (int64, error) {
 	if err != nil {
 		return delivered + failed, fmt.Errorf("delete failed outbox rows: %w", err)
 	}
-	return delivered + failed, nil
+	activityDelivered, err := deleteInBatches(ctx, func(ctx context.Context) (int64, error) {
+		return q.DeleteDeliveredOperatorActivityRows(ctx, lookoutdb.DeleteDeliveredOperatorActivityRowsParams{
+			DeliveredBefore: now.Add(-deliveredRetention),
+			BatchSize:       retentionBatchSize,
+		})
+	})
+	r.Metrics.ObserveOutboxDeleted("activity_delivered", activityDelivered)
+	if err != nil {
+		return delivered + failed + activityDelivered, fmt.Errorf("delete delivered operator activity rows: %w", err)
+	}
+	activityFailed, err := deleteInBatches(ctx, func(ctx context.Context) (int64, error) {
+		return q.DeleteFailedOperatorActivityRows(ctx, lookoutdb.DeleteFailedOperatorActivityRowsParams{
+			FailedBefore: now.Add(-failedRetention),
+			BatchSize:    retentionBatchSize,
+		})
+	})
+	r.Metrics.ObserveOutboxDeleted("activity_failed", activityFailed)
+	if err != nil {
+		return delivered + failed + activityDelivered + activityFailed, fmt.Errorf("delete failed operator activity rows: %w", err)
+	}
+	return delivered + failed + activityDelivered + activityFailed, nil
 }
 
 // deleteInBatches repeats a bounded delete until a batch comes back short or
