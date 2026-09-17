@@ -162,6 +162,22 @@ func TestDiscordDeliveryUsesEmbedsWithoutMentions(t *testing.T) {
 	}
 }
 
+func TestBuildMessageDoesNotInventPlacement(t *testing.T) {
+	m := buildMessage(incidents.DeliveryPayload{
+		IncidentID: testIncidentID,
+		Alertname:  "ServiceDown",
+		Severity:   "critical",
+		Title:      "Service Down: signalman on regional-eu-1",
+		Summary:    "The Signalman metrics endpoint is unavailable.",
+		Event:      incidents.DeliveryEventOpened,
+	}, "")
+	for _, field := range m.Fields {
+		if field.Name == "Cluster" || field.Name == "Region" {
+			t.Fatalf("invented placement field = %+v", field)
+		}
+	}
+}
+
 type smtpMessage struct {
 	To   []string
 	Data string

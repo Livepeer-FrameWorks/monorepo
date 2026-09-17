@@ -135,6 +135,17 @@ func runIngestStateMachine(t *testing.T, database *sql.DB) {
 		t.Fatalf("repeat opened %s, want dedupe into %s", repeat.IncidentID, created.IncidentID)
 	}
 	assertStrings(t, "timeline after repeat", eventKinds(t, db, created.IncidentID), []string{EventAlertFiring})
+	repairedHook := testWebhook(group, "platform-cluster", testAlert("fp1", alertStatusFiring, "warning", t0))
+	repairedHook.GroupLabels["region"] = "eu-central"
+	repairedHook.CommonAnnotations = map[string]string{
+		"summary":     "Signalman on regional-eu-1 is unreachable",
+		"description": "VictoriaMetrics cannot scrape the Signalman metrics endpoint.",
+	}
+	mustIngest(t, svc, repairedHook, IngestUnchanged)
+	repaired := mustGet(t, svc, unrestricted, created.IncidentID).Incident
+	if repaired.Region != "eu-central" || repaired.Title != "Signalman on regional-eu-1 is unreachable" || repaired.Summary != "VictoriaMetrics cannot scrape the Signalman metrics endpoint." {
+		t.Fatalf("repaired incident = %+v", repaired)
+	}
 
 	mustIngest(t, svc, testWebhook(group, "platform-cluster",
 		testAlert("fp1", alertStatusFiring, "warning", t0),

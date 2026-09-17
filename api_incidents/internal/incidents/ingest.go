@@ -225,6 +225,9 @@ func (s *Service) ingestTx(ctx context.Context, q *lookoutdb.Queries, hook Alert
 	inc, err = q.UpdateIncidentAlerting(ctx, lookoutdb.UpdateIncidentAlertingParams{
 		LastAlertAt: now,
 		Severity:    severity,
+		Region:      facts.Region,
+		Title:       facts.Title,
+		Summary:     facts.Summary,
 		ID:          inc.ID,
 		TenantID:    inc.TenantID,
 	})

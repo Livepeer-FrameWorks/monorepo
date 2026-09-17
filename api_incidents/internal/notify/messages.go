@@ -67,11 +67,9 @@ func buildMessage(p incidents.DeliveryPayload, webappURL string) message {
 			m.Color = colorCritical
 		}
 	}
-	cluster := p.ClusterID
-	if cluster == "" {
-		cluster = "platform"
+	if p.ClusterID != "" {
+		m.Fields = append(m.Fields, messageField{Name: "Cluster", Value: p.ClusterID})
 	}
-	m.Fields = append(m.Fields, messageField{Name: "Cluster", Value: cluster})
 	if p.Region != "" {
 		m.Fields = append(m.Fields, messageField{Name: "Region", Value: p.Region})
 	}

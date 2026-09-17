@@ -77,16 +77,46 @@ func (w AlertmanagerWebhook) facts() groupFacts {
 		if v := strings.TrimSpace(w.GroupLabels[key]); v != "" {
 			return v
 		}
-		return strings.TrimSpace(w.CommonLabels[key])
+		if v := strings.TrimSpace(w.CommonLabels[key]); v != "" {
+			return v
+		}
+		for _, alert := range w.Alerts {
+			if v := strings.TrimSpace(alert.Labels[key]); v != "" {
+				return v
+			}
+		}
+		return ""
 	}
 	alertname := label("alertname")
 	title := strings.TrimSpace(w.CommonAnnotations["summary"])
+	if strings.EqualFold(title, alertname) {
+		title = ""
+	}
 	if title == "" {
-		title = alertname
+		titles := alertAnnotationValues(w.Alerts, "summary")
+		switch len(titles) {
+		case 0:
+			title = fallbackAlertTitle(alertname, label)
+		case 1:
+			title = titles[0]
+		default:
+			title = fmt.Sprintf("%s affects %d targets", humanizeAlertname(alertname), len(titles))
+		}
 	}
 	summary := strings.TrimSpace(w.CommonAnnotations["description"])
+	if strings.EqualFold(summary, alertname) {
+		summary = ""
+	}
 	if summary == "" {
-		summary = title
+		descriptions := alertAnnotationValues(w.Alerts, "description")
+		if len(descriptions) == 0 {
+			descriptions = alertAnnotationValues(w.Alerts, "summary")
+		}
+		if len(descriptions) > 0 {
+			summary = strings.Join(descriptions, "\n")
+		} else {
+			summary = title
+		}
 	}
 	return groupFacts{
 		GroupKey:  w.GroupKey,
@@ -96,6 +126,81 @@ func (w AlertmanagerWebhook) facts() groupFacts {
 		Title:     title,
 		Summary:   summary,
 	}
+}
+
+func fallbackAlertTitle(alertname string, label func(string) string) string {
+	title := humanizeAlertname(alertname)
+	service := label("frameworks_service")
+	if service == "" {
+		service = label("job")
+	}
+	if service != "" {
+		if node := label("node_id"); node != "" {
+			return fmt.Sprintf("%s: %s on %s", title, service, node)
+		}
+		return fmt.Sprintf("%s: %s", title, service)
+	}
+	if network := label("network"); network != "" {
+		if stage := label("stage"); stage != "" {
+			if reason := label("reason"); reason != "" {
+				return fmt.Sprintf("%s: %s during %s on %s", title, reason, stage, network)
+			}
+			return fmt.Sprintf("%s during %s on %s", title, stage, network)
+		}
+		return fmt.Sprintf("%s on %s", title, network)
+	}
+	if topic := label("topic"); topic != "" {
+		if region := label("region"); region != "" {
+			return fmt.Sprintf("%s for %s in %s", title, topic, region)
+		}
+		return fmt.Sprintf("%s for %s", title, topic)
+	}
+	if instance := label("instance"); instance != "" {
+		return fmt.Sprintf("%s at %s", title, instance)
+	}
+	return title
+}
+
+func alertAnnotationValues(alerts []AlertmanagerAlert, key string) []string {
+	values := make([]string, 0, len(alerts))
+	seen := make(map[string]struct{}, len(alerts))
+	hasFiring := false
+	for _, alert := range alerts {
+		if alert.Status == alertStatusFiring {
+			hasFiring = true
+			break
+		}
+	}
+	for _, alert := range alerts {
+		if hasFiring && alert.Status != alertStatusFiring {
+			continue
+		}
+		value := strings.TrimSpace(alert.Annotations[key])
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
+func humanizeAlertname(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Monitoring alert"
+	}
+	var out strings.Builder
+	for i, r := range value {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			out.WriteByte(' ')
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // normalizedStart truncates to PostgreSQL's microsecond precision so the

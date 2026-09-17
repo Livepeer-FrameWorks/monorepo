@@ -841,15 +841,21 @@ const updateIncidentAlerting = `-- name: UpdateIncidentAlerting :one
 UPDATE lookout.incidents
 SET last_alert_at = GREATEST(last_alert_at, $1::timestamptz),
     severity = $2,
+    region = COALESCE(NULLIF($3::text, ''), region),
+    title = $4,
+    summary = $5,
     updated_at = NOW()
-WHERE id = $3
-  AND tenant_id IS NOT DISTINCT FROM $4::uuid
+WHERE id = $6
+  AND tenant_id IS NOT DISTINCT FROM $7::uuid
 RETURNING id, scope, tenant_id, cluster_id, region, group_key, alertname, severity, status, resolution, title, summary, started_at, last_alert_at, acknowledged_at, acknowledged_by, assigned_to, resolved_at, resolved_by, created_at, updated_at
 `
 
 type UpdateIncidentAlertingParams struct {
 	LastAlertAt time.Time      `db:"last_alert_at" json:"last_alert_at"`
 	Severity    string         `db:"severity" json:"severity"`
+	Region      string         `db:"region" json:"region"`
+	Title       string         `db:"title" json:"title"`
+	Summary     string         `db:"summary" json:"summary"`
 	ID          string         `db:"id" json:"id"`
 	TenantID    sql.NullString `db:"tenant_id" json:"tenant_id"`
 }
@@ -858,6 +864,9 @@ func (q *Queries) UpdateIncidentAlerting(ctx context.Context, arg UpdateIncident
 	row := q.db.QueryRowContext(ctx, updateIncidentAlerting,
 		arg.LastAlertAt,
 		arg.Severity,
+		arg.Region,
+		arg.Title,
+		arg.Summary,
 		arg.ID,
 		arg.TenantID,
 	)

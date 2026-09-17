@@ -74,6 +74,103 @@ func TestAlertmanagerWebhookValidateRejects(t *testing.T) {
 	}
 }
 
+func TestAlertmanagerFactsUsePerAlertAnnotationsAndLabels(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:    "service-down",
+		GroupLabels: map[string]string{"alertname": "ServiceDown"},
+		Alerts: []AlertmanagerAlert{
+			{
+				Status:      alertStatusFiring,
+				Labels:      map[string]string{"alertname": "ServiceDown", "cluster": "platform", "region": "eu-west"},
+				Annotations: map[string]string{"summary": "signalman on regional-eu-1 is unreachable", "description": "VictoriaMetrics cannot scrape 127.0.0.1:18013."},
+			},
+		},
+	}
+	facts := hook.facts()
+	if facts.Title != "signalman on regional-eu-1 is unreachable" || facts.Summary != "VictoriaMetrics cannot scrape 127.0.0.1:18013." {
+		t.Fatalf("facts text = %+v", facts)
+	}
+	if facts.ClusterID != "platform" || facts.Region != "eu-west" {
+		t.Fatalf("facts placement = %+v", facts)
+	}
+}
+
+func TestAlertmanagerFactsDescribeGroupedTargets(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:    "service-down",
+		GroupLabels: map[string]string{"alertname": "ServiceDown", "cluster": "platform", "region": "eu-west"},
+		Alerts: []AlertmanagerAlert{
+			{Status: alertStatusFiring, Annotations: map[string]string{"summary": "signalman on regional-eu-1 is unreachable", "description": "Cannot scrape signalman on regional-eu-1."}},
+			{Status: alertStatusFiring, Annotations: map[string]string{"summary": "decklog on regional-eu-2 is unreachable", "description": "Cannot scrape decklog on regional-eu-2."}},
+		},
+	}
+	facts := hook.facts()
+	if facts.Title != "Service Down affects 2 targets" {
+		t.Fatalf("title = %q", facts.Title)
+	}
+	if facts.Summary != "Cannot scrape signalman on regional-eu-1.\nCannot scrape decklog on regional-eu-2." {
+		t.Fatalf("summary = %q", facts.Summary)
+	}
+}
+
+func TestAlertmanagerFactsHumanizeMissingAnnotations(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:    "service-down",
+		GroupLabels: map[string]string{"alertname": "ServiceDown", "cluster": "platform"},
+		Alerts:      []AlertmanagerAlert{{Status: alertStatusFiring}},
+	}
+	facts := hook.facts()
+	if facts.Title != "Service Down" || facts.Summary != "Service Down" {
+		t.Fatalf("facts = %+v", facts)
+	}
+}
+
+func TestAlertmanagerFactsUseDiagnosticLabelsWithoutAnnotations(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:    "service-down",
+		GroupLabels: map[string]string{"alertname": "ServiceDown"},
+		Alerts: []AlertmanagerAlert{{
+			Status: alertStatusFiring,
+			Labels: map[string]string{"frameworks_service": "signalman", "node_id": "regional-eu-1"},
+		}},
+	}
+	facts := hook.facts()
+	if facts.Title != "Service Down: signalman on regional-eu-1" || facts.Summary != facts.Title {
+		t.Fatalf("facts = %+v", facts)
+	}
+}
+
+func TestAlertmanagerFactsRejectTautologicalAnnotations(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:          "service-down",
+		GroupLabels:       map[string]string{"alertname": "ServiceDown"},
+		CommonAnnotations: map[string]string{"summary": "ServiceDown", "description": "ServiceDown"},
+		Alerts: []AlertmanagerAlert{{
+			Status: alertStatusFiring,
+			Labels: map[string]string{"frameworks_service": "signalman", "node_id": "regional-eu-1"},
+		}},
+	}
+	facts := hook.facts()
+	if facts.Title != "Service Down: signalman on regional-eu-1" || facts.Summary != facts.Title {
+		t.Fatalf("facts = %+v", facts)
+	}
+}
+
+func TestAlertmanagerFactsRetainResolvedAlertAnnotations(t *testing.T) {
+	hook := AlertmanagerWebhook{
+		GroupKey:    "service-down",
+		GroupLabels: map[string]string{"alertname": "ServiceDown"},
+		Alerts: []AlertmanagerAlert{{
+			Status:      alertStatusResolved,
+			Annotations: map[string]string{"summary": "signalman on regional-eu-1 is reachable again", "description": "The metrics endpoint recovered."},
+		}},
+	}
+	facts := hook.facts()
+	if facts.Title != "signalman on regional-eu-1 is reachable again" || facts.Summary != "The metrics endpoint recovered." {
+		t.Fatalf("facts = %+v", facts)
+	}
+}
+
 func TestHigherSeverity(t *testing.T) {
 	if got := higherSeverity("warning", "critical"); got != "critical" {
 		t.Fatalf("got %q", got)

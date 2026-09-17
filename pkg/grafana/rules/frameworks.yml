@@ -12,13 +12,22 @@ groups:
           description: "Always fires so vmalert, Alertmanager and the external heartbeat prove end-to-end alert delivery; the heartbeat service alarms when these notifications stop."
 
       - alert: ServiceDown
-        expr: up == 0
+        expr: up{frameworks_service!="", node_id!=""} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.job }} on {{ $labels.node_id }} is down"
-          description: "The {{ $labels.job }} scrape target {{ $labels.instance }} in region {{ $labels.region }} has been down for more than 1 minute."
+          summary: "{{ $labels.frameworks_service }} on {{ $labels.node_id }} is unreachable"
+          description: "VictoriaMetrics has been unable to scrape {{ $labels.instance }} (job {{ $labels.job }}) in {{ $labels.region }} for more than one minute. The process, host, or metrics endpoint is unavailable."
+
+      - alert: TelemetryPlacementLabelsMissing
+        expr: max by (job, instance) (up{frameworks_source!="", region=""} or up{frameworks_source!="", cluster=""} or up{frameworks_source!="", node_id=""}) >= 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telemetry target {{ $labels.job }} at {{ $labels.instance }} lacks placement labels"
+          description: "The managed scrape target is missing region, cluster, or node_id. Placement-aware dashboards and alerts cannot identify where this target runs; reconcile its vmagent configuration."
 
       # Media-authority and durable-trigger safety alerts
       - alert: MediaAuthorityDeliveryStuck
@@ -348,12 +357,12 @@ groups:
           description: "The durable deposit cursor is more than 500 finalized blocks behind. New production crypto methods should fail readiness."
 
       - alert: CryptoScannerErrors
-        expr: increase(purser_crypto_scanner_errors_total[5m]) > 0
+        expr: sum by (region, cluster, network, stage, reason) (increase(purser_crypto_scanner_errors_total{stage!="", reason!=""}[5m])) > 0
         labels:
           severity: warning
         annotations:
-          summary: "Crypto scanner errors on {{ $labels.network }}"
-          description: "The RPC scanner recorded one or more errors in the last five minutes."
+          summary: "Crypto scanner {{ $labels.reason }} during {{ $labels.stage }} on {{ $labels.network }}"
+          description: 'The {{ $labels.network }} deposit scanner hit {{ $labels.reason }} during {{ $labels.stage }} {{ printf "%.0f" $value }} time(s) in five minutes. The full provider or database error is in purser.crypto_scan_cursors.last_error and Purser logs for this network.'
 
       - alert: CryptoCustodyBalanceAtRisk
         expr: purser_crypto_unswept_base_units > 0 and on(region, network, asset) purser_crypto_oldest_unswept_age_seconds > 21600
@@ -380,7 +389,7 @@ groups:
           severity: warning
         annotations:
           summary: "USDC sweep relayer gas is low on {{ $labels.network }}"
-          description: "The dedicated relayer has less than 0.005 native ETH for bounded USDC relay gas."
+          description: 'The {{ $labels.network }} USDC sweep relayer has {{ printf "%.6f" $value }} native ETH remaining; at least 0.005 is required for bounded relay gas. Fund the dedicated relayer before queued sweeps stall.'
 
       - alert: CryptoAllocatedDepositReorg
         expr: increase(purser_crypto_deposit_reorg_reversals_total[5m]) > 0
@@ -474,13 +483,13 @@ groups:
           description: "Records on the {{ $labels.source }} -> {{ $labels.target }} link have taken more than 60 seconds to replicate for ten minutes. Regional realtime delivery and aggregator analytics or billing are delayed."
 
       - alert: SignalmanConsumerLagHigh
-        expr: max by (region, topic) (signalman_kafka_consumer_lag) > 1000
+        expr: max by (region, cluster, node_id, instance, topic) (signalman_kafka_consumer_lag{region!="", node_id!=""}) > 1000
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Signalman in {{ $labels.region }} is behind on {{ $labels.topic }}"
-          description: "A Signalman consumer in region {{ $labels.region }} has had more than 1000 unconsumed messages on {{ $labels.topic }} for five minutes, so realtime subscribers see delayed events."
+          summary: "Signalman on {{ $labels.node_id }} is behind on {{ $labels.topic }}"
+          description: 'Signalman at {{ $labels.instance }} in {{ $labels.region }} has {{ printf "%.0f" $value }} unconsumed messages on {{ $labels.topic }}. Realtime subscribers routed to this replica are delayed.'
 
       - alert: FoghornRedisDisconnected
         expr: min by (region, cluster, instance) (foghorn_redis_connected) == 0

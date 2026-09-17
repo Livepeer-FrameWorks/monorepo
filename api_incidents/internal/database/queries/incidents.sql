@@ -93,6 +93,9 @@ FOR UPDATE;
 UPDATE lookout.incidents
 SET last_alert_at = GREATEST(last_alert_at, sqlc.arg(last_alert_at)::timestamptz),
     severity = sqlc.arg(severity),
+    region = COALESCE(NULLIF(sqlc.arg(region)::text, ''), region),
+    title = sqlc.arg(title),
+    summary = sqlc.arg(summary),
     updated_at = NOW()
 WHERE id = sqlc.arg(id)
   AND tenant_id IS NOT DISTINCT FROM sqlc.narg(tenant_id)::uuid
