@@ -400,6 +400,16 @@ func (cm *CryptoMonitor) rpcBlockNumber(ctx context.Context, network NetworkConf
 }
 
 func (cm *CryptoMonitor) rpcBlockByNumber(ctx context.Context, network NetworkConfig, number int64, transactions bool) (*rpcBlock, error) {
+	if !transactions {
+		var header rpcBlockHeader
+		if err := cm.rpc.Call(ctx, network, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", number), false}, &header); err != nil {
+			return nil, err
+		}
+		if header.Hash == "" {
+			return nil, fmt.Errorf("block %d is unavailable", number)
+		}
+		return &rpcBlock{Number: header.Number, Hash: header.Hash}, nil
+	}
 	var block rpcBlock
 	if err := cm.rpc.Call(ctx, network, "eth_getBlockByNumber", []any{fmt.Sprintf("0x%x", number), transactions}, &block); err != nil {
 		return nil, err

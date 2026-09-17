@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -231,17 +232,23 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 		}
 	}
 	if kf := manifest.Infrastructure.Kafka; kf != nil && kf.Enabled {
-		for _, br := range kf.Brokers {
-			targets = append(targets, clusterDriftTarget{
-				Host: br.Host, Display: "kafka:broker", Deploy: "kafka",
-				DesiredMode: kf.Mode, PinnedVersion: kf.Version,
-			})
-		}
-		for _, co := range kf.Controllers {
-			targets = append(targets, clusterDriftTarget{
-				Host: co.Host, Display: "kafka:controller", Deploy: "kafka-controller",
-				DesiredMode: kf.Mode, PinnedVersion: kf.Version,
-			})
+		for _, cluster := range allKafkaClusters(manifest) {
+			region := strings.TrimSpace(cluster.RegionID)
+			if region == "" {
+				region = cluster.Role
+			}
+			for _, br := range cluster.Brokers {
+				targets = append(targets, clusterDriftTarget{
+					Host: br.Host, Display: "kafka:" + region + ":broker", Deploy: "kafka",
+					DesiredMode: kf.Mode, PinnedVersion: kf.Version,
+				})
+			}
+			for _, co := range cluster.Controllers {
+				targets = append(targets, clusterDriftTarget{
+					Host: co.Host, Display: "kafka:" + region + ":controller", Deploy: "kafka-controller",
+					DesiredMode: kf.Mode, PinnedVersion: kf.Version,
+				})
+			}
 		}
 	}
 	if rd := manifest.Infrastructure.Redis; rd != nil && rd.Enabled {

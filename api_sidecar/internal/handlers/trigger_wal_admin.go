@@ -2,12 +2,13 @@ package handlers
 
 import (
 	"net/http"
-	"sort"
 
 	"frameworks/api_sidecar/internal/control"
 
 	"github.com/gin-gonic/gin"
 )
+
+const triggerWALInspectionLimit = 100
 
 // HandleTriggerWALStatus returns the durable trigger WAL state: how many
 // entries are awaiting Foghorn's MistTriggerAck and what they look like.
@@ -18,7 +19,12 @@ import (
 // usual network boundary that protects the rest of the sidecar's
 // admin surface.
 func HandleTriggerWALStatus(c *gin.Context) {
-	pending, err := control.ListTriggerWALPending()
+	depth, err := control.TriggerWALPendingDepth()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	pending, err := control.ListTriggerWALPending(triggerWALInspectionLimit)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 		return
@@ -31,17 +37,11 @@ func HandleTriggerWALStatus(c *gin.Context) {
 		}
 		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		ti, okI := entries[i]["received_at_ms"].(int64)
-		tj, okJ := entries[j]["received_at_ms"].(int64)
-		if !okI || !okJ {
-			return okI
-		}
-		return ti < tj
-	})
 	c.JSON(http.StatusOK, gin.H{
-		"pending_depth": len(pending),
-		"entries":       entries,
+		"pending_depth":     depth,
+		"entries":           entries,
+		"entries_returned":  len(entries),
+		"entries_truncated": depth > len(entries),
 	})
 }
 

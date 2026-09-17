@@ -1,12 +1,49 @@
 package cmd
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
 )
+
+func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
+	checks := kafkaDiagnosticCommands("native", 19092)
+	if len(checks) != 4 {
+		t.Fatalf("checks = %d, want 4", len(checks))
+	}
+	for _, check := range checks {
+		if !strings.HasPrefix(check.Command, "/opt/kafka/bin/") {
+			t.Fatalf("native diagnostic uses retired container path: %q", check.Command)
+		}
+		if !strings.Contains(check.Command, "--bootstrap-server localhost:19092") {
+			t.Fatalf("diagnostic ignores configured broker port: %q", check.Command)
+		}
+	}
+	if !strings.Contains(checks[2].Command, "--describe --all-groups") {
+		t.Fatalf("consumer lag diagnostic missing: %q", checks[2].Command)
+	}
+}
+
+func TestKafkaDiagnosticCommandsRetainExplicitDockerCompatibility(t *testing.T) {
+	checks := kafkaDiagnosticCommands("docker", 9092)
+	for _, check := range checks {
+		if !strings.HasPrefix(check.Command, "docker compose -f /opt/frameworks/kafka/docker-compose.yml") {
+			t.Fatalf("docker diagnostic command = %q", check.Command)
+		}
+	}
+}
+
+func TestDiagnosticCommandErrorPrefersStderrOverExpandedCommandError(t *testing.T) {
+	result := &ssh.CommandResult{ExitCode: 255, Stderr: "ssh: connect: operation not permitted"}
+	got := diagnosticCommandError(result, errors.New("ssh host: \"very large generated probe\" exited 255"))
+	if got != "exit 255 (ssh: connect: operation not permitted)" {
+		t.Fatalf("diagnosticCommandError() = %q", got)
+	}
+}
 
 func TestMediaDiagnosticHostServicesIncludesAliasedMediaServices(t *testing.T) {
 	manifest := &inventory.Manifest{
@@ -79,5 +116,14 @@ func TestMediaDiagnosticScriptRunsDatabaseProbesForExactServices(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("diagnostic script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "|nan|inf|") {
+		t.Fatal("bare inf log filter also matches every info-level record")
+	}
+	if strings.Contains(script, "|signalman|decklog|") {
+		t.Fatal("service names in the filter match every journal prefix for that unit")
+	}
+	if !strings.Contains(script, "(nan|inf)([^[:alnum:]_]|$)") {
+		t.Fatal("diagnostic script must retain boundary-aware NaN/Inf detection")
 	}
 }

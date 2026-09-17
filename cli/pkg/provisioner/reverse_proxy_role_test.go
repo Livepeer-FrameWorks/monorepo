@@ -62,6 +62,7 @@ func TestRenderCaddyfileRestrictsMediaIngestAndOverwritesForwardingHeaders(t *te
 		Domains: []string{"livepeer.example.com"}, Upstream: "127.0.0.1:8935", Profile: "media_ingest",
 	}})
 	for _, want := range []string{
+		"@media_ingest_health {", "path /healthz", "method GET HEAD", "reverse_proxy @media_ingest_health 127.0.0.1:8935",
 		"@media_ingest {", "path /live /live/*", "method POST PUT",
 		"reverse_proxy @media_ingest 127.0.0.1:8935 {",
 		"header_up X-Real-IP {remote_host}", "header_up X-Forwarded-For {remote_host}", "respond 404",
@@ -124,6 +125,8 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 	files := vars["compose_stack_files"].(map[string]any)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
+		"location = /healthz {",
+		"limit_except GET HEAD { deny all; }",
 		"location ^~ /live/ {",
 		"limit_except POST PUT { deny all; }",
 		"proxy_set_header X-Forwarded-For $remote_addr;",
@@ -445,6 +448,9 @@ func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 		"nginx_effective_http2_directive_mode == 'standalone'",
 		"proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};",
 		"proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};",
+		"media_ingest_health_location(site, profile)",
+		"location = /healthz {",
+		"limit_except GET HEAD { deny all; }",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("native nginx template missing %q:\n%s", want, content)
@@ -467,6 +473,12 @@ func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 	systemd := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/nginx-systemd-override.conf.j2")
 	if !strings.Contains(systemd, "LimitNOFILE={{ nginx_systemd_limit_nofile }}") {
 		t.Fatalf("native nginx systemd override missing LimitNOFILE:\n%s", systemd)
+	}
+	caddy := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/caddy/templates/Caddyfile.j2")
+	for _, want := range []string{"@media_ingest_health", "path /healthz", "method GET HEAD", "reverse_proxy @media_ingest_health"} {
+		if !strings.Contains(caddy, want) {
+			t.Fatalf("native Caddy template missing %q:\n%s", want, caddy)
+		}
 	}
 }
 

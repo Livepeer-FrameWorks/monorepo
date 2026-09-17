@@ -1308,14 +1308,37 @@ frameworks cluster diagnose kafka [flags]
 - Broker API version check
 - Cluster responsiveness
 
-The report covers topic listing, consumer groups, broker API reachability, and
-cluster responsiveness for the configured Kafka target.
+The report covers topic listing, consumer groups, a committed-offset lag
+snapshot, broker API reachability, and cluster responsiveness for one broker in
+every configured Kafka region. Native
+deployments use the tools under `/opt/kafka/bin`; an explicitly configured
+Docker deployment uses its Compose toolchain. Any failed probe makes the command
+exit non-zero and includes the remote command error.
 
 **Examples:**
 
 ```bash
 frameworks cluster diagnose kafka
 ```
+
+---
+
+### frameworks cluster diagnose media
+
+Capture read-only service state, listeners, TLS certificate details, recent
+errors, and Quartermaster media placement from every manifest host that runs a
+media/control-path service.
+
+```bash
+frameworks cluster diagnose media [flags]
+frameworks cluster diagnose media --stream-id <uuid> --tenant-id <uuid>
+frameworks cluster diagnose media --output json
+```
+
+`--since` controls the journal window (default `4 hours ago`). JSON output is a
+single structured report containing every host's services, stdout, stderr, exit
+code, and connection/probe error. A missing host, SSH failure, or non-zero probe
+causes a non-zero command exit instead of a silent partial report.
 
 ---
 
@@ -1331,7 +1354,9 @@ Verify public DNS records match Quartermaster inventory.
 frameworks dns doctor --domain example.com
 ```
 
-Compares expected IPs from node inventory against actual DNS resolution. Useful for verifying Navigator has synced DNS records correctly.
+Validates Cloudflare-proxied names by resolution and Bunny smart records as a
+geographically selected subset of Quartermaster's healthy inventory. It checks
+both cluster-specific media names and platform-official global entrypoints.
 
 ---
 

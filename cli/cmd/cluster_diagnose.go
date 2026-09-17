@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -54,14 +55,22 @@ cause outages.`,
 }
 
 type diagnoseOptions struct {
-	StreamID string
-	TenantID string
-	Since    string
+	StreamID   string
+	TenantID   string
+	Since      string
+	OutputJSON bool
 }
 
 // runDiagnose executes diagnostic checks against an already-loaded manifest.
 func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component string, opts diagnoseOptions) error {
-	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Running %s diagnostics", component))
+	jsonMode := output == "json"
+	if jsonMode && component != "media" {
+		return fmt.Errorf("--output json is currently supported for media diagnostics only")
+	}
+	if !jsonMode {
+		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Running %s diagnostics", component))
+	}
+	opts.OutputJSON = jsonMode
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -233,63 +242,127 @@ func buildStandardPorts() map[int]string {
 
 // diagnoseKafka checks Kafka cluster health
 func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	if !manifest.Infrastructure.Kafka.Enabled {
+	if manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
 		return fmt.Errorf("kafka not enabled in manifest")
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Kafka Diagnostics")
-
-	// Check first broker
-	if len(manifest.Infrastructure.Kafka.Brokers) == 0 {
+	clusters := allKafkaClusters(manifest)
+	if len(clusters) == 0 {
 		return fmt.Errorf("no kafka brokers configured")
 	}
-
-	broker := manifest.Infrastructure.Kafka.Brokers[0]
-	host, found := manifest.GetHost(broker.Host)
-	if !found {
-		return fmt.Errorf("broker host not found: %s", broker.Host)
+	failures := 0
+	for _, cluster := range clusters {
+		region := strings.TrimSpace(cluster.RegionID)
+		if region == "" {
+			region = cluster.Role
+		}
+		if len(cluster.Brokers) == 0 {
+			failures++
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: no Kafka brokers configured", region))
+			continue
+		}
+		broker := cluster.Brokers[0]
+		host, found := manifest.GetHost(broker.Host)
+		if !found {
+			failures++
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: broker host not found: %s", region, broker.Host))
+			continue
+		}
+		runner, runnerErr := getRunner(host, pool)
+		if runnerErr != nil {
+			failures++
+			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: connect to %s: %v", region, broker.Host, runnerErr))
+			continue
+		}
+		port := broker.Port
+		if port == 0 {
+			port = 9092
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\nCluster: %s (broker: %s)\n", region, broker.Host)
+		for _, check := range kafkaDiagnosticCommands(manifest.Infrastructure.Kafka.Mode, port) {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s:\n", check.Heading)
+			result, runErr := runner.Run(ctx, check.Command)
+			if runErr != nil || result == nil || result.ExitCode != 0 {
+				failures++
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: %s: %s", region, check.Failure, diagnosticCommandError(result, runErr)))
+				continue
+			}
+			if check.Success != "" {
+				ux.Success(cmd.OutOrStdout(), check.Success)
+			}
+			if strings.TrimSpace(result.Stdout) != "" && (check.Success == "" || verbose) {
+				fmt.Fprintln(cmd.OutOrStdout(), result.Stdout)
+			}
+		}
 	}
-
-	runner, err := getRunner(host, pool)
-	if err != nil {
-		return err
+	if failures > 0 {
+		return fmt.Errorf("kafka diagnostics detected %d failed check(s)", failures)
 	}
-
-	// List topics
-	fmt.Fprintln(cmd.OutOrStdout(), "Topics:")
-	topicsCmd := "docker compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka kafka-topics --bootstrap-server localhost:9092 --list"
-	if result, err := runner.Run(ctx, topicsCmd); err == nil && result.ExitCode == 0 {
-		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-	} else {
-		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Failed to list topics: %v", err))
-	}
-
-	// Check consumer groups
-	fmt.Fprintln(cmd.OutOrStdout(), "\nConsumer Groups:")
-	groupsCmd := "docker compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka kafka-consumer-groups --bootstrap-server localhost:9092 --list"
-	if result, err := runner.Run(ctx, groupsCmd); err == nil && result.ExitCode == 0 {
-		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-	} else {
-		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Failed to list consumer groups: %v", err))
-	}
-
-	// Check broker config
-	fmt.Fprintln(cmd.OutOrStdout(), "\nBroker Status:")
-	brokerCmd := "docker compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka kafka-broker-api-versions --bootstrap-server localhost:9092"
-	if result, err := runner.Run(ctx, brokerCmd); err == nil && result.ExitCode == 0 {
-		ux.Success(cmd.OutOrStdout(), "Broker is responding")
-	} else {
-		ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Broker is not responding: %v", err))
-	}
-
 	return nil
 }
 
+type kafkaDiagnosticCheck struct {
+	Heading, Command, Success, Failure string
+}
+
+func kafkaDiagnosticCommands(mode string, port int) []kafkaDiagnosticCheck {
+	bootstrap := fmt.Sprintf("localhost:%d", port)
+	command := func(tool, args string) string {
+		if strings.EqualFold(strings.TrimSpace(mode), "docker") {
+			return fmt.Sprintf("docker compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka %s --bootstrap-server %s %s", tool, bootstrap, args)
+		}
+		return fmt.Sprintf("/opt/kafka/bin/%s.sh --bootstrap-server %s %s", tool, bootstrap, args)
+	}
+	return []kafkaDiagnosticCheck{
+		{Heading: "Topics", Command: command("kafka-topics", "--list"), Failure: "Failed to list topics"},
+		{Heading: "Consumer Groups", Command: command("kafka-consumer-groups", "--list"), Failure: "Failed to list consumer groups"},
+		{Heading: "Consumer Lag", Command: command("kafka-consumer-groups", "--describe --all-groups"), Failure: "Failed to describe consumer lag"},
+		{Heading: "Broker Status", Command: command("kafka-broker-api-versions", ""), Success: "Broker is responding", Failure: "Broker is not responding"},
+	}
+}
+
+func diagnosticCommandError(result *ssh.CommandResult, err error) string {
+	if result != nil {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail != "" {
+			return fmt.Sprintf("exit %d (%s)", result.ExitCode, detail)
+		}
+		if err != nil {
+			return fmt.Sprintf("exit %d", result.ExitCode)
+		}
+		return fmt.Sprintf("exit %d (no stderr)", result.ExitCode)
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "command returned no result"
+}
+
+type mediaDiagnosticHostReport struct {
+	Host     string   `json:"host"`
+	Address  string   `json:"address,omitempty"`
+	Services []string `json:"services"`
+	Stdout   string   `json:"stdout,omitempty"`
+	Stderr   string   `json:"stderr,omitempty"`
+	ExitCode int      `json:"exit_code"`
+	Error    string   `json:"error,omitempty"`
+}
+
+type mediaDiagnosticReport struct {
+	StreamID string                      `json:"stream_id,omitempty"`
+	TenantID string                      `json:"tenant_id,omitempty"`
+	Since    string                      `json:"since"`
+	Hosts    []mediaDiagnosticHostReport `json:"hosts"`
+}
+
 func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, opts diagnoseOptions) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Media/DNS/Federation Diagnostics")
-	fmt.Fprintln(cmd.OutOrStdout(), "Read-only host probes for service state, listeners, TLS SANs, and recent error logs.")
-	if opts.StreamID != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "Tracing stream_id=%s\n", opts.StreamID)
+	if !opts.OutputJSON {
+		fmt.Fprintln(cmd.OutOrStdout(), "Media/DNS/Federation Diagnostics")
+		fmt.Fprintln(cmd.OutOrStdout(), "Read-only host probes for service state, listeners, TLS SANs, and recent error logs.")
+		if opts.StreamID != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Tracing stream_id=%s\n", opts.StreamID)
+		}
 	}
 
 	hostServices := mediaDiagnosticHostServices(manifest)
@@ -304,45 +377,85 @@ func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	sort.Strings(hosts)
 
 	ports := mediaDiagnosticPorts()
+	report := mediaDiagnosticReport{StreamID: opts.StreamID, TenantID: opts.TenantID, Since: opts.Since}
+	failures := 0
 	for _, hostName := range hosts {
+		hostReport := mediaDiagnosticHostReport{Host: hostName, Services: append([]string(nil), hostServices[hostName]...), ExitCode: -1}
+		sort.Strings(hostReport.Services)
 		host, ok := manifest.GetHost(hostName)
 		if !ok {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: host missing from manifest", hostName))
+			hostReport.Error = "host missing from manifest"
+			report.Hosts = append(report.Hosts, hostReport)
+			failures++
+			if !opts.OutputJSON {
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: %s", hostName, hostReport.Error))
+			}
 			continue
 		}
+		hostReport.Address = host.ExternalIP
 
-		services := hostServices[hostName]
-		sort.Strings(services)
-		fmt.Fprintf(cmd.OutOrStdout(), "\nHost: %s (%s)\n", hostName, host.ExternalIP)
-		fmt.Fprintf(cmd.OutOrStdout(), "Services: %s\n", strings.Join(services, ", "))
+		if !opts.OutputJSON {
+			fmt.Fprintf(cmd.OutOrStdout(), "\nHost: %s (%s)\n", hostName, host.ExternalIP)
+			fmt.Fprintf(cmd.OutOrStdout(), "Services: %s\n", strings.Join(hostReport.Services, ", "))
+		}
 
 		runner, err := getRunner(host, pool)
 		if err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect to %s: %v", hostName, err))
+			hostReport.Error = err.Error()
+			report.Hosts = append(report.Hosts, hostReport)
+			failures++
+			if !opts.OutputJSON {
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect to %s: %v", hostName, err))
+			}
 			continue
 		}
 
-		probe := mediaDiagnosticScript(services, ports, opts)
+		probe := mediaDiagnosticScript(hostReport.Services, ports, opts)
 		result, err := runner.Run(ctx, "sh -lc "+ssh.ShellQuote(probe))
+		if result != nil {
+			hostReport.Stdout = strings.TrimSpace(result.Stdout)
+			hostReport.Stderr = strings.TrimSpace(result.Stderr)
+			hostReport.ExitCode = result.ExitCode
+		}
 		if err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: diagnostic probe failed: %v", hostName, err))
-			continue
+			hostReport.Error = "diagnostic probe failed: " + diagnosticCommandError(result, err)
+			failures++
+		} else if result == nil {
+			hostReport.Error = "diagnostic probe returned no result"
+			failures++
+		} else if result.ExitCode != 0 {
+			hostReport.Error = fmt.Sprintf("diagnostic probe exited %d", result.ExitCode)
+			failures++
 		}
-		if strings.TrimSpace(result.Stdout) != "" {
-			fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-		}
-		if strings.TrimSpace(result.Stderr) != "" {
-			fmt.Fprint(cmd.ErrOrStderr(), result.Stderr)
-		}
-		if result.ExitCode != 0 {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: diagnostic probe exited %d", hostName, result.ExitCode))
+		report.Hosts = append(report.Hosts, hostReport)
+		if !opts.OutputJSON {
+			if hostReport.Stdout != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), hostReport.Stdout)
+			}
+			if hostReport.Stderr != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), hostReport.Stderr)
+			}
+			if hostReport.Error != "" {
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: %s", hostName, hostReport.Error))
+			}
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "\nNext focused checks:")
-	fmt.Fprintln(cmd.OutOrStdout(), "  - Compare service-cluster assignments with admin service-pool status for foghorn/chandler/livepeer-gateway.")
-	fmt.Fprintln(cmd.OutOrStdout(), "  - If Chartroom stream reads still fail, inspect Commodore logs and DB row for the stream ID.")
-	fmt.Fprintln(cmd.OutOrStdout(), "  - If Bunny zones remain empty, inspect Navigator logs after Quartermaster reports healthy media services.")
+	if opts.OutputJSON {
+		encoder := json.NewEncoder(cmd.OutOrStdout())
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "\nNext focused checks:")
+		fmt.Fprintln(cmd.OutOrStdout(), "  - Compare service-cluster assignments with admin service-pool status for foghorn/chandler/livepeer-gateway.")
+		fmt.Fprintln(cmd.OutOrStdout(), "  - If Chartroom stream reads still fail, inspect Commodore logs and DB row for the stream ID.")
+		fmt.Fprintln(cmd.OutOrStdout(), "  - If Bunny zones remain empty, inspect Navigator logs after Quartermaster reports healthy media services.")
+	}
+	if failures > 0 {
+		return fmt.Errorf("media diagnostics failed on %d host(s)", failures)
+	}
 	return nil
 }
 
@@ -477,7 +590,7 @@ for svc in %s; do
   systemctl show "${unit}" -p ActiveState -p SubState -p ExecMainStatus -p MainPID --no-page 2>/dev/null || true
   echo "-- recent suspicious logs --"
   journalctl -u "${unit}" --since "${SINCE}" -n 200 --no-pager 2>/dev/null \
-    | grep -Ei 'error|warn|failed|x509|deadline|No healthy|unsupported protocol|nan|inf|signalman|decklog|storage_usage|bunny|cloudflare' \
+    | grep -Ei 'error|warn|failed|x509|deadline|No healthy|unsupported protocol|(^|[^[:alnum:]_])(nan|inf)([^[:alnum:]_]|$)|storage_usage|bunny|cloudflare' \
     | sed -E 's/^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]+ [^ ]+ [^:]+: //' \
     | sed -E 's/"time":"[^"]+",?//g; s/,"time":"[^"]+"//g' \
     | awk '!seen[$0]++' \

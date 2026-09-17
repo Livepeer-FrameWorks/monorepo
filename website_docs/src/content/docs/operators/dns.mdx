@@ -128,6 +128,13 @@ Quartermaster is the health source for desired DNS state. Navigator filters
 unhealthy or addressless nodes before reconciling records; provider-side health
 checks are an implementation detail of the authoritative provider integration.
 Use `frameworks dns doctor` to compare public DNS with Quartermaster inventory.
+The comparison is provider-aware: Bunny smart DNS may return any non-empty
+geographically selected subset of the healthy authoritative members, while a
+Cloudflare-proxied hostname is validated by successful resolution rather than
+by comparing Cloudflare anycast addresses with origin IPs. An NXDOMAIN response
+or a Bunny address outside Quartermaster's healthy inventory still fails the
+doctor check. Both per-cluster names and platform-official global Bunny
+entrypoints are checked.
 
 ### Wildcard TLS Certificates
 
@@ -168,6 +175,14 @@ below). Certificates: one pool-assigned multi-SAN cert for
 foghorn/chandler/livepeer; one platform-edge multi-SAN cert for the
 five edge-\* names. Both distributed via ConfigSeed only to
 platform-operated nodes.
+
+Livepeer gateways also have a stable physical identity at
+`livepeer-gateway.{node}.infra.{base}`. That record remains present for a
+provisioned running instance even while its process health is degraded; it is
+the HTTPS path Quartermaster uses to probe the loopback-only gateway through
+the node's ingress. Pooled `livepeer.*` membership remains health- and
+freshness-gated, so preserving physical identity does not route production
+traffic to an unhealthy gateway.
 
 **2. Cluster-concrete URLs — operator pin / debug**
 

@@ -30,6 +30,15 @@ import (
 type TriggerWAL struct {
 	dir string
 	mu  sync.Mutex
+
+	// pending is an oldest-first index of WAL paths. Payloads stay on disk and
+	// are decoded in bounded batches; a large backlog must not become a second,
+	// in-memory copy of the WAL. Acked paths are removed from active and lazily
+	// compacted from pending so draining the head stays O(1).
+	pending   []string
+	head      int
+	active    map[string]struct{}
+	pathsByID map[string][]string
 }
 
 // NewTriggerWAL creates (or opens) the WAL directory.
@@ -37,7 +46,24 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("trigger wal mkdir: %w", err)
 	}
-	return &TriggerWAL{dir: dir}, nil
+	files, err := filepath.Glob(filepath.Join(dir, "*.pb"))
+	if err != nil {
+		return nil, fmt.Errorf("trigger wal index glob: %w", err)
+	}
+	sort.Strings(files)
+	w := &TriggerWAL{
+		dir:       dir,
+		pending:   files,
+		active:    make(map[string]struct{}, len(files)),
+		pathsByID: make(map[string][]string, len(files)),
+	}
+	for _, path := range files {
+		w.active[path] = struct{}{}
+		if id, ok := sourceEventIDFromPath(path); ok {
+			w.pathsByID[id] = append(w.pathsByID[id], path)
+		}
+	}
+	return w, nil
 }
 
 // DefaultTriggerWALDir resolves the on-disk directory used by the WAL.
@@ -98,11 +124,7 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	existing, err := filepath.Glob(w.globForID(id))
-	if err != nil {
-		return false, fmt.Errorf("trigger wal duplicate glob: %w", err)
-	}
-	if len(existing) > 0 {
+	if len(w.pathsByID[id]) > 0 {
 		return false, nil
 	}
 
@@ -135,6 +157,7 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 	if err := os.Rename(tmp, path); err != nil {
 		return false, fmt.Errorf("trigger wal rename: %w", err)
 	}
+	w.addPathLocked(id, path)
 	if err := syncDir(w.dir); err != nil {
 		return false, fmt.Errorf("trigger wal sync dir: %w", err)
 	}
@@ -146,15 +169,15 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 func (w *TriggerWAL) Ack(sourceEventID string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	files, err := filepath.Glob(w.globForID(sourceEventID))
-	if err != nil {
-		return fmt.Errorf("trigger wal ack glob: %w", err)
-	}
+	files := append([]string(nil), w.pathsByID[sourceEventID]...)
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("trigger wal ack remove: %w", err)
 		}
+		delete(w.active, f)
 	}
+	delete(w.pathsByID, sourceEventID)
+	w.advanceHeadLocked()
 	if len(files) > 0 {
 		if err := syncDir(w.dir); err != nil {
 			return fmt.Errorf("trigger wal ack sync dir: %w", err)
@@ -169,16 +192,16 @@ func (w *TriggerWAL) Ack(sourceEventID string) error {
 func (w *TriggerWAL) DeadLetter(sourceEventID string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	files, err := filepath.Glob(w.globForID(sourceEventID))
-	if err != nil {
-		return fmt.Errorf("trigger wal dead-letter glob: %w", err)
-	}
+	files := append([]string(nil), w.pathsByID[sourceEventID]...)
 	for _, f := range files {
 		deadPath := f + ".dead"
 		if err := os.Rename(f, deadPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("trigger wal dead-letter rename: %w", err)
 		}
+		delete(w.active, f)
 	}
+	delete(w.pathsByID, sourceEventID)
+	w.advanceHeadLocked()
 	if len(files) > 0 {
 		if err := syncDir(w.dir); err != nil {
 			return fmt.Errorf("trigger wal dead-letter sync dir: %w", err)
@@ -187,21 +210,37 @@ func (w *TriggerWAL) DeadLetter(sourceEventID string) error {
 	return nil
 }
 
-// Pending returns every persisted trigger in oldest-first order (by the
-// received_at_ms prefix embedded in the filename). Used by the forwarder
-// to drain in order and on restart to replay.
+// Pending returns every persisted trigger in oldest-first order. It is kept
+// for tests and offline callers; online draining and inspection must use
+// PendingBatch so a large WAL is never decoded in full.
 func (w *TriggerWAL) Pending() ([]*ipcpb.MistTrigger, error) {
+	return w.PendingBatch(0)
+}
+
+// PendingBatch returns at most limit persisted triggers in oldest-first order.
+// A non-positive limit means all entries. Only the selected protobuf payloads
+// are read; the in-memory index contains paths, not payloads.
+func (w *TriggerWAL) PendingBatch(limit int) ([]*ipcpb.MistTrigger, error) {
 	w.mu.Lock()
-	files, err := filepath.Glob(filepath.Join(w.dir, "*.pb"))
-	w.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("trigger wal glob: %w", err)
+	files := make([]string, 0)
+	for i := w.head; i < len(w.pending); i++ {
+		path := w.pending[i]
+		if _, ok := w.active[path]; !ok {
+			continue
+		}
+		files = append(files, path)
+		if limit > 0 && len(files) >= limit {
+			break
+		}
 	}
-	sort.Strings(files)
+	w.mu.Unlock()
 
 	out := make([]*ipcpb.MistTrigger, 0, len(files))
 	for _, path := range files {
 		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("trigger wal read %s: %w", filepath.Base(path), err)
 		}
@@ -216,11 +255,47 @@ func (w *TriggerWAL) Pending() ([]*ipcpb.MistTrigger, error) {
 
 // PendingDepth returns the count without unmarshaling — for metrics.
 func (w *TriggerWAL) PendingDepth() (int, error) {
-	files, err := filepath.Glob(filepath.Join(w.dir, "*.pb"))
-	if err != nil {
-		return 0, err
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.active), nil
+}
+
+func (w *TriggerWAL) addPathLocked(sourceEventID, path string) {
+	w.active[path] = struct{}{}
+	w.pathsByID[sourceEventID] = append(w.pathsByID[sourceEventID], path)
+	if len(w.pending) == 0 || path > w.pending[len(w.pending)-1] {
+		w.pending = append(w.pending, path)
+		return
 	}
-	return len(files), nil
+	index := sort.SearchStrings(w.pending, path)
+	w.pending = append(w.pending, "")
+	copy(w.pending[index+1:], w.pending[index:])
+	w.pending[index] = path
+	if index < w.head {
+		w.head = index
+	}
+}
+
+func (w *TriggerWAL) advanceHeadLocked() {
+	for w.head < len(w.pending) {
+		if _, ok := w.active[w.pending[w.head]]; ok {
+			break
+		}
+		w.head++
+	}
+	if w.head > 4096 && w.head*2 > len(w.pending) {
+		w.pending = append([]string(nil), w.pending[w.head:]...)
+		w.head = 0
+	}
+}
+
+func sourceEventIDFromPath(path string) (string, bool) {
+	name := strings.TrimSuffix(filepath.Base(path), ".pb")
+	separator := strings.IndexByte(name, '-')
+	if separator <= 0 || separator == len(name)-1 {
+		return "", false
+	}
+	return name[separator+1:], true
 }
 
 func (w *TriggerWAL) path(sourceEventID string, receivedAt int64) string {
@@ -231,10 +306,6 @@ func (w *TriggerWAL) path(sourceEventID string, receivedAt int64) string {
 	}
 	name := strconv.FormatInt(receivedAt, 10) + "-" + sourceEventID + ".pb"
 	return filepath.Join(w.dir, name)
-}
-
-func (w *TriggerWAL) globForID(sourceEventID string) string {
-	return filepath.Join(w.dir, "*-"+sourceEventID+".pb")
 }
 
 func syncDir(dir string) error {

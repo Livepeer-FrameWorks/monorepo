@@ -427,6 +427,11 @@ func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback)
 
 func writeCaddyProxyDirectives(b *strings.Builder, site proxySite) {
 	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+		b.WriteString("    @media_ingest_health {\n")
+		b.WriteString("        path /healthz\n")
+		b.WriteString("        method GET HEAD\n")
+		b.WriteString("    }\n")
+		fmt.Fprintf(b, "    reverse_proxy @media_ingest_health %s\n", site.Upstream)
 		b.WriteString("    @media_ingest {\n")
 		b.WriteString("        path /live /live/*\n")
 		b.WriteString("        method POST PUT\n")
@@ -494,6 +499,10 @@ func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site pr
 	}
 	paths := site.PathPrefixes
 	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+		b.WriteString("\n    location = /healthz {\n")
+		b.WriteString("        limit_except GET HEAD { deny all; }\n")
+		writeNginxProxyBlock(b, site)
+		b.WriteString("    }\n")
 		paths = []string{"^~ /live/"}
 	}
 	if len(paths) == 0 {

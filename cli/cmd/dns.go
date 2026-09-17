@@ -80,7 +80,11 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 
 	// Fetch expected service-backed IPs using the same Quartermaster query
 	// path Navigator relies on.
-	expectedIPs := make(map[string][]string)
+	type expectedDNSRecord struct {
+		IPs      []string
+		Provider pkgdns.Provider
+	}
+	expectedRecords := make(map[string]expectedDNSRecord)
 	serviceTypes := pkgdns.ManagedServiceTypes()
 	staleThresholdSeconds := 300
 	clustersResp, err := cli.ListClusters(ctx, nil)
@@ -91,11 +95,15 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 		return fmt.Errorf("failed to list clusters: %w", err)
 	}
 	clusterSlugs := make(map[string]string, len(clustersResp.Clusters))
+	officialClusters := make(map[string]struct{}, len(clustersResp.Clusters))
 	for _, cluster := range clustersResp.Clusters {
 		if !cluster.GetIsActive() {
 			continue
 		}
 		clusterSlugs[cluster.GetClusterId()] = pkgdns.ClusterSlug(cluster.GetClusterId(), cluster.GetClusterName())
+		if cluster.GetIsPlatformOfficial() {
+			officialClusters[cluster.GetClusterId()] = struct{}{}
+		}
 	}
 
 	for _, serviceType := range serviceTypes {
@@ -117,7 +125,7 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 			if !ok {
 				continue
 			}
-			expectedIPs[fqdn] = wantIPs
+			expectedRecords[fqdn] = expectedDNSRecord{IPs: wantIPs, Provider: pkgdns.ProviderCloudflare}
 			continue
 		case pkgdns.ProviderBunny:
 			if !pkgdns.IsClusterScopedServiceType(serviceType) {
@@ -125,6 +133,18 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 			}
 		default:
 			continue
+		}
+
+		var officialNodes []*quartermasterpb.InfrastructureNode
+		for _, node := range nodesResp.Nodes {
+			if _, ok := officialClusters[node.GetClusterId()]; ok {
+				officialNodes = append(officialNodes, node)
+			}
+		}
+		if rootIPs := uniqueExternalIPs(officialNodes); len(rootIPs) > 0 {
+			if rootFQDN, ok := pkgdns.RootServiceFQDN(serviceType, domain); ok {
+				expectedRecords[rootFQDN] = expectedDNSRecord{IPs: rootIPs, Provider: pkgdns.ProviderBunny}
+			}
 		}
 
 		for clusterID, clusterIPs := range clusterExternalIPs(nodesResp.Nodes) {
@@ -136,7 +156,7 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 			if !ok || len(clusterIPs) == 0 {
 				continue
 			}
-			expectedIPs[clusterFQDN] = clusterIPs
+			expectedRecords[clusterFQDN] = expectedDNSRecord{IPs: clusterIPs, Provider: pkgdns.ProviderBunny}
 		}
 	}
 
@@ -146,6 +166,8 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 
 	type dnsResult struct {
 		Domain      string   `json:"domain"`
+		Provider    string   `json:"provider"`
+		Validation  string   `json:"validation"`
 		ExpectedIPs []string `json:"expected_ips"`
 		ActualIPs   []string `json:"actual_ips"`
 		OK          bool     `json:"ok"`
@@ -155,7 +177,14 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 	var results []dnsResult
 	allHealthy := true
 
-	for fqdn, wantIPs := range expectedIPs {
+	domains := make([]string, 0, len(expectedRecords))
+	for fqdn := range expectedRecords {
+		domains = append(domains, fqdn)
+	}
+	sort.Strings(domains)
+	for _, fqdn := range domains {
+		expected := expectedRecords[fqdn]
+		wantIPs := expected.IPs
 		sort.Strings(wantIPs)
 		ips, err := lookupHost(fqdn)
 		var gotIPs []string
@@ -164,12 +193,20 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 		}
 		sort.Strings(gotIPs)
 
-		r := dnsResult{Domain: fqdn, ExpectedIPs: wantIPs, ActualIPs: gotIPs, OK: true, Status: "OK"}
+		validation := "resolves"
+		if expected.Provider == pkgdns.ProviderBunny {
+			validation = "geo_subset"
+		}
+		r := dnsResult{Domain: fqdn, Provider: string(expected.Provider), Validation: validation, ExpectedIPs: wantIPs, ActualIPs: gotIPs, OK: true, Status: "OK"}
 		if err != nil {
 			r.OK = false
 			r.Status = "NXDOMAIN"
 			allHealthy = false
-		} else if !slicesEqual(wantIPs, gotIPs) {
+		} else if len(gotIPs) == 0 {
+			r.OK = false
+			r.Status = "EMPTY"
+			allHealthy = false
+		} else if expected.Provider == pkgdns.ProviderBunny && !isIPSubset(gotIPs, wantIPs) {
 			r.OK = false
 			r.Status = "MISMATCH"
 			allHealthy = false
@@ -180,7 +217,13 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 	if outputJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(results)
+		if err := enc.Encode(results); err != nil {
+			return err
+		}
+		if !allHealthy {
+			return fmt.Errorf("DNS mismatch detected")
+		}
+		return nil
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -192,11 +235,11 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 		var statusIcon string
 		mode := ux.DetectMode(w)
 		switch r.Status {
-		case "NXDOMAIN":
+		case "NXDOMAIN", "EMPTY":
 			if mode.Unicode {
-				statusIcon = "✗ NXDOMAIN"
+				statusIcon = "✗ " + r.Status
 			} else {
-				statusIcon = "[FAIL] NXDOMAIN"
+				statusIcon = "[FAIL] " + r.Status
 			}
 		case "MISMATCH":
 			if mode.Unicode {
@@ -224,6 +267,22 @@ func runDNSDoctor(ctx context.Context, w io.Writer, cli dnsQMClient, domain stri
 		return fmt.Errorf("DNS mismatch detected")
 	}
 	return nil
+}
+
+func isIPSubset(actual, desired []string) bool {
+	if len(actual) == 0 {
+		return false
+	}
+	wanted := make(map[string]struct{}, len(desired))
+	for _, ip := range desired {
+		wanted[ip] = struct{}{}
+	}
+	for _, ip := range actual {
+		if _, ok := wanted[ip]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func getQuartermasterGRPCClient(ctx context.Context) (*quartermaster.GRPCClient, func(), error) {

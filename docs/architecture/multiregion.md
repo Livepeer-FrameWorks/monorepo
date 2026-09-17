@@ -20,6 +20,14 @@ Gateway routes GraphQL subscriptions to its own region's Signalman replicas. It 
 
 Delivery to subscribers is at-least-once. Signalman suppresses most duplicates from the bare and mirrored topic copies with a bounded event-ID window, which does not survive a restart.
 
+Signalman's broadcast consumers intentionally start at Kafka's latest offset
+when their consumer group has no committed offset. Lag accounting uses the end
+offset as that missing-commit baseline, so a new latest-reset consumer reports
+zero lag rather than the topic's lifetime depth. Durable earliest-reset
+consumers continue to use zero. Metrics for partitions no longer returned by
+Kafka are deleted so removed topics and partitions cannot leave permanently
+firing stale series.
+
 ## Durable events and billing
 
 Quartermaster and Purser write service events into their own outboxes inside the transaction that changes state, and drain workers deliver them to Decklog; see [service-events.md](service-events.md). A cluster with no owner produces platform-scoped `cluster_created` and `cluster_updated` events without a tenant.
@@ -33,6 +41,26 @@ A tenant-private cluster is controlled by one platform Foghorn cell, recorded as
 ## Media placement
 
 Which clusters may ingest or serve a stream is decided by media placement policy: tenant and stream rules compiled by Commodore into signed media authority and enforced by Foghorn at routing and final admission. See [media-authority.md](media-authority.md).
+
+## Media DNS and gateway health
+
+Quartermaster accepts only the canonical `edge-cap-{node}-{service_type}` row
+when it compares and updates Foghorn-reported edge capability health. Historical
+aggregate/instance rows do not participate in transition detection, so a full
+snapshot cannot alternate between two rows for the same node and wake Navigator
+on every interval.
+
+Global Bunny entrypoints aggregate healthy nodes from active
+`platform_official` clusters with one cluster-scoped inventory read per cluster.
+Private-cluster candidates cannot authorize clearing a platform root record.
+
+The Livepeer gateway binds its API to loopback and is exposed by the node's
+`media_ingest` reverse proxy. Each running gateway keeps a stable physical name
+at `livepeer-gateway.{node}.infra.{root}`; the proxy exposes only GET/HEAD
+`/healthz` in addition to publish routes. Quartermaster probes that HTTPS URL.
+Physical identity DNS is gated by desired ingress and active-node state, not by
+the result of the probe that depends on that DNS record. Pooled `livepeer.*`
+discovery remains gated on a fresh healthy result.
 
 ## Not built
 

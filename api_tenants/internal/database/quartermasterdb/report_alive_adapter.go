@@ -42,6 +42,7 @@ func (q *Queries) ListPriorEdgeInstanceStates(ctx context.Context, nodeIDs []str
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.node_id = ANY($1)
 		  AND (svc.type = 'edge' OR svc.type LIKE 'edge-%')
+		  AND si.instance_id = 'edge-cap-' || si.node_id || '-' || svc.type
 	`, pq.Array(nodeIDs))
 	if err != nil {
 		return nil, err
@@ -115,6 +116,7 @@ func (q *Queries) MarkEdgeInstanceUnhealthy(ctx context.Context, arg MarkEdgeIns
 		WHERE svc.service_id = si.service_id
 		  AND svc.type = $1
 		  AND si.node_id = $2
+		  AND si.instance_id = 'edge-cap-' || si.node_id || '-' || svc.type
 	`, arg.ServiceType, arg.NodeID)
 	return err
 }

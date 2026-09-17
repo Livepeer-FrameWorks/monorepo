@@ -82,6 +82,25 @@
     }
 {% endif %}
 {% endmacro %}
+{# The Livepeer gateway is loopback-only behind the media-ingest proxy. Expose
+   exactly its process health endpoint so Quartermaster can check the service
+   without widening the public gateway route surface. #}
+{% macro media_ingest_health_location(site, profile) %}
+    location = /healthz {
+        limit_except GET HEAD { deny all; }
+        proxy_pass {{ site.proxy_pass }};
+        proxy_http_version 1.1;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};
+        proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
+    }
+{% endmacro %}
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -171,6 +190,8 @@ server {
 
 {% if profile_name != 'media_ingest' %}
 {{ runtime_config_location(site, profile) }}
+{% else %}
+{{ media_ingest_health_location(site, profile) }}
 {% endif %}
 {{ credential_path_locations(site, profile) }}
 {% set effective_path_prefixes = ['/live/'] if profile_name == 'media_ingest' else site.path_prefixes | default(['/']) %}
@@ -272,6 +293,8 @@ server {
 
 {% if profile_name != 'media_ingest' %}
 {{ runtime_config_location(site, profile) }}
+{% else %}
+{{ media_ingest_health_location(site, profile) }}
 {% endif %}
 {{ credential_path_locations(site, profile) }}
 {% set effective_path_prefixes = ['/live/'] if profile_name == 'media_ingest' else site.path_prefixes | default(['/']) %}

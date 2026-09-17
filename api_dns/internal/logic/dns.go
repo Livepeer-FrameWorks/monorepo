@@ -819,29 +819,35 @@ func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType strin
 	if err != nil {
 		return nil, fmt.Errorf("list clusters: %w", err)
 	}
-	platformClusters := map[string]struct{}{}
+	var platformClusters []string
 	for _, c := range clustersResp.GetClusters() {
 		if !c.GetIsActive() {
 			continue
 		}
 		if c.GetIsPlatformOfficial() {
-			platformClusters[c.GetClusterId()] = struct{}{}
+			platformClusters = append(platformClusters, c.GetClusterId())
 		}
 	}
 
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
-	if err != nil {
-		return nil, fmt.Errorf("list healthy nodes: %w", err)
-	}
 	var filtered []*quartermasterpb.InfrastructureNode
-	for _, n := range nodesResp.GetNodes() {
-		if _, ok := platformClusters[n.GetClusterId()]; ok {
-			filtered = append(filtered, n)
+	var candidateCount int32
+	for _, clusterID := range platformClusters {
+		nodesResp, listErr := m.qmClient.ListHealthyNodesForDNSForCluster(ctx, int(m.staleAge.Seconds()), serviceType, clusterID)
+		if listErr != nil {
+			return nil, fmt.Errorf("list healthy nodes for official cluster %s: %w", clusterID, listErr)
+		}
+		candidateCount += nodesResp.GetTotalNodes()
+		for _, node := range nodesResp.GetNodes() {
+			// Keep the root inventory scoped even if an older Quartermaster
+			// implementation accidentally returns unfiltered rows.
+			if node.GetClusterId() == clusterID {
+				filtered = append(filtered, node)
+			}
 		}
 	}
 	nodes := dnsNodesFromProto(filtered)
 	if len(nodes) == 0 {
-		if authoritative && nodesResp.GetTotalNodes() <= 0 {
+		if authoritative && candidateCount <= 0 {
 			m.logger.WithFields(logging.Fields{
 				"service_type": serviceType,
 				"zone":         zoneDomain,

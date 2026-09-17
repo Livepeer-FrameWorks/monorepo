@@ -29,6 +29,11 @@ const (
 	// independently of explicit wakeups, so timed-out or post-reconnect
 	// entries get a fresh attempt without external prodding.
 	triggerForwarderTickInterval = 10 * time.Second
+
+	// triggerWALDrainBatch bounds protobuf decoding while allowing a healthy
+	// connection to continue through successive batches without waiting for the
+	// next retry tick.
+	triggerWALDrainBatch = 256
 )
 
 var (
@@ -122,13 +127,18 @@ func TriggerWALPendingDepth() (int, error) {
 	return triggerWAL.PendingDepth()
 }
 
-// ListTriggerWALPending returns the persisted MistTrigger envelopes in
-// oldest-first order. Used by /internal/triggers/wal for inspection.
-func ListTriggerWALPending() ([]*ipcpb.MistTrigger, error) {
+// ListTriggerWALPending returns at most limit persisted MistTrigger envelopes
+// in oldest-first order. A non-positive limit returns all entries for tests and
+// offline callers.
+func ListTriggerWALPending(limit ...int) ([]*ipcpb.MistTrigger, error) {
 	if triggerWAL == nil {
 		return nil, errTriggerForwarderUnready
 	}
-	return triggerWAL.Pending()
+	max := 0
+	if len(limit) > 0 {
+		max = limit[0]
+	}
+	return triggerWAL.PendingBatch(max)
 }
 
 // handleMistTriggerAck routes Foghorn's ack to whatever forwarder pass is
@@ -169,22 +179,26 @@ func drainTriggerWAL(logger logging.Logger) {
 	if stream == nil {
 		return // no active stream; pending entries stay on disk
 	}
-	pending, err := triggerWAL.Pending()
-	if err != nil {
-		logger.WithError(err).Warn("Failed to read trigger WAL")
-		return
-	}
-	removed := make(map[string]struct{})
-	for _, trigger := range pending {
-		if getStream() == nil {
-			return // disconnect mid-drain; resume on reconnect
+	for {
+		pending, err := triggerWAL.PendingBatch(triggerWALDrainBatch)
+		if err != nil {
+			logger.WithError(err).Warn("Failed to read trigger WAL batch")
+			return
 		}
-		requestID := trigger.GetRequestId()
-		if _, ok := removed[requestID]; ok {
-			continue
+		if len(pending) == 0 {
+			return
 		}
-		if sendDurableTriggerAndAwaitAck(trigger, logger) {
-			removed[requestID] = struct{}{}
+		failed := false
+		for _, trigger := range pending {
+			if getStream() == nil {
+				return // disconnect mid-drain; resume on reconnect
+			}
+			if !sendDurableTriggerAndAwaitAck(trigger, logger) {
+				failed = true
+			}
+		}
+		if failed {
+			return // retry failed rows on the periodic pass; do not hot-loop
 		}
 	}
 }

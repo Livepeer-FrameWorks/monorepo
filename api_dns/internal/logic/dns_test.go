@@ -1096,6 +1096,34 @@ func TestSyncBunnyRootServiceAuthoritativePreservesWhenNoCandidatesExist(t *test
 	}
 }
 
+func TestSyncBunnyRootServiceAuthoritativeIgnoresPrivateCandidates(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{
+			{ClusterId: "media-eu-1", IsActive: true, IsPlatformOfficial: true},
+			{ClusterId: "tenant-private-1", IsActive: true, IsPlatformOfficial: false},
+		}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{TotalNodes: 1},
+		responseByCluster: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+			"media-eu-1": {},
+		},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			t.Fatal("private candidates must not authorize clearing platform root DNS")
+			return nil
+		},
+	}
+
+	if _, err := manager.syncBunnyRootService(context.Background(), "edge-ingest", true); err != nil {
+		t.Fatalf("syncBunnyRootService returned error: %v", err)
+	}
+	if slices.Contains(qm.clusterIDs, "tenant-private-1") {
+		t.Fatalf("private cluster queried for platform root inventory: %v", qm.clusterIDs)
+	}
+}
+
 func TestSyncServiceByClusterSkipsWarningWhenNoCandidatesExist(t *testing.T) {
 	qm := &fakeQuartermasterClient{
 		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{

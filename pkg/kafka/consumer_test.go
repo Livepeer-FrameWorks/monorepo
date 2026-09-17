@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -281,6 +282,47 @@ func TestPublishLag_MissingCommitDefaultsToZero(t *testing.T) {
 	}
 	if got := gaugeValue(t, gauge, "events", "0"); got != 42 {
 		t.Fatalf("events/0 lag = %v, want 42", got)
+	}
+}
+
+func TestPublishLag_MissingCommitUsesLatestResetPolicy(t *testing.T) {
+	c, gauge := newLagTrackerConsumer(t)
+	c.resetAtEnd = true
+	fetcher := &fakeLagFetcher{
+		ends:    buildEnds(map[string]map[int32]int64{"events": {0: 2125}}),
+		commits: buildCommits(map[string]map[int32]int64{"events": {0: -1}}),
+	}
+
+	if err := c.publishLag(context.Background(), fetcher, []string{"events"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := gaugeValue(t, gauge, "events", "0"); got != 0 {
+		t.Fatalf("latest-reset uncommitted partition lag = %v, want 0", got)
+	}
+}
+
+func TestPublishLagRemovesPartitionsMissingFromNextSample(t *testing.T) {
+	c, gauge := newLagTrackerConsumer(t)
+	first := &fakeLagFetcher{
+		ends:    buildEnds(map[string]map[int32]int64{"events": {0: 10, 1: 20}}),
+		commits: buildCommits(map[string]map[int32]int64{"events": {0: 5, 1: 15}}),
+	}
+	if err := c.publishLag(context.Background(), first, []string{"events"}); err != nil {
+		t.Fatalf("first sample: %v", err)
+	}
+	if got := testutil.CollectAndCount(gauge); got != 2 {
+		t.Fatalf("first sample series = %d, want 2", got)
+	}
+
+	second := &fakeLagFetcher{
+		ends:    buildEnds(map[string]map[int32]int64{"events": {0: 12}}),
+		commits: buildCommits(map[string]map[int32]int64{"events": {0: 8}}),
+	}
+	if err := c.publishLag(context.Background(), second, []string{"events"}); err != nil {
+		t.Fatalf("second sample: %v", err)
+	}
+	if got := testutil.CollectAndCount(gauge); got != 1 {
+		t.Fatalf("second sample series = %d, want stale partition removed", got)
 	}
 }
 

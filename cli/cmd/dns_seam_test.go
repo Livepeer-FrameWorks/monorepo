@@ -143,6 +143,29 @@ func TestRunDNSDoctor(t *testing.T) {
 		}
 	})
 
+	t.Run("json_failure_preserves_report_and_returns_error", func(t *testing.T) {
+		svcType, _ := dnsCloudflareServiceType(t)
+		f := &fakeDNSQM{
+			clustersResp: &quartermasterpb.ListClustersResponse{},
+			nodesByType: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+				svcType: dnsNodes("203.0.113.20"),
+			},
+		}
+		lookup := func(string) ([]string, error) { return nil, errors.New("no such host") }
+
+		var buf bytes.Buffer
+		if err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, true); err == nil {
+			t.Fatal("expected JSON DNS mismatch to return an error")
+		}
+		var results []map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &results); err != nil {
+			t.Fatalf("failure report is not valid JSON: %v\n%s", err, buf.String())
+		}
+		if len(results) != 1 || results[0]["status"] != "NXDOMAIN" {
+			t.Fatalf("unexpected JSON failure report: %+v", results)
+		}
+	})
+
 	t.Run("nxdomain_returns_error", func(t *testing.T) {
 		svcType, _ := dnsCloudflareServiceType(t)
 		f := &fakeDNSQM{
@@ -163,7 +186,7 @@ func TestRunDNSDoctor(t *testing.T) {
 		}
 	})
 
-	t.Run("mismatch_returns_error", func(t *testing.T) {
+	t.Run("cloudflare_proxy_ip_is_not_origin_drift", func(t *testing.T) {
 		svcType, _ := dnsCloudflareServiceType(t)
 		f := &fakeDNSQM{
 			clustersResp: &quartermasterpb.ListClustersResponse{},
@@ -175,9 +198,69 @@ func TestRunDNSDoctor(t *testing.T) {
 		lookup := func(string) ([]string, error) { return []string{"198.51.100.99"}, nil }
 
 		var buf bytes.Buffer
-		err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, false)
-		if err == nil {
-			t.Fatal("expected DNS mismatch error")
+		if err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, false); err != nil {
+			t.Fatalf("proxied Cloudflare address should be validated by resolution, got %v", err)
+		}
+		if strings.Contains(buf.String(), "MISMATCH") {
+			t.Errorf("Cloudflare proxy address was compared to origin inventory:\n%s", buf.String())
+		}
+	})
+
+	t.Run("cloudflare_empty_answer_is_unhealthy", func(t *testing.T) {
+		svcType, _ := dnsCloudflareServiceType(t)
+		f := &fakeDNSQM{
+			clustersResp: &quartermasterpb.ListClustersResponse{},
+			nodesByType: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+				svcType: {Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: strptr("203.0.113.10")}}},
+			},
+		}
+		lookup := func(string) ([]string, error) { return nil, nil }
+
+		var buf bytes.Buffer
+		if err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, false); err == nil {
+			t.Fatal("expected an empty Cloudflare answer to fail")
+		}
+		if !strings.Contains(buf.String(), "EMPTY") {
+			t.Errorf("expected EMPTY status in output, got:\n%s", buf.String())
+		}
+	})
+
+	t.Run("bunny_geo_answer_may_be_subset", func(t *testing.T) {
+		f := &fakeDNSQM{
+			clustersResp: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+				ClusterId: "media-eu-1", IsActive: true, IsPlatformOfficial: true,
+			}}},
+			nodesByType: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+				"edge-ingest": {Nodes: []*quartermasterpb.InfrastructureNode{
+					{NodeId: "edge-eu-1", ClusterId: "media-eu-1", ExternalIp: strptr("203.0.113.40")},
+					{NodeId: "edge-eu-2", ClusterId: "media-eu-1", ExternalIp: strptr("203.0.113.41")},
+				}},
+			},
+		}
+		lookup := func(string) ([]string, error) { return []string{"203.0.113.41"}, nil }
+
+		var buf bytes.Buffer
+		if err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, false); err != nil {
+			t.Fatalf("Bunny geolocation subset should be healthy, got %v\n%s", err, buf.String())
+		}
+	})
+
+	t.Run("bunny_unexpected_address_is_drift", func(t *testing.T) {
+		f := &fakeDNSQM{
+			clustersResp: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+				ClusterId: "media-eu-1", IsActive: true, IsPlatformOfficial: true,
+			}}},
+			nodesByType: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+				"edge-ingest": {Nodes: []*quartermasterpb.InfrastructureNode{{
+					NodeId: "edge-eu-1", ClusterId: "media-eu-1", ExternalIp: strptr("203.0.113.40"),
+				}}},
+			},
+		}
+		lookup := func(string) ([]string, error) { return []string{"198.51.100.99"}, nil }
+
+		var buf bytes.Buffer
+		if err := runDNSDoctor(context.Background(), &buf, f, "frameworks.network", lookup, false); err == nil {
+			t.Fatal("expected Bunny address outside authoritative inventory to fail")
 		}
 		if !strings.Contains(buf.String(), "MISMATCH") {
 			t.Errorf("expected MISMATCH status in output, got:\n%s", buf.String())

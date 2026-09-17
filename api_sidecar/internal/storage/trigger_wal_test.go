@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -332,6 +333,75 @@ func TestTriggerWALSkipsTmpFiles(t *testing.T) {
 	}
 	if len(pending) != 1 {
 		t.Fatalf("Pending len = %d, want 1 (stray .tmp must be ignored)", len(pending))
+	}
+}
+
+func TestTriggerWALPendingBatchDoesNotDecodePastLimit(t *testing.T) {
+	dir := t.TempDir()
+	first := newTrigger(t, "node-1", "USER_END", []byte("first"))
+	first.Timestamp = 1000
+	payload, err := proto.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal first trigger: %v", err)
+	}
+	if writeErr := os.WriteFile(filepath.Join(dir, "1000000-"+first.RequestId+".pb"), payload, 0o600); writeErr != nil {
+		t.Fatalf("seed first WAL row: %v", writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(dir, "2000000-corrupt.pb"), []byte("not protobuf"), 0o600); writeErr != nil {
+		t.Fatalf("seed corrupt WAL row: %v", writeErr)
+	}
+
+	wal, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatalf("NewTriggerWAL: %v", err)
+	}
+	pending, err := wal.PendingBatch(1)
+	if err != nil {
+		t.Fatalf("PendingBatch(1) decoded beyond its bound: %v", err)
+	}
+	if len(pending) != 1 || pending[0].RequestId != first.RequestId {
+		t.Fatalf("PendingBatch(1) = %+v, want only first row", pending)
+	}
+	if _, err := wal.Pending(); err == nil {
+		t.Fatal("unbounded Pending should reach and reject the corrupt second row")
+	}
+}
+
+func TestTriggerWALIndexRecoversAndTracksDepth(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatalf("NewTriggerWAL #1: %v", err)
+	}
+	const rows = 1000
+	triggers := make([]*ipcpb.MistTrigger, 0, rows)
+	for index := 0; index < rows; index++ {
+		trigger := newTrigger(t, "node-1", "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", []byte(strconv.Itoa(index)))
+		trigger.Timestamp += int64(index)
+		if _, appendErr := first.Append(trigger); appendErr != nil {
+			t.Fatalf("Append row %d: %v", index, appendErr)
+		}
+		triggers = append(triggers, trigger)
+	}
+
+	reopened, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatalf("NewTriggerWAL #2: %v", err)
+	}
+	if depth, depthErr := reopened.PendingDepth(); depthErr != nil || depth != rows {
+		t.Fatalf("recovered depth = %d, %v; want %d", depth, depthErr, rows)
+	}
+	batch, err := reopened.PendingBatch(32)
+	if err != nil || len(batch) != 32 {
+		t.Fatalf("PendingBatch(32) len = %d, err = %v", len(batch), err)
+	}
+	for _, trigger := range triggers[:32] {
+		if err := reopened.Ack(trigger.RequestId); err != nil {
+			t.Fatalf("Ack %s: %v", trigger.RequestId, err)
+		}
+	}
+	if depth, _ := reopened.PendingDepth(); depth != rows-32 {
+		t.Fatalf("depth after batch ack = %d, want %d", depth, rows-32)
 	}
 }
 

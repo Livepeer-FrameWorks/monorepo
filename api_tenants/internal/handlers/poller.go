@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -234,17 +235,27 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 			go func(ii serviceInstance) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				url := fmt.Sprintf("http://%s:%d%s", ii.host, ii.port, ii.path)
+				probeURL, urlErr := httpHealthURL(ii)
 				status := "healthy"
 				atomic.AddInt32(&checked, 1)
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+				if urlErr != nil {
+					status = "unhealthy"
+					atomic.AddInt32(&unhealthy, 1)
+					serviceSummary.recordResult(ii.serviceID, status)
+					logger.WithError(urlErr).WithField("service", ii.serviceID).WithField("health_endpoint", ii.path).Debug("HTTP health check endpoint invalid")
+					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
+						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
+					}
+					return
+				}
+				req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, nil)
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
 					serviceSummary.recordResult(ii.serviceID, status)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
+					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check request failed")
 					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
 					}
@@ -254,14 +265,14 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check failed")
+					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check failed")
 				} else if resp.StatusCode != 200 {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
-					logger.WithField("service", ii.serviceID).WithField("url", url).WithField("status_code", resp.StatusCode).Debug("HTTP health check returned non-200")
+					logger.WithField("service", ii.serviceID).WithField("url", probeURL).WithField("status_code", resp.StatusCode).Debug("HTTP health check returned non-200")
 				} else {
 					atomic.AddInt32(&healthy, 1)
-					logger.WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check passed")
+					logger.WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check passed")
 				}
 				serviceSummary.recordResult(ii.serviceID, status)
 				if resp != nil {
@@ -380,6 +391,24 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 		summary.Debug("Health poller completed")
 	}
 	return nil
+}
+
+func httpHealthURL(inst serviceInstance) (string, error) {
+	endpoint := strings.TrimSpace(inst.path)
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	if parsed.IsAbs() {
+		if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return "", fmt.Errorf("absolute health endpoint must use http or https")
+		}
+		return parsed.String(), nil
+	}
+	if !strings.HasPrefix(endpoint, "/") {
+		return "", fmt.Errorf("relative health endpoint must begin with /")
+	}
+	return fmt.Sprintf("http://%s:%d%s", inst.host, inst.port, endpoint), nil
 }
 
 func applyServiceDefinitionFallback(i *serviceInstance) {

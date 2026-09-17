@@ -317,6 +317,29 @@ func TestDetect_SystemdReadsNativePlatformVersion(t *testing.T) {
 	}
 }
 
+func TestDetect_SystemdManagedComposeStackReportsDockerMode(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{responses: []fakeResponse{
+		{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1},
+		{matchPrefix: "docker ps -a", exitCode: 1},
+		{matchPrefix: "systemctl show", exitCode: 0, stdout: strings.Join([]string{
+			"LoadState=loaded",
+			"ActiveState=active",
+			"SubState=exited",
+			"ExecStart={ path=/usr/bin/docker ; argv[]=/usr/bin/docker compose -f /opt/frameworks/grafana/docker-compose.yml up -d ; }",
+		}, "\n")},
+	}}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "grafana")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !state.Exists || !state.Running || state.Mode != "docker" {
+		t.Fatalf("systemd-managed compose stack = %+v, want running docker", state)
+	}
+}
+
 func TestSystemdEnvironmentFile(t *testing.T) {
 	t.Parallel()
 

@@ -59,6 +59,31 @@ func TestApplyServiceDefinitionFallbackUsesCanonicalHealthMetadata(t *testing.T)
 	}
 }
 
+func TestHTTPHealthURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		inst    serviceInstance
+		want    string
+		wantErr bool
+	}{
+		{name: "relative registry endpoint", inst: serviceInstance{host: "10.88.0.4", port: 8935, path: "/healthz"}, want: "http://10.88.0.4:8935/healthz"},
+		{name: "absolute public endpoint", inst: serviceInstance{host: "10.88.0.4", port: 8935, path: "https://livepeer-gateway.core-eu-1.infra.example.com/healthz"}, want: "https://livepeer-gateway.core-eu-1.infra.example.com/healthz"},
+		{name: "reject non-http absolute endpoint", inst: serviceInstance{path: "file:///etc/passwd"}, wantErr: true},
+		{name: "reject malformed relative endpoint", inst: serviceInstance{path: "healthz"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpHealthURL(tt.inst)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("httpHealthURL() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("httpHealthURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPollOnceRetriesSchemaVersionMismatch(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {

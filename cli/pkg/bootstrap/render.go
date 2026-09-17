@@ -375,6 +375,14 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						// (store-backed); for everything else ReadinessPath() == HealthPath.
 						entry.HealthEndpoint = defs.ReadinessPath()
 					}
+					// A gateway intentionally listens on loopback behind the node's HTTPS
+					// ingress. Probe that public instance endpoint instead of its private
+					// registry address; the latter is not a routable health interface.
+					if pkgdns.IsPhysicalEndpointServiceType(serviceType) {
+						if fqdn, ok := pkgdns.InfraInstanceFQDN(serviceType, hostKey, m.RootDomain); ok && entry.HealthEndpoint != "" {
+							entry.HealthEndpoint = "https://" + fqdn + entry.HealthEndpoint
+						}
+					}
 					if md := deriveServiceMetadata(serviceType, hostKey, port, m, svc, opts); len(md) > 0 {
 						entry.Metadata = md
 					}

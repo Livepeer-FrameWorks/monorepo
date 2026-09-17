@@ -508,6 +508,9 @@ func TestDeriveLivepeerGatewayPhysicalRegistryAndLogicalTLSBundles(t *testing.T)
 	if got := d.Quartermaster.ServiceRegistry[0].ClusterID; got != "core-eu" {
 		t.Fatalf("service_registry cluster_id = %q, want physical cluster core-eu", got)
 	}
+	if got := d.Quartermaster.ServiceRegistry[0].HealthEndpoint; got != "https://livepeer-gateway.core-eu-1.infra.frameworks.network/healthz" {
+		t.Fatalf("service_registry health endpoint = %q, want physical HTTPS readiness endpoint", got)
+	}
 
 	bundles := map[string]TLSBundle{}
 	for _, b := range d.Quartermaster.Ingress.TLSBundles {

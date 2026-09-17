@@ -438,7 +438,7 @@ func runConvertedRuntimeAdapters(t *testing.T, db *sql.DB) {
 			return err
 		}},
 		{"physical-instances", func() error {
-			_, err := queries.ListPhysicalServiceInstances(ctx, PhysicalServiceInstanceFilter{ServiceType: "foghorn", ClusterID: "central-primary", StaleThreshold: 300})
+			_, err := queries.ListPhysicalServiceInstances(ctx, PhysicalServiceInstanceFilter{ServiceType: "foghorn", ClusterID: "central-primary"})
 			return err
 		}},
 		{"physical-domains", func() error { _, err := queries.ListProvisionedPhysicalIngressDomains(ctx); return err }},

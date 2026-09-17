@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -27,6 +29,40 @@ func TestListServiceInstancesByType_DeniesNonServiceCallers(t *testing.T) {
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("expected PermissionDenied for non-service caller, got %v", err)
 		}
+	}
+}
+
+func TestListServiceInstancesByTypeKeepsRunningUnhealthyPhysicalIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "physical identity query" {
+			return nil
+		}
+		if strings.Contains(actualSQL, "si.health_status = 'healthy'") || strings.Contains(actualSQL, "si.last_health_check >") {
+			return fmt.Errorf("physical identity must not be health-gated: %s", actualSQL)
+		}
+		return nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	s.SetPlatformRootDomain("frameworks.network")
+
+	cols := []string{"instance_id", "service_id", "cluster_id", "node_id", "external_ip", "status", "health_status", "port", "protocol"}
+	mock.ExpectQuery("physical identity query").
+		WithArgs("livepeer-gateway").
+		WillReturnRows(sqlmock.NewRows(cols).
+			AddRow("inst-gw-1", "livepeer-gateway", "core-eu", "core-eu-1", "203.0.113.10", "running", "unhealthy", 8935, "http"))
+
+	resp, err := s.ListServiceInstancesByType(serviceCtx(), &quartermasterpb.ListServiceInstancesByTypeRequest{
+		ServiceType: "livepeer-gateway",
+	})
+	if err != nil {
+		t.Fatalf("ListServiceInstancesByType: %v", err)
+	}
+	if len(resp.GetInstances()) != 1 || resp.GetInstances()[0].GetPublicInstanceHost() != "livepeer-gateway.core-eu-1.infra.frameworks.network" {
+		t.Fatalf("physical inventory = %+v", resp.GetInstances())
 	}
 }
 

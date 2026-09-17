@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,8 @@ type Consumer struct {
 	// end-offset vs committed-offset per (topic, partition) and
 	// publishes the difference to lagTracker.Gauge.
 	lagTracker *LagTrackerConfig
+	resetAtEnd bool
+	lagSeries  map[string]struct{}
 }
 
 // ConsumerOption configures a Consumer at construction time. Callers wanting
@@ -61,6 +64,7 @@ type ConsumerOption func(*consumerOptions)
 
 type consumerOptions struct {
 	resetOffset kgo.Offset
+	resetAtEnd  bool
 	lagTracker  *LagTrackerConfig
 }
 
@@ -90,6 +94,7 @@ func WithLagTracker(cfg LagTrackerConfig) ConsumerOption {
 func WithResetOffsetLatest() ConsumerOption {
 	return func(o *consumerOptions) {
 		o.resetOffset = kgo.NewOffset().AtEnd()
+		o.resetAtEnd = true
 	}
 }
 
@@ -126,6 +131,8 @@ func NewConsumer(brokers []string, groupID string, clusterID string, clientID st
 		groupID:    groupID,
 		handlers:   make(map[string]Handler),
 		lagTracker: cfg.lagTracker,
+		resetAtEnd: cfg.resetAtEnd,
+		lagSeries:  make(map[string]struct{}),
 	}, nil
 }
 
@@ -182,7 +189,7 @@ func (c *Consumer) publishLag(ctx context.Context, fetcher lagFetcher, topics []
 
 	committedByTP := make(map[string]map[int32]int64)
 	commits.Each(func(r kadm.OffsetResponse) {
-		if r.Err != nil {
+		if r.Err != nil || r.At < 0 {
 			return
 		}
 		if _, ok := committedByTP[r.Topic]; !ok {
@@ -191,11 +198,15 @@ func (c *Consumer) publishLag(ctx context.Context, fetcher lagFetcher, topics []
 		committedByTP[r.Topic][r.Partition] = r.At
 	})
 
+	currentSeries := make(map[string]struct{})
 	ends.Each(func(o kadm.ListedOffset) {
 		if o.Err != nil {
 			return
 		}
 		committed := int64(0)
+		if c.resetAtEnd {
+			committed = o.Offset
+		}
 		if perTopic, ok := committedByTP[o.Topic]; ok {
 			if v, ok2 := perTopic[o.Partition]; ok2 {
 				committed = v
@@ -205,8 +216,20 @@ func (c *Consumer) publishLag(ctx context.Context, fetcher lagFetcher, topics []
 		if lag < 0 {
 			lag = 0
 		}
-		c.lagTracker.Gauge.WithLabelValues(o.Topic, strconv.Itoa(int(o.Partition))).Set(float64(lag))
+		partition := strconv.Itoa(int(o.Partition))
+		c.lagTracker.Gauge.WithLabelValues(o.Topic, partition).Set(float64(lag))
+		currentSeries[o.Topic+"\x00"+partition] = struct{}{}
 	})
+	for series := range c.lagSeries {
+		if _, ok := currentSeries[series]; ok {
+			continue
+		}
+		parts := strings.SplitN(series, "\x00", 2)
+		if len(parts) == 2 {
+			c.lagTracker.Gauge.DeleteLabelValues(parts[0], parts[1])
+		}
+	}
+	c.lagSeries = currentSeries
 	return nil
 }
 

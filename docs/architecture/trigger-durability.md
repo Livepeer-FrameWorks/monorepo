@@ -116,9 +116,14 @@ reported failed.
 - Directory: explicit `FRAMEWORKS_TRIGGER_WAL_DIR`, otherwise `<HELMSMAN_STATE_DIR>/trigger-wal`. Helmsman refuses startup without a durable state root; it never falls back to the reclaimable media volume, a user cache directory, or `/tmp`.
 - One file per durable trigger: `<received_at_ms>-<source_event_id>.pb` containing the marshaled `pb.MistTrigger`.
 - Writes are atomic: write to `.tmp`, `fsync`, `rename` into place, then fsync the WAL directory. Append returns only after the file and directory entry are durable.
-- `Ack(source_event_id)` deletes the file (glob-on-id so any `received_at_ms` prefix works).
+- Startup builds an in-memory index of file paths and source event IDs. Payloads
+  remain on disk; the index never duplicates the protobuf bodies in memory.
+- `Ack(source_event_id)` deletes the indexed file for any `received_at_ms` prefix.
 - `DeadLetter(source_event_id)` renames non-retryable rows to `.dead`; they are no longer retried but remain inspectable on disk.
-- `Pending()` returns the protobuf-unmarshaled list in oldest-first order (sorted by filename, which has the millisecond prefix).
+- Online replay uses `PendingBatch(256)` in oldest-first order. A healthy
+  connection immediately continues with the next batch, while one failed batch
+  waits for the retry tick. This prevents a six-figure backlog from being read
+  and unmarshaled in full before the first send.
 - No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
 
 The package is a Go-only library; tests in `trigger_wal_test.go` cover idempotent append, idempotent ack, crash-restart recovery (open a fresh handle on the same dir), and ordered drain.
@@ -141,7 +146,7 @@ api_sidecar/internal/handlers (Helmsman)
 
 (asynchronously)
 api_sidecar/internal/control trigger_forwarder.go
-  - drains WAL.Pending() in order
+  - drains bounded WAL.PendingBatch() windows in order
   - for each entry: stream.Send(ControlMessage_MistTrigger),
                     register ack channel keyed by source_event_id,
                     wait up to triggerAckTimeout (30s)
@@ -175,9 +180,15 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 
 ## Failure modes and recovery
 
-- **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder calls `Pending()` and replays. Same `source_event_id` → idempotent across crashes.
+- **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder drains bounded `PendingBatch()` windows. Same `source_event_id` → idempotent across crashes.
 - **api_balancing crashes during processing.** Helmsman's `awaitAck` times out after 30s, the next forwarder tick re-sends. Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
+- **An always-on multi-rendition processing stream creates many rows.**
+  `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` is one billable rendition completion,
+  not one event per input stream. Five renditions at a five-second segment
+  interval produce about 3,600 durable facts per hour. That cardinality is
+  expected; a growing age/depth after downstream recovery is not. Replay and
+  inspection are bounded so expected cardinality cannot wedge recovery.
 - **WAL append fails.** Helmsman returns `503` for accurate diagnostics and emits `mist_webhook_requests_total{status="wal_error"}`. Mist does not read asynchronous trigger responses, so this status does not cause Mist to retry. The event was not accepted into the durable boundary.
 - **Helmsman parse/schema error after reading the body.** The raw body is wrapped in `RawMistWebhookTrigger` and durably journaled before `200 OK`, so MistServer parser drift cannot silently drop an accounting trigger. The raw envelope is operator-visible in `raw_mist_triggers`; typed final-fact projection simply skips it until the parser is fixed and the raw record is replayed.
 - **Downstream non-retryable error (schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
@@ -187,7 +198,11 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 
 - WAL directory pending file count is the canonical "is anything stuck?" signal.
 - `mist_webhook_requests_total{trigger_type, status}` carries `durably_enqueued`, `durably_enqueued_parse_error`, and `wal_error` statuses for each final/accounting handler.
-- `GET /triggers/wal` lists pending rows; `POST /triggers/wal/replay` kicks an immediate drain. Replay is safe because retries use the same `source_event_id` and deterministic typed `event_id`; the WAL itself is idempotent by source id.
+- `GET /triggers/wal` returns total `pending_depth` plus the oldest 100 rows and
+  an `entries_truncated` flag; it does not decode the whole backlog.
+  `POST /triggers/wal/replay` kicks an immediate drain. Replay is safe because
+  retries use the same `source_event_id` and deterministic typed `event_id`; the
+  WAL itself is idempotent by source id.
 
 ## Why not …
 

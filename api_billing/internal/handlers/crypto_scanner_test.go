@@ -84,6 +84,40 @@ func TestCryptoScannerDevelopmentBootstrapIsBounded(t *testing.T) {
 	}
 }
 
+func TestRPCBlockByNumberDecodesHashOnlyTransactions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var payload struct {
+			Params []any `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Params) != 2 || payload.Params[1] != false {
+			t.Fatalf("params = %#v, want header-only block request", payload.Params)
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"jsonrpc": "2.0", "id": 1,
+			"result": map[string]any{
+				"number":       "0x2a",
+				"hash":         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"transactions": []string{"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+
+	monitor := &CryptoMonitor{rpc: NewRPCClient()}
+	block, err := monitor.rpcBlockByNumber(context.Background(), Networks["base"], 42, false)
+	if err != nil {
+		t.Fatalf("rpcBlockByNumber: %v", err)
+	}
+	if block.Number != "0x2a" || block.Hash == "" || len(block.Transactions) != 0 {
+		t.Fatalf("header-only block = %+v", block)
+	}
+}
+
 func scannerAddresses(count int) map[string]struct{} {
 	addresses := make(map[string]struct{}, count)
 	for index := 1; index <= count; index++ {

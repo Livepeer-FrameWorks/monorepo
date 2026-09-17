@@ -342,7 +342,6 @@ func (q *Queries) ListServiceInstancesPage(ctx context.Context, filter ServiceIn
 
 type PhysicalServiceInstanceFilter struct {
 	ServiceType, ClusterID string
-	StaleThreshold         int32
 }
 type PhysicalServiceInstanceRow struct {
 	InstanceID, ServiceID, ClusterID, NodeID string
@@ -353,14 +352,10 @@ type PhysicalServiceInstanceRow struct {
 }
 
 func (q *Queries) ListPhysicalServiceInstances(ctx context.Context, filter PhysicalServiceInstanceFilter) ([]PhysicalServiceInstanceRow, error) {
-	where, args := "WHERE s.type = $1 AND si.status IN ('running','active') AND si.health_status = 'healthy' AND si.node_id IS NOT NULL AND n.external_ip IS NOT NULL AND n.status = 'active'", []any{filter.ServiceType}
+	where, args := "WHERE s.type = $1 AND si.status IN ('running','active') AND si.node_id IS NOT NULL AND n.external_ip IS NOT NULL AND n.status = 'active'", []any{filter.ServiceType}
 	if filter.ClusterID != "" {
 		args = append(args, filter.ClusterID)
 		where += fmt.Sprintf(" AND si.cluster_id = $%d", len(args))
-	}
-	if filter.StaleThreshold > 0 {
-		args = append(args, filter.StaleThreshold)
-		where += fmt.Sprintf(" AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", len(args))
 	}
 	rows, err := q.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT si.instance_id, si.service_id, si.cluster_id, si.node_id, host(n.external_ip), si.status, si.health_status, si.port, si.protocol

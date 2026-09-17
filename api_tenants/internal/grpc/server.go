@@ -8441,6 +8441,8 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *qua
 // the physical endpoint <service>.<node>.infra.<root>. It deliberately does NOT
 // route through service_cluster_assignments: cluster_id stays the physical host
 // cluster so Navigator can publish one infra A record per running instance/node.
+// Physical records describe provisioned node identity, not load-balancer
+// eligibility, and therefore remain published while service health is degraded.
 func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, req *quartermasterpb.ListServiceInstancesByTypeRequest) (*quartermasterpb.ListServiceInstancesByTypeResponse, error) {
 	// Physical inventory (node IDs + external IPs) is infrastructure-internal:
 	// only SERVICE_TOKEN callers (Navigator) may read it, never tenant/user JWTs.
@@ -8457,14 +8459,15 @@ func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, re
 		return nil, status.Errorf(codes.InvalidArgument, "service_type %q has no physical endpoints", serviceType)
 	}
 
-	// Only healthy, operator-active instances are eligible for a public infra
-	// A record: a starting/unhealthy gateway must never receive routable DNS.
-	// Mirrors listHealthyServiceNodes' health gate.
+	// Publish running instances on active nodes independently of health. The
+	// physical name is also the HTTPS health endpoint, so health-gating this
+	// inventory would create a DNS/health bootstrap deadlock. Healthy/fresh gates
+	// still apply to pooled discovery and traffic selection.
 	var rows []quartermasterdb.PhysicalServiceInstanceRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
 		rows, queryErr = quartermasterdb.New(s.db).ListPhysicalServiceInstances(ctx, quartermasterdb.PhysicalServiceInstanceFilter{
-			ServiceType: serviceType, ClusterID: strings.TrimSpace(req.GetClusterId()), StaleThreshold: req.GetStaleThresholdSeconds(),
+			ServiceType: serviceType, ClusterID: strings.TrimSpace(req.GetClusterId()),
 		})
 		return queryErr
 	})

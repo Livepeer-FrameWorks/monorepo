@@ -259,8 +259,8 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 		}
 
 		state.Exists = true
-		state.Mode = "native"
-		state.Running = props["ActiveState"] == "active" && props["SubState"] == "running"
+		state.Mode = systemdRuntimeMode(props["ExecStart"])
+		state.Running = props["ActiveState"] == "active" && (props["SubState"] == "running" || (state.Mode == "docker" && props["SubState"] == "exited"))
 		state.DetectedBy = "systemd"
 		state.Metadata["systemd_service"] = svcName
 		state.Metadata["active_state"] = props["ActiveState"]
@@ -270,7 +270,7 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 		state.Metadata["environment_file"] = systemdEnvironmentFile(props["EnvironmentFiles"])
 		if props["ExecStart"] != "" {
 			state.Metadata["exec_start"] = props["ExecStart"]
-			if bin := systemdExecPath(props["ExecStart"]); bin != "" {
+			if bin := systemdExecPath(props["ExecStart"]); bin != "" && state.Mode == "native" {
 				state.Metadata["binary_path"] = bin
 				version, err := d.readNativePlatformVersion(ctx, bin)
 				if err != nil {
@@ -286,6 +286,14 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 	}
 
 	return &DetectionResult{Method: "systemd", Success: false}, nil
+}
+
+func systemdRuntimeMode(execStart string) string {
+	command := strings.ToLower(execStart)
+	if strings.Contains(command, "docker compose") || strings.Contains(command, "docker-compose") {
+		return "docker"
+	}
+	return "native"
 }
 
 func systemdEnvironmentFile(value string) string {

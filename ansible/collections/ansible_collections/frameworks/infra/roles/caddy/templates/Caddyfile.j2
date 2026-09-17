@@ -75,6 +75,11 @@
 {% endif %}
 {% if site.upstream is defined and site.upstream | length > 0 %}
 {% if site.profile | default('api') == 'media_ingest' %}
+    @media_ingest_health {
+        path /healthz
+        method GET HEAD
+    }
+    reverse_proxy @media_ingest_health {{ site.upstream }}
     @media_ingest {
         path /live /live/*
         method POST PUT

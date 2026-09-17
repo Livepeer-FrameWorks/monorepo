@@ -207,8 +207,8 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 		{"pg-1", "yugabyte", "yugabyte"},
 		{"pg-2", "yugabyte", "yugabyte"},
 		{"ch-1", "clickhouse", "clickhouse"},
-		{"kf-1", "kafka:broker", "kafka"},
-		{"kc-1", "kafka:controller", "kafka-controller"},
+		{"kf-1", "kafka:aggregator:broker", "kafka"},
+		{"kc-1", "kafka:aggregator:controller", "kafka-controller"},
 		{"rd-1", "redis:platform", "redis-platform"},
 		{"rd-2", "redis:foghorn", "redis-foghorn"},
 	}
@@ -246,8 +246,8 @@ func TestCollectClusterDriftEntries_kafkaControllerProbedByControllerDeployName(
 		}}
 	}
 	entries := collectClusterDriftEntriesWith(context.Background(), manifest, nil, factory)
-	if len(entries) != 1 || entries[0].Status != driftClusterOK || entries[0].Service != "kafka:controller" {
-		t.Fatalf("want 1 ok entry labeled kafka:controller, got %+v", entries)
+	if len(entries) != 1 || entries[0].Status != driftClusterOK || entries[0].Service != "kafka:aggregator:controller" {
+		t.Fatalf("want 1 ok entry labeled kafka:aggregator:controller, got %+v", entries)
 	}
 }
 
