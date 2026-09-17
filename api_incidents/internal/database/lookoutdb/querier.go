@@ -22,7 +22,11 @@ type Querier interface {
 	// the tenant. Delivered and failed rows stay as delivery history until retention.
 	CancelPendingIncidentPublications(ctx context.Context, arg CancelPendingIncidentPublicationsParams) (int64, error)
 	ClaimDeliveryCandidates(ctx context.Context, arg ClaimDeliveryCandidatesParams) ([]ClaimDeliveryCandidatesRow, error)
+	// Platform worker claim across all tenants; it returns only opaque delivery
+	// snapshots, and the token-fenced updates below retain each row's tenant key.
+	ClaimOperatorActivityCandidates(ctx context.Context, arg ClaimOperatorActivityCandidatesParams) ([]ClaimOperatorActivityCandidatesRow, error)
 	CompleteDelivery(ctx context.Context, arg CompleteDeliveryParams) (CompleteDeliveryRow, error)
+	CompleteOperatorActivity(ctx context.Context, arg CompleteOperatorActivityParams) (CompleteOperatorActivityRow, error)
 	// Firing alert counts for one page of incidents. Tenant-restricted callers pass
 	// their tenant; unrestricted callers (platform operators, internal services)
 	// pass NULL. Incidents without firing alerts have no row.
@@ -30,13 +34,20 @@ type Querier interface {
 	CountFiringIncidentAlerts(ctx context.Context, arg CountFiringIncidentAlertsParams) (int32, error)
 	CountIncidents(ctx context.Context, arg CountIncidentsParams) (int32, error)
 	CountTenantIncidents(ctx context.Context, arg CountTenantIncidentsParams) (int32, error)
+	// Platform retention across all tenants; only settled rows older than the
+	// cutoff are removed, and no tenant data is returned.
+	DeleteDeliveredOperatorActivityRows(ctx context.Context, arg DeleteDeliveredOperatorActivityRowsParams) (int64, error)
 	// Retention across all tenants: removes one bounded batch of rows delivered
 	// before the cutoff. It deletes only settled rows and returns no row data.
 	DeleteDeliveredOutboxRows(ctx context.Context, arg DeleteDeliveredOutboxRowsParams) (int64, error)
+	// Platform retention across all tenants; only terminal rows older than the
+	// cutoff are removed, and no tenant data is returned.
+	DeleteFailedOperatorActivityRows(ctx context.Context, arg DeleteFailedOperatorActivityRowsParams) (int64, error)
 	// Retention across all tenants: removes one bounded batch of rows that failed
 	// before the cutoff. It deletes only settled rows and returns no row data.
 	DeleteFailedOutboxRows(ctx context.Context, arg DeleteFailedOutboxRowsParams) (int64, error)
 	EnqueueDelivery(ctx context.Context, arg EnqueueDeliveryParams) error
+	EnqueueOperatorActivity(ctx context.Context, arg EnqueueOperatorActivityParams) error
 	// Creates an unverified platform row for a cluster Quartermaster could not
 	// answer for, so ingestion always has a row to lock. An existing row is kept.
 	EnsureClusterScope(ctx context.Context, clusterID string) error
@@ -45,6 +56,7 @@ type Querier interface {
 	// rows keep retrying at the capped backoff: produce failures are platform
 	// outages, and abandoning the row would drop the tenant's Skipper investigation.
 	FailDelivery(ctx context.Context, arg FailDeliveryParams) (FailDeliveryRow, error)
+	FailOperatorActivity(ctx context.Context, arg FailOperatorActivityParams) (FailOperatorActivityRow, error)
 	// The cluster-to-owner map is keyed by cluster and has no caller tenant: it is
 	// what decides an alert's tenant, so these queries cannot filter by one.
 	GetClusterScope(ctx context.Context, clusterID string) (GetClusterScopeRow, error)
@@ -61,6 +73,7 @@ type Querier interface {
 	// and inserts nothing.
 	InsertInvestigationAttachedEvent(ctx context.Context, arg InsertInvestigationAttachedEventParams) (int64, error)
 	LeaseDelivery(ctx context.Context, arg LeaseDeliveryParams) (int64, error)
+	LeaseOperatorActivity(ctx context.Context, arg LeaseOperatorActivityParams) (int64, error)
 	ListIncidentAlerts(ctx context.Context, arg ListIncidentAlertsParams) ([]LookoutIncidentAlert, error)
 	ListIncidentEvents(ctx context.Context, arg ListIncidentEventsParams) ([]LookoutIncidentEvent, error)
 	// Platform-operator listing across scopes; tenant callers use ListTenantIncidents.

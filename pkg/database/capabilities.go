@@ -58,6 +58,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "verified cluster owner scopes", Engine: EnginePostgres, Probe: "SELECT cluster_id, scope, tenant_id, verified, source_updated_at FROM lookout.cluster_scopes LIMIT 0"},
 		{Name: "incident scope and lifecycle", Engine: EnginePostgres, Probe: "SELECT id, scope, tenant_id, group_key, status, resolution FROM lookout.incidents LIMIT 0"},
 		{Name: "notification outbox leasing and retention", Engine: EnginePostgres, Probe: "SELECT channel, attempts, next_attempt_at, lease_token, last_error, delivered_at, failed_at FROM lookout.notification_outbox LIMIT 0"},
+		{Name: "operator activity outbox", Engine: EnginePostgres, Probe: "SELECT source_event_id, event_type, tenant_id, channel, attempts, next_attempt_at, lease_token, delivered_at, failed_at FROM lookout.operator_activity_outbox LIMIT 0"},
 	},
 	"navigator": {
 		{Name: "tenant edge apply state", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_id, node_id, bundle_id, state, last_seed_version, last_delivery_sequence FROM navigator.tenant_edge_apply_state LIMIT 0"},
