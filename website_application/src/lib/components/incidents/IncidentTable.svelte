@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge";
+  import { Button } from "$lib/components/ui/button";
   import {
     Table,
     TableBody,
@@ -15,6 +16,9 @@
     incidentStatusLabel,
     type IncidentRow,
   } from "$lib/incidents";
+  import { getIconComponent } from "$lib/iconUtils";
+
+  const ArrowRightIcon = getIconComponent("ArrowRight");
 
   let {
     incidents,
@@ -29,6 +33,8 @@
   } = $props();
 </script>
 
+<!-- hrefFor is built with resolve() by the page. -->
+<!-- eslint-disable svelte/no-navigation-without-resolve -->
 <div class="overflow-x-auto">
   <Table>
     <TableHeader>
@@ -44,6 +50,7 @@
         <TableHead>Started</TableHead>
         <TableHead>Last alert</TableHead>
         <TableHead class="text-right">Firing alerts</TableHead>
+        <TableHead class="text-right">Action</TableHead>
       </TableRow>
     </TableHeader>
     <TableBody>
@@ -60,12 +67,9 @@
             </Badge>
           </TableCell>
           <TableCell class="min-w-[14rem]">
-            <!-- hrefFor is built with resolve() by the page. -->
-            <!-- eslint-disable svelte/no-navigation-without-resolve -->
             <a class="font-medium text-foreground hover:underline" href={hrefFor(incident.id)}>
               {incident.title}
             </a>
-            <!-- eslint-enable svelte/no-navigation-without-resolve -->
             <div class="text-xs font-mono text-muted-foreground">{incident.alertname}</div>
           </TableCell>
           {#if showScope}
@@ -90,8 +94,20 @@
           <TableCell class="whitespace-nowrap">{formatIncidentTime(incident.lastAlertAt)}</TableCell
           >
           <TableCell class="text-right">{incident.firingAlertCount}</TableCell>
+          <TableCell class="text-right">
+            <Button
+              variant="outline"
+              size="sm"
+              href={hrefFor(incident.id)}
+              aria-label={`View incident: ${incident.title}`}
+            >
+              View incident
+              <ArrowRightIcon class="size-4" aria-hidden="true" />
+            </Button>
+          </TableCell>
         </TableRow>
       {/each}
     </TableBody>
   </Table>
 </div>
+<!-- eslint-enable svelte/no-navigation-without-resolve -->

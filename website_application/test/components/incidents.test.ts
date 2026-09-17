@@ -391,6 +391,11 @@ describe("tenant incident list realtime", () => {
     const link = await screen.findByRole("link", { name: "Edge node heartbeat missing" });
     const row = link.closest("tr") as HTMLElement;
     expect(within(row).getByText("Firing")).toBeTruthy();
+    expect(
+      within(row)
+        .getByRole("link", { name: "View incident: Edge node heartbeat missing" })
+        .getAttribute("href")
+    ).toBe("/infrastructure/incidents/inc-1");
 
     mocks.emitUpdate(
       incidentUpdate({ status: "ACKNOWLEDGED", title: "Edge node heartbeat still missing" })
@@ -488,6 +493,11 @@ describe("operator incident list realtime", () => {
     render(AdminIncidentsPage);
     const link = await screen.findByRole("link", { name: "Kafka broker down" });
     expect(link.getAttribute("href")).toBe("/admin/incidents/inc-platform");
+    expect(
+      within(link.closest("tr") as HTMLElement)
+        .getByRole("link", { name: "View incident: Kafka broker down" })
+        .getAttribute("href")
+    ).toBe("/admin/incidents/inc-platform");
     expect(mocks.listen).toHaveBeenCalled();
 
     mocks.emitUpdate(
