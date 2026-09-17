@@ -79,6 +79,31 @@ func TestBuildOutputsMap(t *testing.T) {
 	}
 }
 
+func TestBuildAdvertisedPlaybackOutputsReturnsOnlyReportedCapabilities(t *testing.T) {
+	rawOutputs := map[string]any{
+		"HLS":    "https://HOST/hls/$/index.m3u8",
+		"WebRTC": "https://HOST/webrtc/$",
+		"RTMP":   "rtmp://HOST:1935/live/$",
+	}
+
+	outputs := BuildAdvertisedPlaybackOutputs("https://edge.example/view", rawOutputs, "live+demo", true)
+	if outputs["HLS"].GetUrl() != "https://edge.example/view/hls/live+demo/index.m3u8" {
+		t.Fatalf("unexpected HLS output: %#v", outputs["HLS"])
+	}
+	if outputs["MIST_WEBRTC"].GetUrl() != "wss://edge.example/view/webrtc/live+demo" {
+		t.Fatalf("unexpected WebRTC output: %#v", outputs["MIST_WEBRTC"])
+	}
+	if outputs["RTMP"].GetUrl() != "rtmp://edge.example:1935/live/live+demo" {
+		t.Fatalf("unexpected RTMP output: %#v", outputs["RTMP"])
+	}
+	if _, exists := outputs["DASH"]; exists {
+		t.Fatal("DASH must not be inferred when Mist did not advertise it")
+	}
+	if _, exists := outputs["MP4"]; exists {
+		t.Fatal("MP4 must not be inferred when Mist did not advertise it")
+	}
+}
+
 func TestBuildOutputsMapRepairsMalformedBaseURLFromHTTPOutput(t *testing.T) {
 	rawOutputs := map[string]any{
 		"HLS":  "[\"https://edge-eu-1.media-eu-1.frameworks.network/view/hls/$/index.m3u8",

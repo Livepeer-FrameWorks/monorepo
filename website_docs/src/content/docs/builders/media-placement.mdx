@@ -48,7 +48,8 @@ query ResolveViewerDestination($contentId: String!) {
 
 This is a requirement before selection, not a preference to apply after choosing a node. `WHEP`
 and `WEBRTC` are distinct; `HLS_CMAF` requests an HLS manifest, while `DASH` requests MPD. Omit
-the argument for automatic negotiation. The low-level player `GatewayClient` also accepts
+the argument to place against any browser-playable Mist output and receive the selected node's full
+output catalog. The low-level player `GatewayClient` also accepts
 `protocol: "HLS"` (typed as `ViewerProtocol`). It rejects a mismatched result and does not retry
 without the requirement when an older GraphQL endpoint rejects the argument.
 
@@ -85,14 +86,18 @@ are not converted into query parameters; your client must attach them to request
 edge. Do not assume a browser forwards authorization across an edge redirect. This live-URL behavior
 does not apply to object-storage signed URLs.
 
-The player keeps Gateway/provided playback URLs authoritative while using the selected Mist edge
-for tracks and status. Metadata hydration, polling and cold recovery cannot silently add a different
-edge or an unprepared format. Direct-Mist mode still discovers its playback sources from Mist.
+Gateway/Foghorn chooses the serving MistServer node; it does not choose the player's protocol.
+An unqualified resolution returns that node's complete advertised output catalog rather than a
+single format selected by the control plane.
+The player fetches stream info from that selected MistServer and uses Mist's source list as the
+authoritative catalog of protocols, URLs, tokens and capabilities. It can therefore fall back among
+HLS, DASH, WebRTC and other formats without re-running placement for each format. The selected edge's
+normal playback trigger still admits every actual media request. Direct-Mist mode uses the same Mist
+source discovery without the Gateway placement step.
 
-The player requests a new format-specific destination after exhausting compatible players on the
-selected URL, with at most three fresh resolutions per initialization. `viewerProtocol: "HLS"`
-pins the requirement and prevents automatic format changes; React/Svelte expose it through
-`options`, and the web component uses `viewer-protocol="HLS"`.
+`viewerProtocol: "HLS"` intentionally filters Mist's catalog when an application requires one
+format; React/Svelte expose it through `options`, and the web component uses
+`viewer-protocol="HLS"`.
 
 Changing those player request fields replaces the active controller, including when its previous
 resolution is still pending. Update supplied destinations by replacing the `endpoints` object,

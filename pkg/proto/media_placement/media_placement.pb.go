@@ -4780,6 +4780,10 @@ type Preparation struct {
 	// INGEST: destination-advertised HTTP(S) origin for node identity/display.
 	// Separate from the protocol-specific listener; never inferred from its port.
 	PublicBaseUrl string `protobuf:"bytes,17,opt,name=public_base_url,json=publicBaseUrl,proto3" json:"public_base_url,omitempty"`
+	// SERVE: the selected node's fresh MistServer output advertisement. The
+	// control plane sanitizes and resolves this catalog for the public response;
+	// placement never reduces it to the bootstrap endpoint's protocol.
+	OutputsJson   string `protobuf:"bytes,18,opt,name=outputs_json,json=outputsJson,proto3" json:"outputs_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4929,6 +4933,13 @@ func (x *Preparation) GetObjectAuthorityVersion() int64 {
 func (x *Preparation) GetPublicBaseUrl() string {
 	if x != nil {
 		return x.PublicBaseUrl
+	}
+	return ""
+}
+
+func (x *Preparation) GetOutputsJson() string {
+	if x != nil {
+		return x.OutputsJson
 	}
 	return ""
 }
@@ -5316,7 +5327,7 @@ const file_media_placement_proto_rawDesc = "" +
 	"\n" +
 	"attempt_id\x18\x04 \x01(\tR\tattemptId\x129\n" +
 	"\n" +
-	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa6\x05\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc9\x05\n" +
 	"\vPreparation\x12=\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2#.media_placement.PreparationOutcomeR\aoutcome\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1b\n" +
@@ -5338,7 +5349,8 @@ const file_media_placement_proto_rawDesc = "" +
 	"\x05ready\x18\x0e \x01(\bR\x05ready\x128\n" +
 	"\x18tenant_authority_version\x18\x0f \x01(\x03R\x16tenantAuthorityVersion\x128\n" +
 	"\x18object_authority_version\x18\x10 \x01(\x03R\x16objectAuthorityVersion\x12&\n" +
-	"\x0fpublic_base_url\x18\x11 \x01(\tR\rpublicBaseUrl*=\n" +
+	"\x0fpublic_base_url\x18\x11 \x01(\tR\rpublicBaseUrl\x12!\n" +
+	"\foutputs_json\x18\x12 \x01(\tR\voutputsJson*=\n" +
 	"\x04Verb\x12\x14\n" +
 	"\x10VERB_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vVERB_INGEST\x10\x01\x12\x0e\n" +

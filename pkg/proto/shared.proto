@@ -303,8 +303,9 @@ message ViewerEndpointRequest {
   string content_id = 2;
   optional string viewer_ip = 3;
   optional string viewer_token = 4;
-  // Canonical playback protocol. Empty negotiates WebRTC then HLS; an explicit
-  // requirement must not fall back to a different protocol.
+  // Optional canonical playback constraint. Empty selects the best serving
+  // node with any browser-playable Mist output and returns its full catalog;
+  // an explicit requirement must not fall back to a different protocol.
   string protocol = 5;
 }
 

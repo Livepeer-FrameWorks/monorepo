@@ -58,6 +58,25 @@ func TestResolvePlaybackURLUsesReportedListenersAndExactIdentity(t *testing.T) {
 	}
 }
 
+func TestResolvePlaybackURLAutoRequiresAnyReportedBrowserOutput(t *testing.T) {
+	if got := ResolvePlaybackURL(map[string]any{
+		"HLS":    "http://HOST:18080/hls/$/index.m3u8",
+		"WebRTC": "ws://HOST:18203/webrtc/$",
+	}, "https://edge.example/view", AutoPlaybackProtocol, "live+stream"); got != "https://edge.example/view/hls/live+stream/index.m3u8" {
+		t.Fatalf("auto playback resolved to %q", got)
+	}
+	if got := ResolvePlaybackURL(map[string]any{
+		"WebRTC": "http://HOST:18080/webrtc/$",
+	}, "https://edge.example/view", AutoPlaybackProtocol, "live+stream"); got != "https://edge.example/view/whep/live+stream" {
+		t.Fatalf("auto playback did not accept the remaining Mist output: %q", got)
+	}
+	if got := ResolvePlaybackURL(map[string]any{
+		"RTMP": "rtmp://HOST:1935/live/$",
+	}, "https://edge.example/view", AutoPlaybackProtocol, "live+stream"); got != "" {
+		t.Fatalf("server-only output became browser playback capability: %q", got)
+	}
+}
+
 // A DTSC connector without an explicit port listens on 4200; the resolved URL
 // must carry that port so the stream advertisement, the placement claim and the
 // arranged origin pull all name the listener with one string.

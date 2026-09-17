@@ -591,4 +591,8 @@ message Preparation {
   // INGEST: destination-advertised HTTP(S) origin for node identity/display.
   // Separate from the protocol-specific listener; never inferred from its port.
   string public_base_url = 17;
+  // SERVE: the selected node's fresh MistServer output advertisement. The
+  // control plane sanitizes and resolves this catalog for the public response;
+  // placement never reduces it to the bootstrap endpoint's protocol.
+  string outputs_json = 18;
 }

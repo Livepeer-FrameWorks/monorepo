@@ -286,13 +286,14 @@ The official FrameWorks Gateway resolves the best edge node for the viewer, retu
 endpoints, and handles failover across clusters. Override `gatewayUrl` only when you run a fully
 self-hosted control plane or local Gateway preview.
 
-Gateway/provided playback URLs remain authoritative during Mist metadata hydration, polling and
-cold recovery. Mist can enrich tracks and capabilities but cannot introduce another playback
-destination or format. When compatible players on the selected URL are exhausted, Gateway mode
-requests a fresh, format-specific destination (at most three per initialization). Resolution failure
-stops that attempt rather than borrowing a URL from Mist. Set `viewerProtocol: "HLS"` to require
-that format without automatic changes; React/Svelte accept it in `options`, and the web component
-accepts `viewer-protocol="HLS"`. Direct-Mist and supplied-endpoint modes do not use this resolver.
+Gateway resolution chooses the serving MistServer node. The player then fetches that selected
+MistServer's stream-info response and treats its source list as authoritative for available playback
+protocols, URLs, tokens and capabilities. An unqualified Foghorn response includes the selected
+node's full advertised output catalog; its compatibility URL is not a player allowlist, and the
+player does not re-run placement merely to try another format. Set `viewerProtocol: "HLS"` only
+when the application intentionally wants to pin the player to one format; React/Svelte accept it in
+`options`, and the web component accepts `viewer-protocol="HLS"`. Every actual playback request is
+still admitted by the selected edge's Mist/Foghorn trigger path.
 
 For standalone endpoint discovery, React's `useViewerEndpoints` and Svelte's
 `createEndpointResolver` accept `protocol: "HLS"` and `playbackAuth` alongside Gateway credentials.

@@ -81,6 +81,28 @@ describe("client session URL stamping", () => {
     expect((controller as any).endpoints.primary.outputs.HLS.url).toContain("fwsid=attach-1");
     expect((controller as any).endpoints.fallbacks[0].url).toContain("fwsid=attach-1");
   });
+
+  it("preserves Mist tokens while applying query-mode viewer auth to discovered sources", () => {
+    const controller = new PlayerController({
+      contentId: "live-1",
+      playbackAuth: { token: "viewer-jwt", transport: "query" },
+      playerManager: { on: vi.fn(() => () => {}) } as any,
+    });
+    const info = (controller as any).applyPlaybackAuthToStreamInfo({
+      source: [
+        {
+          type: "html5/application/vnd.apple.mpegurl",
+          url: "https://edge.test/view/hls/live/index.m3u8?tkn=mist-token",
+        },
+      ],
+      meta: { tracks: [] },
+      type: "live",
+    });
+
+    expect(info.source[0].url).toBe(
+      "https://edge.test/view/hls/live/index.m3u8?tkn=mist-token&jwt=viewer-jwt"
+    );
+  });
 });
 
 describe("normalizeMistSourceUrls", () => {
@@ -105,7 +127,7 @@ describe("normalizeMistSourceUrls", () => {
 });
 
 describe("PlayerController Mist edge hydration", () => {
-  it("uses Mist track metadata without expanding or rewriting Gateway sources", async () => {
+  it("uses the selected MistServer as authority for protocols and track metadata", async () => {
     const controller = new PlayerController({
       contentId: "pb_demo_live_001",
       contentType: "live",
@@ -169,10 +191,19 @@ describe("PlayerController Mist edge hydration", () => {
     expect(requested).toEqual(["live+demo_live_stream_001"]);
     expect((controller as any).streamInfo.source.map((s: { type: string }) => s.type)).toEqual([
       "html5/video/mp4",
+      "html5/application/vnd.apple.mpegurl",
+      "whep",
     ]);
-    expect((controller as any).streamInfo.source[0].mistDatachannels).toBe(true);
+    expect(
+      (controller as any).streamInfo.source.every(
+        (source: { mistDatachannels?: boolean }) => source.mistDatachannels === true
+      )
+    ).toBe(true);
     expect((controller as any).streamInfo.source[0].url).toBe(
       "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1"
+    );
+    expect((controller as any).streamInfo.source[1].url).toBe(
+      "http://localhost:18090/view/hls/live%2Bdemo_live_stream_001/index.m3u8?tkn=1"
     );
     expect((controller as any).streamInfo.meta.tracks[0]).toEqual(
       expect.objectContaining({ bframes: 1 })

@@ -13,12 +13,7 @@ import { DEFAULT_GATEWAY_URL, GatewayClient } from "./GatewayClient";
 import { canonicalViewerProtocol, type ViewerProtocol } from "./ViewerProtocol";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
-import {
-  globalPlayerManager,
-  ensurePlayersRegistered,
-  getAvailablePlayerCapabilities,
-  loadMatchingPlayers,
-} from "./PlayerRegistry";
+import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
@@ -682,9 +677,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private suppressPlayPauseEventsUntil = 0;
 
   private gatewayClient: GatewayClient | null = null;
-  private endpointSourceAuthority = false;
+  private endpointMode: "gateway" | "provided" | "direct-mist" = "gateway";
   private endpointResolutionEpoch = 0;
-  private attemptedViewerProtocols = new Set<string>();
   private streamStateClient: StreamStateClient | null = null;
   private playerManager: PlayerManager;
 
@@ -1140,13 +1134,18 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   private applyPlaybackAuthToStreamInfo(info: StreamInfo | null): StreamInfo | null {
     if (!info) return info;
+    const auth = this.config.playbackAuth;
     const headers = this.playbackAuthHeaders();
-    let source = info.source.map((item) => ({
-      ...item,
-      url: this.clientSessionId
-        ? withQueryParam(item.url, "fwsid", this.clientSessionId)
-        : item.url,
-    }));
+    let source = info.source.map((item) => {
+      let url = item.url;
+      if (auth?.token && auth.transport !== "header") {
+        url = withPlaybackJWT(url, auth.token);
+      }
+      if (this.clientSessionId) {
+        url = withQueryParam(url, "fwsid", this.clientSessionId);
+      }
+      return { ...item, url };
+    });
     if (headers) {
       source = source
         .filter(sourceCanCarryPlaybackHeaders)
@@ -3183,11 +3182,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const { endpoints, gatewayUrl, mistUrl, contentId, authToken } = this.config;
     this.endpointResolutionEpoch++;
     const epoch = this.endpointResolutionEpoch;
-    this.attemptedViewerProtocols.clear();
-    this.endpointSourceAuthority = Boolean(endpoints?.primary) || !mistUrl;
 
     // Priority 1: Use pre-resolved endpoints if provided
     if (endpoints?.primary) {
+      this.endpointMode = "provided";
       this.endpoints = endpoints;
       this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(endpoints.metadata ?? null);
@@ -3201,6 +3199,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Priority 2: Direct MistServer resolution (playground/standalone mode)
     if (mistUrl) {
+      this.endpointMode = "direct-mist";
       await this.resolveFromMistServer(mistUrl, contentId);
       return;
     }
@@ -3210,7 +3209,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       gatewayUrl?.trim() || DEFAULT_GATEWAY_URL,
       contentId,
       authToken,
-      this.config.viewerProtocol ?? (this.playbackAuthHeaders() ? "HLS" : undefined)
+      this.config.viewerProtocol
     );
   }
 
@@ -3219,7 +3218,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Fetches json_{contentId}.js and builds ContentEndpoints from source array
    */
   private async resolveFromMistServer(mistUrl: string, contentId: string): Promise<void> {
-    this.endpointSourceAuthority = false;
+    this.endpointMode = "direct-mist";
     const epoch = this.endpointResolutionEpoch;
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
@@ -3344,19 +3343,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return { sources, tracks };
   }
 
-  // Mist supplies live metadata, not authority to add destinations to a
-  // Gateway/provided endpoint set. Only direct-Mist mode discovers source URLs.
+  // Foghorn selects the serving Mist node. Mist remains authoritative for the
+  // protocols that node actually exposes; a protocol pin is a player-side filter.
   private selectPlaybackSources(observed: StreamSource[]): StreamSource[] {
-    if (!this.endpointSourceAuthority) return observed;
-    const selected = this.endpoints ? (this.buildStreamInfo(this.endpoints)?.source ?? []) : [];
-    return selected.map((source) => {
-      const metadata = observed.find((item) => item.type === source.type);
-      const previous = this.streamInfo?.source.find(
-        (item) => item.type === source.type && item.url === source.url
-      );
-      const mistDatachannels = metadata?.mistDatachannels ?? previous?.mistDatachannels;
-      return mistDatachannels === undefined ? source : { ...source, mistDatachannels };
+    const required = this.config.viewerProtocol;
+    const selected = required
+      ? observed.filter((source) => {
+          const canonicalRequired = canonicalViewerProtocol(required);
+          const available = canonicalViewerProtocol(this.mapMistTypeToProtocol(source.type));
+          return (
+            available === canonicalRequired || (canonicalRequired === "mkv" && available === "webm")
+          );
+        })
+      : observed;
+    const enriched = selected.map((source) => {
+      const previous = this.streamInfo?.source.find((item) => item.type === source.type);
+      return source.mistDatachannels === undefined && previous?.mistDatachannels !== undefined
+        ? { ...source, mistDatachannels: previous.mistDatachannels }
+        : source;
     });
+    if (enriched.length > 0 || this.endpointMode === "direct-mist") return enriched;
+    return this.endpoints ? (this.buildStreamInfo(this.endpoints)?.source ?? []) : [];
   }
 
   /**
@@ -3365,16 +3372,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private mapMistTypeToProtocol(mistType: string): string {
     // WebCodecs raw streams - check BEFORE generic ws/ catch-all
     if (mistType === "ws/video/raw") return "RAW_WS";
-    if (mistType === "wss/video/raw") return "RAW_WSS";
+    if (mistType === "wss/video/raw") return "RAW_WS";
     // Annex B H264 over WebSocket (video-only, uses same 12-byte header as raw)
     if (mistType === "ws/video/h264") return "H264_WS";
-    if (mistType === "wss/video/h264") return "H264_WSS";
+    if (mistType === "wss/video/h264") return "H264_WS";
     // WebM over WebSocket - check BEFORE generic ws/ catch-all
     if (mistType === "ws/video/webm") return "MEWS_WEBM";
-    if (mistType === "wss/video/webm") return "MEWS_WEBM_SSL";
+    if (mistType === "wss/video/webm") return "MEWS_WEBM";
     // MEWS MP4 over WebSocket - catch remaining ws/* types (defaults to mp4)
-    if (mistType.startsWith("ws/")) return "MEWS_WS";
-    if (mistType.startsWith("wss/")) return "MEWS_WSS";
+    if (mistType.startsWith("ws/")) return "MEWS";
+    if (mistType.startsWith("wss/")) return "MEWS";
     if (mistType.includes("webrtc")) return "MIST_WEBRTC";
     if (mistType.includes("mpegurl") || mistType.includes("m3u8")) return "HLS";
     if (mistType.includes("dash") || mistType.includes("mpd")) return "DASH";
@@ -3398,7 +3405,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       WEBM: 4,
       WHEP: 5,
       MIST_WEBRTC: 6,
-      MEWS_WS: 99,
+      MEWS: 99,
     };
     return sources.sort((a, b) => {
       const pa = priority[this.mapMistTypeToProtocol(a.type)] ?? 50;
@@ -3416,7 +3423,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     authToken?: string,
     protocol?: ViewerProtocol
   ): Promise<void> {
-    this.endpointSourceAuthority = true;
+    this.endpointMode = "gateway";
     const epoch = this.endpointResolutionEpoch;
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
@@ -3450,8 +3457,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       const endpoints = await gatewayClient.resolve();
       if (!isCurrent()) return;
       this.endpoints = endpoints;
-      const selectedProtocol = canonicalViewerProtocol(endpoints.primary.protocol);
-      if (selectedProtocol) this.attemptedViewerProtocols.add(selectedProtocol);
       this.streamStateClient?.destroy();
       this.streamStateClient = null;
       this.streamInfo = null;
@@ -3489,69 +3494,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
-  private async resolveNextViewerFormat(): Promise<StreamInfo | null> {
-    if (
-      this.isDestroyed ||
-      !this.container ||
-      !this.gatewayClient ||
-      this.config.endpoints?.primary ||
-      this.config.mistUrl ||
-      this.config.viewerProtocol
-    ) {
-      this.log("[viewerFallback] Format re-resolution unavailable for this attachment");
-      return null;
-    }
-    const order: ViewerProtocol[] =
-      this.config.playbackMode === "vod" || this.config.playbackMode === "quality"
-        ? ["HLS", "DASH", "MP4", "WEBRTC", "MEWS", "WHEP"]
-        : ["HLS", "DASH", "MEWS", "WHEP", "WEBRTC", "RAW_WS"];
-    const supported = new Set(
-      [
-        ...getAvailablePlayerCapabilities(),
-        ...this.playerManager.getRegisteredPlayers().map((player) => player.capability),
-      ].flatMap((capability) => capability.mimes)
-    );
-    const next = order.find((protocol) => {
-      const canonical = canonicalViewerProtocol(protocol)!;
-      if (this.attemptedViewerProtocols.has(canonical)) return false;
-      const mime = getMimeTypeForProtocol(protocol === "WEBRTC" ? "MIST_WEBRTC" : protocol);
-      if (!supported.has(mime)) return false;
-      return !this.playbackAuthHeaders() || sourceCanCarryPlaybackHeaders({ type: mime, url: "" });
-    });
-    if (!next) {
-      this.log("[viewerFallback] No unattempted supported formats remain");
-      return null;
-    }
-    this.log(`[viewerFallback] Resolving authorized ${next} endpoint`);
-    this.attemptedViewerProtocols.add(canonicalViewerProtocol(next)!);
-    const epoch = this.endpointResolutionEpoch;
-    await this.resolveFromGateway(
-      this.config.gatewayUrl?.trim() || DEFAULT_GATEWAY_URL,
-      this.config.contentId,
-      this.config.authToken,
-      next
-    );
-    if (this.isDestroyed || this.endpointResolutionEpoch !== epoch || !this.endpoints) return null;
-    this.streamInfo = this.streamInfo ?? this.buildStreamInfo(this.endpoints);
-    // Fallback bypasses the initial registry loader; load handlers for the newly
-    // authorized format before the manager scores its replacement sources.
-    const replacement = this.streamInfo;
-    if (!replacement) return null;
-    await loadMatchingPlayers(
-      this.playerManager,
-      replacement.source.map((source) => source.type)
-    );
-    if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return null;
-    this.startStreamStatePolling();
-    return replacement;
-  }
-
   private getMistStreamName(fallbackContentId: string = this.config.contentId): string {
     return this.getMetadata()?.contentId || fallbackContentId;
   }
 
   private async hydrateFromSelectedMistEdge(contentId: string): Promise<void> {
-    this.endpointSourceAuthority = true;
     const selectedEndpoints = this.endpoints;
     const epoch = this.endpointResolutionEpoch;
     const mistBaseUrl = this.getSelectedMistBaseUrl();
@@ -3777,7 +3724,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       );
       if (
         streamInfo &&
-        ((this.endpointSourceAuthority && this.endpoints?.primary) ||
+        ((this.endpointMode !== "direct-mist" && this.endpoints?.primary) ||
           (Array.isArray(streamInfo.source) && streamInfo.source.length > 0))
       ) {
         await this.initializeLateFromStreamState(streamInfo);
@@ -4018,7 +3965,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const isCurrent = () =>
       !this.isDestroyed && this.endpointResolutionEpoch === epoch && this.endpoints === endpoints;
     const observed = Array.isArray(streamInfo?.source) ? streamInfo.source : [];
-    if (!streamInfo || (observed.length === 0 && !this.endpointSourceAuthority)) {
+    if (!streamInfo || (observed.length === 0 && this.endpointMode === "direct-mist")) {
       this.log("[initializeLateFromStreamState] No sources in stream info");
       return;
     }
@@ -4063,7 +4010,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         type: streamInfo.type === "vod" ? "vod" : "live",
       });
 
-      if (!this.endpointSourceAuthority && sources.length > 0) {
+      if (this.endpointMode === "direct-mist" && sources.length > 0) {
         const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
         const primarySource =
           httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
@@ -4617,21 +4564,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       forceSource: pendingForce?.forceSource ?? this.config.forceSource,
       // Playback mode is a persistent preference
       playbackMode: this.config.playbackMode,
-      resolveFallback:
-        this.gatewayClient && !this.config.viewerProtocol
-          ? async () => {
-              if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return null;
-              return this.resolveNextViewerFormat();
-            }
-          : undefined,
     };
 
     this.log(`[initializePlayer] Calling playerManager.initializePlayer...`);
     this.log(
       `[initializePlayer] Manager options: ${JSON.stringify(managerOptions)} (pending force: ${pendingForce ? "yes" : "no"})`
-    );
-    this.log(
-      `[initializePlayer] Gateway format fallback: ${Boolean(managerOptions.resolveFallback)}`
     );
     let initializePromise: Promise<HTMLVideoElement> | null = null;
     try {

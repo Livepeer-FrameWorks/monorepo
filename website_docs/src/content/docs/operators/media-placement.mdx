@@ -84,8 +84,11 @@ to a publisher or viewer. Placement's coordinator-independent path resolves live
 management and preview interfaces report on it rather than switching it on. Foghorn installs the
 ingest and viewer placement adapters on both the HTTP and gRPC front doors before it accepts
 traffic, so every live resolution is an exact-node preparation. They return only the prepared
-destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
-requests cannot silently switch formats. This contract and its unit tests are not two-cell playback
+destination together with the selected node's complete advertised Mist output catalog. An
+unqualified request is placed once against “any browser playback output”; Foghorn does not choose a
+device protocol. The player refreshes that catalog from Mist after node selection, and subsequent protocol requests pass through normal
+`PLAY_REWRITE` admission on the serving edge. Explicit protocol requests cannot silently switch
+formats. This contract and its unit tests are not two-cell playback
 proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
 Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
 

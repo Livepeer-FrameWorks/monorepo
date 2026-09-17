@@ -676,7 +676,7 @@ type Query {
     Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
     """
     contentId: String!
-    "Required playback format. A different format is never substituted. Omit for automatic negotiation."
+    "Optional playback constraint. A different format is never substituted. Omit to select a node with any playable Mist output and receive its full catalog."
     protocol: MediaViewerProtocol
   ): ViewerEndpointResponse
 
@@ -7049,11 +7049,11 @@ type ViewerEndpointResponse {
 type ViewerEndpoint {
   nodeId: String!
   baseUrl: String!
-  protocol: String! # "webrtc", "hls", "dash", etc from MistServer outputs
+  protocol: String! # Explicit requested protocol, or "auto" when the client chooses from outputs
   url: String! # Complete URL with stream name substituted
   geoDistance: Float # Distance from viewer in km
   loadScore: Float # Load balancer score
-  outputs: JSON # MistServer outputs configuration (map<string, OutputEndpoint> in proto)
+  outputs: JSON # Complete selected MistServer output catalog (map<string, OutputEndpoint> in proto)
 }
 
 # Playback metadata for any content type (matches proto PlaybackMetadata)

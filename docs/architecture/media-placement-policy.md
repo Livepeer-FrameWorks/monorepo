@@ -1681,11 +1681,12 @@ coordinator does not construct alternative node URLs or overwrite metadata with 
 
 The shared viewer RPC accepts a playback `protocol`, forwarded by the Commodore and Foghorn
 clients and Commodore proxy. An explicit format is never replaced with another. An unspecified
-format negotiates WebRTC then HLS, stopping at the first accepted preparation; an ambiguous
-preparation failure does not authorize trying another format. Only the prepared protocol appears
-in outputs, using the existing player catalog keys. Additional playback formats need a fresh
-resolution; they are not advertised as unprepared fallback URLs. Public format aliases are
-normalized independently of trusted Mist connector observations.
+format performs one protocol-neutral placement: candidate nodes need at least one browser-playable
+Mist output, but Foghorn does not decide which one the viewer will use. Exact-node preparation
+carries the selected node's fresh Mist output advertisement across cell boundaries, and the public
+response exposes the complete sanitized catalog. An ambiguous preparation failure does not
+authorize choosing another node or protocol. Public format aliases are normalized independently of
+trusted Mist connector observations.
 
 GraphQL exposes the optional `protocol: MediaViewerProtocol` argument and the canonical
 `ResolveViewerDestination` operation. The generated field forwards every enum value to the
@@ -1697,25 +1698,21 @@ The low-level player `GatewayClient` accepts a typed `protocol` configuration. E
 never retry an unqualified GraphQL query. They reject mismatched protocol, URL scheme, node or
 output evidence, retain only the selected URL's matching output, and advertise no fallback nodes.
 Changing the configuration aborts prior work and retry delays; late bodies cannot publish an old
-destination or clear a newer in-flight request. The controller preserves Gateway/provided playback
-URLs during Mist hydration, status polling and cold recovery. Mist contributes track and datachannel
-metadata, not additional destinations or formats. Cold recovery retains the selected node and
-metadata without requiring Mist to repeat a source catalog. Direct-Mist mode still discovers sources
-from Mist. Resolution epochs fence stale replies and recovery across detach/reselection; cleanup
-captures the originating clients rather than destroying replacement clients.
+destination or clear a newer in-flight request.
 
-The controller supplies a fresh-resolution callback to PlayerManager. Selection excludes failed
-player/source combinations, not whole source URLs, so another compatible player can reuse the
-prepared endpoint before a new format is requested. After those combinations are exhausted,
-Gateway mode requests a typed, previously untried format supported by a registered player.
-At most three fresh resolutions are allowed per initialization; resolution failure stops that
-attempt, without restoring an old source or issuing an unqualified query. The newly accepted
-destination replaces the source set and its status poller. Local media retry and VOD playhead
-restoration remain owned by PlayerManager. Metadata updates do not initiate format resolution.
+The controller uses Gateway/Foghorn to select a serving MistServer node, not to manufacture the
+player's media catalog. It fetches stream info from that selected node and treats Mist's source list
+as authoritative for protocols, URLs, tokens and capabilities throughout hydration, polling and cold
+recovery. PlayerManager falls back among those sources locally and does not request a new placement
+for each format. Every selected protocol still reaches Mist's normal `PLAY_REWRITE` admission path.
+The resolver's compatibility URL and full output snapshot remain a cold-start fallback only when
+Mist has not yet published a stream source catalog. Resolution epochs fence stale replies and recovery across detach/reselection; cleanup
+captures the originating clients rather than destroying replacement clients. Direct-Mist mode uses
+the same source discovery without Gateway placement.
 
 `viewerProtocol` pins the Gateway requirement through controller and vanilla/React/Svelte/web
-component construction; automatic fallback cannot change it. Header-auth playback initially
-requests HLS, and format fallback filters transports that cannot carry playback headers.
+component construction and filters the selected Mist source catalog to that format. Header-auth
+playback filters discovered transports to those that can carry playback headers.
 Generated API, low-level client, manager/controller integration and wrapper contracts are tested.
 The standalone React `useViewerEndpoints` hook and Svelte `createEndpointResolver` store use the
 same GatewayClient, including typed `protocol`, account credentials and `playbackAuth` forwarding.

@@ -2013,8 +2013,9 @@ type ViewerEndpointRequest struct {
 	ContentId   string                 `protobuf:"bytes,2,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
 	ViewerIp    *string                `protobuf:"bytes,3,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"`
 	ViewerToken *string                `protobuf:"bytes,4,opt,name=viewer_token,json=viewerToken,proto3,oneof" json:"viewer_token,omitempty"`
-	// Canonical playback protocol. Empty negotiates WebRTC then HLS; an explicit
-	// requirement must not fall back to a different protocol.
+	// Optional canonical playback constraint. Empty selects the best serving
+	// node with any browser-playable Mist output and returns its full catalog;
+	// an explicit requirement must not fall back to a different protocol.
 	Protocol      string `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

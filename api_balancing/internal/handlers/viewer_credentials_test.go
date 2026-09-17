@@ -89,8 +89,9 @@ func TestPreparedViewerHTTPQueryCredentialHandoff(t *testing.T) {
 				}
 				location = body.Primary.URL
 				for _, output := range body.Primary.Outputs {
-					if output.URL != location {
-						t.Fatal("output and primary credentials differ")
+					outputURL, parseErr := url.Parse(output.URL)
+					if parseErr != nil || outputURL.Query().Get("jwt") != token {
+						t.Fatal("full output catalog lost viewer credentials")
 					}
 				}
 			} else if w.Code != http.StatusTemporaryRedirect {

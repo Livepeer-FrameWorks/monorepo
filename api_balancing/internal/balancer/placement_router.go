@@ -91,6 +91,7 @@ type PlacementPreparationResult struct {
 	// or a credential-free publishing template for ingest.
 	Endpoint      string
 	PublicBaseURL string
+	OutputsJSON   string
 	Ready         bool
 }
 

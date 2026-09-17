@@ -420,7 +420,7 @@ func TestResolveViewerEndpoint_ActiveDVRUsesArtifactPlacement(t *testing.T) {
 		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID,
 			ObjectID: "artifact:recording-id", SourceGeneration: "dvr:generation", NodeID: "viewer-edge", ClusterID: "private",
 			Protocol: "hls", Endpoint: "https://edge.example/hls/dvr-pid/index.m3u8", PublicBaseURL: "https://edge.example",
-			AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}, nil
+			OutputsJSON: `{"HLS":"https://edge.example/hls/$/index.m3u8"}`, AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}, nil
 	}))
 	resp, err := s.resolveDVRViewerEndpoint(t.Context(), &sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid", Protocol: "hls"}, 0, 0,
 		&control.ContentResolution{ContentType: "dvr", ContentId: "dvr-pid", InternalName: "dvr+recording-name", ArtifactHash: "dvrhash1",

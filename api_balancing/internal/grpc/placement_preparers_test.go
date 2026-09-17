@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -95,12 +96,16 @@ func prepareViewerFromNodeState(_ context.Context, request control.ViewerPlaceme
 		if err != nil {
 			return balancer.PlacementPreparationResult{}, err
 		}
+		outputsJSON, err := json.Marshal(node.Outputs)
+		if err != nil {
+			return balancer.PlacementPreparationResult{}, err
+		}
 		return balancer.PlacementPreparationResult{
 			Outcome: balancer.PlacementAccepted, TenantID: request.TenantID,
 			ObjectID:         sharedauthority.LiveStreamAuthorityID(request.StreamID),
 			SourceGeneration: fmt.Sprintf("%s:%d", node.NodeID, stream.ObservedAt.UnixNano()),
 			NodeID:           node.NodeID, ClusterID: node.ClusterID, Protocol: request.Protocol,
-			PublicBaseURL: node.Host, Endpoint: endpoint, AttemptID: attempt,
+			PublicBaseURL: node.Host, Endpoint: endpoint, OutputsJSON: string(outputsJSON), AttemptID: attempt,
 			ExpiresAt: now.Add(10 * time.Second),
 		}, nil
 	}

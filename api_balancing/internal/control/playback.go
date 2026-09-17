@@ -1415,6 +1415,33 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 	return outputs
 }
 
+// BuildAdvertisedPlaybackOutputs resolves the selected node's complete public
+// playback catalog from its fresh Mist output advertisement. It does not derive
+// unreported listeners from a hostname; placement returns only capabilities the
+// media server declared.
+func BuildAdvertisedPlaybackOutputs(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*sharedpb.OutputEndpoint {
+	protocols := []struct {
+		name, mist string
+	}{
+		{"MIST_HTML", "mist_html"}, {"MIST_WEBRTC", "webrtc"}, {"WHEP", "whep"},
+		{"HLS", "hls"}, {"DASH", "dash"}, {"HLS_CMAF", "cmaf"},
+		{"MEWS", "wsmp4"}, {"MEWS_WEBM", "mews_webm"}, {"MP4", "mp4"}, {"WEBM", "webm"},
+		{"TS", "ts"}, {"AAC", "aac"}, {"H264", "h264"}, {"H264_WS", "h264_ws"},
+		{"RAW_WS", "raw_ws"}, {"JSON_WS", "json_ws"}, {"FLV", "flv"}, {"HDS", "hds"},
+		{"SMOOTHSTREAMING", "smoothstreaming"}, {"SDP", "sdp"},
+		{"RTMP", "rtmp"}, {"RTSP", "rtsp"}, {"SRT", "srt"}, {"DTSC", "dtsc"},
+	}
+	outputs := make(map[string]*sharedpb.OutputEndpoint, len(protocols))
+	for _, protocol := range protocols {
+		endpoint := mist.ResolvePlaybackURL(rawOutputs, baseURL, protocol.mist, streamName)
+		if endpoint == "" {
+			continue
+		}
+		outputs[protocol.name] = &sharedpb.OutputEndpoint{Protocol: protocol.name, Url: endpoint, Capabilities: BuildOutputCapabilities(protocol.name, isLive)}
+	}
+	return outputs
+}
+
 // BuildOutputCapabilities returns default capabilities for a given protocol and content type
 func BuildOutputCapabilities(protocol string, isLive bool) *sharedpb.OutputCapability {
 	caps := &sharedpb.OutputCapability{

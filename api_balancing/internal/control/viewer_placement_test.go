@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/state"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 )
 
@@ -26,13 +28,24 @@ func preparedViewer(t *testing.T, request ViewerPlacementRequest) balancer.Place
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheme := "https"
-	if validPreparedViewerScheme(request.Protocol, "wss") {
-		scheme = "wss"
+	baseURL := "https://edge.example/media"
+	rawOutputs := map[string]any{
+		"HTTP": "http://HOST:18080/$.html", "WebRTC": "http://HOST:18080/webrtc/$", "WHEP": "http://HOST:18080/whep/$",
+		"HLS": "http://HOST:18080/hls/$/index.m3u8", "DASH": "http://HOST:18080/dash/$/index.mpd", "HLS (CMAF)": "http://HOST:18080/cmaf/$/index.m3u8",
+		"MP4": "http://HOST:18080/$.mp4", "MKV": "http://HOST:18080/$.mkv", "WSRaw": "ws://HOST:18080/$.raw",
+		"SmoothStreaming": "http://HOST:18080/smooth/$/Manifest",
+	}
+	endpoint := mist.ResolvePlaybackURL(rawOutputs, baseURL, request.Protocol, request.PlaybackID)
+	if endpoint == "" {
+		t.Fatalf("fixture does not advertise %q", request.Protocol)
+	}
+	encoded, err := json.Marshal(rawOutputs)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: request.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID),
-		SourceGeneration: "generation", ClusterID: "us", NodeID: "us-edge", Protocol: request.Protocol, Endpoint: scheme + "://edge.example/media/" + request.PlaybackID,
-		PublicBaseURL: "https://edge.example/media", AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
+		SourceGeneration: "generation", ClusterID: "us", NodeID: "us-edge", Protocol: request.Protocol, Endpoint: endpoint,
+		PublicBaseURL: baseURL, OutputsJSON: string(encoded), AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
 }
 
 func TestPreparedViewerNormalizesFormatWithoutPreparingAnotherProtocol(t *testing.T) {
@@ -48,6 +61,9 @@ func TestPreparedViewerNormalizesFormatWithoutPreparingAnotherProtocol(t *testin
 		if err != nil || calls != 1 || response.GetPrimary().GetProtocol() != canonical {
 			t.Fatalf("format %s: %v, %v, calls=%d", requested, response, err, calls)
 		}
+		if len(response.Primary.Outputs) < 6 {
+			t.Errorf("format %s reduced Mist's output catalog: %v", canonical, response.Primary.Outputs)
+		}
 		for protocol, key := range map[string]string{"webrtc": "MIST_WEBRTC", "wsmp4": "MEWS", "cmaf": "HLS_CMAF", "mkv": "WEBM"} {
 			if canonical == protocol && response.Primary.Outputs[key] == nil {
 				t.Errorf("format %s lost player output key %s", canonical, key)
@@ -56,28 +72,24 @@ func TestPreparedViewerNormalizesFormatWithoutPreparingAnotherProtocol(t *testin
 	}
 }
 
-func TestPreparedViewerNegotiatesOnlyUntilAccepted(t *testing.T) {
-	for _, firstUnavailable := range []bool{false, true} {
-		calls := 0
-		response, err := ResolvePreparedLiveViewerEndpoint(context.Background(), viewerPreparerFunc(func(ctx context.Context, request ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
-			calls++
-			if request.InternalName != "internal" || request.Location != nil {
-				t.Fatal("viewer identity/unknown geography changed")
-			}
-			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
-				t.Fatal("viewer preparation lost total deadline")
-			}
-			if firstUnavailable && request.Protocol == "webrtc" {
-				return balancer.PlacementPreparationResult{}, balancer.ErrPlacementUnavailable
-			}
-			return preparedViewer(t, request), nil
-		}), ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "live+internal", PlaybackID: "public"}, "")
-		want, count := "webrtc", 1
-		if firstUnavailable {
-			want, count = "hls", 2
+func TestPreparedViewerSelectsNodeOnceAndReturnsFullMistCatalog(t *testing.T) {
+	calls := 0
+	response, err := ResolvePreparedLiveViewerEndpoint(context.Background(), viewerPreparerFunc(func(ctx context.Context, request ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		calls++
+		if request.InternalName != "internal" || request.Location != nil || request.Protocol != mist.AutoPlaybackProtocol {
+			t.Fatalf("unqualified viewer became protocol-specific: %+v", request)
 		}
-		if err != nil || response.Primary.Protocol != want || calls != count || len(response.Fallbacks) != 0 || len(response.Primary.Outputs) != 1 || response.Primary.ClusterId != "us" || response.Primary.BaseUrl != "https://edge.example/media" {
-			t.Fatalf("prepared viewer response: %v, %v, calls=%d", response, err, calls)
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
+			t.Fatal("viewer preparation lost total deadline")
+		}
+		return preparedViewer(t, request), nil
+	}), ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "live+internal", PlaybackID: "public"}, "")
+	if err != nil || response.Primary.Protocol != mist.AutoPlaybackProtocol || calls != 1 || len(response.Fallbacks) != 0 || len(response.Primary.Outputs) < 6 || response.Primary.ClusterId != "us" || response.Primary.BaseUrl != "https://edge.example/media" {
+		t.Fatalf("prepared viewer response: %v, %v, calls=%d", response, err, calls)
+	}
+	for _, protocol := range []string{"HLS", "DASH", "HLS_CMAF", "MIST_WEBRTC", "WHEP", "MP4", "WEBM", "RAW_WS"} {
+		if response.Primary.Outputs[protocol] == nil {
+			t.Errorf("full Mist catalog omitted %s", protocol)
 		}
 	}
 }
@@ -255,9 +267,10 @@ func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T)
 				if err != nil || len(local) != 0 || endpoint.GetNodeId() != "us-edge" || endpoint.GetClusterId() != "us" || calls != 1 {
 					t.Fatalf("preferred remote serving failed: %+v %+v %v calls=%d", local, endpoint, err, calls)
 				}
-				for _, output := range endpoint.Outputs {
-					if !output.GetCapabilities().GetSupportsSeek() {
-						t.Fatal("stored media lost seeking capability")
+				for _, protocol := range []string{"HLS", "MP4", "WEBM"} {
+					output := endpoint.Outputs[protocol]
+					if output == nil || !output.GetCapabilities().GetSupportsSeek() {
+						t.Fatalf("stored media lost seek-capable %s output", protocol)
 					}
 				}
 			} else if !errors.Is(err, ErrStoredMediaPlacementUnavailable) || endpoint != nil || len(local) != 0 {

@@ -8,6 +8,11 @@ import (
 	"unicode"
 )
 
+// AutoPlaybackProtocol is an internal placement capability requirement. It
+// means that a node must expose at least one browser playback output; it does
+// not choose or constrain the protocol used by the eventual viewer.
+const AutoPlaybackProtocol = "auto"
+
 // PlaybackProtocol normalizes a requested playback format, not a trusted Mist
 // connector observation. Listener support must still be checked separately.
 func PlaybackProtocol(requested string) string {
@@ -34,6 +39,14 @@ func PlaybackProtocol(requested string) string {
 // a public HTTP hostname alone. Identity is escaped as one path/query component.
 func ResolvePlaybackURL(outputs map[string]any, publicBase, protocol, streamName string) string {
 	if streamName == "" || strings.TrimSpace(streamName) != streamName || strings.IndexFunc(streamName, unicode.IsControl) >= 0 || streamName == "." || streamName == ".." {
+		return ""
+	}
+	if protocol == AutoPlaybackProtocol {
+		for _, candidate := range []string{"hls", "whep", "webrtc", "dash", "cmaf", "mp4", "wsmp4", "webm"} {
+			if endpoint := ResolvePlaybackURL(outputs, publicBase, candidate, streamName); endpoint != "" {
+				return endpoint
+			}
+		}
 		return ""
 	}
 	template := playbackTemplate(outputs, protocol)

@@ -129,9 +129,12 @@ func (runtime *MediaServePreparationRuntime) Revalidate(ctx context.Context, req
 			return status.Error(codes.FailedPrecondition, "configured source pull is no longer current")
 		}
 	}
-	if receipt.Response != nil && (receipt.Response.GetReady() || receipt.Response.GetEndpoint() != observed.endpoint ||
-		receipt.Response.GetPublicBaseUrl() != observed.node.Host || receipt.Response.GetExpiresAt().AsTime().After(observed.expiresAt)) {
-		return status.Error(codes.FailedPrecondition, "prepared playback path changed")
+	if receipt.Response != nil {
+		outputsJSON, outputsErr := encodePlacementOutputs(observed.node.Outputs)
+		if outputsErr != nil || receipt.Response.GetReady() || receipt.Response.GetEndpoint() != observed.endpoint ||
+			receipt.Response.GetPublicBaseUrl() != observed.node.Host || receipt.Response.GetOutputsJson() != outputsJSON || receipt.Response.GetExpiresAt().AsTime().After(observed.expiresAt) {
+			return status.Error(codes.FailedPrecondition, "prepared playback path changed")
+		}
 	}
 	return nil
 }
@@ -180,11 +183,15 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 			return nil, status.Error(codes.FailedPrecondition, "configured source preparation returned an invalid path")
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, status.FromContextError(err).Err()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, status.FromContextError(ctxErr).Err()
 	}
 	if !runtime.now().Before(observed.expiresAt) {
 		return nil, status.Error(codes.FailedPrecondition, "media preparation evidence expired")
+	}
+	outputsJSON, err := encodePlacementOutputs(observed.node.Outputs)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	q := req.Query
 	return &placementpb.Preparation{
@@ -192,7 +199,7 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 		TenantId: q.TenantId, ObjectId: q.ObjectId, SourceGeneration: q.SourceGeneration,
 		ClusterId: req.ClusterId, NodeId: req.NodeId, Protocol: q.Protocol,
 		PolicyRevision: q.PolicyRevision, ParentRevision: q.ParentRevision, PolicyDigest: q.PolicyDigest,
-		AttemptId: req.AttemptId, Endpoint: observed.endpoint, PublicBaseUrl: observed.node.Host, ExpiresAt: timestamppb.New(observed.expiresAt),
+		AttemptId: req.AttemptId, Endpoint: observed.endpoint, PublicBaseUrl: observed.node.Host, OutputsJson: outputsJSON, ExpiresAt: timestamppb.New(observed.expiresAt),
 	}, nil
 }
 

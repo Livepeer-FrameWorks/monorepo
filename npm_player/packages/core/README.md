@@ -17,13 +17,13 @@ const whepEndpoints = await gateway.resolve();
 gateway.destroy();
 ```
 
-`ViewerProtocol` matches the GraphQL `MediaViewerProtocol` enum. Explicit requests require a
-matching server and never fall back to an unqualified query. Results contain only the matching
-primary output; another format requires another resolution. Omitting `protocol` retains automatic
-server negotiation. The controller can request a fresh format after exhausting players on the
-selected URL, bounded to three new resolutions per initialization. Controller and wrapper
-`viewerProtocol` pins a format and disables those automatic format changes. Full placement
-activation and actual media proof remain required; SDK support is not an end-to-end rollout guarantee.
+`ViewerProtocol` matches the GraphQL `MediaViewerProtocol` enum. Explicit low-level requests require
+a matching server and never fall back to an unqualified query. The player controller normally omits
+that requirement: Gateway/Foghorn chooses the serving MistServer node, then the selected MistServer's
+stream-info response supplies the authoritative protocol catalog. Controller and wrapper
+`viewerProtocol` pins that catalog to one format when an application explicitly requires it. Full
+placement activation and actual media proof remain required; SDK support is not an end-to-end rollout
+guarantee.
 
 > **Most users should install a wrapper instead of core directly:**
 >

@@ -12,8 +12,8 @@ const selectedURL = "https://us.example/hls/live/index.m3u8?receipt=selected";
 const mistInfo = {
   type: "live",
   source: [
-    { type: "html5/application/vnd.apple.mpegurl", url: "https://eu.example/unselected.m3u8" },
-    { type: "whep", url: "https://us.example/unprepared-webrtc" },
+    { type: "html5/application/vnd.apple.mpegurl", url: "https://us.example/from-mist.m3u8" },
+    { type: "whep", url: "https://us.example/from-mist-webrtc" },
   ],
   meta: { tracks: { video: { type: "video", codec: "H264", width: 1920, height: 1080 } } },
 };
@@ -26,7 +26,7 @@ function makeController() {
     playerManager: manager as any,
   });
   const state = controller as any;
-  state.endpointSourceAuthority = true;
+  state.endpointMode = "provided";
   state.endpoints = {
     primary: {
       nodeId: "us-edge",
@@ -63,52 +63,10 @@ afterAll(async () => {
   await ensurePlayersRegistered();
 });
 
-describe("controller format re-resolution", () => {
-  it("loads an authorized HLS fallback when only WebRTC was initially registered", async () => {
-    const manager = new PlayerManager();
-    const controller = new PlayerController({
-      contentId: "playback-id",
-      contentType: "live",
-      playerManager: manager,
-    });
-    const state = controller as any;
-    state.container = document.createElement("div");
-    state.gatewayClient = {};
-    state.attemptedViewerProtocols.add("webrtc");
-    state.startStreamStatePolling = vi.fn();
-    state.resolveFromGateway = vi.fn(async () => {
-      state.endpoints = { primary: { protocol: "hls", url: selectedURL } };
-      state.streamInfo = {
-        type: "live",
-        source: [{ type: "html5/application/vnd.apple.mpegurl", url: selectedURL }],
-        meta: { tracks: [{ type: "video", codec: "H264" }] },
-      };
-    });
-    manager.registerPlayer({
-      capability: { name: "RTC", shortname: "test-rtc", priority: 1, mimes: ["webrtc"] },
-      destroy: vi.fn(),
-    } as unknown as IPlayer);
-
-    expect(manager.getRegisteredPlayers()).toHaveLength(1);
-    const replacement = await state.resolveNextViewerFormat();
-
-    expect(state.resolveFromGateway).toHaveBeenCalledWith(
-      expect.any(String),
-      "playback-id",
-      undefined,
-      "HLS"
-    );
-    expect(replacement.source).toEqual([
-      { type: "html5/application/vnd.apple.mpegurl", url: selectedURL },
-    ]);
-    expect(manager.getRegisteredPlayers().map((player) => player.capability.shortname)).toEqual(
-      expect.arrayContaining(["native", "hlsjs", "videojs"])
-    );
-    await manager.destroy();
-  });
-
-  it("initially requests a header-capable transport when viewer authentication uses headers", async () => {
+describe("controller protocol discovery", () => {
+  it("keeps node resolution unqualified when viewer authentication uses headers", async () => {
     const { state } = makeController();
+    state.config.endpoints = undefined;
     state.config.playbackAuth = { token: "viewer-jwt", transport: "header" };
     state.resolveFromGateway = vi.fn().mockResolvedValue(undefined);
     await state.resolveEndpoints();
@@ -116,11 +74,11 @@ describe("controller format re-resolution", () => {
       expect.any(String),
       "playback-id",
       undefined,
-      "HLS"
+      undefined
     );
   });
 
-  it("resolves HLS through the typed API when the prepared WebRTC output has no compatible player", async () => {
+  it("uses every protocol advertised by the selected Mist node without re-resolving placement", async () => {
     vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
     const manager = new PlayerManager();
     const video = document.createElement("video");
@@ -145,19 +103,18 @@ describe("controller format re-resolution", () => {
       vi.fn(async (_url, options) => {
         const request = JSON.parse(options.body);
         requests.push(request);
-        const hlsRequested = request.variables.protocol === "HLS";
-        const url = hlsRequested ? selectedURL : "wss://eu.example/webrtc/prepared";
+        const url = "wss://us.example/webrtc/bootstrap";
         return {
           ok: true,
           json: async () => ({
             data: {
               resolveViewerEndpoint: {
                 primary: {
-                  nodeId: hlsRequested ? "us-edge" : "eu-edge",
-                  protocol: hlsRequested ? "hls" : "webrtc",
+                  nodeId: "us-edge",
+                  protocol: "webrtc",
                   url,
-                  baseUrl: hlsRequested ? "https://us.example" : "https://eu.example",
-                  outputs: { [hlsRequested ? "HLS" : "MIST_WEBRTC"]: { url } },
+                  baseUrl: "https://us.example",
+                  outputs: { MIST_WEBRTC: { url } },
                 },
                 fallbacks: [],
                 metadata: { contentType: "live", contentId: "live+internal" },
@@ -176,32 +133,43 @@ describe("controller format re-resolution", () => {
     const state = controller as any;
     state.fetchMistStreamInfo = vi.fn().mockResolvedValue(mistInfo);
     await controller.attach(document.createElement("div"));
-    expect(requests.map((request) => request.variables.protocol)).toEqual([undefined, "HLS"]);
-    expect(requests[1].query).toContain("$protocol: MediaViewerProtocol!");
+    expect(requests.map((request) => request.variables.protocol)).toEqual([undefined]);
     expect(hls.initialize).toHaveBeenCalledOnce();
     expect(hls.initialize).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ url: selectedURL }),
+      expect.objectContaining({ url: "https://us.example/from-mist.m3u8" }),
       expect.anything(),
       expect.anything()
     );
     expect(state.endpoints.primary.nodeId).toBe("us-edge");
-    expect(state.streamInfo.source.map((source: any) => source.url)).toEqual([selectedURL]);
+    expect(state.streamInfo.source.map((source: any) => source.url)).toEqual([
+      "https://us.example/from-mist.m3u8",
+      "https://us.example/from-mist-webrtc",
+    ]);
     controller.detach();
     await manager.destroy();
   });
 
-  it("does not negotiate another format when an explicit requirement is configured", async () => {
+  it("filters Mist discovery when the caller explicitly pins a protocol", () => {
     const { state } = makeController();
     state.config.viewerProtocol = "HLS";
-    state.gatewayClient = {};
-    state.resolveFromGateway = vi.fn();
-    expect(await state.resolveNextViewerFormat()).toBeNull();
-    expect(state.resolveFromGateway).not.toHaveBeenCalled();
+    expect(state.selectPlaybackSources(mistInfo.source)).toEqual([mistInfo.source[0]]);
+  });
+
+  it.each([
+    ["MEWS", "wss/video/mp4"],
+    ["MEWS_WEBM", "wss/video/webm"],
+    ["H264_WS", "wss/video/h264"],
+    ["RAW_WS", "wss/video/raw"],
+  ] as const)("matches the %s pin to Mist's secure WebSocket MIME", (viewerProtocol, type) => {
+    const { state } = makeController();
+    state.config.viewerProtocol = viewerProtocol;
+    const source = { type, url: `wss://us.example/${viewerProtocol.toLowerCase()}` };
+    expect(state.selectPlaybackSources([source])).toEqual([source]);
   });
 });
 
-describe("PlayerController placement source authority", () => {
+describe("PlayerController selected Mist source discovery", () => {
   it("ignores old media readiness, errors and completion after endpoint reselection", async () => {
     const { state } = makeController();
     const pending = deferred<HTMLVideoElement>();
@@ -263,13 +231,16 @@ describe("PlayerController placement source authority", () => {
     }
   );
 
-  it("keeps selected URLs through polling and ignores callbacks from replaced pollers", () => {
+  it("refreshes Mist's protocol catalog through polling and ignores callbacks from replaced pollers", () => {
     vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
     const { state } = makeController();
     state.startStreamStatePolling();
     const oldClient = state.streamStateClient;
     oldClient.emit("stateChange", { state: { isOnline: true, streamInfo: mistInfo } });
-    expect(state.streamInfo.source.map((source: any) => source.url)).toEqual([selectedURL]);
+    expect(state.streamInfo.source.map((source: any) => source.url)).toEqual([
+      "https://us.example/from-mist.m3u8",
+      "https://us.example/from-mist-webrtc",
+    ]);
     expect(state.streamInfo.meta.tracks[0]).toMatchObject({ width: 1920 });
     state.startStreamStatePolling();
     const currentState = state.streamState;
@@ -290,7 +261,14 @@ describe("PlayerController placement source authority", () => {
       state: { isOnline: true, streamInfo: mistInfo },
     });
     expect(state.streamInfo.source).toEqual([
-      expect.objectContaining({ url: selectedURL, mistDatachannels: true }),
+      expect.objectContaining({
+        url: "https://us.example/from-mist.m3u8",
+        mistDatachannels: true,
+      }),
+      expect.objectContaining({
+        url: "https://us.example/from-mist-webrtc",
+        mistDatachannels: true,
+      }),
     ]);
     state.cleanup();
   });
@@ -305,24 +283,22 @@ describe("PlayerController placement source authority", () => {
     expect(state.retry).not.toHaveBeenCalled();
   });
 
-  it("maps the selected primary format without inventing output URLs when no catalog is supplied", async () => {
+  it("uses Mist's catalog when the placement response has no output catalog", async () => {
     const { state } = makeController();
     state.endpoints.primary.outputs = {};
     state.fetchMistStreamInfo = vi.fn().mockResolvedValue(mistInfo);
     await state.hydrateFromSelectedMistEdge("playback-id");
-    expect(state.streamInfo.source).toEqual([
-      expect.objectContaining({ type: "html5/application/vnd.apple.mpegurl", url: selectedURL }),
-    ]);
+    expect(state.streamInfo.source).toEqual(mistInfo.source);
   });
 
-  it("keeps the prepared node, URLs and metadata through cold recovery", async () => {
+  it("keeps the prepared node while refreshing protocols and metadata through cold recovery", async () => {
     const { state } = makeController();
     const endpoints = state.endpoints;
     state.initializePlayer = vi.fn().mockResolvedValue(undefined);
     await state.initializeLateFromStreamState(mistInfo);
     expect(state.endpoints).toBe(endpoints);
     expect(state.endpoints.primary.nodeId).toBe("us-edge");
-    expect(state.streamInfo.source.map((source: any) => source.url)).toEqual([selectedURL]);
+    expect(state.streamInfo.source).toEqual(mistInfo.source);
     expect(state.getMetadata().contentId).toBe("live+internal");
     expect(state.initializePlayer).toHaveBeenCalledOnce();
   });
@@ -345,7 +321,7 @@ describe("PlayerController placement source authority", () => {
 
   it("retains Mist source discovery in direct-Mist mode", async () => {
     const { state } = makeController();
-    state.endpointSourceAuthority = false;
+    state.endpointMode = "direct-mist";
     state.initializePlayer = vi.fn().mockResolvedValue(undefined);
     await state.initializeLateFromStreamState(mistInfo);
     expect(state.endpoints.primary.nodeId).toBe("mist-playback-id");
@@ -358,12 +334,12 @@ describe("PlayerController placement source authority", () => {
     state.fetchMistStreamInfo = vi.fn().mockReturnValue(pending.promise);
     const resolving = state.resolveFromMistServer("https://eu.example", "old-stream");
     state.endpointResolutionEpoch++;
-    state.endpointSourceAuthority = true;
+    state.endpointMode = "gateway";
     const endpoints = state.endpoints;
     pending.resolve(mistInfo);
     await resolving;
     expect(state.endpoints).toBe(endpoints);
-    expect(state.endpointSourceAuthority).toBe(true);
+    expect(state.endpointMode).toBe("gateway");
   });
 
   it.each(["reply", "failure"])(

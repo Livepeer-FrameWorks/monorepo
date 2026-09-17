@@ -20,6 +20,8 @@ import (
 
 type viewerPlacementFunc func(context.Context, control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error)
 
+const viewerOutputsJSON = `{"HTTP":"https://us.example/$.html","WebRTC":"https://us.example/webrtc/$","WHEP":"https://us.example/whep/$","HLS":"https://us.example/hls/$/index.m3u8","DASH":"https://us.example/cmaf/$/index.mpd","HLS (CMAF)":"https://us.example/cmaf/$/index.m3u8"}`
+
 func (fn viewerPlacementFunc) PrepareViewer(ctx context.Context, req control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
 	return fn(ctx, req)
 }
@@ -42,7 +44,7 @@ func TestGRPCPreparedViewerDoesNotUseCoordinatorMetadata(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(req.StreamID), SourceGeneration: "generation", NodeID: "us-edge", ClusterID: "us", Protocol: req.Protocol, Endpoint: "https://us.example/hls/public/index.m3u8", PublicBaseURL: "https://us.example", AttemptID: attempt, ExpiresAt: now.Add(time.Second)}, nil
+		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(req.StreamID), SourceGeneration: "generation", NodeID: "us-edge", ClusterID: "us", Protocol: req.Protocol, Endpoint: "https://us.example/hls/public/index.m3u8", PublicBaseURL: "https://us.example", OutputsJSON: viewerOutputsJSON, AttemptID: attempt, ExpiresAt: now.Add(time.Second)}, nil
 	}))
 	response, err := s.ResolveViewerEndpoint(t.Context(), &sharedpb.ViewerEndpointRequest{ContentId: "public", Protocol: "hls"})
 	if err != nil || response.GetPrimary().GetNodeId() != "us-edge" || response.GetMetadata().GetBufferState() != "" || response.GetMetadata().GetStatus() != "live" {
@@ -63,7 +65,7 @@ func TestGRPCViewerUsesPreparedDestinationWithoutLegacyBalancer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), SourceGeneration: "generation", NodeID: "us-edge", ClusterID: "us", Protocol: "hls", Endpoint: "https://us.example/hls/public/index.m3u8", PublicBaseURL: "https://us.example", AttemptID: attempt, ExpiresAt: now.Add(time.Second)}, nil
+		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), SourceGeneration: "generation", NodeID: "us-edge", ClusterID: "us", Protocol: "hls", Endpoint: "https://us.example/hls/public/index.m3u8", PublicBaseURL: "https://us.example", OutputsJSON: viewerOutputsJSON, AttemptID: attempt, ExpiresAt: now.Add(time.Second)}, nil
 	}))
 	request := &sharedpb.ViewerEndpointRequest{ContentId: "public", Protocol: "hls"}
 	response, err := s.resolveLiveViewerEndpoint(t.Context(), request, math.NaN(), math.NaN(), "live+internal", "tenant", "stream", "eu", nil, "eu", "", false)

@@ -146,7 +146,7 @@ func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.P
 		Outcome: outcome, TenantID: response.GetTenantId(), ObjectID: response.GetObjectId(), SourceGeneration: response.GetSourceGeneration(),
 		ClusterID: response.GetClusterId(), NodeID: response.GetNodeId(), Protocol: response.GetProtocol(), PolicyRevision: response.GetPolicyRevision(),
 		ParentRevision: response.GetParentRevision(), PolicyDigest: response.GetPolicyDigest(), AttemptID: response.GetAttemptId(),
-		ExpiresAt: response.GetExpiresAt().AsTime(), Endpoint: response.GetEndpoint(), PublicBaseURL: response.GetPublicBaseUrl(), Ready: response.GetReady(),
+		ExpiresAt: response.GetExpiresAt().AsTime(), Endpoint: response.GetEndpoint(), PublicBaseURL: response.GetPublicBaseUrl(), OutputsJSON: response.GetOutputsJson(), Ready: response.GetReady(),
 	}, nil
 }
 

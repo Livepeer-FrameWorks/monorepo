@@ -28,8 +28,8 @@ func TestPreparedViewerHTTPResolvesRequestedManifestBeforePreparation(t *testing
 		{"public/WHEP", "whep", "https://us.example/whep/public", http.StatusTemporaryRedirect},
 		{"public.mpd", "dash", "https://us.example/cmaf/public/index.mpd", http.StatusTemporaryRedirect},
 		{"public.html", "mist_html", "https://us.example/public.html", http.StatusTemporaryRedirect},
-		{"public/all", "webrtc", "wss://us.example/webrtc/public", http.StatusOK},
-		{"public", "webrtc", "wss://us.example/webrtc/public", http.StatusOK},
+		{"public/all", "auto", "wss://us.example/webrtc/public", http.StatusOK},
+		{"public", "auto", "wss://us.example/webrtc/public", http.StatusOK},
 		{"public/hls/index.mpd", "", "", http.StatusBadRequest},
 		{"public/whep/index.m3u8", "", "", http.StatusBadRequest},
 		{"public/cmaf/../index.mpd", "", "", http.StatusBadRequest},
@@ -149,5 +149,5 @@ func preparedHTTPViewer(t *testing.T, req control.ViewerPlacementRequest, endpoi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(req.StreamID), SourceGeneration: "source", NodeID: "us-edge", ClusterID: "us", Protocol: req.Protocol, Endpoint: endpoint, PublicBaseURL: "https://us.example", AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
+	return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(req.StreamID), SourceGeneration: "source", NodeID: "us-edge", ClusterID: "us", Protocol: req.Protocol, Endpoint: endpoint, PublicBaseURL: "https://us.example", OutputsJSON: viewerOutputsJSON, AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
 }

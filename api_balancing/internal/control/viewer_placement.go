@@ -2,9 +2,11 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,9 +91,9 @@ func ViewerPlacementStoredMedia(request ViewerPlacementRequest) (bool, error) {
 	}
 }
 
-// ResolvePreparedLiveViewerEndpoint negotiates only until a protocol has an
-// accepted destination. It never emits unprepared alternatives or starts pulls
-// for protocols the viewer has not selected.
+// ResolvePreparedLiveViewerEndpoint selects and prepares one serving node. An
+// omitted protocol requires any browser-playable Mist output; the selected
+// MistServer's complete advertised output catalog remains authoritative.
 func ResolvePreparedLiveViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
 	objectID, err := ViewerPlacementLiveObjectID(request)
 	if err != nil || request.ArtifactID != "" || strings.HasPrefix(request.InternalName, "dvr+") {
@@ -136,7 +138,7 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	protocols := []string{"webrtc", "hls"}
+	protocols := []string{mist.AutoPlaybackProtocol}
 	if request.Protocol != "" {
 		protocols = []string{request.Protocol}
 	}
@@ -161,25 +163,29 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 		if err = ctx.Err(); err != nil {
 			return nil, err
 		}
-		outputName := strings.ToUpper(protocol)
-		switch protocol {
-		case "webrtc":
-			outputName = "MIST_WEBRTC"
-		case "wsmp4":
-			outputName = "MEWS"
-		case "cmaf":
-			outputName = "HLS_CMAF"
-		case "mkv":
-			outputName = "WEBM"
-		}
 		base, baseErr := url.Parse(prepared.PublicBaseURL)
 		if baseErr != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && base.Scheme != "http") {
 			return nil, errors.New("viewer preparation has no valid public base URL")
 		}
+		var rawOutputs map[string]any
+		if len(prepared.OutputsJSON) > 1<<20 || json.Unmarshal([]byte(prepared.OutputsJSON), &rawOutputs) != nil || len(rawOutputs) == 0 {
+			return nil, errors.New("viewer preparation has no valid Mist output advertisement")
+		}
+		outputs := BuildAdvertisedPlaybackOutputs(prepared.PublicBaseURL, rawOutputs, request.PlaybackID, true)
+		if !bindPreparedEndpoint(prepared.Endpoint, protocol, outputs) {
+			return nil, errors.New("viewer preparation endpoint is outside its Mist output advertisement")
+		}
+		protocolHints := make([]string, 0, len(outputs))
+		for name := range outputs {
+			if name != "MIST_HTML" && name != "PLAYER_JS" {
+				protocolHints = append(protocolHints, name)
+			}
+		}
+		sort.Strings(protocolHints)
 		endpoint := &sharedpb.ViewerEndpoint{NodeId: prepared.NodeID, ClusterId: prepared.ClusterID, BaseUrl: prepared.PublicBaseURL, Protocol: protocol, Url: prepared.Endpoint,
-			Outputs: map[string]*sharedpb.OutputEndpoint{outputName: {Protocol: outputName, Url: prepared.Endpoint, Capabilities: BuildOutputCapabilities(outputName, true)}}}
+			Outputs: outputs}
 		metadata := &sharedpb.PlaybackMetadata{ContentId: request.PlaybackID, ContentType: "live", TenantId: request.TenantID, StreamId: &request.StreamID,
-			Status: "live", IsLive: true, ProtocolHints: []string{outputName}, ThumbnailAssets: buildThumbnailAssets(resolveThumbnailChandlerBase(activeIngestClusterID), request.StreamID)}
+			Status: "live", IsLive: true, ProtocolHints: protocolHints, ThumbnailAssets: buildThumbnailAssets(resolveThumbnailChandlerBase(activeIngestClusterID), request.StreamID)}
 		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
 	}
 	return nil, balancer.ErrPlacementUnavailable
@@ -187,6 +193,8 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 
 func validPreparedViewerScheme(protocol, scheme string) bool {
 	switch protocol {
+	case mist.AutoPlaybackProtocol:
+		return scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss"
 	case "webrtc", "wsmp4", "mews_webm", "h264_ws", "raw_ws", "json_ws":
 		return scheme == "ws" || scheme == "wss"
 	case "rtmp":
@@ -196,6 +204,29 @@ func validPreparedViewerScheme(protocol, scheme string) bool {
 	default:
 		return scheme == "http" || scheme == "https"
 	}
+}
+
+func bindPreparedEndpoint(endpoint, protocol string, outputs map[string]*sharedpb.OutputEndpoint) bool {
+	preparedURL, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	preparedURL.RawQuery, preparedURL.ForceQuery = "", false
+	for name, output := range outputs {
+		if name == "PLAYER_JS" || (name == "MIST_HTML" && protocol != "mist_html") || output == nil {
+			continue
+		}
+		advertisedURL, parseErr := url.Parse(output.Url)
+		if parseErr != nil {
+			continue
+		}
+		advertisedURL.RawQuery, advertisedURL.ForceQuery = "", false
+		if advertisedURL.String() == preparedURL.String() {
+			output.Url = endpoint
+			return true
+		}
+	}
+	return false
 }
 
 func ViewerPlacementLocation(lat, lon float64) *placement.Coordinates {
