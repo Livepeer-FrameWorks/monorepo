@@ -265,7 +265,7 @@ Viewers of the same live event sit at different distances behind the live edge: 
 
 This creates a structural tension:
 
-- Engagement events can be delayed per viewer so overlays match what is on screen (`docs/rfcs/parlor.md`, Event sync — timeline-bound delivery is the shared mechanism).
+- Engagement events can be delayed per viewer so overlays match what is on screen (`docs/rfcs/parlor.md`, Phase 3: Stream-timeline events — in-band timeline cues are the shared mechanism, and a stream-timeline-anchored lot close is carried the same way).
 - Auction state cannot be forked per viewer. Delaying "lot closed" per viewer while the server has already closed the lot would let a high-latency viewer bid into a decided auction; showing everyone the server-time close structurally advantages low-latency viewers, who see the closing countdown seconds before everyone else.
 
 The close mechanism must therefore be designed so latency does not decide winners:
@@ -332,7 +332,7 @@ Potential future dependency:
 
 - **`api_commerce`** (new) — catalog, merchandising, carts, checkout sessions, orders, promotions; system of record for transactional commerce state.
 - **`api_auctions`** (new) — authoritative auction state machine: bid ledger, close mechanics (stream-timeline-anchored close, grace window), winner selection, settlement state.
-- **Parlor (`api_rooms`) / Signalman (`api_realtime`)** — timeline-bound event delivery to viewers (see Latency fairness and `docs/rfcs/parlor.md`); Signalman carries the realtime fan-out, Parlor the room/engagement context around live retail events.
+- **Parlor (`api_rooms`) / Signalman (`api_realtime`)** — timeline-bound event delivery to viewers (see Latency fairness and `docs/rfcs/parlor.md`); Parlor emits in-band timeline cues and owns the room/engagement context around live retail events, Signalman carries realtime fan-out that is not bound to the stream timeline.
 - **Purser (`api_billing`)** — payment rails on the tenant side only (subscriptions, prepaid balances, x402); shopper checkout goes through external PSPs per the non-reuse section above.
 
 ## Alternatives Considered
