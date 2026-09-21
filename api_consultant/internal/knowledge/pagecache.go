@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/database/skipperdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 type PageCache struct {
@@ -121,28 +122,31 @@ func (s *PageCacheStore) BulkUpsert(ctx context.Context, caches []PageCache) err
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	began := false
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { began = false }, func(tx *sql.Tx) error {
+		began = true
+		queries := skipperdb.New(tx)
+		for _, cache := range caches {
+			sourceType := cache.SourceType
+			if sourceType == "" {
+				sourceType = "sitemap"
+			}
+			if err := queries.UpsertPageCacheWithScheduling(ctx, skipperdb.UpsertPageCacheWithSchedulingParams{
+				TenantID: cache.TenantID, SourceRoot: cache.SourceRoot, PageUrl: cache.PageURL,
+				ContentHash: nullString(cache.ContentHash), Etag: nullString(cache.ETag), LastModified: nullString(cache.LastModified),
+				RawSize: nullInt64(cache.RawSize), LastFetchedAt: cache.LastFetchedAt,
+				SitemapPriority: sql.NullFloat64{Float64: cache.SitemapPriority, Valid: true}, SitemapChangefreq: nullString(cache.SitemapChangeFreq),
+				ConsecutiveUnchanged: int32(cache.ConsecutiveUnchanged), ConsecutiveFailures: int32(cache.ConsecutiveFailures), SourceType: sourceType,
+			}); err != nil {
+				return fmt.Errorf("bulk upsert page cache: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil && !began {
 		return fmt.Errorf("begin bulk upsert page cache: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := skipperdb.New(tx)
-	for _, cache := range caches {
-		sourceType := cache.SourceType
-		if sourceType == "" {
-			sourceType = "sitemap"
-		}
-		if err := queries.UpsertPageCacheWithScheduling(ctx, skipperdb.UpsertPageCacheWithSchedulingParams{
-			TenantID: cache.TenantID, SourceRoot: cache.SourceRoot, PageUrl: cache.PageURL,
-			ContentHash: nullString(cache.ContentHash), Etag: nullString(cache.ETag), LastModified: nullString(cache.LastModified),
-			RawSize: nullInt64(cache.RawSize), LastFetchedAt: cache.LastFetchedAt,
-			SitemapPriority: sql.NullFloat64{Float64: cache.SitemapPriority, Valid: true}, SitemapChangefreq: nullString(cache.SitemapChangeFreq),
-			ConsecutiveUnchanged: int32(cache.ConsecutiveUnchanged), ConsecutiveFailures: int32(cache.ConsecutiveFailures), SourceType: sourceType,
-		}); err != nil {
-			return fmt.Errorf("bulk upsert page cache: %w", err)
-		}
-	}
-	return tx.Commit()
+	return err
 }
 
 // ListForTenant returns all cached pages for a tenant, ordered by last_fetched_at ASC (stalest first).

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/database/skipperdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -147,44 +148,47 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 	// Under PostgreSQL READ COMMITTED (the default), concurrent readers
 	// continue to see the old rows until this transaction commits.
 	// The delete-then-insert is atomic from the perspective of other sessions.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	stage := "begin"
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		queries := skipperdb.New(tx)
+
+		for sourceURL, tenantID := range bySource {
+			if execErr := queries.DeleteKnowledgeSourceChunks(ctx, skipperdb.DeleteKnowledgeSourceChunksParams{
+				TenantID: tenantID, SourceUrl: sourceURL,
+			}); execErr != nil {
+				return fmt.Errorf("delete existing chunks: %w", execErr)
+			}
+		}
+
+		for _, chunk := range chunks {
+			metadataBytes, err := json.Marshal(chunk.Metadata)
+			if err != nil {
+				return fmt.Errorf("encode metadata: %w", err)
+			}
+			sourceRoot := sourceRootFromMetadata(chunk.Metadata, chunk.SourceURL)
+			sourceType := sourceTypeFromMetadata(chunk.Metadata)
+			if err := queries.InsertKnowledgeChunk(ctx, skipperdb.InsertKnowledgeChunkParams{
+				TenantID: chunk.TenantID, SourceUrl: chunk.SourceURL, SourceTitle: chunk.SourceTitle,
+				SourceRoot: sourceRoot, SourceType: nullableSourceType(sourceType), ChunkText: chunk.Text,
+				ChunkIndex: int32(chunk.Index), Embedding: pgvector.NewVector(chunk.Embedding), Metadata: string(metadataBytes),
+			}); err != nil {
+				return fmt.Errorf("insert chunk: %w", err)
+			}
+		}
+		stage = "commit"
+		return nil
+	})
+	switch {
+	case err == nil:
+		return nil
+	case stage == "begin":
 		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-	queries := skipperdb.New(tx)
-
-	for sourceURL, tenantID := range bySource {
-		if execErr := queries.DeleteKnowledgeSourceChunks(ctx, skipperdb.DeleteKnowledgeSourceChunksParams{
-			TenantID: tenantID, SourceUrl: sourceURL,
-		}); execErr != nil {
-			return fmt.Errorf("delete existing chunks: %w", execErr)
-		}
-	}
-
-	for _, chunk := range chunks {
-		metadataBytes, err := json.Marshal(chunk.Metadata)
-		if err != nil {
-			return fmt.Errorf("encode metadata: %w", err)
-		}
-		sourceRoot := sourceRootFromMetadata(chunk.Metadata, chunk.SourceURL)
-		sourceType := sourceTypeFromMetadata(chunk.Metadata)
-		if err := queries.InsertKnowledgeChunk(ctx, skipperdb.InsertKnowledgeChunkParams{
-			TenantID: chunk.TenantID, SourceUrl: chunk.SourceURL, SourceTitle: chunk.SourceTitle,
-			SourceRoot: sourceRoot, SourceType: nullableSourceType(sourceType), ChunkText: chunk.Text,
-			ChunkIndex: int32(chunk.Index), Embedding: pgvector.NewVector(chunk.Embedding), Metadata: string(metadataBytes),
-		}); err != nil {
-			return fmt.Errorf("insert chunk: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
+	case stage == "commit":
 		return fmt.Errorf("commit transaction: %w", err)
+	default:
+		return err
 	}
-
-	return nil
 }
 
 func nullableSourceType(value *string) sql.NullString {

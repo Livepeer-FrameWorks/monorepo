@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_consultant/internal/database/skipperdb"
 	"frameworks/api_consultant/internal/skipper"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 var ErrConversationNotFound = errors.New("conversation not found")
@@ -247,44 +248,46 @@ func (s *ConversationStore) DeleteConversation(ctx context.Context, conversation
 	}
 	userID := skipper.GetUserID(ctx)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	queries := skipperdb.New(tx)
-	if userID != "" {
-		params := skipperdb.DeleteConversationMessagesForUserParams{
-			ConversationID: conversationID, TenantID: tenantID, UserID: userID,
-		}
-		if execErr := queries.DeleteConversationMessagesForUser(ctx, params); execErr != nil {
+	began := false
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { began = false }, func(tx *sql.Tx) error {
+		began = true
+		queries := skipperdb.New(tx)
+		if userID != "" {
+			params := skipperdb.DeleteConversationMessagesForUserParams{
+				ConversationID: conversationID, TenantID: tenantID, UserID: userID,
+			}
+			if execErr := queries.DeleteConversationMessagesForUser(ctx, params); execErr != nil {
+				return fmt.Errorf("delete messages: %w", execErr)
+			}
+		} else if execErr := queries.DeleteConversationMessages(ctx, skipperdb.DeleteConversationMessagesParams{
+			ConversationID: conversationID, TenantID: tenantID,
+		}); execErr != nil {
 			return fmt.Errorf("delete messages: %w", execErr)
 		}
-	} else if execErr := queries.DeleteConversationMessages(ctx, skipperdb.DeleteConversationMessagesParams{
-		ConversationID: conversationID, TenantID: tenantID,
-	}); execErr != nil {
-		return fmt.Errorf("delete messages: %w", execErr)
-	}
 
-	var rows int64
-	if userID != "" {
-		rows, err = queries.DeleteConversationForUser(ctx, skipperdb.DeleteConversationForUserParams{
-			ConversationID: conversationID, TenantID: tenantID, UserID: userID,
-		})
-	} else {
-		rows, err = queries.DeleteConversation(ctx, skipperdb.DeleteConversationParams{
-			ConversationID: conversationID, TenantID: tenantID,
-		})
+		var rows int64
+		var err error
+		if userID != "" {
+			rows, err = queries.DeleteConversationForUser(ctx, skipperdb.DeleteConversationForUserParams{
+				ConversationID: conversationID, TenantID: tenantID, UserID: userID,
+			})
+		} else {
+			rows, err = queries.DeleteConversation(ctx, skipperdb.DeleteConversationParams{
+				ConversationID: conversationID, TenantID: tenantID,
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("delete conversation: %w", err)
+		}
+		if rows == 0 {
+			return ErrConversationNotFound
+		}
+		return nil
+	})
+	if err != nil && !began {
+		return fmt.Errorf("begin tx: %w", err)
 	}
-	if err != nil {
-		return fmt.Errorf("delete conversation: %w", err)
-	}
-	if rows == 0 {
-		return ErrConversationNotFound
-	}
-
-	return tx.Commit()
+	return err
 }
 
 func (s *ConversationStore) GetRecentMessages(ctx context.Context, conversationID string, limit int) ([]Message, error) {

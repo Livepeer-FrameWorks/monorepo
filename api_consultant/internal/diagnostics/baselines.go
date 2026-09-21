@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/database/skipperdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // BaselineMetric holds the Welford running statistics for a single metric.
@@ -191,21 +192,24 @@ func (s *SQLBaselineStore) Upsert(ctx context.Context, tenantID, streamID string
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	began := false
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { began = false }, func(tx *sql.Tx) error {
+		began = true
+		queries := skipperdb.New(tx)
+		for name, m := range metrics {
+			if err := queries.UpsertBaseline(ctx, skipperdb.UpsertBaselineParams{
+				TenantID: tenantID, StreamID: streamID, MetricName: name,
+				AvgValue: m.Avg, M2: m.M2, SampleCount: m.SampleCount,
+			}); err != nil {
+				return fmt.Errorf("upsert baselines: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil && !began {
 		return fmt.Errorf("begin baseline upsert: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := skipperdb.New(tx)
-	for name, m := range metrics {
-		if err := queries.UpsertBaseline(ctx, skipperdb.UpsertBaselineParams{
-			TenantID: tenantID, StreamID: streamID, MetricName: name,
-			AvgValue: m.Avg, M2: m.M2, SampleCount: m.SampleCount,
-		}); err != nil {
-			return fmt.Errorf("upsert baselines: %w", err)
-		}
-	}
-	return tx.Commit()
+	return err
 }
 
 func (s *SQLBaselineStore) CleanupStale(ctx context.Context, tenantID string, maxAge time.Duration) (int64, error) {
