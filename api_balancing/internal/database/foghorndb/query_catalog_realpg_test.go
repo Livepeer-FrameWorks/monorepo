@@ -1808,7 +1808,7 @@ func startFoghornCatalogYugabyte(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return startFoghornCatalogEngine(t, name, image, "5433/tcp", "yugabyte", "yugabyte", "", []string{
-		"--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=false`,
+		"--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true`,
 	})
 }
 

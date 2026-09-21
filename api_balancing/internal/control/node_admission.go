@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -107,36 +108,30 @@ func persistDurableNodeAdmission(ctx context.Context, canonicalNodeID, tenantID,
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin node admission replacement: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	if _, deleteErr := queries.DeleteConflictingNodeAdmissions(ctx, foghorndb.DeleteConflictingNodeAdmissionsParams{
-		CanonicalNodeID: canonicalNodeID, FingerprintSha256: digest,
-		PublicKeyEd25519: register.GetNodeIdentityPublicKeyEd25519(),
-	}); deleteErr != nil {
-		return fmt.Errorf("remove superseded node admission: %w", deleteErr)
-	}
-	stored, err := queries.UpsertNodeAdmission(ctx, foghorndb.UpsertNodeAdmissionParams{
-		CanonicalNodeID:   canonicalNodeID,
-		FingerprintSha256: digest,
-		PublicKeyEd25519:  register.GetNodeIdentityPublicKeyEd25519(),
-		TenantID:          tenantID,
-		ClusterID:         clusterID,
-		ValidUntil:        time.Now().UTC().Add(nodeAdmissionValidity),
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		queries := foghorndb.New(tx)
+		if _, deleteErr := queries.DeleteConflictingNodeAdmissions(ctx, foghorndb.DeleteConflictingNodeAdmissionsParams{
+			CanonicalNodeID: canonicalNodeID, FingerprintSha256: digest,
+			PublicKeyEd25519: register.GetNodeIdentityPublicKeyEd25519(),
+		}); deleteErr != nil {
+			return fmt.Errorf("remove superseded node admission: %w", deleteErr)
+		}
+		stored, err := queries.UpsertNodeAdmission(ctx, foghorndb.UpsertNodeAdmissionParams{
+			CanonicalNodeID:   canonicalNodeID,
+			FingerprintSha256: digest,
+			PublicKeyEd25519:  register.GetNodeIdentityPublicKeyEd25519(),
+			TenantID:          tenantID,
+			ClusterID:         clusterID,
+			ValidUntil:        time.Now().UTC().Add(nodeAdmissionValidity),
+		})
+		if err != nil {
+			return fmt.Errorf("persist node admission: %w", err)
+		}
+		if stored != canonicalNodeID {
+			return errors.New("persisted node admission identity mismatch")
+		}
+		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("persist node admission: %w", err)
-	}
-	if stored != canonicalNodeID {
-		return errors.New("persisted node admission identity mismatch")
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit node admission replacement: %w", err)
-	}
-	return nil
 }
 
 func loadDurableNodeAdmission(ctx context.Context, register *ipcpb.Register) (*durableNodeAdmission, error) {

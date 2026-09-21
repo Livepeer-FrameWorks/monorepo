@@ -13,6 +13,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -230,162 +231,175 @@ func (s *Store) apply(ctx context.Context, encoded []byte, confirmedAt time.Time
 		result.StreamID = object.GetLiveStream().GetStreamId()
 	}
 
-	tx, beginErr := s.db.BeginTx(ctx, nil)
-	if beginErr != nil {
-		return ApplyResult{}, fmt.Errorf("begin media authority apply: %w", beginErr)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	if err := queries.SetLocalMediaAuthorityLockTimeout(ctx, mediaAuthorityLockTimeout.String()); err != nil {
-		return ApplyResult{}, fmt.Errorf("bound media authority lock wait: %w", err)
-	}
-	// Artifact authority and the derivative purge/publication saga share one
-	// lock domain. Take the asset lock before the authority-identity lock so a
-	// concurrent active projection cannot commit in the absence-check window of
-	// a stale purge, and establish a single lock order for future callers.
-	if object := verified.MediaObject; object != nil && object.GetObjectKind() == mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_ARTIFACT {
-		assetKey := strings.TrimSpace(object.GetArtifact().GetArtifactHash())
-		if assetKey == "" {
-			return ApplyResult{}, errors.New("artifact media authority requires artifact hash")
+	// The callback is replayed on retryable transaction errors, so it records
+	// its decision in these locals and the observer runs only after commit.
+	var (
+		stage       = "begin"
+		commitLabel string
+		rejectErr   error
+		duplicate   bool
+		revived     bool
+		heldVersion int64
+	)
+	txErr := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		commitLabel = ""
+		rejectErr = nil
+		duplicate = false
+		revived = false
+		heldVersion = 0
+		metricOutcome = "persist_error"
+		queries := foghorndb.New(tx)
+		if err := queries.SetLocalMediaAuthorityLockTimeout(ctx, mediaAuthorityLockTimeout.String()); err != nil {
+			return fmt.Errorf("bound media authority lock wait: %w", err)
 		}
-		if err := queries.LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
-			LockNamespace: artifacts.ThumbnailAssetLockNamespace,
-			AssetKey:      assetKey,
-		}); err != nil {
-			return ApplyResult{}, fmt.Errorf("lock media-object asset: %w", err)
+		// Artifact authority and the derivative purge/publication saga share one
+		// lock domain. Take the asset lock before the authority-identity lock so a
+		// concurrent active projection cannot commit in the absence-check window of
+		// a stale purge, and establish a single lock order for future callers.
+		if object := verified.MediaObject; object != nil && object.GetObjectKind() == mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_ARTIFACT {
+			assetKey := strings.TrimSpace(object.GetArtifact().GetArtifactHash())
+			if assetKey == "" {
+				return errors.New("artifact media authority requires artifact hash")
+			}
+			if err := queries.LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
+				LockNamespace: artifacts.ThumbnailAssetLockNamespace,
+				AssetKey:      assetKey,
+			}); err != nil {
+				return fmt.Errorf("lock media-object asset: %w", err)
+			}
 		}
-	}
-	identity := foghorndb.LockMediaAuthorityParams{
-		LockNamespace: mediaAuthorityLockNamespace,
-		AuthorityKind: kind,
-		AuthorityID:   envelope.GetAuthorityId(),
-	}
-	if err := queries.LockMediaAuthority(ctx, identity); err != nil {
-		return ApplyResult{}, fmt.Errorf("lock media authority: %w", err)
-	}
+		identity := foghorndb.LockMediaAuthorityParams{
+			LockNamespace: mediaAuthorityLockNamespace,
+			AuthorityKind: kind,
+			AuthorityID:   envelope.GetAuthorityId(),
+		}
+		if err := queries.LockMediaAuthority(ctx, identity); err != nil {
+			return fmt.Errorf("lock media authority: %w", err)
+		}
 
-	current, currentErr := queries.GetMediaAuthorityForUpdate(ctx, foghorndb.GetMediaAuthorityForUpdateParams{
-		AuthorityKind: kind,
-		AuthorityID:   envelope.GetAuthorityId(),
-	})
-	switch {
-	case currentErr == nil && current.AuthorityVersion > int64(envelope.GetAuthorityVersion()):
-		metricOutcome = "stale_version_rejected"
-		if err := insertAudit(ctx, queries, signed, "stale_version_rejected", ErrRollback.Error()); err != nil {
-			return ApplyResult{}, fmt.Errorf("record media authority rollback: %w", err)
+		current, currentErr := queries.GetMediaAuthorityForUpdate(ctx, foghorndb.GetMediaAuthorityForUpdateParams{
+			AuthorityKind: kind,
+			AuthorityID:   envelope.GetAuthorityId(),
+		})
+		if currentErr == nil {
+			heldVersion = current.AuthorityVersion
 		}
-		if err := tx.Commit(); err != nil {
-			return ApplyResult{}, fmt.Errorf("commit media authority rollback audit: %w", err)
+		switch {
+		case currentErr == nil && current.AuthorityVersion > int64(envelope.GetAuthorityVersion()):
+			metricOutcome = "stale_version_rejected"
+			if err := insertAudit(ctx, queries, signed, "stale_version_rejected", ErrRollback.Error()); err != nil {
+				return fmt.Errorf("record media authority rollback: %w", err)
+			}
+			commitLabel, rejectErr = "commit media authority rollback audit", ErrRollback
+			stage = "commit"
+			return nil
+		case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()) && !bytes.Equal(current.PayloadSha256, envelope.GetPayloadSha256()):
+			metricOutcome = "conflict_rejected"
+			if err := insertAudit(ctx, queries, signed, "conflict_rejected", ErrVersionConflict.Error()); err != nil {
+				return fmt.Errorf("record media authority conflict: %w", err)
+			}
+			commitLabel, rejectErr = "commit media authority conflict audit", ErrVersionConflict
+			stage = "commit"
+			return nil
+		case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()):
+			if err := insertAudit(ctx, queries, signed, "duplicate", ""); err != nil {
+				return fmt.Errorf("record duplicate media authority: %w", err)
+			}
+			if err := confirmFetchedAuthority(ctx, queries, result, confirmedAt); err != nil {
+				return err
+			}
+			commitLabel, duplicate = "commit duplicate media authority audit", true
+			stage = "commit"
+			return nil
+		case currentErr != nil && !errors.Is(currentErr, sql.ErrNoRows):
+			return fmt.Errorf("load current media authority: %w", currentErr)
 		}
-		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrRollback)
-		return result, ErrRollback
-	case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()) && !bytes.Equal(current.PayloadSha256, envelope.GetPayloadSha256()):
-		metricOutcome = "conflict_rejected"
-		if err := insertAudit(ctx, queries, signed, "conflict_rejected", ErrVersionConflict.Error()); err != nil {
-			return ApplyResult{}, fmt.Errorf("record media authority conflict: %w", err)
+		if terminal, err := rejectsObjectTombstoneResurrection(current, currentErr == nil, verified); err != nil {
+			return err
+		} else if terminal {
+			metricOutcome = "terminal_lifecycle_rejected"
+			if err := insertAudit(ctx, queries, signed, "terminal_lifecycle_rejected", ErrTombstoneTerminal.Error()); err != nil {
+				return fmt.Errorf("record media authority terminal lifecycle rejection: %w", err)
+			}
+			commitLabel, rejectErr = "commit media authority terminal lifecycle audit", ErrTombstoneTerminal
+			stage = "commit"
+			return nil
 		}
-		if err := tx.Commit(); err != nil {
-			return ApplyResult{}, fmt.Errorf("commit media authority conflict audit: %w", err)
+		if currentErr == nil {
+			rollback, revisionErr := rejectsPlacementRollback(current.Payload, verified)
+			if revisionErr != nil {
+				return revisionErr
+			}
+			if rollback {
+				metricOutcome = "rollback_rejected"
+				if err := insertAudit(ctx, queries, signed, "rollback_rejected", ErrRollback.Error()); err != nil {
+					return fmt.Errorf("record placement rollback: %w", err)
+				}
+				commitLabel, rejectErr = "commit placement rollback audit", ErrRollback
+				stage = "commit"
+				return nil
+			}
 		}
-		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrVersionConflict)
-		return result, ErrVersionConflict
-	case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()):
-		if err := insertAudit(ctx, queries, signed, "duplicate", ""); err != nil {
-			return ApplyResult{}, fmt.Errorf("record duplicate media authority: %w", err)
+
+		sourceRevisions, err := marshalSourceRevisions(envelope.GetSourceRevisions())
+		if err != nil {
+			return err
+		}
+		if err := queries.UpsertMediaAuthority(ctx, foghorndb.UpsertMediaAuthorityParams{
+			AuthorityKind: kind, AuthorityID: envelope.GetAuthorityId(), AuthorityVersion: int64(envelope.GetAuthorityVersion()),
+			SignerKeyID: envelope.GetSignerKeyId(), AudienceCellID: envelope.GetAudienceCellId(),
+			IssuedAt: envelope.GetIssuedAt().AsTime(), RefreshAfter: envelope.GetRefreshAfter().AsTime(), ValidUntil: envelope.GetValidUntil().AsTime(),
+			PayloadSha256: envelope.GetPayloadSha256(), SignedEnvelope: encoded, Payload: envelope.GetPayload(), SourceRevisions: sourceRevisions,
+		}); err != nil {
+			return fmt.Errorf("persist verified media authority: %w", err)
+		}
+		preserve := s.readinessPreservation(current, currentErr, verified)
+		if err := applyProjection(ctx, queries, verified, preserve); err != nil {
+			return err
+		}
+		// Reviving a tenant must not make stale object copies usable. A current
+		// fetch begun after this barrier must confirm each retained object.
+		revived = verified.Tenant != nil && currentErr == nil && !current.ValidUntil.After(s.now().UTC())
+		if revived {
+			if err := queries.WithholdTenantObjectsAppliedBefore(ctx, foghorndb.WithholdTenantObjectsAppliedBeforeParams{
+				TenantID: verified.Tenant.GetTenantId(), ConfirmedAt: sql.NullTime{Time: confirmedAt, Valid: !confirmedAt.IsZero()},
+			}); err != nil {
+				return fmt.Errorf("withhold objects of a revived tenant: %w", err)
+			}
+		}
+		if err := promotePlacementReadiness(ctx, queries, verified); err != nil {
+			return fmt.Errorf("promote schema-2 media authority readiness: %w", err)
+		}
+		if err := insertAudit(ctx, queries, signed, "applied", ""); err != nil {
+			return fmt.Errorf("record applied media authority: %w", err)
 		}
 		if err := confirmFetchedAuthority(ctx, queries, result, confirmedAt); err != nil {
-			return ApplyResult{}, err
+			return err
 		}
-		if err := tx.Commit(); err != nil {
-			return ApplyResult{}, fmt.Errorf("commit duplicate media authority audit: %w", err)
+		commitLabel = "commit media authority apply"
+		stage = "commit"
+		return nil
+	})
+	if txErr != nil {
+		switch stage {
+		case "begin":
+			return ApplyResult{}, fmt.Errorf("begin media authority apply: %w", txErr)
+		case "commit":
+			return ApplyResult{}, fmt.Errorf("%s: %w", commitLabel, txErr)
+		default:
+			return ApplyResult{}, txErr
 		}
+	}
+	if rejectErr != nil {
+		s.logRejectedApply(result, metricOutcome, heldVersion, rejectErr)
+		return result, rejectErr
+	}
+	if duplicate {
 		result.Status = ApplyStatusDuplicate
-		if !confirmedAt.IsZero() {
-			result.Confirmed = s.fence.confirm(result.Kind, result.ID, fenceGeneration)
-		}
-		if s.applyObserver != nil {
-			return result, s.applyObserver(ctx, result)
-		}
-		return result, nil
-	case currentErr != nil && !errors.Is(currentErr, sql.ErrNoRows):
-		return ApplyResult{}, fmt.Errorf("load current media authority: %w", currentErr)
+	} else {
+		result.Status = ApplyStatusApplied
 	}
-	if terminal, err := rejectsObjectTombstoneResurrection(current, currentErr == nil, verified); err != nil {
-		return ApplyResult{}, err
-	} else if terminal {
-		metricOutcome = "terminal_lifecycle_rejected"
-		if err := insertAudit(ctx, queries, signed, "terminal_lifecycle_rejected", ErrTombstoneTerminal.Error()); err != nil {
-			return ApplyResult{}, fmt.Errorf("record media authority terminal lifecycle rejection: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return ApplyResult{}, fmt.Errorf("commit media authority terminal lifecycle audit: %w", err)
-		}
-		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrTombstoneTerminal)
-		return result, ErrTombstoneTerminal
-	}
-	if currentErr == nil {
-		rollback, revisionErr := rejectsPlacementRollback(current.Payload, verified)
-		if revisionErr != nil {
-			return ApplyResult{}, revisionErr
-		}
-		if rollback {
-			metricOutcome = "rollback_rejected"
-			if err := insertAudit(ctx, queries, signed, "rollback_rejected", ErrRollback.Error()); err != nil {
-				return ApplyResult{}, fmt.Errorf("record placement rollback: %w", err)
-			}
-			if err := tx.Commit(); err != nil {
-				return ApplyResult{}, fmt.Errorf("commit placement rollback audit: %w", err)
-			}
-			s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrRollback)
-			return result, ErrRollback
-		}
-	}
-
-	sourceRevisions, err := marshalSourceRevisions(envelope.GetSourceRevisions())
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	if err := queries.UpsertMediaAuthority(ctx, foghorndb.UpsertMediaAuthorityParams{
-		AuthorityKind: kind, AuthorityID: envelope.GetAuthorityId(), AuthorityVersion: int64(envelope.GetAuthorityVersion()),
-		SignerKeyID: envelope.GetSignerKeyId(), AudienceCellID: envelope.GetAudienceCellId(),
-		IssuedAt: envelope.GetIssuedAt().AsTime(), RefreshAfter: envelope.GetRefreshAfter().AsTime(), ValidUntil: envelope.GetValidUntil().AsTime(),
-		PayloadSha256: envelope.GetPayloadSha256(), SignedEnvelope: encoded, Payload: envelope.GetPayload(), SourceRevisions: sourceRevisions,
-	}); err != nil {
-		return ApplyResult{}, fmt.Errorf("persist verified media authority: %w", err)
-	}
-	preserve := s.readinessPreservation(current, currentErr, verified)
-	if err := applyProjection(ctx, queries, verified, preserve); err != nil {
-		return ApplyResult{}, err
-	}
-	// A tenant authority that brings back a tenant the cell held only past its
-	// validity makes the tenant usable again, and with it every
-	// object copy the cell still holds. Those copies were not corrected while
-	// the tenant was out: an object change on a lapsed tenant is published, but
-	// nothing orders its delivery before the tenant's, and another object's
-	// fetch can bring the tenant too. Objects stay withheld until a current
-	// fetch begun after this barrier confirms them. A fetch that revives the
-	// tenant and supplies the object uses the same start instant for both.
-	revived := verified.Tenant != nil && currentErr == nil && !current.ValidUntil.After(s.now().UTC())
-	if revived {
-		if err := queries.WithholdTenantObjectsAppliedBefore(ctx, foghorndb.WithholdTenantObjectsAppliedBeforeParams{
-			TenantID: verified.Tenant.GetTenantId(), ConfirmedAt: sql.NullTime{Time: confirmedAt, Valid: !confirmedAt.IsZero()},
-		}); err != nil {
-			return ApplyResult{}, fmt.Errorf("withhold objects of a revived tenant: %w", err)
-		}
-	}
-	if err := promotePlacementReadiness(ctx, queries, verified); err != nil {
-		return ApplyResult{}, fmt.Errorf("promote schema-2 media authority readiness: %w", err)
-	}
-	if err := insertAudit(ctx, queries, signed, "applied", ""); err != nil {
-		return ApplyResult{}, fmt.Errorf("record applied media authority: %w", err)
-	}
-	if err := confirmFetchedAuthority(ctx, queries, result, confirmedAt); err != nil {
-		return ApplyResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return ApplyResult{}, fmt.Errorf("commit media authority apply: %w", err)
-	}
-	result.Status = ApplyStatusApplied
 	if revived {
 		s.fence.requireRecovery()
 	}

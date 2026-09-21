@@ -10,6 +10,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	fieldcrypto "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/lib/pq"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -408,6 +409,64 @@ func TestAdmissionPayloadMigrationFencesLegacyRowAsV2(t *testing.T) {
 	count, err := migrateAdmissionEffectEncryptionBatch(context.Background(), 10)
 	if err != nil || count != 1 {
 		t.Fatalf("migration count=%d err=%v", count, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCapacityRearmReplaysADatabaseAbortInsteadOfSkippingTheRow proves a serialization abort while rotating a valid
+// obligation replays the batch rather than being recorded as a malformed payload.
+func TestCapacityRearmReplaysADatabaseAbortInsteadOfSkippingTheRow(t *testing.T) {
+	previousEncryptor := admissionEffectEncryptor
+	t.Cleanup(func() { admissionEffectEncryptor = previousEncryptor })
+	if err := ConfigureAdmissionEffectEncryption("test-foghorn-state-key"); err != nil {
+		t.Fatal(err)
+	}
+	valid := &ipcpb.ActivatePushTargets{
+		StreamName: "live+valid", SourceGeneration: testAdmissionGenerationTwo,
+		TargetRevision: 8, ActivationAttempt: "70000000-0000-4000-8000-000000000008",
+		Targets: []*ipcpb.PushTargetSpec{{TargetId: "valid-target", TargetUri: "rtmp://example.test/live/valid"}},
+	}
+	raw, err := proto.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := protectAdmissionPushTargets(raw, testAdmissionTenantTwo, valid.GetStreamName(), testAdmissionGenerationTwo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB := db
+	SetDB(mockDB)
+	t.Cleanup(func() { SetDB(previousDB); _ = mockDB.Close() })
+	expectBatch := func() {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT pg_try_advisory_xact_lock`).
+			WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
+		mock.ExpectQuery(`FROM foghorn.ingest_admission_effects AS effect`).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "stream_internal_name", "source_generation", "target_revision", "push_targets"}).
+				AddRow(int64(2), testAdmissionTenantTwo, valid.GetStreamName(), testAdmissionGenerationTwo, int64(8), protected))
+	}
+	expectBatch()
+	mock.ExpectExec(`UPDATE foghorn.admission_push_target_revisions`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testAdmissionGenerationTwo, int64(8)).
+		WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access due to concurrent update"})
+	mock.ExpectRollback()
+	expectBatch()
+	mock.ExpectExec(`UPDATE foghorn.admission_push_target_revisions`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testAdmissionGenerationTwo, int64(8)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE foghorn.ingest_admission_effects AS effect`).
+		WithArgs(sqlmock.AnyArg(), int64(2)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	updated, err := RearmCapacityPendingPushTargetEffects(context.Background())
+	if err != nil || updated != 1 {
+		t.Fatalf("capacity rearm updated=%d err=%v, want the row re-armed after the replay", updated, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

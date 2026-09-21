@@ -132,86 +132,92 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	if db == nil {
 		return false, "", sql.ErrConnDone
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	var applied bool
+	var currentStatus string
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		applied, currentStatus = false, ""
+		qtx := foghorndb.New(tx)
+		// Lock the row and read its prior status, identity, and the durable dispatch owner node
+		// (dvr_start_dispatch.node_id, persisted at StartDVR and retained through finalize) transactionally
+		// with the mutation below.
+		row, err := qtx.LockDVRProgressArtifact(ctx, dvrHash)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Row missing: nothing to promote, nothing to emit, nothing applied.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		prevStatus := row.Status.String
+		tenantID := row.TenantID
+		streamID := row.StreamID
+		internalName := row.StreamInternalName
+		dispatchNode := row.DispatchNode
+
+		// A report for a terminal/finalizing row is a no-op: progress must never overwrite a terminal or
+		// 'finalizing' status. applied=false so callers leave downstream sinks untouched; the current
+		// (unchanged) status is returned so callers can distinguish it from an accepted transition.
+		if prevStatus != "requested" && prevStatus != "starting" && prevStatus != "recording" {
+			currentStatus = prevStatus
+			return nil
+		}
+
+		// Bind the report to the dispatched recording node. A progress report from any other node (or an
+		// active row with no dispatch owner) is rejected without mutating.
+		if dispatchNode == "" || dispatchNode != nodeID {
+			return fmt.Errorf("dvr progress for %s rejected: reporting node %q is not the dispatched recording node %q", dvrHash, nodeID, dispatchNode)
+		}
+
+		firstEdge := prevStatus == "requested" || prevStatus == "starting"
+		// Startup heartbeats are not proof that Mist accepted the recording push.
+		// Promote only after owner confirmation or an observed media segment.
+		if firstEdge && status != "recording" && segmentCount == 0 {
+			currentStatus = prevStatus
+			return nil
+		}
+		// Metrics update + canonical first-edge promotion. size_bytes grows monotonically (GREATEST); status
+		// only ever advances requested/starting -> recording, never to a node-supplied value.
+		if err = qtx.RecordDVRProgress(ctx, foghorndb.RecordDVRProgressParams{ArtifactHash: dvrHash, SizeBytes: sizeBytes}); err != nil {
+			return err
+		}
+
+		if firstEdge {
+			data := &ipcpb.DVRLifecycleData{
+				Status:  ipcpb.DVRLifecycleData_STATUS_RECORDING,
+				DvrHash: dvrHash,
+			}
+			// tenant_id is NOT NULL on the row; the outbox rejects a tenant-less lifecycle event, so an
+			// unexpectedly empty tenant rolls the whole transaction back (fail closed).
+			if tenantID != "" {
+				data.TenantId = &tenantID
+			}
+			if streamID != "" {
+				data.StreamId = &streamID
+			}
+			if internalName != "" {
+				data.StreamInternalName = &internalName
+			}
+			if nodeID != "" {
+				data.NodeId = &nodeID
+			}
+			sc := int32(segmentCount)
+			data.SegmentCount = &sc
+			if sizeBytes > 0 {
+				sz := uint64(sizeBytes)
+				data.SizeBytes = &sz
+			}
+			if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, data); enqErr != nil {
+				return enqErr
+			}
+		}
+		// Accepted active transition: the row is now 'recording'.
+		applied, currentStatus = true, "recording"
+		return nil
+	})
 	if err != nil {
 		return false, "", err
 	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
-
-	qtx := foghorndb.New(tx)
-	// Lock the row and read its prior status, identity, and the durable dispatch owner node
-	// (dvr_start_dispatch.node_id, persisted at StartDVR and retained through finalize) transactionally
-	// with the mutation below.
-	row, err := qtx.LockDVRProgressArtifact(ctx, dvrHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		// Row missing: nothing to promote, nothing to emit, nothing applied.
-		return false, "", tx.Commit()
-	}
-	if err != nil {
-		return false, "", err
-	}
-	prevStatus := row.Status.String
-	tenantID := row.TenantID
-	streamID := row.StreamID
-	internalName := row.StreamInternalName
-	dispatchNode := row.DispatchNode
-
-	// A report for a terminal/finalizing row is a no-op: progress must never overwrite a terminal or
-	// 'finalizing' status. applied=false so callers leave downstream sinks untouched; the current
-	// (unchanged) status is returned so callers can distinguish it from an accepted transition.
-	if prevStatus != "requested" && prevStatus != "starting" && prevStatus != "recording" {
-		return false, prevStatus, tx.Commit()
-	}
-
-	// Bind the report to the dispatched recording node. A progress report from any other node (or an
-	// active row with no dispatch owner) is rejected without mutating.
-	if dispatchNode == "" || dispatchNode != nodeID {
-		return false, "", fmt.Errorf("dvr progress for %s rejected: reporting node %q is not the dispatched recording node %q", dvrHash, nodeID, dispatchNode)
-	}
-
-	firstEdge := prevStatus == "requested" || prevStatus == "starting"
-	// Startup heartbeats are not proof that Mist accepted the recording push.
-	// Promote only after owner confirmation or an observed media segment.
-	if firstEdge && status != "recording" && segmentCount == 0 {
-		return false, prevStatus, tx.Commit()
-	}
-	// Metrics update + canonical first-edge promotion. size_bytes grows monotonically (GREATEST); status
-	// only ever advances requested/starting -> recording, never to a node-supplied value.
-	if err = qtx.RecordDVRProgress(ctx, foghorndb.RecordDVRProgressParams{ArtifactHash: dvrHash, SizeBytes: sizeBytes}); err != nil {
-		return false, "", err
-	}
-
-	if firstEdge {
-		data := &ipcpb.DVRLifecycleData{
-			Status:  ipcpb.DVRLifecycleData_STATUS_RECORDING,
-			DvrHash: dvrHash,
-		}
-		// tenant_id is NOT NULL on the row; the outbox rejects a tenant-less lifecycle event, so an
-		// unexpectedly empty tenant rolls the whole transaction back (fail closed).
-		if tenantID != "" {
-			data.TenantId = &tenantID
-		}
-		if streamID != "" {
-			data.StreamId = &streamID
-		}
-		if internalName != "" {
-			data.StreamInternalName = &internalName
-		}
-		if nodeID != "" {
-			data.NodeId = &nodeID
-		}
-		sc := int32(segmentCount)
-		data.SegmentCount = &sc
-		if sizeBytes > 0 {
-			sz := uint64(sizeBytes)
-			data.SizeBytes = &sz
-		}
-		if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, data); enqErr != nil {
-			return false, "", enqErr
-		}
-	}
-	// Accepted active transition: the row is now 'recording'.
-	return true, "recording", tx.Commit()
+	return applied, currentStatus, nil
 }
 
 func (r *dvrRepositoryDB) UpdateDVRCompletionByHash(ctx context.Context, dvrHash string, finalStatus string, durationSeconds int64, sizeBytes int64, manifestPath string, errorMsg string) error {
@@ -438,19 +444,7 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		return records[i].FilePath < records[j].FilePath
 	})
 
-	var err error
-	for attempt := range 3 {
-		err = r.upsertArtifactsOnce(ctx, nodeID, records)
-		if err == nil || !isRetryableArtifactUpsertError(err) || ctx.Err() != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
-		}
-	}
-	return err
+	return r.upsertArtifacts(ctx, nodeID, records)
 }
 
 // applyReportRevisionGuard atomically advances the node's report ordering watermark and reports
@@ -492,114 +486,111 @@ func AllocateNodeControlFence(ctx context.Context, nodeID string) (int64, error)
 	return fence, err
 }
 
-func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID string, artifacts []state.ArtifactRecord) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	qtx := foghorndb.New(tx)
+func (r *artifactRepositoryDB) upsertArtifacts(ctx context.Context, nodeID string, artifacts []state.ArtifactRecord) error {
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		qtx := foghorndb.New(tx)
 
-	var reportFence, reportSeq int64
-	if len(artifacts) > 0 {
-		reportFence = artifacts[0].ReportConnectionFence
-		reportSeq = artifacts[0].ReportSeq
-	}
-	if stale, gerr := applyReportRevisionGuard(ctx, tx, nodeID, reportFence, reportSeq); gerr != nil {
-		return gerr
-	} else if stale {
-		return nil // a newer report already applied; dropping this stale one (deferred rollback)
-	}
-
-	// The poller report is the source of truth for which nodes hold a *materialized*
-	// artifact file. Each report that makes a node newly-present (first seen or restored
-	// from orphaned) emits a durable GAINED in the same transaction, covering reconnects
-	// and sync-complete cache copies. It does NOT observe read-through relay block caches
-	// (<asset>.blocks/ directories) — the poller skips directories, so partial edge
-	// caches are absent from placement (see docs/architecture/analytics-pipeline.md).
-	//
-	// All records in one report share the capture time (ArtifactRecord.ReportedAtMs) — that is
-	// event time only. The monotonic ordering key for a placement transition is the Postgres
-	// per-copy counter assigned when the GAINED/LOST/UPDATED row is
-	// emitted, NOT this timestamp.
-	var reportedAtMs int64
-	if len(artifacts) > 0 {
-		reportedAtMs = artifacts[0].ReportedAtMs
-	}
-	for _, a := range artifacts {
-		if errExec := qtx.UpdateArtifactReportMetadata(ctx, foghorndb.UpdateArtifactReportMetadataParams{
-			ArtifactHash: a.ArtifactHash, StreamInternalName: a.StreamName,
-			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed,
-		}); errExec != nil {
-			return errExec
+		var reportFence, reportSeq int64
+		if len(artifacts) > 0 {
+			reportFence = artifacts[0].ReportConnectionFence
+			reportSeq = artifacts[0].ReportSeq
 		}
-		role := a.Role
-		if role == "" {
-			role = "cache"
+		if stale, gerr := applyReportRevisionGuard(ctx, tx, nodeID, reportFence, reportSeq); gerr != nil {
+			return gerr
+		} else if stale {
+			return errTxRollbackNoop // a newer report already applied; roll back this stale one
 		}
 
-		var priorRole string
-		var priorOrphaned, priorComplete bool
-		priorExisted := true
-		writable, lockErr := lockPlacementWriteAgainstDeletion(ctx, qtx, a.ArtifactHash, nodeID, a.ReportedAtMs)
-		if errors.Is(lockErr, sql.ErrNoRows) {
-			// Inventory can include files whose authoritative artifact row is absent.
-			continue
+		// The poller report is the source of truth for which nodes hold a *materialized*
+		// artifact file. Each report that makes a node newly-present (first seen or restored
+		// from orphaned) emits a durable GAINED in the same transaction, covering reconnects
+		// and sync-complete cache copies. It does NOT observe read-through relay block caches
+		// (<asset>.blocks/ directories) — the poller skips directories, so partial edge
+		// caches are absent from placement (see docs/architecture/analytics-pipeline.md).
+		//
+		// All records in one report share the capture time (ArtifactRecord.ReportedAtMs) — that is
+		// event time only. The monotonic ordering key for a placement transition is the Postgres
+		// per-copy counter assigned when the GAINED/LOST/UPDATED row is
+		// emitted, NOT this timestamp.
+		var reportedAtMs int64
+		if len(artifacts) > 0 {
+			reportedAtMs = artifacts[0].ReportedAtMs
 		}
-		if lockErr != nil {
-			return lockErr
-		}
-		if !writable {
-			continue
-		}
-		prior, perr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: a.ArtifactHash, NodeID: nodeID})
-		if perr != nil {
-			if errors.Is(perr, sql.ErrNoRows) {
-				priorExisted = false
-			} else {
-				return perr
+		for _, a := range artifacts {
+			if errExec := qtx.UpdateArtifactReportMetadata(ctx, foghorndb.UpdateArtifactReportMetadataParams{
+				ArtifactHash: a.ArtifactHash, StreamInternalName: a.StreamName,
+				AccessCount: a.AccessCount, LastAccessed: a.LastAccessed,
+			}); errExec != nil {
+				return errExec
 			}
-		} else {
-			priorRole, priorOrphaned, priorComplete = prior.Role, prior.IsOrphaned.Bool, prior.IsComplete
-		}
-		upserted, uerr := qtx.UpsertReportedArtifactNode(ctx, foghorndb.UpsertReportedArtifactNodeParams{
-			ArtifactHash: a.ArtifactHash, NodeID: nodeID, FilePath: a.FilePath,
-			SizeBytes: a.SizeBytes, SegmentCount: int64(a.SegmentCount), SegmentBytes: a.SegmentBytes,
-			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed, ReportedAtMs: a.ReportedAtMs,
-			Role: role, IsComplete: a.IsComplete,
-		})
-		if errors.Is(uerr, sql.ErrNoRows) {
-			continue // FK guard: artifact unknown, nothing upserted
-		}
-		if uerr != nil {
-			return uerr
-		}
-		if err = emitPresentTx(ctx, tx, a.ArtifactHash, nodeID, upserted.Role, upserted.IsComplete,
-			a.SizeBytes, !priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, reportedAtMs); err != nil {
-			return err
-		}
-	}
+			role := a.Role
+			if role == "" {
+				role = "cache"
+			}
 
-	// A report asserts PRESENCE only: it never negatively diffs a present row that is absent from the
-	// report. Absence converges through the routing cordon (ArtifactInventoryReady), fenced takeover on
-	// reconnect/disconnect, and the stale sweep below — so a copy the node dropped is orphaned within the
-	// stale window rather than immediately.
-	//
-	// Orphan rows unseen for >10 min, emitting a durable LOST for each in this transaction. Also covers
-	// disconnects and any unversioned/eviction path.
-	swept, sweepErr := qtx.OrphanStaleReportedArtifactNodes(ctx, nodeID)
-	if sweepErr != nil {
-		return sweepErr
-	}
-	orphaned := make([]lostRow, 0, len(swept))
-	for _, row := range swept {
-		orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
-	}
-	if err = emitLost(ctx, tx, nodeID, orphaned, reportedAtMs); err != nil {
-		return err
-	}
+			var priorRole string
+			var priorOrphaned, priorComplete bool
+			priorExisted := true
+			writable, lockErr := lockPlacementWriteAgainstDeletion(ctx, qtx, a.ArtifactHash, nodeID, a.ReportedAtMs)
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				// Inventory can include files whose authoritative artifact row is absent.
+				continue
+			}
+			if lockErr != nil {
+				return lockErr
+			}
+			if !writable {
+				continue
+			}
+			prior, perr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: a.ArtifactHash, NodeID: nodeID})
+			if perr != nil {
+				if errors.Is(perr, sql.ErrNoRows) {
+					priorExisted = false
+				} else {
+					return perr
+				}
+			} else {
+				priorRole, priorOrphaned, priorComplete = prior.Role, prior.IsOrphaned.Bool, prior.IsComplete
+			}
+			upserted, uerr := qtx.UpsertReportedArtifactNode(ctx, foghorndb.UpsertReportedArtifactNodeParams{
+				ArtifactHash: a.ArtifactHash, NodeID: nodeID, FilePath: a.FilePath,
+				SizeBytes: a.SizeBytes, SegmentCount: int64(a.SegmentCount), SegmentBytes: a.SegmentBytes,
+				AccessCount: a.AccessCount, LastAccessed: a.LastAccessed, ReportedAtMs: a.ReportedAtMs,
+				Role: role, IsComplete: a.IsComplete,
+			})
+			if errors.Is(uerr, sql.ErrNoRows) {
+				continue // FK guard: artifact unknown, nothing upserted
+			}
+			if uerr != nil {
+				return uerr
+			}
+			if err := emitPresentTx(ctx, tx, a.ArtifactHash, nodeID, upserted.Role, upserted.IsComplete,
+				a.SizeBytes, !priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, reportedAtMs); err != nil {
+				return err
+			}
+		}
 
-	return tx.Commit()
+		// A report asserts PRESENCE only: it never negatively diffs a present row that is absent from the
+		// report. Absence converges through the routing cordon (ArtifactInventoryReady), fenced takeover on
+		// reconnect/disconnect, and the stale sweep below — so a copy the node dropped is orphaned within the
+		// stale window rather than immediately.
+		//
+		// Orphan rows unseen for >10 min, emitting a durable LOST for each in this transaction. Also covers
+		// disconnects and any unversioned/eviction path.
+		swept, sweepErr := qtx.OrphanStaleReportedArtifactNodes(ctx, nodeID)
+		if sweepErr != nil {
+			return sweepErr
+		}
+		orphaned := make([]lostRow, 0, len(swept))
+		for _, row := range swept {
+			orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
+		}
+		return emitLost(ctx, tx, nodeID, orphaned, reportedAtMs)
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return nil
+	}
+	return err
 }
 
 // Invariant: the lifecycle writers below (origin register, cache-fill, orphan, delete) enqueue
@@ -746,14 +737,6 @@ func emitLost(ctx context.Context, tx *sql.Tx, nodeID string, rows []lostRow, at
 	return nil
 }
 
-func isRetryableArtifactUpsertError(err error) bool {
-	switch database.SQLState(err) {
-	case "40P01", "40001":
-		return true
-	}
-	return false
-}
-
 // GetArtifactSyncInfo retrieves sync tracking info for an artifact
 func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifactHash string) (*state.ArtifactSyncInfo, error) {
 	if db == nil {
@@ -834,16 +817,10 @@ func (r *artifactRepositoryDB) addCached(ctx context.Context, artifactHash, node
 		return sql.ErrConnDone
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		_, err := AddCachedNodeCopyTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes, 0)
 		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	if _, err := AddCachedNodeCopyTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes, 0); err != nil {
-		return err
-	}
-	return tx.Commit()
+	})
 }
 
 // AddCachedNodeCopyTx upserts a cache placement and emits GAINED (cache) on a genuine transition,
@@ -923,40 +900,34 @@ func (r *artifactRepositoryDB) RegisterDVRRecordingOrigin(ctx context.Context, a
 		return sql.ErrConnDone
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	qtx := foghorndb.New(tx)
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		qtx := foghorndb.New(tx)
 
-	var priorRole string
-	var priorComplete, priorOrphaned bool
-	priorExisted := true
-	if _, lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
-		return lockErr
-	}
-	prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
-	if priorErr != nil {
-		if errors.Is(priorErr, sql.ErrNoRows) {
-			priorExisted = false
-		} else {
-			return priorErr
+		var priorRole string
+		var priorComplete, priorOrphaned bool
+		priorExisted := true
+		if _, lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
+			return lockErr
 		}
-	} else {
-		priorRole, priorComplete, priorOrphaned = prior.Role, prior.IsComplete, prior.IsOrphaned.Bool
-	}
-	upserted, uerr := qtx.UpsertDVRRecordingOrigin(ctx, foghorndb.UpsertDVRRecordingOriginParams{
-		ArtifactHash: artifactHash, NodeID: nodeID, BaseUrl: baseURL,
+		prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
+		if priorErr != nil {
+			if errors.Is(priorErr, sql.ErrNoRows) {
+				priorExisted = false
+			} else {
+				return priorErr
+			}
+		} else {
+			priorRole, priorComplete, priorOrphaned = prior.Role, prior.IsComplete, prior.IsOrphaned.Bool
+		}
+		upserted, uerr := qtx.UpsertDVRRecordingOrigin(ctx, foghorndb.UpsertDVRRecordingOriginParams{
+			ArtifactHash: artifactHash, NodeID: nodeID, BaseUrl: baseURL,
+		})
+		if uerr != nil {
+			return uerr
+		}
+		return emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", upserted, 0,
+			!priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, 0)
 	})
-	if uerr != nil {
-		return uerr
-	}
-	if err = emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", upserted, 0,
-		!priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, 0); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // RegisterOriginArtifact marks a node as the origin — the producer that finalized
@@ -1012,16 +983,9 @@ func (r *artifactRepositoryDB) RegisterOriginArtifact(ctx context.Context, artif
 		return sql.ErrConnDone
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	if err = RegisterOriginArtifactTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes, complete); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		return RegisterOriginArtifactTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes, complete)
+	})
 }
 
 // ListOriginNodes returns node IDs that hold the canonical full file
@@ -1128,39 +1092,40 @@ func (r *artifactRepositoryDB) ReconcileNodeCopies(ctx context.Context) (int, er
 // (fresh monotonic version), so a node that legitimately returns is re-GAINED with an
 // even newer version — no lost update.
 func (r *artifactRepositoryDB) sweepStalePresent(ctx context.Context) (int, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	qtx := foghorndb.New(tx)
+	var orphanedCount int
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		orphanedCount = 0
+		qtx := foghorndb.New(tx)
 
-	// FOR UPDATE SKIP LOCKED locks each candidate so two replicas can't both orphan it;
-	// the final UPDATE re-checks is_orphaned + last_seen_at so a heartbeat landing between
-	// selection and update (refreshing last_seen_at, or a concurrent restore) is not
-	// clobbered — that row simply isn't updated and emits no LOST.
-	rows, err := qtx.OrphanGloballyStaleArtifactNodes(ctx)
+		// FOR UPDATE SKIP LOCKED locks each candidate so two replicas can't both orphan it;
+		// the final UPDATE re-checks is_orphaned + last_seen_at so a heartbeat landing between
+		// selection and update (refreshing last_seen_at, or a concurrent restore) is not
+		// clobbered — that row simply isn't updated and emits no LOST.
+		rows, err := qtx.OrphanGloballyStaleArtifactNodes(ctx)
+		if err != nil {
+			return err
+		}
+		orphaned := make([]lostNodeRow, 0, len(rows))
+		for _, row := range rows {
+			orphaned = append(orphaned, lostNodeRow{hash: row.ArtifactHash, nodeID: row.NodeID, role: row.Role})
+		}
+		for _, lr := range orphaned {
+			tenant, terr := placementTenant(ctx, tx, lr.hash)
+			if terr != nil {
+				return terr
+			}
+			if eerr := enqueueNodeCopy(ctx, tx, tenant, lr.hash, lr.nodeID, lr.role,
+				ipcpb.ArtifactNodeCopyEvent_LOST, false, 0, 0); eerr != nil {
+				return eerr
+			}
+		}
+		orphanedCount = len(orphaned)
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
-	orphaned := make([]lostNodeRow, 0, len(rows))
-	for _, row := range rows {
-		orphaned = append(orphaned, lostNodeRow{hash: row.ArtifactHash, nodeID: row.NodeID, role: row.Role})
-	}
-	for _, lr := range orphaned {
-		tenant, terr := placementTenant(ctx, tx, lr.hash)
-		if terr != nil {
-			return 0, terr
-		}
-		if eerr := enqueueNodeCopy(ctx, tx, tenant, lr.hash, lr.nodeID, lr.role,
-			ipcpb.ArtifactNodeCopyEvent_LOST, false, 0, 0); eerr != nil {
-			return 0, eerr
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return len(orphaned), nil
+	return orphanedCount, nil
 }
 
 // lostNodeRow is a stale (artifact, node) row being orphaned by the global sweep.
@@ -1185,38 +1150,41 @@ func (r *artifactRepositoryDB) RefreshNodeCopy(ctx context.Context, artifactHash
 // SKIP LOCKED (so a concurrent replica's lock doesn't block or double-emit). Returns
 // whether it actually emitted (false when the row raced away or was already emitted).
 func (r *artifactRepositoryDB) reconcileOne(ctx context.Context, artifactHash, nodeID string) (bool, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	row, err := foghorndb.New(tx).LockUnemittedArtifactNode(ctx, foghorndb.LockUnemittedArtifactNodeParams{
-		ArtifactHash: artifactHash, NodeID: nodeID,
+	var emitted bool
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		emitted = false
+		row, err := foghorndb.New(tx).LockUnemittedArtifactNode(ctx, foghorndb.LockUnemittedArtifactNodeParams{
+			ArtifactHash: artifactHash, NodeID: nodeID,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return errTxRollbackNoop // orphaned/deleted/gone, or locked by another replica
+		}
+		if err != nil {
+			return err
+		}
+		if row.LastEmittedVersion != 0 {
+			return errTxRollbackNoop // already emitted by a concurrent path
+		}
+		role := row.Role
+		if role == "" {
+			role = "cache"
+		}
+		// enqueueNodeCopy mints a fresh version and records it on the row, so subsequent
+		// reconciles skip it and any later LOST supersedes it.
+		if err := enqueueNodeCopy(ctx, tx, row.TenantID, artifactHash, nodeID, role,
+			ipcpb.ArtifactNodeCopyEvent_GAINED, row.IsComplete, row.SizeBytes, 0); err != nil {
+			return err
+		}
+		emitted = true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil // orphaned/deleted/gone, or locked by another replica
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if row.LastEmittedVersion != 0 {
-		return false, nil // already emitted by a concurrent path
-	}
-	role := row.Role
-	if role == "" {
-		role = "cache"
-	}
-	// enqueueNodeCopy mints a fresh version and records it on the row, so subsequent
-	// reconciles skip it and any later LOST supersedes it.
-	if err := enqueueNodeCopy(ctx, tx, row.TenantID, artifactHash, nodeID, role,
-		ipcpb.ArtifactNodeCopyEvent_GAINED, row.IsComplete, row.SizeBytes, 0); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return emitted, nil
 }
 
 // DeleteNodeArtifact removes one node's local-copy row (explicit deletion/eviction)
@@ -1228,17 +1196,13 @@ func (r *artifactRepositoryDB) DeleteNodeArtifact(ctx context.Context, artifactH
 		return "", sql.ErrConnDone
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	var outcome state.NodeArtifactDeletionOutcome
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		var txErr error
+		outcome, txErr = DeleteNodeArtifactTx(ctx, tx, artifactHash, nodeID, nodeClockDeletedAtMs)
+		return txErr
+	})
 	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	outcome, err := DeleteNodeArtifactTx(ctx, tx, artifactHash, nodeID, nodeClockDeletedAtMs)
-	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return outcome, nil
@@ -1287,34 +1251,31 @@ func (r *artifactRepositoryDB) MarkNodeArtifactsOrphaned(ctx context.Context, no
 		return sql.ErrConnDone
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		// Reject a stale empty report: without this, a delayed older "node holds nothing" report could
+		// orphan copies a newer report already restored (the described corruption).
+		if stale, gerr := applyReportRevisionGuard(ctx, tx, nodeID, reportFence, reportSeq); gerr != nil {
+			return gerr
+		} else if stale {
+			return errTxRollbackNoop
+		}
 
-	// Reject a stale empty report: without this, a delayed older "node holds nothing" report could
-	// orphan copies a newer report already restored (the described corruption).
-	if stale, gerr := applyReportRevisionGuard(ctx, tx, nodeID, reportFence, reportSeq); gerr != nil {
-		return gerr
-	} else if stale {
+		// Orphan every present copy on the node except an incomplete origin row (an active DVR still being
+		// written). Runs only on the eviction/disconnect path; reports never drive a negative diff here.
+		rows, err := foghorndb.New(tx).OrphanNodeArtifacts(ctx, nodeID)
+		if err != nil {
+			return err
+		}
+		orphaned := make([]lostRow, 0, len(rows))
+		for _, row := range rows {
+			orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
+		}
+		return emitLost(ctx, tx, nodeID, orphaned, reportedAtMs)
+	})
+	if errors.Is(err, errTxRollbackNoop) {
 		return nil
 	}
-
-	// Orphan every present copy on the node except an incomplete origin row (an active DVR still being
-	// written). Runs only on the eviction/disconnect path; reports never drive a negative diff here.
-	rows, err := foghorndb.New(tx).OrphanNodeArtifacts(ctx, nodeID)
-	if err != nil {
-		return err
-	}
-	orphaned := make([]lostRow, 0, len(rows))
-	for _, row := range rows {
-		orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
-	}
-	if err = emitLost(ctx, tx, nodeID, orphaned, reportedAtMs); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 func (r *artifactRepositoryDB) NeedsVODDtshSync(ctx context.Context, artifactHash string) bool {

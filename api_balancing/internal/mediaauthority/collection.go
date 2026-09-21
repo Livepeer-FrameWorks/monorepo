@@ -2,11 +2,13 @@ package mediaauthority
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 )
@@ -118,51 +120,52 @@ func (s *Store) collectExpired(ctx context.Context) (int, error) {
 // Apply takes them, fenced on the version that was found collectable. An apply
 // that advanced the authority in between wins, and the row stays.
 func (s *Store) collectOne(ctx context.Context, row foghorndb.ListCollectableMediaAuthoritiesRow) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin media authority collection: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	if err = queries.SetLocalMediaAuthorityLockTimeout(ctx, mediaAuthorityLockTimeout.String()); err != nil {
-		return false, fmt.Errorf("bound media authority lock wait: %w", err)
-	}
-	if row.ArtifactHash != "" {
-		if err = queries.LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
-			LockNamespace: artifacts.ThumbnailAssetLockNamespace, AssetKey: row.ArtifactHash,
-		}); err != nil {
-			// Held by an apply or a purge; this authority is taken on a later run.
-			return false, nil //nolint:nilerr // contention is not a failure of the collection
+	collected := false
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		collected = false
+		queries := foghorndb.New(tx)
+		if err := queries.SetLocalMediaAuthorityLockTimeout(ctx, mediaAuthorityLockTimeout.String()); err != nil {
+			return fmt.Errorf("bound media authority lock wait: %w", err)
 		}
-	}
-	if err = queries.LockMediaAuthority(ctx, foghorndb.LockMediaAuthorityParams{
-		LockNamespace: mediaAuthorityLockNamespace, AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID,
-	}); err != nil {
-		return false, nil //nolint:nilerr // contention is not a failure of the collection
-	}
-	deleted, err := queries.DeleteCollectedMediaAuthority(ctx, foghorndb.DeleteCollectedMediaAuthorityParams{
-		AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
+		if row.ArtifactHash != "" {
+			if err := queries.LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
+				LockNamespace: artifacts.ThumbnailAssetLockNamespace, AssetKey: row.ArtifactHash,
+			}); err != nil {
+				return fmt.Errorf("lock collected artifact: %w", err)
+			}
+		}
+		if err := queries.LockMediaAuthority(ctx, foghorndb.LockMediaAuthorityParams{
+			LockNamespace: mediaAuthorityLockNamespace, AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID,
+		}); err != nil {
+			return fmt.Errorf("lock collected authority: %w", err)
+		}
+		deleted, err := queries.DeleteCollectedMediaAuthority(ctx, foghorndb.DeleteCollectedMediaAuthorityParams{
+			AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
+		})
+		if err != nil {
+			return fmt.Errorf("forget media authority %s: %w", row.AuthorityID, err)
+		}
+		if deleted == 0 {
+			return nil
+		}
+		if row.AuthorityKind == "tenant" {
+			err = queries.DeleteCollectedTenantAuthorityProjection(ctx, foghorndb.DeleteCollectedTenantAuthorityProjectionParams{
+				TenantID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
+			})
+		} else {
+			err = queries.DeleteCollectedMediaObjectAuthorityProjection(ctx, foghorndb.DeleteCollectedMediaObjectAuthorityProjectionParams{
+				AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("forget media authority projection %s: %w", row.AuthorityID, err)
+		}
+		collected = true
+		return nil
 	})
-	if err != nil {
-		return false, fmt.Errorf("forget media authority %s: %w", row.AuthorityID, err)
-	}
-	if deleted == 0 {
+	if database.SQLState(err) == "55P03" {
+		// A concurrent apply or purge holds the row; collection can try it next pass.
 		return false, nil
 	}
-	if row.AuthorityKind == "tenant" {
-		err = queries.DeleteCollectedTenantAuthorityProjection(ctx, foghorndb.DeleteCollectedTenantAuthorityProjectionParams{
-			TenantID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
-		})
-	} else {
-		err = queries.DeleteCollectedMediaObjectAuthorityProjection(ctx, foghorndb.DeleteCollectedMediaObjectAuthorityProjectionParams{
-			AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion,
-		})
-	}
-	if err != nil {
-		return false, fmt.Errorf("forget media authority projection %s: %w", row.AuthorityID, err)
-	}
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit media authority collection: %w", err)
-	}
-	return true, nil
+	return collected && err == nil, err
 }

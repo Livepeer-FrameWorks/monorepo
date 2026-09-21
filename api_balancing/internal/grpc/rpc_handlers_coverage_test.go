@@ -13,6 +13,7 @@ import (
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	grpclib "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -329,4 +330,46 @@ func keysOf(m map[string]grpclib.ServiceInfo) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// Invariant: a delete whose first attempt aborts after its soft-delete matched reports only what the committed attempt
+// did. When a concurrent delete wins before the replay, the replay matches no row, so this call must report
+// already-deleted and run no physical cleanup.
+func TestDeleteVodAsset_ReplayAfterLostRaceDoesNotClaimDelete_RpcHandlers(t *testing.T) {
+	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
+
+	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
+		WithArgs("hash-1", "t1").
+		WillReturnRows(sqlmock.NewRows(deleteLookupCols()).AddRow(
+			"synced", "vod/t1/hash/video.mp4", sql.NullString{}, sql.NullString{},
+			sql.NullInt64{Int64: 2048, Valid: true}, sql.NullTime{}, sql.NullString{},
+			sql.NullString{}, sql.NullString{}, "",
+			sql.NullString{}, sql.NullString{}, sql.NullString{}, false, sql.NullString{},
+		))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts SET status = 'deleted'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access due to concurrent update"})
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts SET status = 'deleted'`).
+		WithArgs("hash-1", "t1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
+		ArtifactHash: "hash-1",
+		TenantId:     "t1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Success {
+		t.Fatalf("expected Success=false after losing the delete race on replay, got %+v", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
 }

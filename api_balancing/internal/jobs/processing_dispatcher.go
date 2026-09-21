@@ -506,55 +506,59 @@ func (d *ProcessingDispatcher) markArtifactStatus(ctx context.Context, job *proc
 // so a concurrently-terminal artifact never produces a false processing-started event
 // and exactly one event is published per successful dispatch.
 func (d *ProcessingDispatcher) commitDispatched(ctx context.Context, job *processingJob, nodeID, reason string) error {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin dispatched tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	stage := "begin"
+	raced := false
+	err := database.WithRetryablePostgresTxWithHook(ctx, d.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		raced = false
+		// The job was claimed as 'dispatched' by the CTE, but the node is already running and can report
+		// completion before this commit. Guard on status='dispatched' so a fast 'completed'/'failed' is NOT
+		// rewritten back to 'processing'. RowsAffected==0 => the terminal report won the race: treat it as an
+		// idempotent no-op (skip the artifact transition and the STARTED event); the transaction wrote nothing.
+		queries := foghorndb.New(tx)
+		n, execErr := queries.CommitDispatchedProcessingJob(ctx, foghorndb.CommitDispatchedProcessingJobParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}, RoutingReason: sql.NullString{String: reason, Valid: reason != ""}})
+		if execErr != nil {
+			return fmt.Errorf("update job routing metadata: %w", execErr)
 		}
-	}()
+		if n == 0 {
+			raced = true
+			return nil
+		}
 
-	// The job was claimed as 'dispatched' by the CTE, but the node is already running and can report
-	// completion before this commit. Guard on status='dispatched' so a fast 'completed'/'failed' is NOT
-	// rewritten back to 'processing'. RowsAffected==0 => the terminal report won the race: treat it as an
-	// idempotent no-op (skip the artifact transition and the STARTED event) and roll back.
-	queries := foghorndb.New(tx)
-	n, execErr := queries.CommitDispatchedProcessingJob(ctx, foghorndb.CommitDispatchedProcessingJobParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}, RoutingReason: sql.NullString{String: reason, Valid: reason != ""}})
-	if execErr != nil {
-		return fmt.Errorf("update job routing metadata: %w", execErr)
-	}
-	if n == 0 {
-		d.logger.WithField("job_id", job.JobID).Info("commitDispatched: job already left 'dispatched' (fast completion won); no-op")
+		// Project the job state onto the clip/vod artifact. Guarded + tenant-scoped so a
+		// concurrently deleted/expired/aborted/ready artifact is never resurrected, and a
+		// hash collision never crosses tenants. Only a real transition emits the event.
+		transitioned := false
+		if job != nil && job.ArtifactHash.Valid && job.ArtifactHash.String != "" && job.TenantID != "" &&
+			(job.ArtifactType.String == "clip" || job.ArtifactType.String == "vod") {
+			n, artErr := queries.MarkProcessingArtifactStarted(ctx, foghorndb.MarkProcessingArtifactStartedParams{ArtifactHash: job.ArtifactHash.String, TenantID: job.TenantID})
+			if artErr != nil {
+				return fmt.Errorf("project processing status onto artifact: %w", artErr)
+			}
+			transitioned = n > 0
+		}
+
+		if transitioned {
+			if enqErr := d.enqueueProcessingStartedTx(ctx, tx, job, nodeID); enqErr != nil {
+				return fmt.Errorf("enqueue processing-started lifecycle: %w", enqErr)
+			}
+		}
+		stage = "commit"
 		return nil
-	}
-
-	// Project the job state onto the clip/vod artifact. Guarded + tenant-scoped so a
-	// concurrently deleted/expired/aborted/ready artifact is never resurrected, and a
-	// hash collision never crosses tenants. Only a real transition emits the event.
-	transitioned := false
-	if job != nil && job.ArtifactHash.Valid && job.ArtifactHash.String != "" && job.TenantID != "" &&
-		(job.ArtifactType.String == "clip" || job.ArtifactType.String == "vod") {
-		n, artErr := queries.MarkProcessingArtifactStarted(ctx, foghorndb.MarkProcessingArtifactStartedParams{ArtifactHash: job.ArtifactHash.String, TenantID: job.TenantID})
-		if artErr != nil {
-			return fmt.Errorf("project processing status onto artifact: %w", artErr)
+	})
+	switch {
+	case err == nil:
+		if raced {
+			d.logger.WithField("job_id", job.JobID).Info("commitDispatched: job already left 'dispatched' (fast completion won); no-op")
 		}
-		transitioned = n > 0
+		return nil
+	case stage == "begin":
+		return fmt.Errorf("begin dispatched tx: %w", err)
+	case stage == "commit":
+		return fmt.Errorf("commit dispatched: %w", err)
+	default:
+		return err
 	}
-
-	if transitioned {
-		if enqErr := d.enqueueProcessingStartedTx(ctx, tx, job, nodeID); enqErr != nil {
-			return fmt.Errorf("enqueue processing-started lifecycle: %w", enqErr)
-		}
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return fmt.Errorf("commit dispatched: %w", commitErr)
-	}
-	committed = true
-	return nil
 }
 
 // enqueueProcessingStartedTx writes the ONE processing-started lifecycle event
@@ -735,78 +739,94 @@ func (d *ProcessingDispatcher) recoverStale() {
 // artifacts — flips the artifact to failed and enqueues the failure lifecycle on the SAME tx. A
 // failed job is never left with a live artifact or a lost telemetry event.
 func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID string, ttlCutoff, queuedCutoff time.Time) {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
+	// Each rejection path logs its own reason after the rollback; errExhaustionAborted carries
+	// that already-logged outcome out of the replayable callback.
+	errExhaustionAborted := errors.New("exhaustion transaction aborted")
+	stage := "begin"
+	var abortLog func()
+	exhausted := false
+	var exhaustedHash sql.NullString
+	err := database.WithRetryablePostgresTxWithHook(ctx, d.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		abortLog = nil
+		exhausted = false
+		// Terminalize the job ONLY if it still matches the exhausted/stuck predicate, and resolve its
+		// artifact in the same tx. ErrNoRows ⇒ the job recovered/completed since enumeration ⇒ no-op.
+		queries := foghorndb.New(tx)
+		failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			abortLog = func() {} // recovered/completed since enumeration
+			return errExhaustionAborted
+		}
+		if scanErr != nil {
+			return scanErr
+		}
+		artifactHash, artifactType, tenantID := failed.ArtifactHash, failed.ArtifactType, failed.TenantID
+		streamID, streamInternalName, errorMsg := failed.StreamID, failed.StreamInternalName, failed.ErrorMessage.String
+		exhausted, exhaustedHash = true, artifactHash
+
+		if artifactHash.Valid && (artifactType == "clip" || artifactType == "vod") {
+			// Only fail a PRE-TERMINAL, tenant-matching artifact — never resurrect one that was
+			// concurrently deleted/expired/aborted/completed, and never cross tenants on a hash collision.
+			artFailed, artErr := queries.MarkExhaustedArtifactFailed(ctx, foghorndb.MarkExhaustedArtifactFailedParams{ArtifactHash: artifactHash.String, ErrorMessage: sql.NullString{String: errorMsg, Valid: errorMsg != ""}, TenantID: tenantID})
+			if artErr != nil {
+				abortLog = func() {
+					d.logger.WithError(artErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to mark exhausted artifact failed; rolling back")
+				}
+				return fmt.Errorf("%w: %w", errExhaustionAborted, artErr)
+			}
+			// Only emit the FAILED lifecycle if THIS tx actually transitioned the artifact. A 0-row
+			// result means it was already terminal (concurrently ready/deleted/expired/aborted) — the
+			// job still fails, but a false FAILED analytics event must not be emitted.
+			if artFailed == 0 {
+				// nothing to publish; commit the job-failed transition only
+			} else if artifactType == "clip" {
+				clipData := &ipcpb.ClipLifecycleData{Stage: ipcpb.ClipLifecycleData_STAGE_FAILED, ClipHash: artifactHash.String, Error: &errorMsg}
+				if tenantID != "" {
+					clipData.TenantId = &tenantID
+				}
+				if streamID != "" {
+					clipData.StreamId = &streamID
+				}
+				if streamInternalName != "" {
+					clipData.StreamInternalName = &streamInternalName
+				}
+				if enqErr := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); enqErr != nil {
+					abortLog = func() {
+						d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue clip failure lifecycle; rolling back")
+					}
+					return fmt.Errorf("%w: %w", errExhaustionAborted, enqErr)
+				}
+			} else {
+				vodData := &ipcpb.VodLifecycleData{Status: ipcpb.VodLifecycleData_STATUS_FAILED, VodHash: artifactHash.String, Error: &errorMsg}
+				if tenantID != "" {
+					vodData.TenantId = &tenantID
+				}
+				if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+					abortLog = func() {
+						d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue vod failure lifecycle; rolling back")
+					}
+					return fmt.Errorf("%w: %w", errExhaustionAborted, enqErr)
+				}
+			}
+		}
+		stage = "commit"
+		return nil
+	})
+	if exhausted {
+		d.logger.WithFields(logging.Fields{"job_id": jobID, "artifact_hash": exhaustedHash.String}).Warn("Processing job exhausted; failing atomically")
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, errExhaustionAborted) && abortLog != nil:
+		abortLog()
+	case stage == "begin":
 		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to begin exhaustion transaction")
-		return
+	case stage == "commit":
+		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to commit exhaustion; will retry")
+	default:
+		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to terminalize exhausted job")
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-		}
-	}()
-
-	// Terminalize the job ONLY if it still matches the exhausted/stuck predicate, and resolve its
-	// artifact in the same tx. ErrNoRows ⇒ the job recovered/completed since enumeration ⇒ no-op.
-	queries := foghorndb.New(tx)
-	failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
-	if errors.Is(scanErr, sql.ErrNoRows) {
-		return // recovered/completed since enumeration
-	}
-	if scanErr != nil {
-		d.logger.WithError(scanErr).WithField("job_id", jobID).Warn("Failed to terminalize exhausted job")
-		return
-	}
-	artifactHash, artifactType, tenantID := failed.ArtifactHash, failed.ArtifactType, failed.TenantID
-	streamID, streamInternalName, errorMsg := failed.StreamID, failed.StreamInternalName, failed.ErrorMessage.String
-	d.logger.WithFields(logging.Fields{"job_id": jobID, "artifact_hash": artifactHash.String}).Warn("Processing job exhausted; failing atomically")
-
-	if artifactHash.Valid && (artifactType == "clip" || artifactType == "vod") {
-		// Only fail a PRE-TERMINAL, tenant-matching artifact — never resurrect one that was
-		// concurrently deleted/expired/aborted/completed, and never cross tenants on a hash collision.
-		artFailed, artErr := queries.MarkExhaustedArtifactFailed(ctx, foghorndb.MarkExhaustedArtifactFailedParams{ArtifactHash: artifactHash.String, ErrorMessage: sql.NullString{String: errorMsg, Valid: errorMsg != ""}, TenantID: tenantID})
-		if artErr != nil {
-			d.logger.WithError(artErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to mark exhausted artifact failed; rolling back")
-			return
-		}
-		// Only emit the FAILED lifecycle if THIS tx actually transitioned the artifact. A 0-row
-		// result means it was already terminal (concurrently ready/deleted/expired/aborted) — the
-		// job still fails, but a false FAILED analytics event must not be emitted.
-		if artFailed == 0 {
-			// nothing to publish; commit the job-failed transition only
-		} else if artifactType == "clip" {
-			clipData := &ipcpb.ClipLifecycleData{Stage: ipcpb.ClipLifecycleData_STAGE_FAILED, ClipHash: artifactHash.String, Error: &errorMsg}
-			if tenantID != "" {
-				clipData.TenantId = &tenantID
-			}
-			if streamID != "" {
-				clipData.StreamId = &streamID
-			}
-			if streamInternalName != "" {
-				clipData.StreamInternalName = &streamInternalName
-			}
-			if enqErr := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); enqErr != nil {
-				d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue clip failure lifecycle; rolling back")
-				return
-			}
-		} else {
-			vodData := &ipcpb.VodLifecycleData{Status: ipcpb.VodLifecycleData_STATUS_FAILED, VodHash: artifactHash.String, Error: &errorMsg}
-			if tenantID != "" {
-				vodData.TenantId = &tenantID
-			}
-			if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-				d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue vod failure lifecycle; rolling back")
-				return
-			}
-		}
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		d.logger.WithError(commitErr).WithField("job_id", jobID).Warn("Failed to commit exhaustion; will retry")
-		return
-	}
-	committed = true
 }
 
 // InsertProcessingJob creates a new processing job. Exported for use by vod_pipeline.

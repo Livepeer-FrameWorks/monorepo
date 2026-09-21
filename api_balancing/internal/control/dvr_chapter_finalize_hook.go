@@ -12,6 +12,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -258,123 +259,116 @@ func finalizeChapterArtifactTx(
 	logger logging.Logger,
 	fields logging.Fields,
 ) (string, error) {
-	tx, err := db.BeginTx(ctx, nil)
+	var resolvedHash string
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		resolvedHash = ""
+
+		// Lock the chapter row and its allocated playback artifact together, and confirm BOTH the
+		// chapter is still 'finalizing' AND the artifact is still 'finalizing' (its allocated state)
+		// AND the parent DVR isn't deleted. A late completion arriving after a parent-DVR delete
+		// cascade (which soft-deletes the child artifact) must NOT resurrect it to 'ready' — those
+		// guards make it an ignored no-op instead. A missing row (chapter/artifact gone) is transient.
+		qtx := foghorndb.New(tx)
+		locked, lockErr := qtx.LockChapterFinalizeArtifact(ctx, chapterID)
+		if lockErr != nil {
+			return lockErr
+		}
+		chapterState, storedHash, tenantID := locked.State, locked.PlaybackArtifactHash, locked.TenantID
+		artifactStatus, parentStatus, assignedNode := locked.ArtifactStatus.String, locked.ParentStatus, locked.FinalizeNodeID
+		if chapterState != ChapterStateFinalizing {
+			return errChapterNotInFinalizing
+		}
+		// Reporting-node authorization, read UNDER the FOR UPDATE lock so a concurrent stale-finalize reclaim
+		// cannot reassign finalize_node_id between the check and the finalize. Only the node this attempt is
+		// currently dispatched to may finalize it (and become its recorded origin). A mismatch/unset assignment is
+		// an ignored no-op — not a retry — so it does not bounce a legitimately-reassigned attempt.
+		if assignedNode == "" || assignedNode != nodeID {
+			return errChapterFinalizeNodeMismatch
+		}
+		if expectedAttempt <= 0 || locked.FinalizeAttempts != expectedAttempt {
+			return errChapterNotInFinalizing
+		}
+		if artifactStatus != "finalizing" {
+			// The allocated artifact is no longer awaiting finalization (deleted by a parent cascade,
+			// or already finalized/failed). Do NOT resurrect it — ignored no-op.
+			return errChapterNotInFinalizing
+		}
+		if parentStatus == "deleted" {
+			// Parent DVR was deleted; the chapter must not finalize into a live artifact.
+			return errChapterNotInFinalizing
+		}
+		resolvedHash = storedHash
+		if resolvedHash == "" {
+			resolvedHash = playbackHash
+		}
+		if resolvedHash != playbackHash {
+			logger.WithFields(fields).WithFields(logging.Fields{
+				"allocated_hash": resolvedHash,
+				"result_hash":    playbackHash,
+			}).Warn("Chapter finalize: result artifact hash differs from allocated; using allocated")
+		}
+
+		// Artifact row → reflect the produced MKV (size, format, duration, tracks) and move to
+		// local/pending. Guard on status='finalizing' + require exactly one row so a concurrent
+		// delete that slipped between the lock read and this write cannot be clobbered.
+		affected, dbErr := qtx.FinalizeChapterPlaybackArtifact(ctx, foghorndb.FinalizeChapterPlaybackArtifactParams{
+			ArtifactHash: resolvedHash, SizeBytes: sizeBytes, TracksJson: tracksJSON,
+			DurationMs: chapterDurationMs, TracksPresent: tracksPresent,
+		})
+		if dbErr != nil {
+			return dbErr
+		}
+		if affected != 1 {
+			return errChapterNotInFinalizing
+		}
+
+		// vod_metadata (codecs/resolution/fps) from Helmsman stream info — same tx.
+		if metaErr := updateChapterVodMetadataTx(ctx, tx, resolvedHash, outputs); metaErr != nil {
+			return metaErr
+		}
+
+		// Origin placement + node-copy event — same tx. This node wrote the canonical MKV.
+		if outputPath != "" {
+			if regErr := RegisterOriginArtifactTx(ctx, tx, resolvedHash, nodeID, outputPath, sizeBytes, true); regErr != nil {
+				return regErr
+			}
+		}
+
+		// Chapter transition. We hold the chapter lock and confirmed 'finalizing', so exactly one
+		// row must transition; anything else is an anomaly that must not commit.
+		rows, finErr := MarkChapterFinalizedTx(ctx, tx, chapterID, expectedAttempt, segCount, hasGaps, mediaStartMs, mediaEndMs)
+		if finErr != nil {
+			return finErr
+		}
+		if rows != 1 {
+			return fmt.Errorf("chapter finalize transitioned %d rows, want exactly 1", rows)
+		}
+
+		// Completion lifecycle in the same tx (durable outbox).
+		vodData := &ipcpb.VodLifecycleData{
+			Status:  ipcpb.VodLifecycleData_STATUS_COMPLETED,
+			VodHash: resolvedHash,
+		}
+		if tenantID != "" {
+			vodData.TenantId = &tenantID
+		}
+		now := time.Now().Unix()
+		vodData.CompletedAt = &now
+		if sizeBytes > 0 {
+			u := uint64(sizeBytes)
+			vodData.SizeBytes = &u
+		}
+		if outputPath != "" {
+			vodData.FilePath = &outputPath
+		}
+		if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+			return enqErr
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-		}
-	}()
-
-	// Lock the chapter row and its allocated playback artifact together, and confirm BOTH the
-	// chapter is still 'finalizing' AND the artifact is still 'finalizing' (its allocated state)
-	// AND the parent DVR isn't deleted. A late completion arriving after a parent-DVR delete
-	// cascade (which soft-deletes the child artifact) must NOT resurrect it to 'ready' — those
-	// guards make it an ignored no-op instead. A missing row (chapter/artifact gone) is transient.
-	qtx := foghorndb.New(tx)
-	locked, lockErr := qtx.LockChapterFinalizeArtifact(ctx, chapterID)
-	if lockErr != nil {
-		return "", lockErr
-	}
-	chapterState, storedHash, tenantID := locked.State, locked.PlaybackArtifactHash, locked.TenantID
-	artifactStatus, parentStatus, assignedNode := locked.ArtifactStatus.String, locked.ParentStatus, locked.FinalizeNodeID
-	if chapterState != ChapterStateFinalizing {
-		return "", errChapterNotInFinalizing
-	}
-	// Reporting-node authorization, read UNDER the FOR UPDATE lock so a concurrent stale-finalize reclaim
-	// cannot reassign finalize_node_id between the check and the finalize. Only the node this attempt is
-	// currently dispatched to may finalize it (and become its recorded origin). A mismatch/unset assignment is
-	// an ignored no-op — not a retry — so it does not bounce a legitimately-reassigned attempt.
-	if assignedNode == "" || assignedNode != nodeID {
-		return "", errChapterFinalizeNodeMismatch
-	}
-	if expectedAttempt <= 0 || locked.FinalizeAttempts != expectedAttempt {
-		return "", errChapterNotInFinalizing
-	}
-	if artifactStatus != "finalizing" {
-		// The allocated artifact is no longer awaiting finalization (deleted by a parent cascade,
-		// or already finalized/failed). Do NOT resurrect it — ignored no-op.
-		return "", errChapterNotInFinalizing
-	}
-	if parentStatus == "deleted" {
-		// Parent DVR was deleted; the chapter must not finalize into a live artifact.
-		return "", errChapterNotInFinalizing
-	}
-	resolvedHash := storedHash
-	if resolvedHash == "" {
-		resolvedHash = playbackHash
-	}
-	if resolvedHash != playbackHash {
-		logger.WithFields(fields).WithFields(logging.Fields{
-			"allocated_hash": resolvedHash,
-			"result_hash":    playbackHash,
-		}).Warn("Chapter finalize: result artifact hash differs from allocated; using allocated")
-	}
-
-	// Artifact row → reflect the produced MKV (size, format, duration, tracks) and move to
-	// local/pending. Guard on status='finalizing' + require exactly one row so a concurrent
-	// delete that slipped between the lock read and this write cannot be clobbered.
-	affected, dbErr := qtx.FinalizeChapterPlaybackArtifact(ctx, foghorndb.FinalizeChapterPlaybackArtifactParams{
-		ArtifactHash: resolvedHash, SizeBytes: sizeBytes, TracksJson: tracksJSON,
-		DurationMs: chapterDurationMs, TracksPresent: tracksPresent,
-	})
-	if dbErr != nil {
-		return "", dbErr
-	}
-	if affected != 1 {
-		return "", errChapterNotInFinalizing
-	}
-
-	// vod_metadata (codecs/resolution/fps) from Helmsman stream info — same tx.
-	if metaErr := updateChapterVodMetadataTx(ctx, tx, resolvedHash, outputs); metaErr != nil {
-		return "", metaErr
-	}
-
-	// Origin placement + node-copy event — same tx. This node wrote the canonical MKV.
-	if outputPath != "" {
-		if regErr := RegisterOriginArtifactTx(ctx, tx, resolvedHash, nodeID, outputPath, sizeBytes, true); regErr != nil {
-			return "", regErr
-		}
-	}
-
-	// Chapter transition. We hold the chapter lock and confirmed 'finalizing', so exactly one
-	// row must transition; anything else is an anomaly that must not commit.
-	rows, finErr := MarkChapterFinalizedTx(ctx, tx, chapterID, expectedAttempt, segCount, hasGaps, mediaStartMs, mediaEndMs)
-	if finErr != nil {
-		return "", finErr
-	}
-	if rows != 1 {
-		return "", fmt.Errorf("chapter finalize transitioned %d rows, want exactly 1", rows)
-	}
-
-	// Completion lifecycle in the same tx (durable outbox).
-	vodData := &ipcpb.VodLifecycleData{
-		Status:  ipcpb.VodLifecycleData_STATUS_COMPLETED,
-		VodHash: resolvedHash,
-	}
-	if tenantID != "" {
-		vodData.TenantId = &tenantID
-	}
-	now := time.Now().Unix()
-	vodData.CompletedAt = &now
-	if sizeBytes > 0 {
-		u := uint64(sizeBytes)
-		vodData.SizeBytes = &u
-	}
-	if outputPath != "" {
-		vodData.FilePath = &outputPath
-	}
-	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-		return "", enqErr
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return "", commitErr
-	}
-	committed = true
 	return resolvedHash, nil
 }
 

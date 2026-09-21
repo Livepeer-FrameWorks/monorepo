@@ -238,50 +238,47 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 	if db == nil {
 		return 0, false, sql.ErrConnDone
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, false, fmt.Errorf("mark chapter finalizing: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		attempt, ok = 0, false
+		// finalize_node_id is persisted here — before the job is sent to the node — so the result/progress handlers
+		// can bind the reporting connection to the assignment (chapter-finalize jobs have no processing_jobs row).
+		claimed, claimErr := foghorndb.New(tx).ClaimDVRChapterFinalization(ctx, foghorndb.ClaimDVRChapterFinalizationParams{
+			ChapterID:            chapterID,
+			PlaybackArtifactHash: sql.NullString{String: playbackHash, Valid: playbackHash != ""},
+			StaleSeconds:         staleTimeout.Seconds(), FinalizeNodeID: finalizeNodeID,
+			FinalizeProcessesJson: processesJSON,
+		})
+		if errors.Is(claimErr, sql.ErrNoRows) {
+			return errTxRollbackNoop // not claimable (already advanced / another worker)
 		}
-	}()
-	// finalize_node_id is persisted here — before the job is sent to the node — so the result/progress handlers
-	// can bind the reporting connection to the assignment (chapter-finalize jobs have no processing_jobs row).
-	attempt, err = foghorndb.New(tx).ClaimDVRChapterFinalization(ctx, foghorndb.ClaimDVRChapterFinalizationParams{
-		ChapterID:            chapterID,
-		PlaybackArtifactHash: sql.NullString{String: playbackHash, Valid: playbackHash != ""},
-		StaleSeconds:         staleTimeout.Seconds(), FinalizeNodeID: finalizeNodeID,
-		FinalizeProcessesJson: processesJSON,
+		if claimErr != nil {
+			return fmt.Errorf("mark chapter finalizing: %w", claimErr)
+		}
+		// Enqueue the PROCESSING lifecycle in the SAME transaction so the state transition and its
+		// analytics event commit atomically (never lost between a separate commit and a fire-and-forget
+		// enqueue).
+		startedAt := time.Now().Unix()
+		vodData := &ipcpb.VodLifecycleData{
+			Status:    ipcpb.VodLifecycleData_STATUS_PROCESSING,
+			VodHash:   playbackHash,
+			StartedAt: &startedAt,
+		}
+		if tenantID != "" {
+			vodData.TenantId = &tenantID
+		}
+		if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+			return fmt.Errorf("enqueue chapter processing lifecycle: %w", enqErr)
+		}
+		attempt, ok = claimed, true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil // not claimable (already advanced / another worker)
+	if errors.Is(err, errTxRollbackNoop) {
+		return 0, false, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("mark chapter finalizing: %w", err)
+		return 0, false, err
 	}
-	// Enqueue the PROCESSING lifecycle in the SAME transaction so the state transition and its
-	// analytics event commit atomically (never lost between a separate commit and a fire-and-forget
-	// enqueue).
-	startedAt := time.Now().Unix()
-	vodData := &ipcpb.VodLifecycleData{
-		Status:    ipcpb.VodLifecycleData_STATUS_PROCESSING,
-		VodHash:   playbackHash,
-		StartedAt: &startedAt,
-	}
-	if tenantID != "" {
-		vodData.TenantId = &tenantID
-	}
-	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-		return 0, false, fmt.Errorf("enqueue chapter processing lifecycle: %w", enqErr)
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return 0, false, fmt.Errorf("mark chapter finalizing: commit: %w", commitErr)
-	}
-	committed = true
-	return attempt, true, nil
+	return attempt, ok, nil
 }
 
 // MarkChapterFinalized transitions finalizing → finalized after the
@@ -325,15 +322,9 @@ func MarkChapterFrozen(ctx context.Context, chapterID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	if err := MarkChapterFrozenTx(ctx, tx, chapterID); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		return MarkChapterFrozenTx(ctx, tx, chapterID)
+	})
 }
 
 // MarkChapterFrozenTx is the transactional form so a chapter can be frozen atomically with the
@@ -392,68 +383,66 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 	default:
 		return false, fmt.Errorf("invalid terminal state %q", terminalState)
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("mark chapter failed: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	var failed bool
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		failed = false
+		// Transition the chapter and recover its allocated playback artifact hash in one shot.
+		q := foghorndb.New(tx)
+		// A NODE-reported terminal failure (expectedNode != '') may ONLY act on the attempt currently dispatched to
+		// that node — state MUST still be 'finalizing' with a matching finalize_node_id. A retry that already
+		// bounced the chapter to 'closed' cleared finalize_node_id, so a delayed report from the retired node
+		// matches nothing. Only INTERNAL recovery (expectedNode == '') may terminalize a 'closed' row (e.g. max
+		// attempts exceeded before redispatch).
+		playbackHash, scanErr := q.FailDVRChapter(ctx, foghorndb.FailDVRChapterParams{
+			ChapterID: chapterID, State: terminalState,
+			LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
+			ExpectedAttempt: expectedAttempt,
+		})
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return errTxRollbackNoop
 		}
-	}()
-	// Transition the chapter and recover its allocated playback artifact hash in one shot.
-	q := foghorndb.New(tx)
-	// A NODE-reported terminal failure (expectedNode != '') may ONLY act on the attempt currently dispatched to
-	// that node — state MUST still be 'finalizing' with a matching finalize_node_id. A retry that already
-	// bounced the chapter to 'closed' cleared finalize_node_id, so a delayed report from the retired node
-	// matches nothing. Only INTERNAL recovery (expectedNode == '') may terminalize a 'closed' row (e.g. max
-	// attempts exceeded before redispatch).
-	playbackHash, scanErr := q.FailDVRChapter(ctx, foghorndb.FailDVRChapterParams{
-		ChapterID: chapterID, State: terminalState,
-		LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
-		ExpectedAttempt: expectedAttempt,
+		if scanErr != nil {
+			return fmt.Errorf("mark chapter failed: %w", scanErr)
+		}
+		// A terminally-failed chapter must not leave its allocated playback artifact stuck
+		// 'finalizing' (it would show "processing" forever and never be reclaimed). Fail it in the
+		// same transaction; the guard leaves an already-terminal/deleted/ready artifact untouched.
+		if playbackHash.Valid && playbackHash.String != "" {
+			artTenant, artErr := q.FailDVRChapterArtifact(ctx, foghorndb.FailDVRChapterArtifactParams{
+				ArtifactHash: playbackHash.String, ErrorMessage: sql.NullString{String: reason, Valid: true},
+			})
+			if artErr != nil && !errors.Is(artErr, sql.ErrNoRows) {
+				return fmt.Errorf("mark chapter artifact failed: %w", artErr)
+			}
+			// The artifact was newly failed → enqueue its failed lifecycle in the SAME transaction, so
+			// the state change and its analytics event commit atomically (never lost to a crash between
+			// a separate commit and a fire-and-forget enqueue).
+			if artErr == nil {
+				errMsg := reason
+				vodData := &ipcpb.VodLifecycleData{
+					Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
+					VodHash: playbackHash.String,
+					Error:   &errMsg,
+				}
+				if artTenant != "" {
+					t := artTenant
+					vodData.TenantId = &t
+				}
+				if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+					return fmt.Errorf("enqueue chapter failure lifecycle: %w", enqErr)
+				}
+			}
+		}
+		failed = true
+		return nil
 	})
-	if errors.Is(scanErr, sql.ErrNoRows) {
+	if errors.Is(err, errTxRollbackNoop) {
 		return false, nil
 	}
-	if scanErr != nil {
-		return false, fmt.Errorf("mark chapter failed: %w", scanErr)
+	if err != nil {
+		return false, err
 	}
-	// A terminally-failed chapter must not leave its allocated playback artifact stuck
-	// 'finalizing' (it would show "processing" forever and never be reclaimed). Fail it in the
-	// same transaction; the guard leaves an already-terminal/deleted/ready artifact untouched.
-	if playbackHash.Valid && playbackHash.String != "" {
-		artTenant, artErr := q.FailDVRChapterArtifact(ctx, foghorndb.FailDVRChapterArtifactParams{
-			ArtifactHash: playbackHash.String, ErrorMessage: sql.NullString{String: reason, Valid: true},
-		})
-		if artErr != nil && !errors.Is(artErr, sql.ErrNoRows) {
-			return false, fmt.Errorf("mark chapter artifact failed: %w", artErr)
-		}
-		// The artifact was newly failed → enqueue its failed lifecycle in the SAME transaction, so
-		// the state change and its analytics event commit atomically (never lost to a crash between
-		// a separate commit and a fire-and-forget enqueue).
-		if artErr == nil {
-			errMsg := reason
-			vodData := &ipcpb.VodLifecycleData{
-				Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
-				VodHash: playbackHash.String,
-				Error:   &errMsg,
-			}
-			if artTenant != "" {
-				t := artTenant
-				vodData.TenantId = &t
-			}
-			if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-				return false, fmt.Errorf("enqueue chapter failure lifecycle: %w", enqErr)
-			}
-		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, fmt.Errorf("mark chapter failed: commit: %w", commitErr)
-	}
-	committed = true
-	return true, nil
+	return failed, nil
 }
 
 // RetryChapterFinalize bounces a 'finalizing' chapter back to 'closed' so the queue re-dispatches it.
@@ -671,48 +660,44 @@ func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID string) ([]
 	if tenantID == "" {
 		return nil, false, fmt.Errorf("delete dvr: tenant_id required")
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, false, fmt.Errorf("delete dvr: begin: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	var (
+		childHashes        []string
+		parentTransitioned bool
+	)
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		childHashes, parentTransitioned = nil, false
+		// Soft-delete the parent DVR — GUARDED on status <> 'deleted' AND tenant_id so it is
+		// transition-idempotent and tenant-scoped: a concurrent/retry delete of an already-deleted DVR
+		// (or a same-hash artifact owned by another tenant) affects 0 rows and does NOT re-enqueue the
+		// DVR-deleted lifecycle event. RowsAffected confirms whether this call performed the transition.
+		q := foghorndb.New(tx)
+		affected, execErr := q.SoftDeleteDVRParent(ctx, foghorndb.SoftDeleteDVRParentParams{
+			ArtifactHash: dvrHash, TenantID: tenantID,
+		})
+		if execErr != nil {
+			return fmt.Errorf("delete dvr: soft-delete parent: %w", execErr)
 		}
-	}()
+		parentTransitioned = affected > 0
 
-	// Soft-delete the parent DVR — GUARDED on status <> 'deleted' AND tenant_id so it is
-	// transition-idempotent and tenant-scoped: a concurrent/retry delete of an already-deleted DVR
-	// (or a same-hash artifact owned by another tenant) affects 0 rows and does NOT re-enqueue the
-	// DVR-deleted lifecycle event. RowsAffected confirms whether this call performed the transition.
-	q := foghorndb.New(tx)
-	affected, execErr := q.SoftDeleteDVRParent(ctx, foghorndb.SoftDeleteDVRParentParams{
-		ArtifactHash: dvrHash, TenantID: tenantID,
+		// Cascade children + chapter rows + per-child VOD-deleted events ALWAYS (idempotent —
+		// already-deleted children match nothing), so a re-delete of an already-deleted parent whose
+		// children were never cascaded still repairs them. Emit the DVR-deleted event ONLY on a real transition.
+		cascaded, cascadeErr := CascadeDVRChildrenTx(ctx, tx, dvrHash, tenantID)
+		if cascadeErr != nil {
+			return cascadeErr
+		}
+		if parentTransitioned {
+			dvrData := &ipcpb.DVRLifecycleData{Status: ipcpb.DVRLifecycleData_STATUS_DELETED, DvrHash: dvrHash, TenantId: &tenantID}
+			if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
+				return fmt.Errorf("delete dvr: enqueue dvr lifecycle: %w", enqErr)
+			}
+		}
+		childHashes = cascaded
+		return nil
 	})
-	if execErr != nil {
-		return nil, false, fmt.Errorf("delete dvr: soft-delete parent: %w", execErr)
+	if err != nil {
+		return nil, false, err
 	}
-	parentTransitioned := affected > 0
-
-	// Cascade children + chapter rows + per-child VOD-deleted events ALWAYS (idempotent —
-	// already-deleted children match nothing), so a re-delete of an already-deleted parent whose
-	// children were never cascaded still repairs them. Emit the DVR-deleted event ONLY on a real transition.
-	childHashes, cascadeErr := CascadeDVRChildrenTx(ctx, tx, dvrHash, tenantID)
-	if cascadeErr != nil {
-		return nil, false, cascadeErr
-	}
-	if parentTransitioned {
-		dvrData := &ipcpb.DVRLifecycleData{Status: ipcpb.DVRLifecycleData_STATUS_DELETED, DvrHash: dvrHash, TenantId: &tenantID}
-		if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
-			return nil, false, fmt.Errorf("delete dvr: enqueue dvr lifecycle: %w", enqErr)
-		}
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, false, fmt.Errorf("delete dvr: commit: %w", commitErr)
-	}
-	committed = true
 	return childHashes, parentTransitioned, nil
 }
 
@@ -744,16 +729,11 @@ func RepairDeletedDVRChildrenBatch(ctx context.Context, limit int) (int, error) 
 		if cnd.tenant == "" {
 			continue // can't tenant-scope the cascade; skip rather than run an unscoped delete
 		}
-		tx, txErr := db.BeginTx(ctx, nil)
-		if txErr != nil {
-			return repaired, fmt.Errorf("repair deleted dvr children: begin: %w", txErr)
-		}
-		if _, cascadeErr := CascadeDVRChildrenTx(ctx, tx, cnd.hash, cnd.tenant); cascadeErr != nil {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-			return repaired, cascadeErr
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return repaired, fmt.Errorf("repair deleted dvr children: commit: %w", commitErr)
+		if txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+			_, cascadeErr := CascadeDVRChildrenTx(ctx, tx, cnd.hash, cnd.tenant)
+			return cascadeErr
+		}); txErr != nil {
+			return repaired, txErr
 		}
 		repaired++
 	}

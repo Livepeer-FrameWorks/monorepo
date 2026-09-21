@@ -342,31 +342,14 @@ func (dispatcher) Dispatch(ctx context.Context, row outboxRow) ([]string, error)
 
 func claimBatch(ctx context.Context) ([]outboxRow, error) {
 	var out []outboxRow
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		batch, err := claimBatchOnce(ctx)
-		if err != nil {
-			return err
-		}
-		out = batch
-		return nil
-	})
-	return out, err
-}
-
-func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]outboxRow, error) {
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		out = nil
 		rows, qerr := foghorndb.New(tx).ClaimArtifactEvents(ctx, foghorndb.ClaimArtifactEventsParams{
 			LeaseSeconds: lease.Seconds(),
 			BatchLimit:   batchSize,
 		})
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 
 		batch := make([]outboxRow, 0, len(rows))
@@ -383,16 +366,14 @@ func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 				ids = append(ids, r.id)
 			}
 			if uerr := foghorndb.New(tx).MarkArtifactEventsClaimed(ctx, ids); uerr != nil {
-				return nil, uerr
+				return uerr
 			}
 		}
-		return batch, nil
-	}()
+		out = batch
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	if cerr := tx.Commit(); cerr != nil {
-		return nil, cerr
 	}
 	return out, nil
 }

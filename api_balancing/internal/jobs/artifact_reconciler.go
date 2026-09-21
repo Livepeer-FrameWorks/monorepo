@@ -456,24 +456,31 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 		}
 		// Staging, an orphaned candidate, or an object whose artifact is gone → enqueue for cleanup and drop the
 		// ledger row atomically, so the object is durably collected exactly once.
-		tx, txErr := r.db.BeginTx(ctx, nil)
+		stage := "begin"
+		txErr := database.WithRetryablePostgresTxWithHook(ctx, r.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+			txQueries := queries.WithTx(tx)
+			stage = "enqueue"
+			if eErr := txQueries.EnqueueStagingCleanup(ctx, foghorndb.EnqueueStagingCleanupParams{ObjectKey: lr.ObjectKey, BackendID: lr.BackendID}); eErr != nil {
+				return eErr
+			}
+			stage = "delete"
+			if dErr := txQueries.DeleteFreezePublicationLedgerRow(ctx, lr.ObjectKey); dErr != nil {
+				return dErr
+			}
+			stage = "commit"
+			return nil
+		})
 		if txErr != nil {
-			r.logger.WithError(txErr).Debug("freeze publication ledger: begin tx failed")
-			continue
-		}
-		txQueries := queries.WithTx(tx)
-		if eErr := txQueries.EnqueueStagingCleanup(ctx, foghorndb.EnqueueStagingCleanupParams{ObjectKey: lr.ObjectKey, BackendID: lr.BackendID}); eErr != nil {
-			tx.Rollback() //nolint:errcheck
-			r.logger.WithError(eErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: enqueue failed")
-			continue
-		}
-		if dErr := txQueries.DeleteFreezePublicationLedgerRow(ctx, lr.ObjectKey); dErr != nil {
-			tx.Rollback() //nolint:errcheck
-			r.logger.WithError(dErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: ledger delete failed")
-			continue
-		}
-		if cErr := tx.Commit(); cErr != nil {
-			r.logger.WithError(cErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: commit failed")
+			switch stage {
+			case "begin":
+				r.logger.WithError(txErr).Debug("freeze publication ledger: begin tx failed")
+			case "enqueue":
+				r.logger.WithError(txErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: enqueue failed")
+			case "delete":
+				r.logger.WithError(txErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: ledger delete failed")
+			default:
+				r.logger.WithError(txErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: commit failed")
+			}
 			continue
 		}
 		collected++

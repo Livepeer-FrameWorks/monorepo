@@ -3,10 +3,13 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -62,43 +65,46 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 	// a DVR owns its chapters' retention, so they must move together (keep-forever ⇒ NULL for
 	// both). A propagation failure rolls the parent update back rather than returning success
 	// with diverged children.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "retention override begin: %v", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-		}
-	}()
-
+	errNotFinalized := errors.New("retention override target not finalized")
+	stage := "begin"
 	retentionUntil := sql.NullTime{}
 	if untilArg != nil {
 		retentionUntil = sql.NullTime{Time: untilTime, Valid: true}
 	}
-	affected, err := foghorndb.New(tx).OverrideFinalizedArtifactRetention(ctx, foghorndb.OverrideFinalizedArtifactRetentionParams{
-		RetentionUntil: retentionUntil, ArtifactHash: artifactHash,
-		TenantID: tenantID, ArtifactType: artifactType,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "retention override failed: %v", err)
-	}
-	if affected == 0 {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"%s artifact is active or not found; retention overrides apply only to finalized assets", artifactType)
-	}
+	txErr := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		affected, err := foghorndb.New(tx).OverrideFinalizedArtifactRetention(ctx, foghorndb.OverrideFinalizedArtifactRetentionParams{
+			RetentionUntil: retentionUntil, ArtifactHash: artifactHash,
+			TenantID: tenantID, ArtifactType: artifactType,
+		})
+		if err != nil {
+			return fmt.Errorf("retention override failed: %w", err)
+		}
+		if affected == 0 {
+			return errNotFinalized
+		}
 
-	if artifactType == "dvr" {
-		if _, propErr := control.PropagateChapterRetentionTx(ctx, tx, tenantID, artifactHash, untilArg); propErr != nil {
-			return nil, status.Errorf(codes.Internal, "retention override: propagate to child chapters failed: %v", propErr)
+		if artifactType == "dvr" {
+			if _, propErr := control.PropagateChapterRetentionTx(ctx, tx, tenantID, artifactHash, untilArg); propErr != nil {
+				return fmt.Errorf("retention override: propagate to child chapters failed: %w", propErr)
+			}
+		}
+		stage = "commit"
+		return nil
+	})
+	if txErr != nil {
+		switch {
+		case errors.Is(txErr, errNotFinalized):
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"%s artifact is active or not found; retention overrides apply only to finalized assets", artifactType)
+		case stage == "body":
+			return nil, status.Error(codes.Internal, txErr.Error())
+		case stage == "commit":
+			return nil, status.Errorf(codes.Internal, "retention override commit: %v", txErr)
+		default:
+			return nil, status.Errorf(codes.Internal, "retention override begin: %v", txErr)
 		}
 	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "retention override commit: %v", commitErr)
-	}
-	committed = true
 
 	resp := &foghornpb.OverrideArtifactRetentionResponse{Applied: true}
 	if !keepForever {

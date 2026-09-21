@@ -11,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -184,53 +185,55 @@ func (j *RetentionJob) expireArtifactTx(
 	// Build the event (enrichment RPCs) before opening the tx.
 	event := j.buildDeletionEvent(ctx, hash, artifactType, internalName, tenantID, userID, sizeBytes, retentionUntil)
 
-	tx, err := j.db.BeginTx(ctx, nil)
-	if err != nil {
-		j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: begin expire tx failed")
-		return false
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+	stage := "begin"
+	err := database.WithRetryablePostgresTxWithHook(ctx, j.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		// Guarded soft-delete that RE-EVALUATES the full expiry predicate (not just terminal status),
+		// so a concurrent retention change since candidate selection actually prevents deletion.
+		stage = "expire"
+		deletedTenantID, scanErr := foghorndb.New(tx).ExpireArtifactIfStillEligible(ctx, foghorndb.ExpireArtifactIfStillEligibleParams{
+			ArtifactHash: hash, RetentionDays: int32(j.retentionDays),
+		})
+		if scanErr != nil {
+			return scanErr
 		}
-	}()
 
-	// Guarded soft-delete that RE-EVALUATES the full expiry predicate (not just terminal status),
-	// so a concurrent retention change since candidate selection actually prevents deletion.
-	deletedTenantID, scanErr := foghorndb.New(tx).ExpireArtifactIfStillEligible(ctx, foghorndb.ExpireArtifactIfStillEligibleParams{
-		ArtifactHash: hash, RetentionDays: int32(j.retentionDays),
+		// A DVR cascades to its chapters in the SAME tx (children soft-delete + chapter rows + per-
+		// child VOD-deleted events), exactly like an explicit delete — so a 'finalizing' chapter of a
+		// now-deleted parent isn't re-dispatched forever.
+		if artifactType == "dvr" {
+			stage = "cascade"
+			tenant := ""
+			tenant = deletedTenantID
+			if _, cErr := control.CascadeDVRChildrenTx(ctx, tx, hash, tenant); cErr != nil {
+				return cErr
+			}
+		}
+
+		stage = "enqueue"
+		if err := enqueueBuiltDeletionEvent(ctx, tx, event); err != nil {
+			return err
+		}
+		stage = "commit"
+		return nil
 	})
-	if errors.Is(scanErr, sql.ErrNoRows) {
-		return false // no longer eligible (retention extended/cleared, or already deleted)
-	}
-	if scanErr != nil {
-		j.logger.WithError(scanErr).WithField("artifact_hash", hash).Warn("Retention: soft-delete failed")
-		return false
-	}
-
-	// A DVR cascades to its chapters in the SAME tx (children soft-delete + chapter rows + per-
-	// child VOD-deleted events), exactly like an explicit delete — so a 'finalizing' chapter of a
-	// now-deleted parent isn't re-dispatched forever.
-	if artifactType == "dvr" {
-		tenant := ""
-		tenant = deletedTenantID
-		if _, cErr := control.CascadeDVRChildrenTx(ctx, tx, hash, tenant); cErr != nil {
-			j.logger.WithError(cErr).WithField("dvr_hash", hash).Warn("Retention: cascade child chapters failed; rolling back")
-			return false
+	if err != nil {
+		switch stage {
+		case "begin":
+			j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: begin expire tx failed")
+		case "expire":
+			if errors.Is(err, sql.ErrNoRows) {
+				return false // no longer eligible (retention extended/cleared, or already deleted)
+			}
+			j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: soft-delete failed")
+		case "cascade":
+			j.logger.WithError(err).WithField("dvr_hash", hash).Warn("Retention: cascade child chapters failed; rolling back")
+		case "enqueue":
+			j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: enqueue deletion lifecycle failed; rolling back")
+		default:
+			j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: commit expire failed")
 		}
-	}
-
-	if err := enqueueBuiltDeletionEvent(ctx, tx, event); err != nil {
-		j.logger.WithError(err).WithField("artifact_hash", hash).Warn("Retention: enqueue deletion lifecycle failed; rolling back")
 		return false
 	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		j.logger.WithError(commitErr).WithField("artifact_hash", hash).Warn("Retention: commit expire failed")
-		return false
-	}
-	committed = true
 	return true
 }
 

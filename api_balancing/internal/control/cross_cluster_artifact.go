@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
@@ -41,35 +42,29 @@ func adoptRemoteArtifactRow(ctx context.Context, db *sql.DB, hash, contentType, 
 	if synced {
 		syncStatus = "synced"
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("adoptRemoteArtifactRow begin: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	affected, err := queries.AdoptRemoteArtifact(ctx, foghorndb.AdoptRemoteArtifactParams{
-		ArtifactHash: hash, ArtifactType: artifacts.CanonicalByteKind(contentType), TenantID: tenantID,
-		InternalName: internalName, StreamInternalName: streamInternalName,
-		Format: format, SyncStatus: syncStatus,
-		OriginClusterID:  originClusterID,
-		StorageClusterID: sql.NullString{String: storageClusterID, Valid: storageClusterID != ""},
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		queries := foghorndb.New(tx)
+		affected, err := queries.AdoptRemoteArtifact(ctx, foghorndb.AdoptRemoteArtifactParams{
+			ArtifactHash: hash, ArtifactType: artifacts.CanonicalByteKind(contentType), TenantID: tenantID,
+			InternalName: internalName, StreamInternalName: streamInternalName,
+			Format: format, SyncStatus: syncStatus,
+			OriginClusterID:  originClusterID,
+			StorageClusterID: sql.NullString{String: storageClusterID, Valid: storageClusterID != ""},
+		})
+		if err != nil {
+			controlLogger().WithError(err).WithField("artifact_hash", hash).WithField("origin_cluster_id", originClusterID).Warn("adoptRemoteArtifactRow: upsert failed; failing resolution closed (no row → byte GET would 404)")
+			return fmt.Errorf("adoptRemoteArtifactRow upsert: %w", err)
+		}
+		if affected != 1 {
+			return fmt.Errorf("adoptRemoteArtifactRow: artifact identity is owned by another tenant or local lifecycle")
+		}
+		if _, err := queries.SettleFederatedArtifactCatalogRevision(ctx, foghorndb.SettleFederatedArtifactCatalogRevisionParams{
+			ArtifactHash: hash, TenantID: tenantID,
+		}); err != nil {
+			return fmt.Errorf("adoptRemoteArtifactRow settle local catalog revision: %w", err)
+		}
+		return nil
 	})
-	if err != nil {
-		controlLogger().WithError(err).WithField("artifact_hash", hash).WithField("origin_cluster_id", originClusterID).Warn("adoptRemoteArtifactRow: upsert failed; failing resolution closed (no row → byte GET would 404)")
-		return fmt.Errorf("adoptRemoteArtifactRow upsert: %w", err)
-	}
-	if affected != 1 {
-		return fmt.Errorf("adoptRemoteArtifactRow: artifact identity is owned by another tenant or local lifecycle")
-	}
-	if _, err := queries.SettleFederatedArtifactCatalogRevision(ctx, foghorndb.SettleFederatedArtifactCatalogRevisionParams{
-		ArtifactHash: hash, TenantID: tenantID,
-	}); err != nil {
-		return fmt.Errorf("adoptRemoteArtifactRow settle local catalog revision: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("adoptRemoteArtifactRow commit: %w", err)
-	}
-	return nil
 }
 
 // ErrCrossClusterArtifactUnavailable is returned when the artifact's

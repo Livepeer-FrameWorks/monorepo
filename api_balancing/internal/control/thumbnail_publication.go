@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -82,69 +83,71 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 	if dbh == nil || attemptID == "" || tenantID == "" || assetKey == "" || nodeID == "" || destinationCluster == "" || len(files) == 0 {
 		return false, nil
 	}
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	err = database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		claimed = false
+		// Per-asset fence FIRST: serialize with a concurrent stream-deletion (RecordStreamCleanupObligation) so the
+		// tombstone check below cannot race an as-yet-uninserted tombstone row (a row lock can't fence a missing row).
+		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
+			return lErr
+		}
 
-	// Per-asset fence FIRST: serialize with a concurrent stream-deletion (RecordStreamCleanupObligation) so the
-	// tombstone check below cannot race an as-yet-uninserted tombstone row (a row lock can't fence a missing row).
-	if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
-		return false, lErr
-	}
+		// TERMINAL-PARENT FENCE at claim: never hand out upload authority for an artifact that is already terminal
+		// (deleted/failed/expired/aborted) — a later publish would be fenced anyway, but only after the node
+		// uploaded garbage to staging. The parent row is locked FOR UPDATE; the
+		// asset advisory lock above also fences deletion when no row exists yet. A
+		// live stream_id has no artifact row (not found → proceed).
+		var parentTerminal bool
+		parentTerminal, tErr := foghorndb.New(tx).LockThumbnailParentTerminal(ctx, assetKey)
+		if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
+			return tErr
+		}
+		if tErr == nil && parentTerminal {
+			return errTxRollbackNoop // fail-closed: parent is terminal, no upload authority
+		}
 
-	// TERMINAL-PARENT FENCE at claim: never hand out upload authority for an artifact that is already terminal
-	// (deleted/failed/expired/aborted) — a later publish would be fenced anyway, but only after the node
-	// uploaded garbage to staging. The parent row is locked FOR UPDATE; the
-	// asset advisory lock above also fences deletion when no row exists yet. A
-	// live stream_id has no artifact row (not found → proceed).
-	var parentTerminal bool
-	parentTerminal, tErr := foghorndb.New(tx).LockThumbnailParentTerminal(ctx, assetKey)
-	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
-		return false, tErr
-	}
-	if tErr == nil && parentTerminal {
-		return false, nil // fail-closed: parent is terminal, no upload authority
-	}
+		// TOMBSTONE FENCE at claim: a live stream (no artifacts row) that was deleted has a durable cleanup obligation
+		// instead of a terminal artifact row. Never hand out upload authority for a tombstoned asset — otherwise the
+		// node uploads staging garbage the cleanup sweep must chase. The asset lock
+		// above serializes this plain tombstone read with deletion.
+		if tombstoned, tsErr := assetTombstonedTx(ctx, tx, assetKey); tsErr != nil {
+			return tsErr
+		} else if tombstoned {
+			return errTxRollbackNoop
+		}
 
-	// TOMBSTONE FENCE at claim: a live stream (no artifacts row) that was deleted has a durable cleanup obligation
-	// instead of a terminal artifact row. Never hand out upload authority for a tombstoned asset — otherwise the
-	// node uploads staging garbage the cleanup sweep must chase. The asset lock
-	// above serializes this plain tombstone read with deletion.
-	if tombstoned, tsErr := assetTombstonedTx(ctx, tx, assetKey); tsErr != nil {
-		return false, tsErr
-	} else if tombstoned {
+		// Backend capture (RFC I2): record the fingerprint of THIS cell's local store ON the assignment. The bytes are
+		// known-local here (see the durable_backend_local note above), so cleanup later compares this recorded id against
+		// the cell's current store and fails closed on a mismatch (a forbidden repoint). FAIL CLOSED on an empty fingerprint:
+		// a cell handing out thumbnail-upload authority must have a local store to attribute, and a fresh assignment must
+		// never be written unattributed (which cleanup would later have to guess a store for).
+		backendID := localBackendFingerprint()
+		if backendID == "" {
+			return fmt.Errorf("claim thumbnail attempt %s: no local backend fingerprint to attribute the assignment (no local S3 store) — refusing to mint upload authority", attemptID)
+		}
+		q := foghorndb.New(tx)
+		if execErr := q.InsertThumbnailAssignment(ctx, foghorndb.InsertThumbnailAssignmentParams{
+			AttemptID: attemptID, TenantID: tenantID, AssetKey: assetKey, NodeID: nodeID,
+			DestinationCluster: destinationCluster, Expiry: expiry, BackendID: sql.NullString{String: backendID, Valid: true},
+		}); execErr != nil {
+			return execErr
+		}
+		for _, f := range files {
+			if execErr := q.InsertThumbnailTaskObject(ctx, foghorndb.InsertThumbnailTaskObjectParams{
+				AttemptID: attemptID, FileName: f, StagingKey: ThumbnailStagingKey(assetKey, attemptID, f),
+			}); execErr != nil {
+				return execErr
+			}
+		}
+		claimed = true
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
 		return false, nil
 	}
-
-	// Backend capture (RFC I2): record the fingerprint of THIS cell's local store ON the assignment. The bytes are
-	// known-local here (see the durable_backend_local note above), so cleanup later compares this recorded id against
-	// the cell's current store and fails closed on a mismatch (a forbidden repoint). FAIL CLOSED on an empty fingerprint:
-	// a cell handing out thumbnail-upload authority must have a local store to attribute, and a fresh assignment must
-	// never be written unattributed (which cleanup would later have to guess a store for).
-	backendID := localBackendFingerprint()
-	if backendID == "" {
-		return false, fmt.Errorf("claim thumbnail attempt %s: no local backend fingerprint to attribute the assignment (no local S3 store) — refusing to mint upload authority", attemptID)
+	if err != nil {
+		return false, err
 	}
-	q := foghorndb.New(tx)
-	if execErr := q.InsertThumbnailAssignment(ctx, foghorndb.InsertThumbnailAssignmentParams{
-		AttemptID: attemptID, TenantID: tenantID, AssetKey: assetKey, NodeID: nodeID,
-		DestinationCluster: destinationCluster, Expiry: expiry, BackendID: sql.NullString{String: backendID, Valid: true},
-	}); execErr != nil {
-		return false, execErr
-	}
-	for _, f := range files {
-		if execErr := q.InsertThumbnailTaskObject(ctx, foghorndb.InsertThumbnailTaskObjectParams{
-			AttemptID: attemptID, FileName: f, StagingKey: ThumbnailStagingKey(assetKey, attemptID, f),
-		}); execErr != nil {
-			return false, execErr
-		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, commitErr
-	}
-	return true, nil
+	return claimed, nil
 }
 
 // LoadThumbnailAttempt returns the assignment + its object rows for a completion to bind against. found=false
@@ -312,158 +315,153 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 	if dbh == nil || attemptID == "" || token == "" {
 		return false, nil
 	}
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-
-	q := foghorndb.New(tx)
-	// Take the per-asset lock before any assignment row lock. The lookup inside
-	// LockThumbnailAttemptAsset is non-locking and asset_key is immutable; the
-	// guarded row lock below then re-establishes eligibility. This common order
-	// prevents pointer finalization (asset -> assignments) from deadlocking with
-	// publication (assignments -> asset).
-	if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
-		LockNamespace: artifacts.ThumbnailAssetLockNamespace,
-		AttemptID:     attemptID,
-	}); lErr != nil {
-		return false, lErr
-	}
-
-	// Lock the attempt row for the whole transaction and re-check its guards: a
-	// concurrent expiry-recovery sweep can then neither fail+enqueue this attempt
-	// between the read and pointer flip nor be raced by it.
-	assignment, selErr := q.LockPublishableThumbnailAttempt(ctx, foghorndb.LockPublishableThumbnailAttemptParams{
-		AttemptID: attemptID, PublishLeaseToken: sql.NullString{String: token, Valid: true},
-	})
-	if errors.Is(selErr, sql.ErrNoRows) {
-		return false, nil // not eligible: not publishing, expired, or already terminal
-	}
-	if selErr != nil {
-		return false, selErr
-	}
-	assetKey, tenantID := assignment.AssetKey, assignment.TenantID
-
-	unverified, cErr := q.CountUnverifiedThumbnailObjects(ctx, attemptID)
-	if cErr != nil {
-		return false, cErr
-	}
-	if unverified > 0 {
-		return false, nil // cannot publish an attempt with an unverified object
-	}
-
-	// PARENT-TOMBSTONE FENCE: never activate a thumbnail whose parent artifact is being purged, or a completion
-	// racing a purge could flip the pointer to a version the purge is deleting. The row is locked FOR UPDATE so
-	// this serializes against the soft-delete UPDATE and the hard-delete — a publisher that observed 'ready'
-	// commits its pointer BEFORE the artifact can be marked deleted, and one that races the deletion sees
-	// 'deleted' and settles failed. Read by artifact_hash alone (globally unique + single-owner) so the fence
-	// catches the tombstone regardless of tenant; a live stream_id has no artifact row (not found → proceed).
-	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
-	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
-		return false, tErr
-	}
-	if tErr == nil && artifactTerminal {
-		if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
-			return false, sErr
+	err = database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		activated = false
+		q := foghorndb.New(tx)
+		// Take the per-asset lock before any assignment row lock. The lookup inside
+		// LockThumbnailAttemptAsset is non-locking and asset_key is immutable; the
+		// guarded row lock below then re-establishes eligibility. This common order
+		// prevents pointer finalization (asset -> assignments) from deadlocking with
+		// publication (assignments -> asset).
+		if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
+			LockNamespace: artifacts.ThumbnailAssetLockNamespace,
+			AttemptID:     attemptID,
+		}); lErr != nil {
+			return lErr
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return false, commitErr
+
+		// Lock the attempt row for the whole transaction and re-check its guards: a
+		// concurrent expiry-recovery sweep can then neither fail+enqueue this attempt
+		// between the read and pointer flip nor be raced by it.
+		assignment, selErr := q.LockPublishableThumbnailAttempt(ctx, foghorndb.LockPublishableThumbnailAttemptParams{
+			AttemptID: attemptID, PublishLeaseToken: sql.NullString{String: token, Valid: true},
+		})
+		if errors.Is(selErr, sql.ErrNoRows) {
+			return errTxRollbackNoop // not eligible: not publishing, expired, or already terminal
 		}
-		return false, nil
-	}
-
-	// TOMBSTONE FENCE (live streams): an asset with no artifacts row cannot be caught by the terminal-status fence
-	// above, so a deleted LIVE stream is fenced here by its durable cleanup obligation. The asset advisory lock
-	// serializes this plain read with RecordStreamCleanupObligation. If tombstoned, settle this attempt failed (enqueue its
-	// version objects for cleanup) rather than flip the pointer to a version the cleanup sweep is about to delete.
-	if tombstoned, tsErr := assetTombstonedTx(ctx, tx, assetKey); tsErr != nil {
-		return false, tsErr
-	} else if tombstoned {
-		if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
-			return false, sErr
+		if selErr != nil {
+			return selErr
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return false, commitErr
+		assetKey, tenantID := assignment.AssetKey, assignment.TenantID
+
+		unverified, cErr := q.CountUnverifiedThumbnailObjects(ctx, attemptID)
+		if cErr != nil {
+			return cErr
 		}
-		return false, nil
-	}
+		if unverified > 0 {
+			return errTxRollbackNoop // cannot publish an attempt with an unverified object
+		}
 
-	// Capture the currently-active version (if any) BEFORE the CAS so we can stamp its supersession time when
-	// this attempt displaces it — the reader-safety horizon the GC honors is measured from that stamp. asset_key
-	// is globally unique, so this is a single-row read.
-	prior, sErr := q.GetThumbnailActiveVersion(ctx, assetKey)
-	if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
-		return false, sErr
-	}
-	priorVersion := sql.NullString{String: prior, Valid: sErr == nil}
+		// PARENT-TOMBSTONE FENCE: never activate a thumbnail whose parent artifact is being purged, or a completion
+		// racing a purge could flip the pointer to a version the purge is deleting. The row is locked FOR UPDATE so
+		// this serializes against the soft-delete UPDATE and the hard-delete — a publisher that observed 'ready'
+		// commits its pointer BEFORE the artifact can be marked deleted, and one that races the deletion sees
+		// 'deleted' and settles failed. Read by artifact_hash alone (globally unique + single-owner) so the fence
+		// catches the tombstone regardless of tenant; a live stream_id has no artifact row (not found → proceed).
+		artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+		if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
+			return tErr
+		}
+		if tErr == nil && artifactTerminal {
+			if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
+				return sErr
+			}
+			return nil
+		}
 
-	// Monotonic pointer CAS keyed by the globally-unique asset_key: advance only when this attempt is
-	// new as the pointer's current attempt by the server-owned STRICTLY-MONOTONIC claim_seq (never created_at,
-	// which is not a total order across equal timestamps / HA clock skew). Re-publishing the same attempt remains
-	// idempotent by identity; a distinct attempt must have a strictly greater claim. The strict comparison also
-	// fences a legacy/new allocator tie during a rolling upgrade. The tenant_id guard is defence-in-depth
-	// ownership attribution: asset_key is single-owner so it
-	// always matches, but a mismatched write can never hijack another owner's pointer.
-	n, upErr := q.ActivateThumbnailPointer(ctx, foghorndb.ActivateThumbnailPointerParams{
-		ActiveVersion: attemptID, AssetKey: assetKey, TenantID: tenantID,
-		ActiveToken: sql.NullString{String: token, Valid: true},
-	})
-	if upErr != nil {
-		return false, upErr
-	}
-	activated = n == 1
+		// TOMBSTONE FENCE (live streams): an asset with no artifacts row cannot be caught by the terminal-status fence
+		// above, so a deleted LIVE stream is fenced here by its durable cleanup obligation. The asset advisory lock
+		// serializes this plain read with RecordStreamCleanupObligation. If tombstoned, settle this attempt failed (enqueue its
+		// version objects for cleanup) rather than flip the pointer to a version the cleanup sweep is about to delete.
+		if tombstoned, tsErr := assetTombstonedTx(ctx, tx, assetKey); tsErr != nil {
+			return tsErr
+		} else if tombstoned {
+			if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
+				return sErr
+			}
+			return nil
+		}
 
-	if activated {
-		// Winner: stamp the displaced version's supersession time (the GC horizon anchor) and mark published.
-		if priorVersion.Valid && priorVersion.String != "" && priorVersion.String != attemptID {
-			if sErr := q.MarkThumbnailSuperseded(ctx, priorVersion.String); sErr != nil {
-				return false, sErr
+		// Capture the currently-active version (if any) BEFORE the CAS so we can stamp its supersession time when
+		// this attempt displaces it — the reader-safety horizon the GC honors is measured from that stamp. asset_key
+		// is globally unique, so this is a single-row read.
+		prior, sErr := q.GetThumbnailActiveVersion(ctx, assetKey)
+		if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
+			return sErr
+		}
+		priorVersion := sql.NullString{String: prior, Valid: sErr == nil}
+
+		// Monotonic pointer CAS keyed by the globally-unique asset_key: advance only when this attempt is
+		// new as the pointer's current attempt by the server-owned STRICTLY-MONOTONIC claim_seq (never created_at,
+		// which is not a total order across equal timestamps / HA clock skew). Re-publishing the same attempt remains
+		// idempotent by identity; a distinct attempt must have a strictly greater claim. The strict comparison also
+		// fences a legacy/new allocator tie during a rolling upgrade. The tenant_id guard is defence-in-depth
+		// ownership attribution: asset_key is single-owner so it
+		// always matches, but a mismatched write can never hijack another owner's pointer.
+		n, upErr := q.ActivateThumbnailPointer(ctx, foghorndb.ActivateThumbnailPointerParams{
+			ActiveVersion: attemptID, AssetKey: assetKey, TenantID: tenantID,
+			ActiveToken: sql.NullString{String: token, Valid: true},
+		})
+		if upErr != nil {
+			return upErr
+		}
+		activated = n == 1
+
+		if activated {
+			// Winner: stamp the displaced version's supersession time (the GC horizon anchor) and mark published.
+			if priorVersion.Valid && priorVersion.String != "" && priorVersion.String != attemptID {
+				if sErr := q.MarkThumbnailSuperseded(ctx, priorVersion.String); sErr != nil {
+					return sErr
+				}
+			}
+			// Under the row lock this must affect exactly one row; a 0-row result means the guarded state changed
+			// despite the lock — roll back rather than commit a pointer flip whose attempt is not 'published'.
+			published, mErr := q.MarkThumbnailPublished(ctx, attemptID)
+			if mErr != nil {
+				return mErr
+			}
+			if published != 1 {
+				return fmt.Errorf("thumbnail publish: attempt %s left 'publishing' under lock; rolling back", attemptID)
+			}
+			// Enqueue the now-superseded staging objects (garbage once promoted) atomically with the pointer flip.
+			// has_thumbnails is NOT flipped here: it is deferred to projectAndMarkThumbnail, which runs only AFTER the
+			// winner's objects are projected to their deterministic served keys — so the API never advertises a thumbnail
+			// Chandler cannot yet serve. A crash after the CAS but before projection leaves the attempt 'published' +
+			// UNPROJECTED (deterministic_projected_at IS NULL); the recovery reconciler re-drives the projection and then
+			// flips has_thumbnails, so the durable side effect is never permanently skipped.
+			stagingKeys, sErr := txObjectKeys(ctx, tx, attemptID, "staging_key")
+			if sErr != nil {
+				return sErr
+			}
+			if eErr := EnqueueThumbnailCleanup(ctx, tx, stagingKeys); eErr != nil {
+				return eErr
+			}
+			// De-register THIS winner's candidate objects (the completion enqueued them BEFORE promotion). Their keys
+			// are the recorded version_key column (per-token `v/{token}/…`), now the LIVE served version — leaving them
+			// queued would let the cleanup worker delete the live object. A losing/stale completion's candidate is a
+			// DISTINCT per-token key that stays queued and is reclaimed; the prior winner's set is re-armed by the GC
+			// after the reader-safety horizon via its recorded version_key, so nothing leaks.
+			winnerKeys, wErr := txObjectKeys(ctx, tx, attemptID, "version_key")
+			if wErr != nil {
+				return wErr
+			}
+			if dErr := DequeueThumbnailCleanup(ctx, tx, winnerKeys); dErr != nil {
+				return dErr
+			}
+		} else {
+			// Non-activating attempt (a newer version owns the pointer, or the ownership guard rejected it): settle
+			// it 'failed' with its promoted version objects enqueued for cleanup, so it never leaks.
+			if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
+				return sErr
 			}
 		}
-		// Under the row lock this must affect exactly one row; a 0-row result means the guarded state changed
-		// despite the lock — roll back rather than commit a pointer flip whose attempt is not 'published'.
-		published, mErr := q.MarkThumbnailPublished(ctx, attemptID)
-		if mErr != nil {
-			return false, mErr
-		}
-		if published != 1 {
-			return false, fmt.Errorf("thumbnail publish: attempt %s left 'publishing' under lock; rolling back", attemptID)
-		}
-		// Enqueue the now-superseded staging objects (garbage once promoted) atomically with the pointer flip.
-		// has_thumbnails is NOT flipped here: it is deferred to projectAndMarkThumbnail, which runs only AFTER the
-		// winner's objects are projected to their deterministic served keys — so the API never advertises a thumbnail
-		// Chandler cannot yet serve. A crash after the CAS but before projection leaves the attempt 'published' +
-		// UNPROJECTED (deterministic_projected_at IS NULL); the recovery reconciler re-drives the projection and then
-		// flips has_thumbnails, so the durable side effect is never permanently skipped.
-		stagingKeys, sErr := txObjectKeys(ctx, tx, attemptID, "staging_key")
-		if sErr != nil {
-			return false, sErr
-		}
-		if eErr := EnqueueThumbnailCleanup(ctx, tx, stagingKeys); eErr != nil {
-			return false, eErr
-		}
-		// De-register THIS winner's candidate objects (the completion enqueued them BEFORE promotion). Their keys
-		// are the recorded version_key column (per-token `v/{token}/…`), now the LIVE served version — leaving them
-		// queued would let the cleanup worker delete the live object. A losing/stale completion's candidate is a
-		// DISTINCT per-token key that stays queued and is reclaimed; the prior winner's set is re-armed by the GC
-		// after the reader-safety horizon via its recorded version_key, so nothing leaks.
-		winnerKeys, wErr := txObjectKeys(ctx, tx, attemptID, "version_key")
-		if wErr != nil {
-			return false, wErr
-		}
-		if dErr := DequeueThumbnailCleanup(ctx, tx, winnerKeys); dErr != nil {
-			return false, dErr
-		}
-	} else {
-		// Non-activating attempt (a newer version owns the pointer, or the ownership guard rejected it): settle
-		// it 'failed' with its promoted version objects enqueued for cleanup, so it never leaks.
-		if sErr := settleFailedWithVersionCleanup(ctx, tx, attemptID); sErr != nil {
-			return false, sErr
-		}
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, commitErr
+	if err != nil {
+		return false, err
 	}
 	return activated, nil
 }
@@ -548,40 +546,47 @@ func projectAndMarkThumbnail(ctx context.Context, dbh *sql.DB, client S3ClientIn
 // reassert path, to decide whether the still-live winner should re-copy (allowProjected=true). Returns ok=false (no
 // error) when the fence rejects it.
 func gateThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetKey string, allowProjected bool) (bool, error) {
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
-		return false, lErr
-	}
-	if tombstoned, tErr := assetTombstonedTx(ctx, tx, assetKey); tErr != nil {
-		return false, tErr
-	} else if tombstoned {
+	var eligible bool
+	err := database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		eligible = false
+		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
+			return lErr
+		}
+		if tombstoned, tErr := assetTombstonedTx(ctx, tx, assetKey); tErr != nil {
+			return tErr
+		} else if tombstoned {
+			return errTxRollbackNoop
+		}
+		q := foghorndb.New(tx)
+		artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+		if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
+			return tErr
+		}
+		if tErr == nil && artifactTerminal {
+			return errTxRollbackNoop
+		}
+		// Active-pointer check: only the CURRENT winner may write the shared deterministic key. When claiming for the
+		// initial projection we additionally require it to be unprojected; the reassert re-copies an already-projected winner.
+		var ok bool
+		var aErr error
+		if allowProjected {
+			ok, aErr = q.ThumbnailProjectionEligible(ctx, attemptID)
+		} else {
+			ok, aErr = q.UnprojectedThumbnailEligible(ctx, attemptID)
+		}
+		if aErr != nil {
+			return aErr
+		}
+		eligible = ok
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
 		return false, nil
 	}
-	q := foghorndb.New(tx)
-	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
-	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
-		return false, tErr
+	if err != nil {
+		return false, err
 	}
-	if tErr == nil && artifactTerminal {
-		return false, nil
-	}
-	// Active-pointer check: only the CURRENT winner may write the shared deterministic key. When claiming for the
-	// initial projection we additionally require it to be unprojected; the reassert re-copies an already-projected winner.
-	var ok bool
-	var aErr error
-	if allowProjected {
-		ok, aErr = q.ThumbnailProjectionEligible(ctx, attemptID)
-	} else {
-		ok, aErr = q.UnprojectedThumbnailEligible(ctx, attemptID)
-	}
-	if aErr != nil {
-		return false, aErr
-	}
-	return ok, tx.Commit()
+	return eligible, nil
 }
 
 // settleThumbnailProjection is step 3 of projection: after the copy landed, re-verify (under the per-asset lock) that
@@ -594,54 +599,61 @@ func gateThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetK
 // projectionProviderAmbiguityWindow). Idempotent. servingCluster is write-once and rides the has_thumbnails catalog-revision bump so it
 // projects to Commodore on the same snapshot (no trigger change needed).
 func settleThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetKey, tenantID, servingCluster string) (bool, error) {
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
-		return false, lErr
-	}
-	if tombstoned, tErr := assetTombstonedTx(ctx, tx, assetKey); tErr != nil {
-		return false, tErr
-	} else if tombstoned {
-		return false, nil
-	}
-	q := foghorndb.New(tx)
-	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
-	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
-		return false, tErr
-	}
-	if tErr == nil && artifactTerminal {
-		return false, nil
-	}
-	n, uErr := q.MarkThumbnailProjected(ctx, foghorndb.MarkThumbnailProjectedParams{
-		AttemptID: attemptID, AssetKey: assetKey, ReassertSeconds: int64(DeterministicCopyWindow.Seconds()),
+	var projected bool
+	err := database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		projected = false
+		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
+			return lErr
+		}
+		if tombstoned, tErr := assetTombstonedTx(ctx, tx, assetKey); tErr != nil {
+			return tErr
+		} else if tombstoned {
+			return errTxRollbackNoop
+		}
+		q := foghorndb.New(tx)
+		artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+		if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
+			return tErr
+		}
+		if tErr == nil && artifactTerminal {
+			return errTxRollbackNoop
+		}
+		n, uErr := q.MarkThumbnailProjected(ctx, foghorndb.MarkThumbnailProjectedParams{
+			AttemptID: attemptID, AssetKey: assetKey, ReassertSeconds: int64(DeterministicCopyWindow.Seconds()),
+		})
+		if uErr != nil {
+			return uErr
+		}
+		marked := n == 1
+		if marked {
+			// Flip has_thumbnails AND stamp the authoritative serving cluster in ONE write (a no-op for a live stream_id
+			// with no artifact row). NULLIF('' ) keeps an empty destination from clobbering a set value; the WHERE fires on
+			// the has_thumbnails flip (which bumps catalog_revision → re-projects, carrying the serving cluster) or when a
+			// non-empty serving cluster first differs.
+			if hErr := q.MarkArtifactHasThumbnails(ctx, foghorndb.MarkArtifactHasThumbnailsParams{
+				ArtifactHash: assetKey, TenantID: tenantID, ServingCluster: servingCluster,
+			}); hErr != nil {
+				return hErr
+			}
+			// A federated pointer may own this cell's derivative bytes but never the
+			// origin catalog row. Its local thumbnail mutation is therefore settled
+			// as cache metadata instead of leaving an unprojectable revision gap.
+			if _, settleErr := q.SettleFederatedArtifactCatalogRevision(ctx, foghorndb.SettleFederatedArtifactCatalogRevisionParams{
+				ArtifactHash: assetKey, TenantID: tenantID,
+			}); settleErr != nil {
+				return settleErr
+			}
+		}
+		projected = marked
+		return nil
 	})
-	if uErr != nil {
-		return false, uErr
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
 	}
-	marked := n == 1
-	if marked {
-		// Flip has_thumbnails AND stamp the authoritative serving cluster in ONE write (a no-op for a live stream_id
-		// with no artifact row). NULLIF('' ) keeps an empty destination from clobbering a set value; the WHERE fires on
-		// the has_thumbnails flip (which bumps catalog_revision → re-projects, carrying the serving cluster) or when a
-		// non-empty serving cluster first differs.
-		if hErr := q.MarkArtifactHasThumbnails(ctx, foghorndb.MarkArtifactHasThumbnailsParams{
-			ArtifactHash: assetKey, TenantID: tenantID, ServingCluster: servingCluster,
-		}); hErr != nil {
-			return false, hErr
-		}
-		// A federated pointer may own this cell's derivative bytes but never the
-		// origin catalog row. Its local thumbnail mutation is therefore settled
-		// as cache metadata instead of leaving an unprojectable revision gap.
-		if _, settleErr := q.SettleFederatedArtifactCatalogRevision(ctx, foghorndb.SettleFederatedArtifactCatalogRevisionParams{
-			ArtifactHash: assetKey, TenantID: tenantID,
-		}); settleErr != nil {
-			return false, settleErr
-		}
+	if err != nil {
+		return false, err
 	}
-	return marked, tx.Commit()
+	return projected, nil
 }
 
 // clearThumbnailReassert clears the one-shot reassert clock (deterministic_reassert_at = NULL) for an attempt whose
@@ -818,15 +830,9 @@ func DeleteThumbnailControlRows(ctx context.Context, dbh *sql.DB, tenantID, asse
 	if dbh == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" {
 		return nil
 	}
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if err := DeleteThumbnailControlRowsTx(ctx, tx, tenantID, assetKey); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		return DeleteThumbnailControlRowsTx(ctx, tx, tenantID, assetKey)
+	})
 }
 
 // DeleteThumbnailControlRowsTx does the control-row deletion in the CALLER's transaction, so it can be composed
@@ -1036,73 +1042,75 @@ func StuckIncompleteThumbnailAttemptIDs(ctx context.Context, dbh *sql.DB, now, s
 // boundary) so a still-live attempt selected under a fast replica clock is NOT failed out from under a completion
 // that is legitimately promoting it.
 func failAndSweepThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID string) (bool, error) {
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
+	var swept bool
+	err := database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		swept = false
+		q := foghorndb.New(tx)
+		if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
+			LockNamespace: artifacts.ThumbnailAssetLockNamespace,
+			AttemptID:     attemptID,
+		}); lErr != nil {
+			return lErr
+		}
+		n, uErr := q.FailExpiredThumbnailAttempt(ctx, attemptID)
+		if uErr != nil {
+			return uErr
+		}
+		if n != 1 {
+			return errTxRollbackNoop // a concurrent completion moved it on; leave its objects untouched
+		}
+		// Reconstruct staging + candidate keys from the attempt's own segments (staging = attempt_id, candidate =
+		// COALESCE(publish_lease_token, version)), so a promoted-but-unrecorded object — a completion that died between
+		// S3 promote and MarkVerified — is swept even though version_key was never written to its row.
+		staging, version, kErr := reconstructAttemptObjectKeys(ctx, tx, attemptID)
+		if kErr != nil {
+			return kErr
+		}
+		keys := append(staging, version...)
+		if eErr := EnqueueThumbnailCleanup(ctx, tx, keys); eErr != nil {
+			return eErr
+		}
+		swept = true
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
 	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	q := foghorndb.New(tx)
-	if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
-		LockNamespace: artifacts.ThumbnailAssetLockNamespace,
-		AttemptID:     attemptID,
-	}); lErr != nil {
-		return false, lErr
+	if err != nil {
+		return false, err
 	}
-	n, uErr := q.FailExpiredThumbnailAttempt(ctx, attemptID)
-	if uErr != nil {
-		return false, uErr
-	}
-	if n != 1 {
-		return false, nil // a concurrent completion moved it on; leave its objects untouched
-	}
-	// Reconstruct staging + candidate keys from the attempt's own segments (staging = attempt_id, candidate =
-	// COALESCE(publish_lease_token, version)), so a promoted-but-unrecorded object — a completion that died between
-	// S3 promote and MarkVerified — is swept even though version_key was never written to its row.
-	staging, version, kErr := reconstructAttemptObjectKeys(ctx, tx, attemptID)
-	if kErr != nil {
-		return false, kErr
-	}
-	keys := append(staging, version...)
-	if eErr := EnqueueThumbnailCleanup(ctx, tx, keys); eErr != nil {
-		return false, eErr
-	}
-	if cErr := tx.Commit(); cErr != nil {
-		return false, cErr
-	}
-	return true, nil
+	return swept, nil
 }
 
 // gcSupersededThumbnailAttempt atomically deletes a superseded published attempt and enqueues its version
 // objects. The guarded DELETE (still superseded past the horizon) runs FIRST; the enqueue happens in the SAME
 // transaction ONLY if the DELETE won — so a version that (impossibly) became active again is never queued.
 func gcSupersededThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID string, supersededHorizon time.Time) error {
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	q := foghorndb.New(tx)
-	if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
-		LockNamespace: artifacts.ThumbnailAssetLockNamespace,
-		AttemptID:     attemptID,
-	}); lErr != nil {
-		return lErr
-	}
-	keys, kErr := txObjectKeys(ctx, tx, attemptID, "version_key")
-	if kErr != nil {
-		return kErr
-	}
-	n, dErr := q.DeleteSupersededThumbnailAttempt(ctx, foghorndb.DeleteSupersededThumbnailAttemptParams{
-		AttemptID: attemptID, SupersededAt: sql.NullTime{Time: supersededHorizon, Valid: true},
+	err := database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		if lErr := q.LockThumbnailAttemptAsset(ctx, foghorndb.LockThumbnailAttemptAssetParams{
+			LockNamespace: artifacts.ThumbnailAssetLockNamespace,
+			AttemptID:     attemptID,
+		}); lErr != nil {
+			return lErr
+		}
+		keys, kErr := txObjectKeys(ctx, tx, attemptID, "version_key")
+		if kErr != nil {
+			return kErr
+		}
+		n, dErr := q.DeleteSupersededThumbnailAttempt(ctx, foghorndb.DeleteSupersededThumbnailAttemptParams{
+			AttemptID: attemptID, SupersededAt: sql.NullTime{Time: supersededHorizon, Valid: true},
+		})
+		if dErr != nil {
+			return dErr
+		}
+		if n != 1 {
+			return errTxRollbackNoop // no longer eligible (re-activated / already gone); enqueue nothing
+		}
+		return EnqueueThumbnailCleanup(ctx, tx, keys)
 	})
-	if dErr != nil {
-		return dErr
+	if errors.Is(err, errTxRollbackNoop) {
+		return nil
 	}
-	if n != 1 {
-		return nil // no longer eligible (re-activated / already gone); enqueue nothing
-	}
-	if eErr := EnqueueThumbnailCleanup(ctx, tx, keys); eErr != nil {
-		return eErr
-	}
-	return tx.Commit()
+	return err
 }
