@@ -702,7 +702,7 @@ lint-go:
 	for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> Linting $$service_name"; \
-		(cd $$service_dir && golangci-lint run --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
+		(cd $$service_dir && GIT_WORK_TREE="$(CURDIR)" golangci-lint run --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
 	done; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
 
