@@ -5873,8 +5873,10 @@ func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interv
 }
 
 const (
-	provisionDetectTimeout     = 10 * time.Second
-	provisionApplyTimeout      = 10 * time.Minute
+	provisionDetectTimeout = 10 * time.Second
+	// Fresh hosts may need to download large infrastructure archives from
+	// upstream mirrors before Ansible can configure them.
+	provisionApplyTimeout      = 20 * time.Minute
 	provisionValidateTimeout   = 75 * time.Second
 	provisionInitializeTimeout = 2 * time.Minute
 	// Quartermaster clients use WaitForReady. Allow a newly established
