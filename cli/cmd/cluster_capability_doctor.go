@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/releases"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
@@ -23,6 +24,7 @@ func doctorPostgresCapabilities(
 	manifest *inventory.Manifest,
 	host inventory.Host,
 	password string,
+	targetVersion string,
 ) *health.CheckResult {
 	result := &health.CheckResult{
 		Name:      "postgres_capabilities",
@@ -64,7 +66,7 @@ func doctorPostgresCapabilities(
 		if deploy == "" {
 			deploy = serviceName
 		}
-		capabilities := pkgdatabase.CapabilitiesFor(deploy, pkgdatabase.EnginePostgres)
+		capabilities := doctorCapabilitiesForVersion(deploy, pkgdatabase.EnginePostgres, targetVersion)
 		if len(capabilities) == 0 {
 			continue
 		}
@@ -105,6 +107,7 @@ func doctorClickHouseCapabilities(
 	sshPool *ssh.Pool,
 	manifest *inventory.Manifest,
 	sharedEnv map[string]string,
+	targetVersion string,
 ) *health.CheckResult {
 	result := &health.CheckResult{
 		Name:      "clickhouse_capabilities",
@@ -149,7 +152,7 @@ func doctorClickHouseCapabilities(
 		if deploy == "" {
 			deploy = serviceName
 		}
-		for _, capability := range pkgdatabase.CapabilitiesFor(deploy, pkgdatabase.EngineClickHouse) {
+		for _, capability := range doctorCapabilitiesForVersion(deploy, pkgdatabase.EngineClickHouse, targetVersion) {
 			probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			err := executor.Exec(probeCtx, "localhost", ch.EffectivePort(), user, password, "periscope", capability.Probe)
 			cancel()
@@ -165,4 +168,19 @@ func doctorClickHouseCapabilities(
 	result.Message = fmt.Sprintf("%d ClickHouse runtime capabilities executable", checked)
 	result.Metadata["capabilities"] = fmt.Sprintf("%d", checked)
 	return result
+}
+
+func doctorCapabilitiesForVersion(service string, engine pkgdatabase.Engine, targetVersion string) []pkgdatabase.Capability {
+	capabilities := pkgdatabase.CapabilitiesFor(service, engine)
+	targetVersion = strings.TrimSpace(targetVersion)
+	if targetVersion == "" {
+		return capabilities
+	}
+	filtered := capabilities[:0]
+	for _, capability := range capabilities {
+		if capability.IntroducedIn == "" || releases.CompareSemver(capability.IntroducedIn, targetVersion) <= 0 {
+			filtered = append(filtered, capability)
+		}
+	}
+	return filtered
 }

@@ -818,6 +818,10 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 // use `cluster provision --dry-run` (ansible-playbook --check --diff).
 func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	manifest := rc.Manifest
+	doctorTarget, targetErr := resolveMigrationTarget(rc, "")
+	if targetErr != nil {
+		doctorTarget = ""
+	}
 	out := cmd.OutOrStdout()
 	ux.Heading(out, "Running cluster health checks")
 	fmt.Fprintf(out, "Manifest: %s (type: %s, profile: %s)\n", rc.ManifestPath, manifest.Type, manifest.Profile)
@@ -1004,10 +1008,6 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			recordMiss("Postgres migrations", "no postgres/yugabyte hosts resolvable in manifest")
 		} else {
 			databasePassword := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
-			doctorTarget, targetErr := resolveMigrationTarget(rc, "")
-			if targetErr != nil {
-				doctorTarget = ""
-			}
 			totalChecks++
 			// Any tserver carries the (cluster-replicated) _migrations table; probe
 			// each node and use the first that responds rather than pinning Nodes[0].
@@ -1079,7 +1079,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 				totalChecks++
 				var capabilityResult *health.CheckResult
 				for _, h := range hosts {
-					capabilityResult = doctorPostgresCapabilities(cmd.Context(), doctorSSHPool, manifest, h, databasePassword)
+					capabilityResult = doctorPostgresCapabilities(cmd.Context(), doctorSSHPool, manifest, h, databasePassword, doctorTarget)
 					if capabilityResult.OK {
 						break
 					}
@@ -1100,7 +1100,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 
 	if deep && manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
 		totalChecks++
-		capabilityResult := doctorClickHouseCapabilities(cmd.Context(), doctorSSHPool, manifest, sharedEnv)
+		capabilityResult := doctorClickHouseCapabilities(cmd.Context(), doctorSSHPool, manifest, sharedEnv, doctorTarget)
 		printHealthResult(cmd, "ClickHouse runtime capabilities", capabilityResult)
 		if capabilityResult.OK {
 			passedChecks++

@@ -19,9 +19,10 @@ const (
 // data. These probes complement the migration ledger; they are not another
 // desired-schema manifest.
 type Capability struct {
-	Name   string
-	Engine Engine
-	Probe  string
+	Name         string
+	Engine       Engine
+	Probe        string
+	IntroducedIn string
 }
 
 // CapabilityError identifies the binary requirement that the live engine did
@@ -41,17 +42,17 @@ func (e *CapabilityError) Unwrap() error { return e.Err }
 
 var capabilityCatalog = map[string][]Capability{
 	"bosun": {
-		{Name: "tenant endpoints and secrets", Engine: EnginePostgres, Probe: "SELECT e.tenant_id, e.id, e.event_types, e.api_version, e.status, e.consecutive_failures, e.failing_since, s.secret_ciphertext, s.state, s.expires_at FROM bosun.webhook_endpoints e JOIN bosun.webhook_endpoint_secrets s ON s.tenant_id = e.tenant_id AND s.endpoint_id = e.id LIMIT 0"},
-		{Name: "delivery ledger leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, event_id, kind, status, attempts, next_attempt_at, lease_token, leased_until, replay_count FROM bosun.webhook_deliveries LIMIT 0"},
-		{Name: "event ledger", Engine: EnginePostgres, Probe: "SELECT tenant_id, event_id, event_type, schema_name, payload, occurred_at, received_at FROM bosun.webhook_events LIMIT 0"},
-		{Name: "disable notification outbox", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, kind, attempts, next_attempt_at, lease_token, completed_at FROM bosun.webhook_notification_outbox LIMIT 0"},
-		{Name: "domain event outbox", Engine: EnginePostgres, Probe: "SELECT event_id, event_type, tenant_id, lease_token, completed_at FROM bosun.domain_event_outbox LIMIT 0"},
+		{Name: "tenant endpoints and secrets", Engine: EnginePostgres, Probe: "SELECT e.tenant_id, e.id, e.event_types, e.api_version, e.status, e.consecutive_failures, e.failing_since, s.secret_ciphertext, s.state, s.expires_at FROM bosun.webhook_endpoints e JOIN bosun.webhook_endpoint_secrets s ON s.tenant_id = e.tenant_id AND s.endpoint_id = e.id LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "delivery ledger leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, event_id, kind, status, attempts, next_attempt_at, lease_token, leased_until, replay_count FROM bosun.webhook_deliveries LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "event ledger", Engine: EnginePostgres, Probe: "SELECT tenant_id, event_id, event_type, schema_name, payload, occurred_at, received_at FROM bosun.webhook_events LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "disable notification outbox", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, kind, attempts, next_attempt_at, lease_token, completed_at FROM bosun.webhook_notification_outbox LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "domain event outbox", Engine: EnginePostgres, Probe: "SELECT event_id, event_type, tenant_id, lease_token, completed_at FROM bosun.domain_event_outbox LIMIT 0", IntroducedIn: "v0.3.11"},
 	},
 	"commodore": {
-		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0"},
-		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0"},
-		{Name: "media authority recipient validity", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_deliveries LIMIT 0"},
-		{Name: "actionable media authority rejections", Engine: EnginePostgres, Probe: "SELECT authority_kind, authority_id, authority_version, cell_id FROM commodore.media_authority_actionable_rejections LIMIT 0"},
+		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "media authority recipient validity", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_deliveries LIMIT 0", IntroducedIn: "v0.3.11"},
+		{Name: "actionable media authority rejections", Engine: EnginePostgres, Probe: "SELECT authority_kind, authority_id, authority_version, cell_id FROM commodore.media_authority_actionable_rejections LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "media placement revisions", Engine: EnginePostgres, Probe: "SELECT tenant_id, scope_kind, scope_id, revision, policy_payload, active_revision, active_policy_payload FROM commodore.media_placement_policies LIMIT 0"},
 		{Name: "media placement apply receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, idempotency_key, request_sha256, revision, parent_revision, rollout_status FROM commodore.media_placement_changes LIMIT 0"},
 		{Name: "wallet authentication", Engine: EnginePostgres, Probe: "SELECT wallet_address, chain_id, message_hash, expires_at, consumed_at FROM commodore.wallet_auth_challenges LIMIT 0"},
@@ -59,7 +60,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "artifact creation acknowledgement leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, kind, artifact_hash, command_ack_pending, command_ack_next_at, command_ack_leased_until, command_ack_lease_token FROM commodore.artifact_creation_intents LIMIT 0"},
 	},
 	"foghorn": {
-		{Name: "media authority recovery confirmation", Engine: EnginePostgres, Probe: "SELECT authority_id, confirmed_at FROM foghorn.media_authorities LIMIT 0"},
+		{Name: "media authority recovery confirmation", Engine: EnginePostgres, Probe: "SELECT authority_id, confirmed_at FROM foghorn.media_authorities LIMIT 0", IntroducedIn: "v0.3.11"},
 		{Name: "ingest admission fencing", Engine: EnginePostgres, Probe: "SELECT id, tenant_id, node_id, stream_internal_name, connector_pid, projection_state, source_revision FROM foghorn.ingest_sessions LIMIT 0"},
 		{Name: "restream activation-attempt fencing", Engine: EnginePostgres, Probe: "SELECT source_generation, target_revision, activation_attempt, mist_push_ids FROM foghorn.admission_push_target_revisions LIMIT 0"},
 		{Name: "cell storage identity", Engine: EnginePostgres, Probe: "SELECT backend_id, bucket, endpoint, region, prefix FROM foghorn.cell_storage_identity LIMIT 0"},
@@ -80,7 +81,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "distributed ledger-worker locking", Engine: EnginePostgres, Probe: "SELECT pg_try_advisory_xact_lock(hashtext('periscope-ingest:capability'))"},
 		{Name: "API delivery identity", Engine: EngineClickHouse, Probe: "SELECT tenant_id, source_event_id, ingested_at_ms FROM periscope.api_requests LIMIT 0"},
 		{Name: "viewer attribution", Engine: EngineClickHouse, Probe: "SELECT tenant_id, cluster_id, node_id, session_id FROM periscope.viewer_connection_events LIMIT 0"},
-		{Name: "domain event projections", Engine: EngineClickHouse, Probe: "SELECT a.tenant_id, a.artifact_id, a.version, e.actor_auth_type, e.actor_token_hash FROM periscope.artifact_state_current_v2 AS a, periscope.api_events AS e LIMIT 0"},
+		{Name: "domain event projections", Engine: EngineClickHouse, Probe: "SELECT a.tenant_id, a.artifact_id, a.version, e.actor_auth_type, e.actor_token_hash FROM periscope.artifact_state_current_v2 AS a, periscope.api_events AS e LIMIT 0", IntroducedIn: "v0.3.11"},
 	},
 	"periscope-query": {
 		{Name: "delegated-token replay fencing", Engine: EnginePostgres, Probe: "SELECT jti, expires_at FROM periscope.delegated_jwt_replays LIMIT 0"},
