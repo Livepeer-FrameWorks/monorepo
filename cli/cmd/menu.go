@@ -469,7 +469,7 @@ func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 				fmt.Fprintln(cmd.OutOrStdout(), "Service name is required")
 				continue
 			}
-			version := promptInputDefault(r, "Version (stable|rc|vX.Y.Z)", "")
+			version := promptInputDefault(r, "Version (stable|candidate|rc|vX.Y.Z)", "")
 			cc := newClusterUpgradeCmd()
 			cc.SetArgs([]string{service})
 			_ = cc.Flags().Set("manifest", manifest)

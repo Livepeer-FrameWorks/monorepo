@@ -126,21 +126,37 @@ func TestPrometheusStackRoleVarsAlertmanagerMapsReceiverEnv(t *testing.T) {
 		t.Fatalf("prometheusStackRoleVars: %v", err)
 	}
 	want := map[string]any{
-		"alertmanager_artifact_url":       "https://example.test/alertmanager.tar.gz",
-		"alertmanager_lookout_url":        "http://lookout.internal:18022/v1/alertmanager",
-		"alertmanager_lookout_token":      "lookout-token",
-		"alertmanager_heartbeat_url":      "https://heartbeat.example.test/ping",
-		"alertmanager_email_to":           "ops@example.test",
-		"alertmanager_smtp_smarthost":     "smtp.example.test:587",
-		"alertmanager_smtp_from":          "alerts@example.test",
-		"alertmanager_smtp_auth_username": "alerts",
-		"alertmanager_smtp_auth_password": "secret",
-		"alertmanager_port":               9093,
+		"alertmanager_artifact_url":                   "https://example.test/alertmanager.tar.gz",
+		"alertmanager_external_notifications_enabled": true,
+		"alertmanager_lookout_url":                    "http://lookout.internal:18022/v1/alertmanager",
+		"alertmanager_lookout_token":                  "lookout-token",
+		"alertmanager_heartbeat_url":                  "https://heartbeat.example.test/ping",
+		"alertmanager_email_to":                       "ops@example.test",
+		"alertmanager_smtp_smarthost":                 "smtp.example.test:587",
+		"alertmanager_smtp_from":                      "alerts@example.test",
+		"alertmanager_smtp_auth_username":             "alerts",
+		"alertmanager_smtp_auth_password":             "secret",
+		"alertmanager_port":                           9093,
 	}
 	for key, value := range want {
 		if got := vars[key]; got != value {
 			t.Errorf("%s = %#v, want %#v", key, got, value)
 		}
+	}
+}
+
+func TestPrometheusStackRoleVarsAlertmanagerCanDisableExternalNotifications(t *testing.T) {
+	vars, err := prometheusStackRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		EnvVars: map[string]string{
+			"ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED": "false",
+		},
+		Metadata: map[string]any{"component": "alertmanager", "platform_channel": "stable"},
+	}, alertingTestHelpers(t, "alertmanager"))
+	if err != nil {
+		t.Fatalf("prometheusStackRoleVars: %v", err)
+	}
+	if got := vars["alertmanager_external_notifications_enabled"]; got != false {
+		t.Fatalf("alertmanager_external_notifications_enabled = %#v, want false", got)
 	}
 }
 
@@ -164,8 +180,9 @@ func TestPrometheusStackRoleRendersAlertingSafeguards(t *testing.T) {
 	config := readRepoFile(t, role+"templates/alertmanager.yml.j2")
 	for _, needle := range []string{
 		"receiver: lookout\n  group_by: [alertname, region, cluster]",
+		"{% if alertmanager_external_notifications_enabled | bool %}",
 		"    - receiver: heartbeat\n      matchers:\n        - alertname=\"Watchdog\"",
-		"    - receiver: email-fallback\n      matchers:\n        - severity=\"critical\"\n      repeat_interval: 1h\n      continue: true\n    - receiver: lookout\n",
+		"    - receiver: discard-watchdog\n      matchers:\n        - alertname=\"Watchdog\"",
 		"url: {{ alertmanager_lookout_url | to_json }}\n        send_resolved: true\n        http_config:\n          authorization:\n            type: Bearer\n            credentials: {{ alertmanager_lookout_token | to_json }}",
 		"url: {{ alertmanager_heartbeat_url | to_json }}\n        send_resolved: false",
 		"email_configs:",

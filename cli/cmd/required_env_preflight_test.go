@@ -36,6 +36,22 @@ func TestMissingRequiredExternalEnvTreatsBlankAsMissing(t *testing.T) {
 	}
 }
 
+func TestAlertmanagerInternalOnlyRequiresLookoutButNotExternalDestinations(t *testing.T) {
+	env := map[string]string{
+		"ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED": "false",
+		"LOOKOUT_ALERTMANAGER_TOKEN":                  "token",
+	}
+	if missing := missingRequiredExternalEnv("alertmanager", env); len(missing) != 0 {
+		t.Fatalf("missing = %+v, want none for internal-only Alertmanager", missing)
+	}
+
+	delete(env, "LOOKOUT_ALERTMANAGER_TOKEN")
+	missing := missingRequiredExternalEnv("alertmanager", env)
+	if len(missing) != 1 || missing[0].Key != "LOOKOUT_ALERTMANAGER_TOKEN" {
+		t.Fatalf("missing = %+v, want only LOOKOUT_ALERTMANAGER_TOKEN", missing)
+	}
+}
+
 // Provision checks every planned alerting input before the first batch, so a
 // missing SMTP or heartbeat value fails the run instead of the Ansible assert
 // after vmagent and vmalert already changed.

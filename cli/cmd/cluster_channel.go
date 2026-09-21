@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var validChannels = []string{"stable", "rc"}
+var validChannels = []string{"stable", "candidate", "rc"}
 
 func newClusterSetChannelCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -18,12 +18,13 @@ func newClusterSetChannelCmd() *cobra.Command {
 		Long: `Set the release channel recorded in the cluster manifest.
 
 Valid channels:
-  stable  - Production releases (default)
-  rc      - Release candidates (pre-production)
+  stable     - Latest production-ready release (default)
+  candidate  - Newest release, including release candidates
+  rc         - Legacy RC-only track
 
 The channel controls which release track 'frameworks cluster upgrade' uses
 when no explicit version is given.`,
-		Example: `  frameworks cluster set-channel rc
+		Example: `  frameworks cluster set-channel candidate
   frameworks cluster set-channel stable --manifest /etc/frameworks/cluster.yaml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -71,8 +72,8 @@ func runSetChannel(cmd *cobra.Command, rc *resolvedCluster, channel string) erro
 	manifest.Channel = channel
 
 	ux.Success(out, fmt.Sprintf("Channel updated in %s: %s -> %s", manifestPath, current, channel))
-	if channel == "rc" {
-		ux.Warn(out, "Release candidates are pre-production — review the changelog before upgrading.")
+	if channel == "candidate" || channel == "rc" {
+		ux.Warn(out, "This channel may select a pre-production release — review the changelog before upgrading.")
 	}
 	ux.PrintNextSteps(out, []ux.NextStep{
 		{Cmd: "frameworks cluster release plan", Why: "Review the complete release selected by the new channel."},

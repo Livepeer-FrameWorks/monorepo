@@ -2,7 +2,9 @@ package credentials
 
 import (
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -235,10 +237,15 @@ func GenerateMediaAuthorityDeploymentMaterial() (map[string]string, error) {
 // ValidateShared. It is intended for first production bootstrap; upgrade tooling should use the
 // narrower media-authority generator so existing platform secrets are never rotated implicitly.
 func GenerateSharedDeploymentMaterial() (map[string]string, error) {
-	values := make(map[string]string, len(generatable)+len(mediaAuthorityKeys))
+	values := make(map[string]string, len(generatable)+len(mediaAuthorityKeys)+3)
 	if _, err := GenerateIfMissing(values); err != nil {
 		return nil, err
 	}
+	edgeTelemetryPrivateKey, err := generateEdgeTelemetryJWTPrivateKey()
+	if err != nil {
+		return nil, err
+	}
+	values["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] = edgeTelemetryPrivateKey
 	consent, err := GenerateCapacityConsentReviewMaterial()
 	if err != nil {
 		return nil, err
@@ -250,6 +257,20 @@ func GenerateSharedDeploymentMaterial() (map[string]string, error) {
 		return nil, fmt.Errorf("validate generated shared deployment material: %w", err)
 	}
 	return values, nil
+}
+
+// generateEdgeTelemetryJWTPrivateKey creates the durable ES256 signer shared
+// by Foghorn and vmauth when edge telemetry is enabled.
+func generateEdgeTelemetryJWTPrivateKey() (string, error) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return "", fmt.Errorf("generate edge telemetry ES256 key: %w", err)
+	}
+	der, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("encode edge telemetry private key: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})), nil
 }
 
 // GenerateCapacityConsentReviewMaterial creates a dedicated Quartermaster signer,

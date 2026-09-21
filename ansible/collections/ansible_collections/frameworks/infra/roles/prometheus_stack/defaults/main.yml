@@ -70,6 +70,7 @@ alertmanager_config_path: /etc/alertmanager/alertmanager.yml
 alertmanager_storage_path: /var/lib/alertmanager
 alertmanager_lookout_url: ""
 alertmanager_lookout_token: ""
+alertmanager_external_notifications_enabled: true
 alertmanager_heartbeat_url: ""
 alertmanager_email_to: ""
 alertmanager_smtp_smarthost: ""

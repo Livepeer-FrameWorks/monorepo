@@ -272,7 +272,7 @@ func normalizeReleaseTargetVersion(version string) string {
 func normalizeReleaseTargetChannel(channel string) (string, error) {
 	channel = strings.ToLower(strings.TrimSpace(channel))
 	switch channel {
-	case "stable", "rc":
+	case "stable", "candidate", "rc":
 		return channel, nil
 	default:
 		return "", fmt.Errorf("unsupported release channel %q", channel)
@@ -594,7 +594,7 @@ func edgeReleaseQMClientForCommand(cmd *cobra.Command) (*qmclient.GRPCClient, fw
 
 func releaseTargetVersionForSelector(selector, platformVersion string) string {
 	switch strings.ToLower(strings.TrimSpace(selector)) {
-	case "", "latest", "stable", "rc":
+	case "", "latest", "stable", "candidate", "rc":
 		return ""
 	default:
 		return strings.TrimSpace(platformVersion)

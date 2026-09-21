@@ -7,6 +7,7 @@
   listen: yugabyte daemon-reload
   ansible.builtin.systemd:
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart yb-master
   listen: yugabyte restart master
@@ -15,6 +16,7 @@
     state: restarted
     daemon_reload: true
   register: yugabyte_master_restarted
+  when: not ansible_check_mode
 
 - name: Restart yb-tserver
   listen: yugabyte restart tserver
@@ -23,17 +25,22 @@
     state: restarted
     daemon_reload: true
   register: yugabyte_tserver_restarted
+  when: not ansible_check_mode
 
 - name: Reload yb-master
   listen: yugabyte reload master
   ansible.builtin.systemd:
     name: "{{ yugabyte_master_service }}"
     state: reloaded
-  when: yugabyte_master_restarted is not defined
+  when:
+    - not ansible_check_mode
+    - yugabyte_master_restarted is not defined
 
 - name: Reload yb-tserver
   listen: yugabyte reload tserver
   ansible.builtin.systemd:
     name: "{{ yugabyte_tserver_service }}"
     state: reloaded
-  when: yugabyte_tserver_restarted is not defined
+  when:
+    - not ansible_check_mode
+    - yugabyte_tserver_restarted is not defined

@@ -259,6 +259,29 @@ func TestGenerateMediaAuthorityDeploymentMaterialIsCompleteAndValid(t *testing.T
 	}
 }
 
+func TestGenerateSharedDeploymentMaterialIncludesEdgeTelemetrySigner(t *testing.T) {
+	values, err := GenerateSharedDeploymentMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := values["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"]
+	pemBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("edge telemetry signer is not base64: %v", err)
+	}
+	block, rest := pem.Decode(pemBytes)
+	if block == nil || block.Type != "EC PRIVATE KEY" || len(strings.TrimSpace(string(rest))) != 0 {
+		t.Fatal("edge telemetry signer is not one EC private-key PEM")
+	}
+	privateKey, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse edge telemetry signer: %v", err)
+	}
+	if privateKey.Curve.Params().Name != "P-256" {
+		t.Fatalf("edge telemetry signer uses %s, want P-256", privateKey.Curve.Params().Name)
+	}
+}
+
 func TestValidateTelemetryTokenSecret(t *testing.T) {
 	if err := ValidateTelemetryTokenSecret(strings.Repeat("ab", 32)); err != nil {
 		t.Fatalf("valid secret rejected: %v", err)

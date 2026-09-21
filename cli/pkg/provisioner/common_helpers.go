@@ -35,7 +35,7 @@ func releaseVersion(configured, resolved string) string {
 
 func isReleaseChannel(version string) bool {
 	switch version {
-	case "", "stable", "latest":
+	case "", "stable", "candidate", "latest", "rc":
 		return true
 	default:
 		return false

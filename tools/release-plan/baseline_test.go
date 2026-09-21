@@ -110,6 +110,17 @@ func TestResolveBaselineStableToRCFallback(t *testing.T) {
 	}
 }
 
+func TestResolveBaselineRCUsesNewerStableInsteadOfOldRC(t *testing.T) {
+	releases := parseTagSlice("v0.2.6-rc1", "v0.3.9")
+	baseline, lineage := resolveBaseline(parseTag("v0.3.10-rc1"), releases)
+	if !baseline.wellFormed || baseline.raw != "v0.3.9" {
+		t.Fatalf("baseline = %+v, want v0.3.9", baseline)
+	}
+	if len(lineage) != 1 || lineage[0].Track != "stable" {
+		t.Fatalf("lineage = %+v, want latest stable predecessor", lineage)
+	}
+}
+
 func TestResolveBaselineFirstReleaseEver(t *testing.T) {
 	baseline, lineage := resolveBaseline(parseTag("v0.1.0"), nil)
 	if baseline.wellFormed {

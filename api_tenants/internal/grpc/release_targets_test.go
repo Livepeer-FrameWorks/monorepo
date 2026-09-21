@@ -97,6 +97,18 @@ func TestNormalizeReleaseTargetChannelTrimsAndLowercases(t *testing.T) {
 	}
 }
 
+func TestNormalizeReleaseTargetChannelAcceptsCandidate(t *testing.T) {
+	t.Parallel()
+
+	channel, err := normalizeReleaseTargetChannel(" CANDIDATE ")
+	if err != nil {
+		t.Fatalf("normalizeReleaseTargetChannel: %v", err)
+	}
+	if channel != "candidate" {
+		t.Fatalf("channel = %q, want candidate", channel)
+	}
+}
+
 func TestValidateEdgeReleaseComponentsRejectsUnknownComponent(t *testing.T) {
 	t.Parallel()
 

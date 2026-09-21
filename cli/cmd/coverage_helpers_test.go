@@ -162,8 +162,8 @@ func TestMajorVersion(t *testing.T) {
 
 func TestIsValidChannel(t *testing.T) {
 	t.Parallel()
-	if !isValidChannel("stable") || !isValidChannel("rc") {
-		t.Fatal("stable and rc must be valid")
+	if !isValidChannel("stable") || !isValidChannel("candidate") || !isValidChannel("rc") {
+		t.Fatal("stable, candidate, and rc must be valid")
 	}
 	if isValidChannel("nightly") || isValidChannel("") {
 		t.Fatal("unknown channels must be invalid")

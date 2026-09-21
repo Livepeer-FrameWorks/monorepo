@@ -499,10 +499,10 @@ func ResolveVersion(versionStr string) (channel, version string) {
 
 	// A release track name uses that channel's latest.
 	switch versionStr {
-	case "stable", "rc":
+	case "stable", "candidate", "rc":
 		return versionStr, "latest"
 	case "latest":
-		return "stable", "latest"
+		return "candidate", "latest"
 	default:
 		nv := normalizeVersion(versionStr)
 		return channelForTag(nv), nv
@@ -675,7 +675,7 @@ func normalizeVersion(version string) string {
 	if version == "" || version == "latest" {
 		return "latest"
 	}
-	if version == "stable" || version == "rc" {
+	if version == "stable" || version == "candidate" || version == "rc" {
 		return version
 	}
 	if strings.HasPrefix(version, "v") {

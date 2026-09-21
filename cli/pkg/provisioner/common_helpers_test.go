@@ -9,7 +9,7 @@ import (
 // (which must be resolved against the manifest) versus an already-pinned
 // version. The empty string counts as a channel (use the default).
 func TestIsReleaseChannel(t *testing.T) {
-	channels := []string{"", "stable", "latest"}
+	channels := []string{"", "stable", "candidate", "latest", "rc"}
 	for _, v := range channels {
 		if !isReleaseChannel(v) {
 			t.Errorf("isReleaseChannel(%q) = false, want true", v)

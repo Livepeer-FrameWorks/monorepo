@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func main() {
@@ -14,12 +15,24 @@ func main() {
 		newTag         = flag.String("tag", "", "The platform tag being released (e.g. v0.2.40). Required.")
 		componentsPath = flag.String("components", "", "Override for .github/release-components.json (defaults to <monorepo>/.github/release-components.json)")
 		out            = flag.String("out", "", "Write JSON output to this path; if empty, write to stdout")
+		updateChannels = flag.Bool("update-channels", false, "Advance GitOps channel pointers for --tag and exit")
 	)
 	flag.Parse()
 
 	if *newTag == "" {
 		fmt.Fprintln(os.Stderr, "release-plan: --tag is required")
 		os.Exit(2)
+	}
+	if *updateChannels {
+		updates, err := UpdateReleaseChannels(*gitopsDir, *newTag, time.Now().UTC())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "release-plan: update channels: %v\n", err)
+			os.Exit(1)
+		}
+		for _, update := range updates {
+			fmt.Fprintf(os.Stderr, "release-plan: channel=%s previous=%s next=%s updated=%t\n", update.Channel, update.Previous, *newTag, update.Updated)
+		}
+		return
 	}
 	if *componentsPath == "" {
 		*componentsPath = filepath.Join(*monorepoRoot, ".github", "release-components.json")

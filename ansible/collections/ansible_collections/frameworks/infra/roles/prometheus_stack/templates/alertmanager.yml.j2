@@ -9,6 +9,7 @@
    after the email route continues past them. Groups split by alertname,
    region and cluster; Lookout derives one incident's scope from its cluster,
    so a group never mixes clusters owned by different tenants. #}
+{% if alertmanager_external_notifications_enabled | bool %}
 global:
   resolve_timeout: 5m
   smtp_smarthost: {{ alertmanager_smtp_smarthost | to_json }}
@@ -18,6 +19,7 @@ global:
   smtp_auth_password: {{ alertmanager_smtp_auth_password | to_json }}
 {% endif %}
   smtp_require_tls: true
+{% endif %}
 
 route:
   receiver: lookout
@@ -26,6 +28,7 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+{% if alertmanager_external_notifications_enabled | bool %}
     - receiver: heartbeat
       matchers:
         - alertname="Watchdog"
@@ -37,6 +40,11 @@ route:
         - severity="critical"
       repeat_interval: 1h
       continue: true
+{% else %}
+    - receiver: discard-watchdog
+      matchers:
+        - alertname="Watchdog"
+{% endif %}
     - receiver: lookout
 
 inhibit_rules:
@@ -55,6 +63,7 @@ receivers:
           authorization:
             type: Bearer
             credentials: {{ alertmanager_lookout_token | to_json }}
+{% if alertmanager_external_notifications_enabled | bool %}
   - name: email-fallback
     email_configs:
       - to: {{ alertmanager_email_to | to_json }}
@@ -63,3 +72,6 @@ receivers:
     webhook_configs:
       - url: {{ alertmanager_heartbeat_url | to_json }}
         send_resolved: false
+{% else %}
+  - name: discard-watchdog
+{% endif %}

@@ -11,7 +11,7 @@ type Manifest struct {
 	Version    string   `yaml:"version"`
 	Type       string   `yaml:"type"`                  // cluster | edge
 	Profile    string   `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
-	Channel    string   `yaml:"channel,omitempty"`     // release channel: "stable" (default), "rc"
+	Channel    string   `yaml:"channel,omitempty"`     // release channel: "stable" (default), "candidate", "rc" (legacy)
 	RootDomain string   `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
 	EnvFiles   []string `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
 	HostsFile  string   `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
@@ -587,7 +587,7 @@ type UpdateStrategyConfig struct {
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
 	Type            string     `yaml:"type,omitempty"`    // edge; accepted for consistency with cluster manifests
-	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "rc", or explicit version (e.g., "v1.2.3-rc1")
+	Channel         string     `yaml:"channel,omitempty"` // Release channel: "stable", "candidate", "rc" (legacy), or an explicit version
 	RootDomain      string     `yaml:"root_domain"`
 	PoolDomain      string     `yaml:"pool_domain"` // Shared edge pool domain (e.g., edge.media-eu.example.com)
 	Email           string     `yaml:"email"`       // ACME email

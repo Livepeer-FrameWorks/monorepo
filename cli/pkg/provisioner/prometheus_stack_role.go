@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,6 +126,15 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 			vars["vmalert_notifier_urls"] = notifiers
 		}
 	case "alertmanager":
+		externalNotificationsEnabled := true
+		if raw := strings.TrimSpace(config.EnvVars["ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED"]); raw != "" {
+			parsed, parseErr := strconv.ParseBool(raw)
+			if parseErr != nil {
+				return nil, fmt.Errorf("ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED must be a boolean: %w", parseErr)
+			}
+			externalNotificationsEnabled = parsed
+		}
+		vars["alertmanager_external_notifications_enabled"] = externalNotificationsEnabled
 		// The critical-alert email fallback sends through the platform's
 		// shared SMTP settings, the same mailbox pkg/email uses.
 		for envKey, varName := range map[string]string{

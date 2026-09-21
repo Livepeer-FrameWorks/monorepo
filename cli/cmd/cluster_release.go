@@ -79,7 +79,7 @@ live-state gates. Use 'release apply --dry-run' when you also want those live ch
 			return runReleasePlan(cmd, rc, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.version, "version", "", "Target version (stable, rc, v1.2.3); defaults to cluster channel")
+	cmd.Flags().StringVar(&opts.version, "version", "", "Target version (stable, candidate, rc, v1.2.3); defaults to cluster channel")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 	return cmd
 }
@@ -173,7 +173,7 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 			return runReleaseApply(cmd, rc, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.version, "version", "", "Target version (stable, rc, v1.2.3); defaults to cluster channel")
+	cmd.Flags().StringVar(&opts.version, "version", "", "Target version (stable, candidate, rc, v1.2.3); defaults to cluster channel")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show the plan and run every gate/Check without mutating anything")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip the confirmation prompt")
 	cmd.Flags().BoolVar(&opts.skipValidation, "skip-validation", false, "Skip health validation after each service upgrade")

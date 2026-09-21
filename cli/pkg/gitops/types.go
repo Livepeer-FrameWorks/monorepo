@@ -362,7 +362,7 @@ func IsDebugAssetName(name string) bool {
 
 // FetchOptions configures manifest fetching
 type FetchOptions struct {
-	Channel        string        // stable | rc
+	Channel        string        // stable | candidate | rc (legacy)
 	Version        string        // v1.2.3 | latest
 	CacheDir       string        // Local cache directory
 	Offline        bool          // Use cache only, don't fetch

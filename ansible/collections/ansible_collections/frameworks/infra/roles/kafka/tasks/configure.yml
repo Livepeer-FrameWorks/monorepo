@@ -17,6 +17,21 @@
     mode: "0644"
   notify: kafka restart
 
+- name: Inspect KRaft storage format sentinel
+  ansible.builtin.stat:
+    path: "{{ kafka_format_sentinel }}"
+  register: kafka_format_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Report pending KRaft storage format under --check
+  ansible.builtin.debug:
+    msg: "{{ kafka_service_name }} storage would be formatted for cluster {{ kafka_cluster_id }}"
+  when:
+    - ansible_check_mode
+    - not (kafka_format_sentinel_stat.stat.exists | default(false))
+  changed_when: true
+
 - name: Format KRaft storage (once per cluster, sentinel on meta.properties)
   ansible.builtin.command: >-
     {{ kafka_bin_dir }}/kafka-storage.sh format
@@ -31,3 +46,4 @@
     creates: "{{ kafka_format_sentinel }}"
   become: true
   become_user: "{{ kafka_user }}"
+  when: not ansible_check_mode

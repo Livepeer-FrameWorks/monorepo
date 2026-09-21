@@ -336,6 +336,62 @@ func TestArchitectureGuard_databaseWritesDoNotRunInCheckMode(t *testing.T) {
 	}
 }
 
+func TestKafkaFormatDoesNotRunAsMissingServiceUserInCheckMode(t *testing.T) {
+	t.Parallel()
+	_, ansibleRoots := repoSourceRoots(t)
+	if len(ansibleRoots) == 0 {
+		t.Fatal("ansible source root not found")
+	}
+
+	body := readRoleTask(t, ansibleRoots[0], "kafka", "configure.yml")
+	formatBlock := namedAnsibleTaskBlock(t, body, "Format KRaft storage (once per cluster, sentinel on meta.properties)")
+	if !strings.Contains(formatBlock, "when: not ansible_check_mode") {
+		t.Fatal("Kafka storage formatting must not become the absent kafka user in check mode")
+	}
+	if !strings.Contains(body, "Report pending KRaft storage format under --check") {
+		t.Fatal("Kafka check mode must report pending storage formatting")
+	}
+
+	handlers := readRoleTask(t, ansibleRoots[0], "kafka", filepath.Join("..", "handlers", "main.yml"))
+	for _, name := range []string{"Restart kafka", "Reload kafka"} {
+		block := namedAnsibleTaskBlock(t, handlers, name)
+		if !strings.Contains(block, "not ansible_check_mode") {
+			t.Fatalf("Kafka handler %q must not address an absent service in check mode", name)
+		}
+	}
+}
+
+func TestFreshHostCheckModeDoesNotRequireInstalledRuntimeArtifacts(t *testing.T) {
+	t.Parallel()
+	_, ansibleRoots := repoSourceRoots(t)
+	if len(ansibleRoots) == 0 {
+		t.Fatal("ansible source root not found")
+	}
+
+	redisInstall := readRoleTask(t, ansibleRoots[0], "redis", "install.yml")
+	discovery := namedAnsibleTaskBlock(t, redisInstall, "Discover Redis server binary for named instance")
+	if !strings.Contains(discovery, "not ansible_check_mode") {
+		t.Fatal("Redis check mode must not require a binary from a package it did not install")
+	}
+	if !strings.Contains(redisInstall, "Select Redis server binary for named instance under --check") {
+		t.Fatal("Redis check mode must provide the expected packaged binary path")
+	}
+
+	yugabyteHandlers := readRoleTask(t, ansibleRoots[0], "yugabyte", filepath.Join("..", "handlers", "main.yml"))
+	for _, name := range []string{
+		"Daemon-reload systemd",
+		"Restart yb-master",
+		"Restart yb-tserver",
+		"Reload yb-master",
+		"Reload yb-tserver",
+	} {
+		block := namedAnsibleTaskBlock(t, yugabyteHandlers, name)
+		if !strings.Contains(block, "not ansible_check_mode") {
+			t.Fatalf("Yugabyte handler %q must not address absent services in check mode", name)
+		}
+	}
+}
+
 func readRoleTask(t *testing.T, ansibleRoot, role, task string) string {
 	t.Helper()
 	path := filepath.Join(ansibleRoot, "collections", "ansible_collections", "frameworks", "infra", "roles", role, "tasks", task)

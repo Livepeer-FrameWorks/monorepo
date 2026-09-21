@@ -117,7 +117,7 @@ save a default, or pass them explicitly.`,
 	}
 
 	cmd.Flags().StringVar(&only, "only", "all", "Phase to provision (infrastructure|applications|interfaces|all)")
-	cmd.Flags().StringVar(&version, "version", "", "Target release (stable, rc, v1.2.3); defaults to the cluster channel")
+	cmd.Flags().StringVar(&version, "version", "", "Target release (stable, candidate, rc, v1.2.3); defaults to the cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
@@ -3418,7 +3418,7 @@ func applyPlatformReleaseVersionDefault(config *provisioner.ServiceConfig, platf
 		return
 	}
 	switch strings.TrimSpace(config.Version) {
-	case "", "stable", "latest", "rc":
+	case "", "stable", "latest", "candidate", "rc":
 		if trimmed := strings.TrimSpace(platformVersion); trimmed != "" {
 			config.Version = trimmed
 		}
@@ -6235,11 +6235,23 @@ func detectProvisionTaskState(ctx context.Context, prov provisioner.Provisioner,
 func missingRequiredExternalEnv(serviceType string, env map[string]string) []servicedefs.RequiredEnvVar {
 	var missing []servicedefs.RequiredEnvVar
 	for _, req := range servicedefs.RequiredExternalEnv(serviceType) {
+		if serviceType == "alertmanager" && !alertmanagerExternalNotificationsEnabled(env) && req.Key != "LOOKOUT_ALERTMANAGER_TOKEN" {
+			continue
+		}
 		if strings.TrimSpace(env[req.Key]) == "" {
 			missing = append(missing, req)
 		}
 	}
 	return missing
+}
+
+func alertmanagerExternalNotificationsEnabled(env map[string]string) bool {
+	raw := strings.TrimSpace(env["ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED"])
+	if raw == "" {
+		return true
+	}
+	enabled, err := strconv.ParseBool(raw)
+	return err != nil || enabled
 }
 
 func validateInfrastructureRuntimeRoleConfig(taskType string, config provisioner.ServiceConfig) error {

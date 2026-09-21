@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"frameworks/cli/pkg/credentials"
 
@@ -16,8 +17,35 @@ func newClusterSecretsCmd() *cobra.Command {
 		Short: "Generate cluster secret material for an operator-owned secret store",
 	}
 	cmd.AddCommand(newClusterSecretsGenerateSharedCmd())
+	cmd.AddCommand(newClusterSecretsGenerateInternalCACmd())
 	cmd.AddCommand(newClusterSecretsGenerateMediaAuthorityCmd())
 	cmd.AddCommand(newClusterSecretsGenerateCapacityConsentCmd())
+	return cmd
+}
+
+func newClusterSecretsGenerateInternalCACmd() *cobra.Command {
+	var outputPath string
+	cmd := &cobra.Command{
+		Use:   "generate-internal-ca",
+		Short: "Generate a managed internal service CA",
+		Long:  "Writes a fresh root certificate plus its Navigator signing intermediate and private key to a new mode-0600 dotenv file. Import all three values into the operator-owned SOPS secret store, then securely remove the plaintext fragment.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(outputPath) == "" {
+				return fmt.Errorf("--out is required")
+			}
+			values, err := credentials.GenerateInternalCADeploymentMaterial(time.Now())
+			if err != nil {
+				return err
+			}
+			if err := writeSecretFragment(outputPath, "Managed internal service CA; import all values together.", values); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Internal CA material written to %s (mode 0600).\n", outputPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outputPath, "out", "", "new dotenv fragment path (required; never overwritten)")
 	return cmd
 }
 

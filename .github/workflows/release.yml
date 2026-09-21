@@ -2613,6 +2613,8 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'legacy' }}
           generate_release_notes: true
           files: |
             dist/manifest.yaml
@@ -2657,6 +2659,14 @@ jobs:
       ENV_REPO: Livepeer-FrameWorks/gitops
       RELEASE_BRANCH: release/${{ github.ref_name }}
     steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v6
+        with:
+          path: monorepo
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: monorepo/.go-version
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -2684,15 +2694,15 @@ jobs:
           mkdir -p releases
           cp ../dist/manifest.yaml releases/${{ github.ref_name }}.yaml
 
-          # Update channel pointer
-          channel="stable"
-          if [[ "${{ github.ref_name }}" =~ -rc($|([.-]?[0-9]+)$) ]]; then channel="rc"; fi
-          mkdir -p channels
-          cat > channels/${channel}.yaml <<YAML
-          platform_version: ${{ github.ref_name }}
-          manifest: releases/${{ github.ref_name }}.yaml
-          updated_at: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          YAML
+          # Advance candidate for every release, stable for GA, and the legacy
+          # rc pointer for RC releases. The helper refuses pointer regressions.
+          (
+            cd ../monorepo/tools/release-plan
+            go run . \
+              --gitops "${GITHUB_WORKSPACE}/env-repo" \
+              --tag "${GITHUB_REF_NAME}" \
+              --update-channels
+          )
 
           # Commit and push
           git config user.name "github-actions"
@@ -2703,8 +2713,10 @@ jobs:
 
           # Create or reset to new content
           git checkout -B "${RELEASE_BRANCH}"
-          git add releases/${{ github.ref_name }}.yaml channels/${channel}.yaml
-          git commit -m "Release manifest for ${{ github.ref_name }}"
+          git add releases/${{ github.ref_name }}.yaml channels
+          if ! git diff --cached --quiet; then
+            git commit -m "Release manifest for ${{ github.ref_name }}"
+          fi
           git push --force origin "${RELEASE_BRANCH}"
 
       - name: Create or update PR to env repo

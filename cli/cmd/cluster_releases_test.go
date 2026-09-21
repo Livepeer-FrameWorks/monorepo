@@ -41,6 +41,7 @@ func TestNormalizeReleaseTargetChannel(t *testing.T) {
 	}{
 		{" stable ", "stable"},
 		{"STABLE", "stable"},
+		{"Candidate", "candidate"},
 		{"Rc", "rc"},
 	}
 

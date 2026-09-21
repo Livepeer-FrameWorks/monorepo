@@ -130,18 +130,9 @@ func listReleases(gitopsDir string) ([]parsedTag, error) {
 	return out, nil
 }
 
-// resolveBaseline picks the baseline release manifest for newTag given the
-// available releases. Rules (matching docs/architecture/build-and-packaging.md
-// "channel-aware carry-forward"):
-//
-//  1. stable → stable: most recent stable released before newTag.
-//  2. rc → rc:         most recent rc released before newTag.
-//  3. rc → stable promotion (same MMR, no rc suffix): the most recent rc
-//     with the same MMR is the natural baseline — a no-op
-//     promotion skips the entire build matrix.
-//  4. stable → rc (first rc on a new MMR): falls back to the most recent
-//     stable; the source-hash comparison catches actually-
-//     changed components.
+// resolveBaseline picks the latest semantic-version predecessor of newTag.
+// Stable and rc releases share one lineage: an rc newer than the latest stable
+// is the natural baseline, while an old rc can never displace a newer stable.
 //
 // If newTag has no eligible baseline (first release ever), the returned
 // parsedTag has wellFormed=false and the caller treats every component as
@@ -153,58 +144,14 @@ func resolveBaseline(newTag parsedTag, releases []parsedTag) (parsedTag, []Basel
 		return parsedTag{}, lineage
 	}
 
-	// rc → stable promotion: same M.m.p, no rc suffix → most recent rc with same M.m.p.
-	if !newTag.isRC {
-		latestSameMMRrc := latest(releases, func(p parsedTag) bool {
-			return p.isRC && p.major == newTag.major && p.minor == newTag.minor && p.patch == newTag.patch && p.less(newTag)
-		})
-		if latestSameMMRrc.wellFormed {
-			lineage = append(lineage, BaselineLineageStep{
-				Track: string(TrackRC),
-				Tag:   latestSameMMRrc.raw,
-				Why:   fmt.Sprintf("rc→stable promotion: most recent rc of %d.%d.%d", newTag.major, newTag.minor, newTag.patch),
-			})
-			return latestSameMMRrc, lineage
-		}
-		// Otherwise: most recent stable strictly earlier than newTag.
-		latestStable := latest(releases, func(p parsedTag) bool {
-			return !p.isRC && p.less(newTag)
-		})
-		if latestStable.wellFormed {
-			lineage = append(lineage, BaselineLineageStep{
-				Track: string(TrackStable),
-				Tag:   latestStable.raw,
-				Why:   "stable→stable: most recent prior stable",
-			})
-			return latestStable, lineage
-		}
-		lineage = append(lineage, BaselineLineageStep{Tag: newTag.raw, Why: "no prior stable found; treat all components as build"})
-		return parsedTag{}, lineage
-	}
-
-	// newTag is an rc.
-	latestRC := latest(releases, func(p parsedTag) bool {
-		return p.isRC && p.less(newTag)
-	})
-	if latestRC.wellFormed {
+	predecessor := latest(releases, func(p parsedTag) bool { return p.less(newTag) })
+	if predecessor.wellFormed {
 		lineage = append(lineage, BaselineLineageStep{
-			Track: string(TrackRC),
-			Tag:   latestRC.raw,
-			Why:   "rc→rc: most recent prior rc",
+			Track: string(classifyTrack(predecessor.raw)),
+			Tag:   predecessor.raw,
+			Why:   "latest semantic-version predecessor",
 		})
-		return latestRC, lineage
-	}
-	// First rc on this MMR: fall back to most recent stable.
-	latestStable := latest(releases, func(p parsedTag) bool {
-		return !p.isRC && p.less(newTag)
-	})
-	if latestStable.wellFormed {
-		lineage = append(lineage, BaselineLineageStep{
-			Track: string(TrackStable),
-			Tag:   latestStable.raw,
-			Why:   "stable→rc fallback: no prior rc; using most recent stable",
-		})
-		return latestStable, lineage
+		return predecessor, lineage
 	}
 	lineage = append(lineage, BaselineLineageStep{Tag: newTag.raw, Why: "no prior release found; treat all components as build"})
 	return parsedTag{}, lineage

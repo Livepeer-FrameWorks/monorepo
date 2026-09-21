@@ -16,8 +16,9 @@ func TestResolveVersionNormalization(t *testing.T) {
 		version string
 	}{
 		{input: "", channel: "stable", version: "latest"},
-		{input: "latest", channel: "stable", version: "latest"},
+		{input: "latest", channel: "candidate", version: "latest"},
 		{input: "stable", channel: "stable", version: "latest"},
+		{input: "candidate", channel: "candidate", version: "latest"},
 		{input: "rc", channel: "rc", version: "latest"},
 		{input: "v1.2.3", channel: "stable", version: "v1.2.3"},
 		{input: "1.2.3", channel: "stable", version: "v1.2.3"},

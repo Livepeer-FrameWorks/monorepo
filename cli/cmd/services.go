@@ -345,7 +345,7 @@ func newServicesPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&configSecrets, "config-secrets", "", "path to secrets env file (default: config/env/secrets.env)")
 	cmd.Flags().StringVar(&envOutput, "env-output", "", "path for generated env file (default: <dir>/.central.env)")
 	cmd.Flags().StringVar(&envContext, "env-context", "central", "value for ENV_CONTEXT in the generated env file")
-	cmd.Flags().StringVar(&version, "version", "stable", "release channel (stable|rc) or pinned version (vX.Y.Z) for image digest resolution")
+	cmd.Flags().StringVar(&version, "version", "stable", "release channel (stable|candidate|rc) or pinned version (vX.Y.Z) for image digest resolution")
 	cmd.Flags().BoolVar(&unpinned, "unpinned", false, "skip manifest resolution and emit the catalog's image strings verbatim (offline/dev escape hatch)")
 	return cmd
 }

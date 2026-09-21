@@ -6,16 +6,16 @@
       - alertmanager_artifact_checksum | length > 0
       - alertmanager_lookout_url | length > 0
       - alertmanager_lookout_token | length > 0
-      - alertmanager_heartbeat_url | length > 0
-      - alertmanager_email_to | length > 0
-      - alertmanager_smtp_smarthost | length > 0
-      - alertmanager_smtp_from | length > 0
+      - not (alertmanager_external_notifications_enabled | bool) or alertmanager_heartbeat_url | length > 0
+      - not (alertmanager_external_notifications_enabled | bool) or alertmanager_email_to | length > 0
+      - not (alertmanager_external_notifications_enabled | bool) or alertmanager_smtp_smarthost | length > 0
+      - not (alertmanager_external_notifications_enabled | bool) or alertmanager_smtp_from | length > 0
     fail_msg: >-
       alertmanager requires artifact URL/checksum, a Lookout service in the
       manifest (rendered as ALERTMANAGER_LOOKOUT_URL), plus
-      LOOKOUT_ALERTMANAGER_TOKEN, ALERTMANAGER_HEARTBEAT_URL,
-      ALERTMANAGER_EMAIL_TO, and the platform SMTP_HOST, SMTP_PORT and
-      FROM_EMAIL in the manifest env files
+      LOOKOUT_ALERTMANAGER_TOKEN and, when external notifications are enabled,
+      ALERTMANAGER_HEARTBEAT_URL, ALERTMANAGER_EMAIL_TO, and the platform
+      SMTP_HOST, SMTP_PORT and FROM_EMAIL in the manifest env files
 
 - name: Set alertmanager extract directory
   ansible.builtin.set_fact:

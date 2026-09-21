@@ -1,5 +1,5 @@
 // Package main implements the release-plan tool: it inspects the monorepo
-// source tree against a track-aware baseline release manifest and decides,
+// source tree against the latest predecessor release manifest and decides,
 // per artefact, whether the build matrix should rebuild it or carry forward
 // the baseline's image+digest and native binary references unchanged.
 //

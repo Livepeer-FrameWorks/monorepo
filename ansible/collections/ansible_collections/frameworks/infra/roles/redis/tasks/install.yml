@@ -66,6 +66,15 @@
   changed_when: false
   check_mode: false
   when:
+    - not ansible_check_mode
+    - redis_named_instance | bool
+
+- name: Select Redis server binary for named instance under --check
+  ansible.builtin.set_fact:
+    redis_server_binary:
+      stdout: "{{ '/usr/bin/valkey-server' if redis_engine == 'valkey' else '/usr/bin/redis-server' }}"
+  when:
+    - ansible_check_mode
     - redis_named_instance | bool
 
 - name: Discover Redis runtime user for named instance

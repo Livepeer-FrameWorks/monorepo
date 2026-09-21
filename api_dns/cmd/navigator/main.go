@@ -69,8 +69,12 @@ type NavigatorServer struct {
 	// it so a node/service change refreshes <service>.<node>.infra.<root> at once
 	// instead of waiting for the periodic reconcile tick.
 	Reconciler *worker.DNSReconciler
-	Logger     logging.Logger
-	Metrics    *ServerMetrics
+	// DNSRecordsDisabled leaves certificate issuance and renewal active while
+	// preventing public A/LB/alias reconciliation. Private staging deployments
+	// use split DNS and must not publish RFC1918 origins to provider APIs.
+	DNSRecordsDisabled bool
+	Logger             logging.Logger
+	Metrics            *ServerMetrics
 	// RootDomain is the operator base domain (e.g. "frameworks.network").
 	// Custom-domain RPCs use it to build the canonical CNAME instructions
 	// returned to the dashboard.
@@ -174,7 +178,12 @@ func main() {
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
-	go reconciler.Start(context.Background())
+	dnsRecordsEnabled := config.GetEnvBool("NAVIGATOR_DNS_RECORDS_ENABLED", true)
+	if dnsRecordsEnabled {
+		go reconciler.Start(context.Background())
+	} else {
+		logger.Info("Public DNS record reconciliation disabled; certificate management remains active")
+	}
 
 	// Tenant alias worker reconciles DNS from Navigator's durable
 	// per-edge ACK state. Foghorn reports ACKs through Navigator gRPC.
@@ -190,7 +199,9 @@ func main() {
 		tenantZoneLabel,
 		staleSeconds,
 	)
-	go aliasWorker.Start(context.Background())
+	if dnsRecordsEnabled {
+		go aliasWorker.Start(context.Background())
+	}
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("navigator", version.Version)
@@ -204,16 +215,17 @@ func main() {
 
 	// === Server Setup ===
 	navigatorServer := &NavigatorServer{
-		DNSManager:        dnsManager,
-		CertManager:       certManager,
-		InternalCAManager: internalCAManager,
-		AliasPublisher:    aliasWorker,
-		Quartermaster:     qmClient,
-		TenantClusters:    certManager,
-		Reconciler:        reconciler,
-		Logger:            logger,
-		Metrics:           serverMetrics,
-		RootDomain:        rootDomain,
+		DNSManager:         dnsManager,
+		CertManager:        certManager,
+		InternalCAManager:  internalCAManager,
+		AliasPublisher:     aliasWorker,
+		Quartermaster:      qmClient,
+		TenantClusters:     certManager,
+		Reconciler:         reconciler,
+		DNSRecordsDisabled: !dnsRecordsEnabled,
+		Logger:             logger,
+		Metrics:            serverMetrics,
+		RootDomain:         rootDomain,
 	}
 
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
@@ -439,6 +451,13 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *dnspb.SyncDNSRequest
 		log = log.WithField("cluster_id", req.GetClusterId())
 	}
 	log.Info("Received SyncDNS request")
+	if s.DNSRecordsDisabled {
+		log.Info("Public DNS record reconciliation is disabled")
+		return &dnspb.SyncDNSResponse{
+			Success: true,
+			Message: "DNS record reconciliation disabled by operator",
+		}, nil
+	}
 
 	var (
 		partialErrors map[string]string

@@ -9,10 +9,13 @@
     state: restarted
     daemon_reload: true
   register: kafka_restarted
+  when: not ansible_check_mode
 
 - name: Reload kafka
   listen: kafka reload
   ansible.builtin.systemd:
     name: "{{ kafka_service_name }}"
     state: reloaded
-  when: kafka_restarted is not defined
+  when:
+    - not ansible_check_mode
+    - kafka_restarted is not defined

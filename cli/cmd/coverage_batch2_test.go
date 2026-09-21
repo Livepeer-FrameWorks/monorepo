@@ -149,7 +149,7 @@ func TestServiceConfigForTask(t *testing.T) {
 
 func TestReleaseTargetVersionForSelector(t *testing.T) {
 	t.Parallel()
-	for _, sel := range []string{"", "latest", "stable", "rc", "  STABLE  "} {
+	for _, sel := range []string{"", "latest", "stable", "candidate", "rc", "  STABLE  "} {
 		if got := releaseTargetVersionForSelector(sel, "v1.2.3"); got != "" {
 			t.Fatalf("channel selector %q should yield empty (follow head), got %q", sel, got)
 		}

@@ -61,7 +61,7 @@ Version defaults to the cluster's configured channel (set with
 
 Version can be:
   - Specific version: v0.0.0-rc1, v1.2.3
-  - Channel: stable, rc (uses latest from channel)
+  - Channel: stable, candidate, rc (uses latest from channel)
   - Default: cluster channel (or stable)
 
 Use --all to upgrade all enabled services in dependency order.
@@ -72,7 +72,7 @@ rollback does not undo schema or data migrations, so destructive contract steps
 and required data migrations must follow the target release notes.`,
 		Example: `  frameworks cluster upgrade quartermaster
   frameworks cluster upgrade commodore --version v0.0.0-rc2
-  frameworks cluster upgrade bridge --version rc --dry-run
+  frameworks cluster upgrade bridge --version candidate --dry-run
   frameworks cluster upgrade --all --yes`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 0 {
@@ -97,7 +97,7 @@ and required data migrations must follow the target release notes.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&version, "version", "", "Version to upgrade to (stable, rc, v1.2.3); defaults to cluster channel")
+	cmd.Flags().StringVar(&version, "version", "", "Version to upgrade to (stable, candidate, rc, v1.2.3); defaults to cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be upgraded without executing")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after upgrade")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
@@ -137,7 +137,7 @@ rollout.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&version, "version", "", "Version to plan for (stable, rc, v1.2.3); defaults to cluster channel")
+	cmd.Flags().StringVar(&version, "version", "", "Version to plan for (stable, candidate, rc, v1.2.3); defaults to cluster channel")
 	return cmd
 }
 

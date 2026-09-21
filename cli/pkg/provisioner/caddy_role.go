@@ -8,7 +8,7 @@ import (
 
 func caddyRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
 	version := firstNonEmpty(config.Version, metaString(config.Metadata, "version"))
-	if version == "" || version == "stable" || version == "latest" {
+	if version == "" || version == "stable" || version == "candidate" || version == "latest" || version == "rc" {
 		version = "2.8.4"
 	}
 
