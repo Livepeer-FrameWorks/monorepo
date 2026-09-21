@@ -217,11 +217,25 @@ func markBaselineVerificationPending(ctx context.Context, probe serviceDatabaseP
 }
 
 // createBaselineReferenceDatabase creates the reference with the source
-// database's encoding and locale on PostgreSQL; YugabyteDB databases are
-// created without options, as the yugabyte role creates them.
+// database's encoding and locale on PostgreSQL. On YugabyteDB it copies the
+// source's colocation: index definitions print a colocated table's leading key
+// as ASC and a distributed one's as HASH, so a reference in the other shape
+// would differ from a healthy source in every index.
 func createBaselineReferenceDatabase(ctx context.Context, probe serviceDatabaseProbe, source, reference string) error {
 	statement := "CREATE DATABASE " + pq.QuoteIdentifier(reference)
-	if !probe.yugabyte() {
+	if probe.yugabyte() {
+		colocated, err := probe.scalarText(ctx, source, "SELECT yb_is_database_colocated()")
+		if err != nil {
+			return fmt.Errorf("read colocation of %s: %w", source, err)
+		}
+		switch strings.TrimSpace(colocated) {
+		case "t", "true":
+			statement += " WITH COLOCATION = true"
+		case "f", "false":
+		default:
+			return fmt.Errorf("database %s reports colocation %q", source, colocated)
+		}
+	} else {
 		built, err := probe.scalarText(ctx, probe.maintenanceDatabase(), fmt.Sprintf(
 			"SELECT format('CREATE DATABASE %%I TEMPLATE template0 ENCODING %%L LC_COLLATE %%L LC_CTYPE %%L', %s, pg_encoding_to_char(encoding), datcollate, datctype) FROM pg_database WHERE datname = %s",
 			pq.QuoteLiteral(reference), pq.QuoteLiteral(source)))
@@ -236,9 +250,28 @@ func createBaselineReferenceDatabase(ctx context.Context, probe serviceDatabaseP
 	return probe.exec(ctx, probe.maintenanceDatabase(), statement)
 }
 
+// dropDatabaseIfExists drops name. A backend whose client has already disconnected can outlive the engine's own short
+// wait on a loaded YugabyteDB node, so a drop refused because the database is still being accessed is retried for up
+// to referenceDropWait before it fails.
 func dropDatabaseIfExists(ctx context.Context, probe serviceDatabaseProbe, name string) error {
-	return probe.exec(ctx, probe.maintenanceDatabase(), "DROP DATABASE IF EXISTS "+pq.QuoteIdentifier(name))
+	deadline := time.Now().Add(referenceDropWait)
+	for {
+		err := probe.exec(ctx, probe.maintenanceDatabase(), "DROP DATABASE IF EXISTS "+pq.QuoteIdentifier(name))
+		if err == nil || !strings.Contains(err.Error(), "is being accessed by other users") || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(referenceDropRetryInterval):
+		}
+	}
 }
+
+const (
+	referenceDropWait          = time.Minute
+	referenceDropRetryInterval = 2 * time.Second
+)
 
 func baselineReferenceName(database, suffix string) (string, error) {
 	name := database + baselineReferenceInfix + suffix

@@ -38,6 +38,17 @@ argument_specs:
         type: str
         required: true
         description: Release version label (for logging/introspection).
+      yugabyte_restart_scope:
+        type: str
+        required: false
+        default: all
+        choices: [all, master, tserver]
+        description: Processes a restart touches; cluster upgrade restarts every master before any tserver.
+      yugabyte_allow_engine_change:
+        type: bool
+        required: false
+        default: false
+        description: Allow changing the engine of a node that already joined the universe; set only by cluster upgrade.
       yugabyte_master_addresses:
         type: str
         required: false
@@ -75,6 +86,25 @@ argument_specs:
             type: str
             required: false
             no_log: true
+          colocated:
+            type: bool
+            required: false
+      yugabyte_database_placements:
+        type: list
+        elements: dict
+        required: false
+        description: Name, owner, and colocation of each database in yugabyte_databases, without credentials.
+        options:
+          name:
+            type: str
+            required: true
+          owner:
+            type: str
+            required: true
+          colocated:
+            type: bool
+            required: true
+            description: Create the database WITH COLOCATION = true when it does not exist yet.
       yugabyte_application_password:
         type: str
         required: false

@@ -1,0 +1,87 @@
+# YugabyteDB placement for the purser database. Every table created by schema/purser.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: purser
+layout: colocated
+colocated_tables:
+  - purser.billing_collection_balances
+  - purser.billing_collection_writeoffs
+  - purser.hd_wallet_state
+  - purser.crypto_scan_cursors
+  - purser.crypto_sweep_relayer_nonces
+  - purser.billing_tiers
+  - purser.tier_entitlements
+  - purser.meter_definitions
+  - purser.tier_pricing_rules
+  - purser.tenant_subscriptions
+  - purser.subscription_pricing_overrides
+  - purser.subscription_entitlement_overrides
+  - purser.cluster_owners
+  - purser.platform_fee_policy
+  - purser.prepaid_balances
+  - purser.usage_reservations
+  - purser.metering_sources
+  - purser.cluster_pricing
+  - purser.mollie_customers
+  - purser.mollie_mandates
+  - purser.cluster_subscriptions
+  - purser.vat_rate_periods
+  - purser.tenant_balance_rollups
+  - public._schema_baseline
+distributed_tables:
+  # One row per anomalous deposit reference, so it grows with events.
+  - purser.crypto_accounting_anomalies
+  - purser.delegated_jwt_replays
+  - purser.billing_invoices
+  - purser.billing_collection_entries
+  - purser.billing_payments
+  - purser.crypto_wallets
+  - purser.crypto_deposit_events
+  - purser.crypto_custody_addresses
+  - purser.crypto_sweep_batches
+  - purser.crypto_sweep_items
+  - purser.crypto_sweep_sources
+  - purser.crypto_sweep_events
+  - purser.invoice_line_items
+  - purser.operator_credit_ledger
+  - purser.operator_payouts
+  - purser.balance_transactions
+  - purser.pending_topups
+  - purser.usage_records
+  - purser.provider_usage_records
+  - purser.usage_reports
+  - purser.usage_report_quarantine
+  - purser.prepaid_usage_settlements
+  - purser.metering_windows
+  - purser.metering_anomalies
+  - purser.usage_adjustments
+  - purser.stripe_meter_events_outbox
+  - purser.invoice_email_outbox
+  - purser.cluster_pricing_history
+  - purser.webhook_events
+  - purser.x402_nonces
+  - purser.x402_payment_quotes
+  - purser.x402_settlement_attempts
+  - purser.x402_rate_limit_windows
+  - purser.x402_mutation_results
+  - purser.simplified_invoices
+  - purser.crypto_invoices
+  - purser.credit_notes
+  - purser.vat_validation_evidence
+  - purser.payment_provider_intents
+  - purser.provider_payment_objects
+  - purser.billing_payment_attempts
+  - purser.payment_reversals
+  - purser.operator_credit_clawback_reversals
+  - purser.mollie_payment_observations
+  - purser.provider_webhook_inbox
+  - purser.billing_event_outbox
+  - purser.usage_records_quarantine
+  - purser.media_authority_refresh_outbox
+  - purser.livepeer_funding_attempts
+write_rate_benchmark:
+  - purser.prepaid_balances
+  - purser.usage_reservations
+  - purser.tenant_balance_rollups
+  - purser.billing_collection_balances

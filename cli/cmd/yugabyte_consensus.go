@@ -23,7 +23,9 @@ const (
 )
 
 var (
-	yugabyteRaftHeaderPattern = regexp.MustCompile(`^Current raft config:\s*current_term:\s*([0-9]+)\s+leader_uuid:\s*"([^"]+)"\s+config\s*\{\s*opid_index:\s*(-?[0-9]+)\s+(.*)\s*\}\s*$`)
+	// The index of the operation that committed the config is printed as opid_index up to 2025.2 and as
+	// committed_op_index from 2026.1, so both spellings are accepted.
+	yugabyteRaftHeaderPattern = regexp.MustCompile(`^Current raft config:\s*current_term:\s*([0-9]+)\s+leader_uuid:\s*"([^"]+)"\s+config\s*\{\s*(?:opid_index|committed_op_index):\s*(-?[0-9]+)\s+(.*)\s*\}\s*$`)
 	yugabyteRaftPeerPattern   = regexp.MustCompile(`peers\s*\{\s*permanent_uuid:\s*"([^"]+)"\s+member_type:\s*([A-Z_]+)\s+last_known_private_addr\s*\{\s*host:\s*"([^"]+)"\s+port:\s*([0-9]+)\s*\}`)
 )
 
@@ -100,8 +102,9 @@ func auditYugabyteMasterConsensus(ctx context.Context, manifest *inventory.Manif
 func yugabyteConsensusProbeCommand(masterAddresses, localMasterHost string) string {
 	masters := ssh.ShellQuote(masterAddresses)
 	mastersURL := ssh.ShellQuote("http://" + net.JoinHostPort(localMasterHost, "7000") + "/api/v1/masters")
-	return fmt.Sprintf(`set -eu
-admin=/opt/yugabyte/bin/yb-admin
+	return provisioner.YugabyteBinaryResolverShell + fmt.Sprintf(`
+set -eu
+admin="$(fw_yb_bin yb-admin)"
 state_file="$(mktemp)"
 trap 'rm -f "$state_file"' EXIT
 echo %s
@@ -165,7 +168,10 @@ func parseAndValidateYugabyteConsensus(output string, expectedAddresses []string
 	if consensus.LeaderUUID != liveLeaderUUID {
 		return nil, fmt.Errorf("leader identity mismatch: committed leader %s, live leader %s", consensus.LeaderUUID, liveLeaderUUID)
 	}
-	if consensus.Term <= 0 || consensus.OpID < 0 {
+	// opid_index is the operation that committed this config. Masters bootstrapped together from a static address
+	// list keep their initial config, committed with opid_index -1, until the first membership change; a pending
+	// change is reported separately. Anything below -1, or no term, is not a committed config.
+	if consensus.Term <= 0 || consensus.OpID < -1 {
 		return nil, fmt.Errorf("master Raft config is not committed: term=%d opid=%d", consensus.Term, consensus.OpID)
 	}
 	return consensus, nil

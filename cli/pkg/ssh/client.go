@@ -75,9 +75,15 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	result.Stdout = strings.TrimSpace(stdout.String())
-	result.Stderr = strings.TrimSpace(stderr.String())
+	return CompleteRun(result, c.resolution.Target, command, stdout.Bytes(), stderr.Bytes(), err)
+}
 
+// CompleteRun fills result from a finished remote command the way Client.Run reports it: stdout and stderr trimmed of
+// surrounding whitespace, and a failed run returned as an error that names the target and carries the capped stderr.
+// Test runners that stand in for Client use it so callers see production semantics.
+func CompleteRun(result *CommandResult, target, command string, stdout, stderr []byte, err error) (*CommandResult, error) {
+	result.Stdout = strings.TrimSpace(string(stdout))
+	result.Stderr = strings.TrimSpace(string(stderr))
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -86,9 +92,8 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 			result.ExitCode = -1
 		}
 		result.Error = err
-		return result, wrapRunError(c.resolution.Target, command, result.ExitCode, result.Stderr, err)
+		return result, wrapRunError(target, command, result.ExitCode, result.Stderr, err)
 	}
-
 	result.ExitCode = 0
 	return result, nil
 }

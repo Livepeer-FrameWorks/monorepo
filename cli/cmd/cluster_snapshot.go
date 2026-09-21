@@ -12,6 +12,7 @@ import (
 
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -391,25 +392,23 @@ func postgresSnapshotScript(target postgresSnapshotTarget) string {
 		peer = "1"
 	}
 	dbs := strings.Join(safeDBNames(target.Databases), " ")
-	return fmt.Sprintf(`set +e
+	return provisioner.YugabyteBinaryResolverShell + fmt.Sprintf(`
+set +e
 PORT=%d
 USER_NAME=%s
 PASSWORD=%s
 BINARY=%s
 PEER=%s
 DATABASES=%s
+PLACEMENT_SQL=%s
 resolve_sql_binary() {
+  if [ "$BINARY" = "ysqlsh" ]; then
+    fw_yb_bin ysqlsh
+    return $?
+  fi
   if command -v "$BINARY" >/dev/null 2>&1; then
     command -v "$BINARY"
     return 0
-  fi
-  if [ "$BINARY" = "ysqlsh" ]; then
-    for path in /home/yugabyte/tserver/bin/ysqlsh /opt/yugabyte/bin/ysqlsh /usr/local/bin/ysqlsh; do
-      if [ -x "$path" ]; then
-        echo "$path"
-        return 0
-      fi
-    done
   fi
   return 1
 }
@@ -461,12 +460,17 @@ for db in $DATABASES; do
   run_section "largest user tables" "$db" "SELECT schemaname, relname, n_live_tup, pg_size_pretty(pg_total_relation_size(relid)) AS total_size FROM pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 80;" 1
   run_section "migration ledger" "$db" "SELECT version, phase, seq, checksum FROM _migrations ORDER BY version, phase, seq LIMIT 200;" 0
   run_section "recent data migrations" "$db" "SELECT id, status, updated_at FROM data_migrations ORDER BY updated_at DESC LIMIT 80;" 0
+  if [ "$BINARY" = "ysqlsh" ]; then
+    run_section "yugabyte layout: database colocation" "$db" "SELECT yb_is_database_colocated() AS colocated;" 0
+    run_section "yugabyte layout: relation placement" "$db" "$PLACEMENT_SQL" 0
+    run_section "yugabyte layout: tablets hosted by this node" "$db" "SELECT count(DISTINCT tablet_id) AS tablets, count(*) AS tablet_peers FROM yb_local_tablets WHERE namespace_name = current_database() AND state = 'TABLET_DATA_READY';" 0
+  fi
 done
 if [ "$REQUIRED_OK" != "1" ] || [ "$REQUIRED_FAILED" = "1" ]; then
   exit 1
 fi
 exit 0
-`, target.Port, ssh.ShellQuote(target.User), ssh.ShellQuote(target.Password), ssh.ShellQuote(target.Binary), peer, ssh.ShellQuote(dbs), ssh.ShellQuote(target.HostName))
+`, target.Port, ssh.ShellQuote(target.User), ssh.ShellQuote(target.Password), ssh.ShellQuote(target.Binary), peer, ssh.ShellQuote(dbs), ssh.ShellQuote(provisioner.YugabyteRelationPlacementQuery), ssh.ShellQuote(target.HostName))
 }
 
 func clickHouseSnapshotScript(databases []string, port int, user, password string) string {

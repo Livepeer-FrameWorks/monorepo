@@ -336,3 +336,48 @@ func TestClassifyUpgradeFirstInstall(t *testing.T) {
 		t.Fatal("nil detector state must fail closed")
 	}
 }
+
+// TestUpgradeReleaseInfoFindsInfrastructureEntries covers engines a release lists under infrastructure, such as
+// Yugabyte: cluster upgrade must find them, because it is the only path allowed to change a joined node's engine.
+func TestUpgradeReleaseInfoFindsInfrastructureEntries(t *testing.T) {
+	release := &gitops.Manifest{
+		Services: []gitops.ServiceEntry{{Name: "commodore", ServiceVersion: "v0.3.10", Image: "img", Digest: "sha256:abc"}},
+		Infrastructure: []gitops.InfrastructureEntry{{Name: "yugabyte", Version: "2026.1.1.2", Artifacts: []gitops.Artifact{
+			{Arch: "linux-amd64", URL: "https://downloads.yugabyte.com/releases/2026.1.1.2/yb.tar.gz", Checksum: "sha256:488a"},
+		}}},
+	}
+	info, err := upgradeReleaseInfo(release, "yugabyte")
+	if err != nil || info.Version != "2026.1.1.2" || info.Binaries["linux-amd64"].Checksum != "sha256:488a" {
+		t.Fatalf("yugabyte release info = %+v, %v", info, err)
+	}
+	if info, err = upgradeReleaseInfo(release, "commodore"); err != nil || info.Version != "v0.3.10" {
+		t.Fatalf("service release info = %+v, %v; services must still resolve as services", info, err)
+	}
+	if _, err = upgradeReleaseInfo(release, "missing"); err == nil {
+		t.Fatal("an unknown component resolved")
+	}
+}
+
+func TestUpgradeInstanceIDCarriesTheYugabyteNodeIdentity(t *testing.T) {
+	manifest := &inventory.Manifest{Infrastructure: inventory.InfrastructureConfig{Postgres: &inventory.PostgresConfig{
+		Enabled: true,
+		Engine:  "yugabyte",
+		Nodes: []inventory.PostgresNode{
+			{Host: "db-a", ID: 1},
+			{Host: "db-b", ID: 2},
+			{Host: "db-c", ID: 3},
+		},
+	}}}
+	// The placement zone of a node is derived from this id, so each host must resolve to its own.
+	for host, want := range map[string]string{"db-a": "1", "db-b": "2", "db-c": "3"} {
+		if got := upgradeInstanceID(manifest, "yugabyte", inventory.Host{Name: host}); got != want {
+			t.Fatalf("upgradeInstanceID(%s) = %q, want %q", host, got, want)
+		}
+	}
+	if got := upgradeInstanceID(manifest, "commodore", inventory.Host{Name: "db-a"}); got != "" {
+		t.Fatalf("upgradeInstanceID for a non-yugabyte service = %q, want empty", got)
+	}
+	if got := upgradeInstanceID(manifest, "yugabyte", inventory.Host{Name: "unknown"}); got != "" {
+		t.Fatalf("upgradeInstanceID for a host outside the universe = %q, want empty", got)
+	}
+}

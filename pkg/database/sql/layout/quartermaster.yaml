@@ -1,0 +1,40 @@
+# YugabyteDB placement for the quartermaster database. Every table created by schema/quartermaster.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: quartermaster
+layout: colocated
+colocated_tables:
+  - quartermaster.billing_entitlement_handoffs
+  - quartermaster.tenants
+  - quartermaster.tenant_attribution
+  - quartermaster.bootstrap_tenant_aliases
+  - quartermaster.referral_codes
+  - quartermaster.infrastructure_clusters
+  - quartermaster.infrastructure_nodes
+  - quartermaster.services
+  - quartermaster.cluster_services
+  - quartermaster.service_instances
+  - quartermaster.service_cluster_assignments
+  - quartermaster.mesh_topology_state
+  - quartermaster.mesh_node_configs
+  - quartermaster.tls_bundles
+  - quartermaster.ingress_sites
+  - quartermaster.tenant_cluster_assignments
+  - quartermaster.tenant_cluster_access
+  - quartermaster.edge_releases
+  - quartermaster.cluster_release_targets
+  - quartermaster.node_fingerprints
+  - quartermaster.bootstrap_tokens
+  - quartermaster.cluster_invites
+  - public._schema_baseline
+distributed_tables:
+  - quartermaster.delegated_jwt_replays
+  - quartermaster.service_event_outbox
+  - quartermaster.navigator_custom_domain_outbox
+  - quartermaster.navigator_tenant_alias_outbox
+  - quartermaster.media_authority_refresh_outbox
+  - quartermaster.media_capacity_consent_changes
+write_rate_benchmark:
+  - quartermaster.infrastructure_nodes
+  - quartermaster.service_instances

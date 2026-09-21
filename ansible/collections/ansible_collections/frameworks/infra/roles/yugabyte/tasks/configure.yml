@@ -81,6 +81,7 @@
     owner: root
     group: root
     mode: "0644"
+  when: yugabyte_restart_scope in ['all', 'tserver']
   notify:
     - yugabyte daemon-reload
     - yugabyte restart tserver

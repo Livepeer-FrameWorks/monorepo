@@ -16,6 +16,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -608,7 +609,8 @@ func logsSnapshotScript(opts logsSnapshotOptions) string {
 	if opts.Boot {
 		boot = "1"
 	}
-	return fmt.Sprintf(`set +e
+	return provisioner.YugabyteBinaryResolverShell + fmt.Sprintf(`
+set +e
 SINCE=%s
 BOOT=%s
 TAIL=%d
@@ -693,11 +695,12 @@ if systemctl list-unit-files yb-master.service --no-legend --no-pager >/dev/null
     master_addresses="$(sed -n 's/^--master_addresses=//p' "$master_conf" | head -n 1)"
     web_host="$(sed -n 's/^--webserver_interface=//p' "$master_conf" | head -n 1)"
     web_port="$(sed -n 's/^--webserver_port=//p' "$master_conf" | head -n 1)"
-    if [ -n "$master_addresses" ] && [ -x /opt/yugabyte/bin/yb-admin ]; then
+    admin="$(fw_yb_bin yb-admin 2>/dev/null)"
+    if [ -n "$master_addresses" ] && [ -n "$admin" ]; then
       echo "-- live masters --"
-      /opt/yugabyte/bin/yb-admin --master_addresses "$master_addresses" list_all_masters 2>&1 || true
+      "$admin" --master_addresses "$master_addresses" list_all_masters 2>&1 || true
       echo "-- committed master raft configs --"
-      /opt/yugabyte/bin/yb-admin --master_addresses "$master_addresses" dump_masters_state CONSOLE 2>/dev/null | grep '^Current raft config:' | sort -u || true
+      "$admin" --master_addresses "$master_addresses" dump_masters_state CONSOLE 2>/dev/null | grep '^Current raft config:' | sort -u || true
     fi
     if [ -n "$web_host" ] && [ -n "$web_port" ] && command -v curl >/dev/null 2>&1; then
       echo "-- master health --"

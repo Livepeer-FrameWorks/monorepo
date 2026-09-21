@@ -410,6 +410,25 @@ func ServiceDatabaseLookup(service string) (string, bool) {
 	return db, ok
 }
 
+// ServiceDatabaseNames returns the distinct platform databases the catalog assigns to services, sorted. A corrupt
+// catalog returns nil; callers that must fail closed check LoadError first.
+func ServiceDatabaseNames() []string {
+	if embedded.err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(embedded.serviceDatabases))
+	names := make([]string, 0, len(embedded.serviceDatabases))
+	for _, db := range embedded.serviceDatabases {
+		if _, ok := seen[db]; ok {
+			continue
+		}
+		seen[db] = struct{}{}
+		names = append(names, db)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // LoadError exposes any parse error encountered loading the embedded catalog.
 // Callers that need to fail-closed on a corrupt catalog should check this.
 func LoadError() error {

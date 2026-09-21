@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -381,7 +382,20 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	// Scale the deadline with replica count — each host runs the full
 	// provision+health cycle sequentially.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(hosts))*10*time.Minute)
+	perHost := 10 * time.Minute
+	if serviceName == "yugabyte" {
+		// Each node may wait for the masters to confirm it can go down and then for its own recovery.
+		perHost += 2 * yugabyteRollRecoveryTimeout
+	}
+	deadline := time.Duration(len(hosts)) * perHost
+	if serviceName == "yugabyte" {
+		// After installing the engine and restarting the masters, the tservers restart in a second pass through the
+		// same gate (and any master an interruption left on the old binary in a first one), each node waiting for
+		// permission and for recovery. Finalizing then waits for the universe to settle and rewrites the YSQL catalog.
+		deadline += 2*time.Duration(len(hosts))*(2*yugabyteRollRecoveryTimeout+5*time.Minute) +
+			yugabyteRollRecoveryTimeout + yugabyteFinalizeTimeout + time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	// Create SSH pool
@@ -428,7 +442,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	}
 
-	svcInfo, err := gitopsManifest.GetServiceInfo(deployName)
+	svcInfo, err := upgradeReleaseInfo(gitopsManifest, deployName)
 	if err != nil {
 		return result, fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
 	}
@@ -487,12 +501,51 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	// returns immediately — the manifest version is NOT advanced, so a partial
 	// rollout never advertises a version the pool is not fully running.
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Deploying to %d host(s)...\n", len(hosts))
+	// Yugabyte nodes change one at a time through the roll: each serving node only once the masters confirm the
+	// universe survives losing it, and the next only after it has recovered.
+	var ybRoll *yugabyteRoll
+	if serviceName == "yugabyte" && !dryRun {
+		ybRoll = newYugabyteGate(cmd.OutOrStdout(), manifest, sshPool)
+		if ybRoll != nil {
+			names := make([]string, 0, len(hosts))
+			for _, host := range hosts {
+				ybRoll.serving[host.Name] = ybRoll.u.ServesYSQL(ctx, host)
+				names = append(names, host.Name)
+			}
+			ybRoll.setOrder(names)
+			ordered := make([]inventory.Host, 0, len(hosts))
+			for _, name := range ybRoll.order {
+				for _, host := range hosts {
+					if host.Name == name {
+						ordered = append(ordered, host)
+					}
+				}
+			}
+			hosts = ordered
+		}
+	}
 	anyUpgraded := false
 	for i, host := range hosts {
 		if len(hosts) > 1 {
 			fmt.Fprintf(cmd.OutOrStdout(), "\n--- Replica %d/%d: %s ---\n", i+1, len(hosts), host.ExternalIP)
 		}
-		hostResult, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback, withinRelease)
+		var hostResult upgradeResult
+		upgrade := func() error {
+			var upgradeErr error
+			hostResult, upgradeErr = upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback, withinRelease)
+			return upgradeErr
+		}
+		var hostErr error
+		if ybRoll != nil {
+			hostErr = ybRoll.changeMaster(ctx, host, func(gate func() error) error {
+				if gateErr := gate(); gateErr != nil {
+					return gateErr
+				}
+				return upgrade()
+			})
+		} else {
+			hostErr = upgrade()
+		}
 		if hostErr != nil {
 			return result, hostErr
 		}
@@ -505,6 +558,30 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if dryRun {
 		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
 		return result, nil
+	}
+	if ybRoll != nil {
+		// YugabyteDB upgrades every master before any tserver. The install pass above restarted only masters; a master
+		// an interrupted run left on the old binary is restarted first, then every tserver still on it.
+		restartOnly := func(scope string) func(context.Context, inventory.Host) error {
+			return func(ctx context.Context, host inventory.Host) error {
+				return restartYugabyteProcess(ctx, rc, sshPool, manifest, host, serviceName, deployName, svcInfo.Version, upgradeRuntimeData, scope)
+			}
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\nRestarting Yugabyte masters still on the previous engine, then every tserver...")
+		if err := ybRoll.rollStale(ctx, "yb-master", restartOnly("master")); err != nil {
+			return result, fmt.Errorf("restart Yugabyte masters on %s: %w", svcInfo.Version, err)
+		}
+		if err := ybRoll.rollStale(ctx, "yb-tserver", restartOnly("tserver")); err != nil {
+			return result, fmt.Errorf("every Yugabyte master runs %s but not every tserver; rerun the upgrade to continue: %w", svcInfo.Version, err)
+		}
+		for _, host := range hosts {
+			if err := completeYugabyteUpgradeHost(ctx, rc, sshPool, manifest, host, serviceName, deployName, svcInfo.Version, upgradeRuntimeData); err != nil {
+				return result, err
+			}
+		}
+		if err := ybRoll.finalizeUpgrade(ctx); err != nil {
+			return result, fmt.Errorf("every Yugabyte node runs %s but the upgrade is not finalized; rerun the upgrade to finalize: %w", svcInfo.Version, err)
+		}
 	}
 
 	// Record the deployed version on the in-memory manifest for this run's remaining steps only. It is deliberately NOT
@@ -523,6 +600,74 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	return result, nil
 }
 
+// Database initialization and whole-node validation require YSQL, so they run only after both process phases.
+func completeYugabyteUpgradeHost(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName, version string, runtimeData map[string]any) error {
+	config, _, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
+	if err != nil {
+		return err
+	}
+	config.Version = version
+	rc.applyReleaseMetadata(config.Metadata)
+	prov, err := provisioner.GetProvisioner(deployName, sshPool)
+	if err != nil {
+		return err
+	}
+	if err := initializeOutsideRelayout(ctx, sshPool, host, manifest.Infrastructure.Postgres, func() error { return prov.Initialize(ctx, host, config) }); err != nil {
+		return fmt.Errorf("initialize Yugabyte on %s: %w", host.Name, err)
+	}
+	if err := prov.Validate(ctx, host, config); err != nil {
+		return fmt.Errorf("validate Yugabyte on %s: %w", host.Name, err)
+	}
+	return nil
+}
+
+// upgradeReleaseInfo returns the release data an upgrade deploys for deployName: its service, interface, or native
+// binary entry, or else its infrastructure entry. Infrastructure components such as Yugabyte and Kafka are listed
+// under infrastructure in a release, and cluster upgrade yugabyte is the only path allowed to change the engine of a
+// node that already joined the universe.
+func upgradeReleaseInfo(release *gitops.Manifest, deployName string) (*gitops.ServiceInfo, error) {
+	info, err := release.GetServiceInfo(deployName)
+	if err == nil {
+		return info, nil
+	}
+	infra := release.GetInfrastructure(deployName)
+	if infra == nil {
+		return nil, err
+	}
+	info = &gitops.ServiceInfo{Name: infra.Name, Version: infra.Version, Image: infra.Image, Digest: infra.Digest, Binaries: map[string]gitops.Artifact{}}
+	if infra.Image != "" && infra.Digest != "" {
+		info.FullImage = infra.Image + "@" + infra.Digest
+	}
+	for _, artifact := range infra.Artifacts {
+		info.Binaries[artifact.Arch] = artifact
+	}
+	return info, nil
+}
+
+// restartYugabyteProcess restarts only scope (master or tserver) on host through the role's restart tag, with the
+// configuration the upgrade deploys.
+func restartYugabyteProcess(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName, version string, runtimeData map[string]any, scope string) error {
+	config, _, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
+	if err != nil {
+		return err
+	}
+	config.Version = version
+	rc.applyReleaseMetadata(config.Metadata)
+	if config.Metadata == nil {
+		config.Metadata = map[string]any{}
+	}
+	config.Metadata["restart_scope"] = scope
+	prov, err := provisioner.GetProvisioner(deployName, sshPool)
+	if err != nil {
+		return fmt.Errorf("get provisioner: %w", err)
+	}
+	restarter, ok := prov.(provisioner.Restarter)
+	if !ok {
+		return fmt.Errorf("the %s provisioner cannot restart a single process", deployName)
+	}
+	return restarter.Restart(ctx, host, config)
+}
+
 func prepareUpgradeRuntimeData(manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string, systemTenantID string) (map[string]any, error) {
 	runtimeData, err := provisionRuntimeData(manifest, manifestDir, sharedEnv)
 	if err != nil {
@@ -534,12 +679,13 @@ func prepareUpgradeRuntimeData(manifest *inventory.Manifest, manifestDir string,
 
 // resolveUpgradeHosts returns every host an upgrade must touch for serviceName.
 //
-// Infrastructure services resolve to their single documented primary host —
-// multi-node infra (ensemble Yugabyte, Kafka KRaft, ClickHouse) upgrades one
-// node at a time via Provision's idempotent role run, and the CLI targets the
-// coordinator/first node in each case. Application services, interfaces, and
-// observability components resolve to ALL hosts they run on so HA replicas are
-// upgraded together rather than leaving stale replicas behind.
+// Most infrastructure services resolve to their single documented primary host
+// (Kafka KRaft and ClickHouse target the coordinator/first node). Yugabyte
+// resolves to every node, because a node left on the old binary would stay
+// behind; the upgrade loop changes them one at a time through the Yugabyte roll.
+// Application services, interfaces, and observability components resolve to
+// ALL hosts they run on so HA replicas are upgraded together rather than
+// leaving stale replicas behind.
 func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]inventory.Host, bool) {
 	switch serviceName {
 	case "postgres":
@@ -551,9 +697,8 @@ func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]in
 		return nil, false
 	case "yugabyte":
 		if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() && len(pg.Nodes) > 0 {
-			if host, ok := manifest.GetHost(pg.Nodes[0].Host); ok {
-				return []inventory.Host{host}, true
-			}
+			hosts := postgresCandidateHosts(manifest, pg)
+			return hosts, len(hosts) == len(pg.Nodes)
 		}
 		return nil, false
 	case "kafka":
@@ -690,6 +835,16 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		config.Mode = state.Mode
 	}
 	rc.applyReleaseMetadata(config.Metadata)
+	if serviceName == "yugabyte" {
+		// The install pass of the ordered engine upgrade restarts only the master; every tserver keeps its running
+		// binary until all masters run the new one, and cluster upgrade is the one path allowed to change the engine
+		// of a node that already joined the universe.
+		if config.Metadata == nil {
+			config.Metadata = map[string]any{}
+		}
+		config.Metadata["restart_scope"] = "master"
+		config.Metadata["allow_engine_change"] = true
+	}
 
 	if dryRun {
 		if firstInstall {
@@ -728,7 +883,12 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	if err := prov.Deploy(ctx, host, config); err != nil {
 		return result, fmt.Errorf("failed to provision new version on %s: %w", host.ExternalIP, err)
 	}
-	if err := prov.Initialize(ctx, host, config); err != nil {
+	if serviceName == "yugabyte" {
+		fmt.Fprintf(cmd.OutOrStdout(), "    Installed %s; master recovery and the tserver phase are checked by the upgrade coordinator\n", svcInfo.Version)
+		return upgradeResult{changed: true, installed: firstInstall}, nil
+	}
+	initialize := func() error { return prov.Initialize(ctx, host, config) }
+	if err := initialize(); err != nil {
 		return result, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Deployed %s\n", svcInfo.Version)
@@ -825,7 +985,7 @@ func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, h
 		Name:       serviceName,
 		Type:       deployName,
 		ServiceID:  serviceName,
-		InstanceID: "",
+		InstanceID: upgradeInstanceID(manifest, serviceName, host),
 		Host:       host.Name,
 		ClusterID:  clusterID,
 		Phase:      orchestrator.PhaseApplications,
@@ -845,6 +1005,25 @@ func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, h
 		return provisioner.ServiceConfig{}, "", fmt.Errorf("build upgrade config: %w", err)
 	}
 	return config, clusterID, nil
+}
+
+// upgradeInstanceID resolves the manifest identity of the replica being upgraded, for services whose role vars are
+// derived from it. A Yugabyte node's placement zone comes from its node id, so upgrading with an empty instance would
+// rewrite every node's tserver/master config to the zone of node 1 and collapse the universe's fault domains.
+func upgradeInstanceID(manifest *inventory.Manifest, serviceName string, host inventory.Host) string {
+	if serviceName != "yugabyte" {
+		return ""
+	}
+	pg := manifest.Infrastructure.Postgres
+	if pg == nil {
+		return ""
+	}
+	for _, node := range pg.Nodes {
+		if node.Host == host.Name {
+			return strconv.Itoa(node.ID)
+		}
+	}
+	return ""
 }
 
 func deployedArtifactMatches(state *detect.ServiceState, target *gitops.ServiceInfo) bool {

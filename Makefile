@@ -684,8 +684,14 @@ fmt:
 lint:
 	@failed=0; \
 	$(MAKE) lint-go || failed=1; \
+	$(MAKE) verify-db-transactions || failed=1; \
 	$(MAKE) lint-frontend || failed=1; \
 	if [ $$failed -eq 1 ]; then exit 1; fi
+
+# Every explicit transaction replays through database.WithRetryablePostgresTx or documents why it cannot.
+.PHONY: verify-db-transactions
+verify-db-transactions:
+	@$(CURDIR)/scripts/verify-db-transactions.sh
 
 # Baseline mode: reports only violations newer than .golangci-baseline (matches CI go-lint).
 lint-go:
@@ -789,9 +795,12 @@ SCHEMA_VERIFY_POSTGRES_TESTS := TestPurserViewsUseExplicitProjectionLists|TestPo
 SCHEMA_VERIFY_CLICKHOUSE_TESTS := TestClickHouseServiceCapabilitiesExecute|TestClickHouseDeliveryRollupContractSeedsAndRetainsDiscoveryThroughScheduledRefreshes|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries|TestArtifactEventsDedupedPreservesLegacyRows
 YUGABYTE_SCHEMA_DATABASES := commodore foghorn lookout navigator periscope purser quartermaster skipper
 SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|TestYugabyteDatabaseSelection
-SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities|TestYugabyteServiceBaselineReapplyAndCompletion
-SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)
+SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities|TestYugabyteServiceBaselineReapplyAndCompletion|TestYugabyteRelayoutPreflightRehearsesDatabase
+SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS := TestYugabyteColocatedDDLAbortsAreRetryable|TestYugabyteDistributedOptOutSplits|TestYugabyteRelayoutMovesDatabaseIntoDeclaredLayout|TestYugabyteRelayoutCutoverRunsTheWindowFromPrepare|TestYugabyteRelayoutRefusesASchemaChangedAfterPrepare|TestYugabyteRelayoutRollbackRestoresOriginalDatabase|TestYugabyteRelayoutLeaseExcludesSecondOwner|TestYugabyteRelayoutTakeoverEndsTheStaleOwnersRemoteWork|TestYugabyteRelayoutWorkerAdmissionFailsClosed|TestYugabyteRelayoutRestoresADefaultACL|TestYugabyteRelayoutVerifyRejectsAChangedShadow|TestYugabyteRelayoutRollbackResumesAfterAnInterruptedRollback
+SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)
 SCHEMA_VERIFY_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)|$(SCHEMA_VERIFY_CLICKHOUSE_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)
+YUGABYTE_RELAYOUT_REHEARSAL_TESTS := TestYugabyteRelayoutRehearsalThreeNodes
+YUGABYTE_LAYOUT_BENCHMARK_TESTS := TestYugabyteColocatedWriteRateBenchmark
 # CI sets CONTRACT_COVERAGE_DIR so these same test executions emit engine-specific profiles.
 # Leaving it unset preserves the ordinary local targets without coverage artifacts.
 CONTRACT_GO_TEST := $(CURDIR)/scripts/run-go-contract-test.sh
@@ -834,7 +843,7 @@ verify-commodore-placement-test-selection:
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS)' '^TestMediaAuthority.*_RealYugabyte$$'
 
 verify-foghorn-test-selection: verify-commodore-placement-test-selection
-	@./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(SCHEMA_VERIFY_TESTS)' '^Test' schema_verify
+	@./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(SCHEMA_VERIFY_TESTS)|$(YUGABYTE_RELAYOUT_REHEARSAL_TESTS)|$(YUGABYTE_LAYOUT_BENCHMARK_TESTS)' '^Test' schema_verify
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' '^(TestValidateStreamKey_|TestSyncActiveIngestPlacement_|TestClearStreamActiveCluster_).*RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' '^TestPlacementActivation.*_RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/database/commodoredb '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' 'RealPG$$'
@@ -888,7 +897,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query -tags schema_verify -run 'TestBillingCatalogExecutesAgainstCurrentClickHouse' -count=1 -timeout 600s ./internal/database/periscopequerydb/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse|TestClusterWorkloadSeparatesStorageFlowStockAndScope_RealClickHouse|TestFederationSummaryPreservesOperatorHistoryWithoutDualRollupDuplicates_RealClickHouse|TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClickHouse|TestStreamDailyAudienceUsesSessionEndDayAndExcludesEmptyGeo_RealClickHouse|TestDashboardRefreshPreservesBothPlanesAcrossOneSidedCorrections_RealClickHouse' -count=1 -timeout 1200s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-metering-chain -tags schema_verify -run 'TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines' -count=1 -timeout 600s ./internal/handlers/
-	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestPrepaidBalanceCurrencyRepairMigration_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestPrepaidBalanceCurrencyRepairMigration_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG|TestMonthlyInvoiceReplaysAfterSerializationFailure_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-grpc -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
@@ -1040,7 +1049,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-postgres requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
 	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli postgres/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestPrepaidBalanceCurrencyRepairMigration_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestPrepaidBalanceCurrencyRepairMigration_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG|TestMonthlyInvoiceReplaysAfterSerializationFailure_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_billing && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@cd api_dns && go test -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
@@ -1086,6 +1095,7 @@ verify-schema-yugabyte-schema: verify-foghorn-test-selection
 
 verify-schema-yugabyte-schema-isolated:
 	@$(MAKE) --no-print-directory verify-schema-yugabyte-selection-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-engine-contracts
 	@failed=0; \
 	for database in $(YUGABYTE_SCHEMA_DATABASES); do \
 		echo "Verifying $$database Yugabyte schema in a fresh engine..."; \
@@ -1093,6 +1103,21 @@ verify-schema-yugabyte-schema-isolated:
 			$(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts YUGABYTE_SCHEMA_COVERAGE_NAME="schema-$$database" || failed=1; \
 	done; \
 	exit $$failed
+
+verify-schema-yugabyte-engine-contracts:
+	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the engine contracts run in an isolated engine"; exit 1; }
+	@echo "Verifying Yugabyte colocation engine contracts (Docker)..."
+	@$(CONTRACT_GO_TEST) cli yugabyte/colocation-engine -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+
+verify-yugabyte-relayout-rehearsal:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-relayout-rehearsal requires a running Docker daemon"; exit 1; }
+	@echo "Rehearsing a production-shaped relayout on a three-node RF3 Yugabyte cluster (Docker)..."
+	@FRAMEWORKS_YUGABYTE_REHEARSAL=1 $(CONTRACT_GO_TEST) cli yugabyte/relayout-rehearsal -tags schema_verify -run '$(YUGABYTE_RELAYOUT_REHEARSAL_TESTS)' -count=1 -v -timeout 3600s ./pkg/provisioner/
+
+verify-yugabyte-layout-benchmark:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-layout-benchmark requires a running Docker daemon"; exit 1; }
+	@echo "Benchmarking colocated write_rate_benchmark tables against distributed placement (Docker)..."
+	@FRAMEWORKS_YUGABYTE_BENCHMARK=1 $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(CONTRACT_GO_TEST) cli yugabyte/layout-benchmark -tags schema_verify -run '$(YUGABYTE_LAYOUT_BENCHMARK_TESTS)' -count=1 -v -timeout 3600s ./pkg/provisioner/
 
 verify-schema-yugabyte-selection-contracts:
 	@echo "Verifying Yugabyte schema harness and database selection..."

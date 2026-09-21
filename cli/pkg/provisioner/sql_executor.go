@@ -134,10 +134,11 @@ func (t *directTxExecutor) Exec(ctx context.Context, sqlText string) error {
 //   - UsePeerAuth=true (Postgres): sudo -u <user> psql via Unix socket (peer auth)
 //   - UsePeerAuth=false (YugabyteDB): ysqlsh -h localhost via TCP with .pgpass file
 type SSHExecutor struct {
-	Runner      ssh.Runner
-	BinaryPath  string // defaults to "psql"
-	UsePeerAuth bool   // true = sudo + Unix socket; false = TCP + -h localhost
-	Password    string // for TCP auth mode; passed via PGPASSWORD env var
+	Runner           ssh.Runner
+	BinaryPath       string // defaults to "psql"
+	UseYugabyteTools bool   // resolve ysqlsh from the node's selected engine release
+	UsePeerAuth      bool   // true = sudo + Unix socket; false = TCP + -h localhost
+	Password         string // for TCP auth mode; passed through a temporary .pgpass file
 }
 
 func (s *SSHExecutor) binaryPath() string {
@@ -232,12 +233,17 @@ func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath, pgpassFile strin
 		cleanupFiles += " " + pgpassFile
 	}
 	trap := fmt.Sprintf("trap 'rm -f %s' EXIT", cleanupFiles)
+	binary := s.binaryPath()
+	if s.UseYugabyteTools {
+		trap += "\n" + YugabyteBinaryResolverShell + "\nyb_client=\"$(fw_yb_bin ysqlsh)\" || exit 1"
+		binary = `"$yb_client"`
+	}
 
 	if s.UsePeerAuth {
 		return fmt.Sprintf("%s; sudo -u %s %s -X -p %d -d %s -v ON_ERROR_STOP=1%s -f %s",
 			trap,
 			shellQuote(conn.User),
-			s.binaryPath(),
+			binary,
 			conn.Port,
 			shellQuote(conn.Database),
 			extra,
@@ -252,7 +258,7 @@ func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath, pgpassFile strin
 	return fmt.Sprintf("%s; %s%s -X -h localhost -p %d -U %s -d %s -v ON_ERROR_STOP=1%s -f %s",
 		trap,
 		pgpassEnv,
-		s.binaryPath(),
+		binary,
 		conn.Port,
 		shellQuote(conn.User),
 		shellQuote(conn.Database),

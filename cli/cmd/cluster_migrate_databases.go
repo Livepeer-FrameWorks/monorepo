@@ -21,6 +21,8 @@ var (
 	initializeServiceDatabasesFn = provisioner.InitializeServiceDatabases
 	bootstrapServiceDatabasesFn  = bootstrapServiceDatabases
 	migrateBelowFloorGuardFn     = runBelowFloorGuardExcluding
+	// refuseDuringYugabyteRelayoutFn reads the relayout journal through a healthy tserver.
+	refuseDuringYugabyteRelayoutFn = refuseDuringYugabyteRelayout
 )
 
 // manifestServiceDatabases returns the manifest's physical service databases
@@ -87,6 +89,11 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 	host, err := postgresAdminHost(ctx, manifest, pg, sshPool)
 	if err != nil {
 		return nil, err
+	}
+	if pg.IsYugabyte() {
+		if err = refuseDuringYugabyteRelayoutFn(ctx, sshPool, host, pg); err != nil {
+			return nil, err
+		}
 	}
 	states, err := readServiceDatabaseStatesFn(ctx, sshPool, host, pg, candidates)
 	if err != nil {

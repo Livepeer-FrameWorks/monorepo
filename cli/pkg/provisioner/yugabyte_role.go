@@ -39,17 +39,19 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	}
 
 	vars := map[string]any{
-		"yugabyte_artifact_url":       artifact.URL,
-		"yugabyte_artifact_checksum":  artifact.Checksum,
-		"yugabyte_version":            releaseVersion(config.Version, artifact.Version),
-		"yugabyte_node_address":       meshOrExternal(config.Metadata, host),
-		"yugabyte_master_addresses":   masterAddresses,
-		"yugabyte_replication_factor": rf,
-		"yugabyte_ysql_port":          port,
-		"yugabyte_placement_cloud":    "frameworks",
-		"yugabyte_placement_region":   "eu",
-		"yugabyte_placement_zone":     fmt.Sprintf("eu-%d", max(nodeID, 1)),
-		"yugabyte_node_id":            nodeID,
+		"yugabyte_artifact_url":        artifact.URL,
+		"yugabyte_artifact_checksum":   artifact.Checksum,
+		"yugabyte_version":             releaseVersion(config.Version, artifact.Version),
+		"yugabyte_node_address":        meshOrExternal(config.Metadata, host),
+		"yugabyte_master_addresses":    masterAddresses,
+		"yugabyte_replication_factor":  rf,
+		"yugabyte_ysql_port":           port,
+		"yugabyte_placement_cloud":     "frameworks",
+		"yugabyte_placement_region":    "eu",
+		"yugabyte_placement_zone":      fmt.Sprintf("eu-%d", max(nodeID, 1)),
+		"yugabyte_node_id":             nodeID,
+		"yugabyte_restart_scope":       yugabyteRestartScope(config.Metadata),
+		"yugabyte_allow_engine_change": metaBool(config.Metadata, "allow_engine_change", false),
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
@@ -57,6 +59,9 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			return nil, fmt.Errorf("yugabyte: %w", err)
 		}
 		list := make([]map[string]any, 0, len(dbs))
+		// placements repeats name, owner, and colocation without credentials, so the tasks that create databases can
+		// loop over it with their output visible.
+		placements := make([]map[string]any, 0, len(dbs))
 		for _, db := range dbs {
 			entry := map[string]any{"name": db["name"]}
 			if owner := db["owner"]; owner != "" {
@@ -71,9 +76,25 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			if runtimePassword := db["runtime_password"]; runtimePassword != "" {
 				entry["runtime_password"] = runtimePassword
 			}
+			// Per-cell physical databases such as foghorn_eu take the layout of their logical database.
+			layoutSource := db["layout_source"]
+			if layoutSource == "" {
+				layoutSource = db["name"]
+			}
+			colocated, err := YugabyteDatabaseColocated(layoutSource)
+			if err != nil {
+				return nil, fmt.Errorf("yugabyte database %s: %w", db["name"], err)
+			}
+			entry["colocated"] = colocated
 			list = append(list, entry)
+			owner := db["owner"]
+			if owner == "" {
+				owner = db["name"]
+			}
+			placements = append(placements, map[string]any{"name": db["name"], "owner": owner, "colocated": colocated})
 		}
 		vars["yugabyte_databases"] = list
+		vars["yugabyte_database_placements"] = placements
 	}
 	// Application credentials. The `postgres_password` metadata key is the
 	// historical name cluster_init + cluster_seed already populate. Local
@@ -116,8 +137,18 @@ func yugabyteRoleDetect(ctx context.Context, host inventory.Host, _ ServiceConfi
 	result, err := runner.Run(ctx, "pgrep -x yb-master >/dev/null && pgrep -x yb-tserver >/dev/null && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 
-	bin, binErr := runner.Run(ctx, "test -x /opt/yugabyte/bin/yb-master && echo EXISTS")
+	bin, binErr := runner.Run(ctx, YugabyteBinaryResolverShell+"\nfw_yb_bin yb-master >/dev/null && echo EXISTS")
 	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
+}
+
+// yugabyteRestartScope is the processes a Yugabyte restart touches: all, or only master or tserver when cluster
+// upgrade orders every master before any tserver.
+func yugabyteRestartScope(metadata map[string]any) string {
+	switch scope := metaString(metadata, "restart_scope"); scope {
+	case "master", "tserver":
+		return scope
+	}
+	return "all"
 }

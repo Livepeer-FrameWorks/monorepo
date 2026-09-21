@@ -16,7 +16,9 @@
     state: restarted
     daemon_reload: true
   register: yugabyte_master_restarted
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - yugabyte_restart_scope in ['all', 'master']
 
 - name: Restart yb-tserver
   listen: yugabyte restart tserver
@@ -25,7 +27,18 @@
     state: restarted
     daemon_reload: true
   register: yugabyte_tserver_restarted
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - yugabyte_restart_scope in ['all', 'tserver']
+
+- name: Record applied tserver configuration
+  listen:
+    - yugabyte restart tserver
+    - yugabyte record tserver config
+  ansible.builtin.include_tasks: record-tserver-config.yml
+  when:
+    - not ansible_check_mode
+    - yugabyte_restart_scope in ['all', 'tserver']
 
 - name: Reload yb-master
   listen: yugabyte reload master

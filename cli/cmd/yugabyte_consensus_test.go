@@ -29,6 +29,26 @@ func TestParseAndValidateYugabyteConsensusAcceptsMatchingVoters(t *testing.T) {
 	}
 }
 
+// TestParseAndValidateYugabyteConsensusAcceptsTheInitialConfig covers a universe whose masters were bootstrapped
+// together and never changed membership: their committed config is the initial one, with opid_index -1.
+func TestParseAndValidateYugabyteConsensusAcceptsTheInitialConfig(t *testing.T) {
+	initial := strings.Replace(healthyYugabyteRaftConfig, "opid_index: 42", "opid_index: -1", 1)
+	consensus, err := parseAndValidateYugabyteConsensus(
+		yugabyteProbeFixture(healthyYugabyteMastersJSON, initial),
+		[]string{"10.0.0.1:7100", "10.0.0.2:7100", "10.0.0.3:7100"},
+	)
+	if err != nil || consensus.OpID != -1 {
+		t.Fatalf("initial committed config = %+v, %v; want it accepted", consensus, err)
+	}
+	for _, bad := range []string{"current_term: 0", "opid_index: -2"} {
+		broken := strings.Replace(initial, map[string]string{"current_term: 0": "current_term: 12", "opid_index: -2": "opid_index: -1"}[bad], bad, 1)
+		if _, err = parseAndValidateYugabyteConsensus(yugabyteProbeFixture(healthyYugabyteMastersJSON, broken),
+			[]string{"10.0.0.1:7100", "10.0.0.2:7100", "10.0.0.3:7100"}); err == nil {
+			t.Fatalf("a config with %s was accepted as committed", bad)
+		}
+	}
+}
+
 func TestParseAndValidateYugabyteConsensusRejectsReplacedIdentity(t *testing.T) {
 	live := strings.Replace(healthyYugabyteMastersJSON, `"permanent_uuid":"uuid-b"`, `"permanent_uuid":"replacement-b"`, 1)
 	_, err := parseAndValidateYugabyteConsensus(
@@ -73,5 +93,21 @@ func TestYugabyteConsensusProbeUsesManifestAddressesAndStructuredEndpoint(t *tes
 		if !strings.Contains(command, want) {
 			t.Fatalf("probe command missing %q:\n%s", want, command)
 		}
+	}
+}
+
+// From 2026.1 the masters print the committing operation as committed_op_index rather than opid_index. A fresh
+// universe on that engine reports -1 there, and a probe that cannot read it fails provisioning verification.
+func TestParseAndValidateYugabyteConsensusReadsTheRenamedCommittedIndex(t *testing.T) {
+	renamed := strings.Replace(healthyYugabyteRaftConfig, "opid_index: 42", "committed_op_index: -1", 1)
+	consensus, err := parseAndValidateYugabyteConsensus(
+		yugabyteProbeFixture(healthyYugabyteMastersJSON, renamed),
+		[]string{"10.0.0.1:7100", "10.0.0.2:7100", "10.0.0.3:7100"},
+	)
+	if err != nil {
+		t.Fatalf("parseAndValidateYugabyteConsensus: %v", err)
+	}
+	if consensus.OpID != -1 || len(consensus.Peers) != 3 {
+		t.Fatalf("consensus = %+v, want opid -1 across 3 peers", consensus)
 	}
 }

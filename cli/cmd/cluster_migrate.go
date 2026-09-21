@@ -313,11 +313,16 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 			return fmt.Errorf("no yugabyte tserver with healthy local YSQL among %d candidate(s)", len(hosts))
 		}
 		pgHost = h
+		if err := refuseDuringYugabyteRelayoutFn(ctx, sshPool, pgHost, pg); err != nil {
+			return err
+		}
 	}
 
 	databases := schemaDatabasesFromConfigs(pg.Databases)
+	engine := provisioner.SQLEnginePostgres
 	if pg.IsYugabyte() {
 		databases = yugabyteSchemaDatabases(pg.Databases, manifest)
+		engine = provisioner.SQLEngineYugabyte
 	}
 	if len(databases) == 0 {
 		fmt.Fprintln(out, "Postgres: no databases configured in manifest.")
@@ -330,7 +335,7 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 			return nil
 		}
 	}
-	items, err := provisioner.BuildMigrationItemsForDatabases(databases, phase, target)
+	items, err := provisioner.BuildMigrationItemsForEngine(databases, phase, target, engine)
 	if err != nil {
 		return fmt.Errorf("collect postgres migrations: %w", err)
 	}

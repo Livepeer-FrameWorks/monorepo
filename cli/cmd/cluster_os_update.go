@@ -202,7 +202,12 @@ func runOSUpdateCheck(cmd *cobra.Command, rc *resolvedCluster, hostsCSV string, 
 }
 
 func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode string, noReboot bool, serial int, continueOnErr bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	deadline := 60 * time.Minute
+	if pg := rc.Manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+		// Each Yugabyte node may wait for the masters to confirm it can go down and then for its own recovery.
+		deadline += time.Duration(len(pg.Nodes)) * 2 * yugabyteRollRecoveryTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	if mode != "safe" && mode != "full" {
@@ -214,16 +219,76 @@ func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode st
 
 	ux.Heading(cmd.OutOrStdout(), "Applying OS updates across fleet")
 
-	return runOSUpdatePlaybook(ctx, cmd, rc, osUpdatePlaybookOpts{
-		PlaybookFile: "playbooks/cluster_os_update.yml",
-		HostsCSV:     hostsCSV,
-		ExtraVars: map[string]any{
-			"os_update_mode":          mode,
-			"no_reboot":               noReboot,
-			"os_update_serial":        serial,
-			"os_update_halt_on_error": !continueOnErr,
-		},
-	})
+	targets, err := osUpdateHostList(rc.Manifest, hostsCSV)
+	if err != nil {
+		return err
+	}
+	yugabyteNodes := map[string]bool{}
+	if pg := rc.Manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+		for _, node := range pg.Nodes {
+			yugabyteNodes[node.Host] = true
+		}
+	}
+	var others, yugabyteTargets []inventory.Host
+	for _, host := range targets {
+		if yugabyteNodes[host.Name] {
+			yugabyteTargets = append(yugabyteTargets, host)
+		} else {
+			others = append(others, host)
+		}
+	}
+	playbook := func(hosts []inventory.Host, serial int) error {
+		names := make([]string, 0, len(hosts))
+		for _, host := range hosts {
+			names = append(names, host.Name)
+		}
+		return runOSUpdatePlaybook(ctx, cmd, rc, osUpdatePlaybookOpts{
+			PlaybookFile: "playbooks/cluster_os_update.yml",
+			HostsCSV:     strings.Join(names, ","),
+			ExtraVars: map[string]any{
+				"os_update_mode":          mode,
+				"no_reboot":               noReboot,
+				"os_update_serial":        serial,
+				"os_update_halt_on_error": !continueOnErr,
+			},
+		})
+	}
+	if len(others) > 0 {
+		if err := playbook(others, serial); err != nil {
+			return err
+		}
+	}
+	if len(yugabyteTargets) == 0 {
+		return nil
+	}
+	// An OS update can restart or reboot a Yugabyte node, so Yugabyte nodes are updated one at a time through the roll,
+	// whatever --serial says, and a failure stops the rest.
+	sshPool := fwssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+	defer sshPool.Close()
+	roll := newYugabyteGate(cmd.OutOrStdout(), rc.Manifest, sshPool)
+	names := make([]string, 0, len(yugabyteTargets))
+	for _, host := range yugabyteTargets {
+		roll.serving[host.Name] = roll.u.ServesYSQL(ctx, host)
+		names = append(names, host.Name)
+	}
+	roll.setOrder(names)
+	fmt.Fprintf(cmd.OutOrStdout(), "Updating %d Yugabyte node(s) one at a time\n", len(names))
+	for _, name := range roll.order {
+		for _, host := range yugabyteTargets {
+			if host.Name != name {
+				continue
+			}
+			if err := roll.change(ctx, host, func(gate func() error) error {
+				if gateErr := gate(); gateErr != nil {
+					return gateErr
+				}
+				return playbook([]inventory.Host{host}, 1)
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type osUpdatePlaybookOpts struct {

@@ -48,22 +48,67 @@
     - not ansible_check_mode
     - yugabyte_databases | length > 0
 
+# Colocation is fixed when a database is created. Existing databases are never
+# altered or recreated here; placement drift is reported by cluster doctor.
+- name: Validate database identifiers used in CREATE DATABASE
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - (item.owner | default(item.name, true)) is match('^[A-Za-z_][A-Za-z0-9_]*$')
+    fail_msg: "Yugabyte database {{ item.name }} and its owner must be plain SQL identifiers"
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: yugabyte_databases | length > 0
+
+- name: Read existing databases
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: yugabyte
+    query: SELECT datname FROM pg_database
+  register: yugabyte_existing_databases
+  when:
+    - not ansible_check_mode
+    - yugabyte_databases | length > 0
+
+- name: Create colocated databases
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: yugabyte
+    autocommit: true
+    query: >-
+      CREATE DATABASE "{{ item.name }}"
+      WITH OWNER = "{{ item.owner }}" COLOCATION = true
+  # The placements list carries no credentials, so an engine error stays visible.
+  loop: "{{ yugabyte_database_placements | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.colocated | bool
+    - item.name not in (yugabyte_existing_databases.query_result | default([]) | map(attribute='datname') | list)
+
 - name: Create databases
   community.postgresql.postgresql_db:
     name: "{{ item.name }}"
-    owner: "{{ item.owner | default(item.name, true) }}"
+    owner: "{{ item.owner }}"
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
     state: present
-  loop: "{{ yugabyte_databases }}"
+  loop: "{{ yugabyte_database_placements | default([]) }}"
   loop_control:
     label: "{{ item.name }}"
-  no_log: true
   when:
     - not ansible_check_mode
-    - yugabyte_databases | length > 0
+    - not (item.colocated | bool)
 
 - name: Create least-privilege application runtime roles
   community.postgresql.postgresql_user:

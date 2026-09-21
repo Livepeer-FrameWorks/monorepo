@@ -316,8 +316,8 @@ func skipperSQLExecutor(ctx context.Context, rc *resolvedCluster, pool *fwssh.Po
 	if pg.IsYugabyte() {
 		conn.User = "yugabyte"
 		return &provisioner.SSHExecutor{
-			Runner:     runner,
-			BinaryPath: "/opt/yugabyte/bin/ysqlsh",
+			Runner:           runner,
+			UseYugabyteTools: true,
 		}, conn, nil
 	}
 	conn.User = "postgres"

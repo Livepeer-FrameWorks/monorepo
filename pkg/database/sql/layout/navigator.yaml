@@ -1,0 +1,22 @@
+# YugabyteDB placement for the navigator database. Every table created by schema/navigator.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: navigator
+layout: colocated
+colocated_tables:
+  - navigator.certificates
+  - navigator.acme_accounts
+  - navigator.tls_bundles
+  - navigator.certificate_issuance_leases
+  - navigator.internal_ca
+  - navigator.internal_certificates
+  - navigator.tenant_aliases
+  - navigator.tenant_alias_cluster_authority
+  - navigator.tenant_alias_retirements
+  - navigator.tenant_custom_domains
+  - public._schema_baseline
+distributed_tables:
+  - navigator.tenant_edge_apply_state
+write_rate_benchmark:
+  - navigator.certificate_issuance_leases

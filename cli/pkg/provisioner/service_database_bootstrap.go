@@ -126,7 +126,7 @@ func newServiceDatabaseProbe(sshPool *ssh.Pool, host inventory.Host, pg *invento
 	if err != nil {
 		return nil, fmt.Errorf("ssh connect: %w", err)
 	}
-	return ysqlStateProbe{executor: &SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}, port: pg.EffectivePort()}, nil
+	return ysqlStateProbe{executor: &SSHExecutor{Runner: runner, UseYugabyteTools: true}, port: pg.EffectivePort()}, nil
 }
 
 // probeDatabaseInitialized checks for the baseline marker and the migration

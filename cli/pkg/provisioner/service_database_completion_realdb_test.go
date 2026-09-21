@@ -360,6 +360,10 @@ func TestPostgresServiceDatabaseDropsReferenceOnFailedApply(t *testing.T) {
 // TestYugabyteServiceBaselineReapplyAndCompletion runs the completion on
 // YugabyteDB, where an interrupted baseline keeps its partial DDL, and proves
 // the selected baseline applies twice with an unchanged catalog.
+// TestYugabyteServiceBaselineReapplyAndCompletion completes an interrupted baseline in both shapes a service database
+// has on YugabyteDB: distributed, as every database created before layouts existed, and in its declared layout, as a
+// release creates a missing one. Both receive the layout-rewritten baseline the yugabyte role applies, so the
+// distributed shape also proves COLOCATION = false is accepted outside a colocated database.
 func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 	requireDocker(t)
 	name := ybStart(t, fmt.Sprintf("fw-sv-yb-complete-%d", time.Now().UnixNano()))
@@ -368,38 +372,53 @@ func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 	services, _ := yugabyteServiceDatabases(t)
 
 	for _, source := range services {
-		t.Run(source, func(t *testing.T) {
-			probe := probe
-			probe.t = t
-			databaseName := source + "_complete"
-			database := serviceDatabaseForTest(databaseName, source)
-			probe.createDatabase(databaseName)
-			t.Cleanup(func() { ybDropDatabase(t, name, databaseName) })
+		for _, shape := range []string{"distributed", "declared"} {
+			t.Run(source+"/"+shape, func(t *testing.T) {
+				probe := probe
+				probe.t = t
+				layout := ybDatabaseLayout(t, source)
+				// Short suffixes keep <database>__baseline_check_<hex> within the 63-byte identifier limit.
+				databaseName := source + "_cmp_" + shape[:1]
+				database := serviceDatabaseForTest(databaseName, source)
+				if shape == "declared" {
+					ybCreateDatabase(t, name, databaseName, layout)
+				} else {
+					probe.createDatabase(databaseName)
+				}
+				t.Cleanup(func() { ybDropDatabase(t, name, databaseName) })
+				rewrite := func(sql string) string { return ybLayoutSQL(t, layout, sql) }
+				applier := func(_ context.Context, databases []SchemaDatabase) error {
+					for _, target := range databases {
+						probe.apply(target.Name, rewrite(embeddedBaselineForTest(t, target.SourceName)))
+					}
+					return nil
+				}
 
-			probe.apply(databaseName, interruptedBaselinePrefix(t, source))
-			state := probe.state(database)
-			if !state.HasUnverifiedSchema() {
-				t.Fatalf("interrupted baseline state = %+v, want tables without marker", state)
-			}
-			started := time.Now()
-			if err := initializeServiceDatabases(ctx, probe, []SchemaDatabase{database}, map[string]ServiceDatabaseState{databaseName: state}, probe.baselineApplier(), randomReferenceSuffix, serviceBaselineTimeout); err != nil {
-				t.Fatal(err)
-			}
-			if elapsed := time.Since(started); elapsed > serviceBaselineTimeout/2 {
-				t.Fatalf("completing %s took %s, over half of its %s per-database bound", source, elapsed, serviceBaselineTimeout)
-			} else {
-				t.Logf("completed %s in %s (bound %s)", source, elapsed.Round(time.Second), serviceBaselineTimeout)
-			}
-			if state := probe.state(database); !state.Initialized {
-				t.Fatalf("completed database state = %+v, want initialized", state)
-			}
-			requireBaselineFloor(t, probe, databaseName)
-			probe.requireNoBaselineReferences()
-			ybRequireAllIndexesValid(t, name, databaseName)
+				probe.apply(databaseName, rewrite(interruptedBaselinePrefix(t, source)))
+				state := probe.state(database)
+				if !state.HasUnverifiedSchema() {
+					t.Fatalf("interrupted baseline state = %+v, want tables without marker", state)
+				}
+				started := time.Now()
+				if err := initializeServiceDatabases(ctx, probe, []SchemaDatabase{database}, map[string]ServiceDatabaseState{databaseName: state}, applier, randomReferenceSuffix, serviceBaselineTimeout); err != nil {
+					t.Fatal(err)
+				}
+				if elapsed := time.Since(started); elapsed > serviceBaselineTimeout/2 {
+					t.Fatalf("completing %s took %s, over half of its %s per-database bound", source, elapsed, serviceBaselineTimeout)
+				} else {
+					t.Logf("completed %s (%s) in %s (bound %s)", source, shape, elapsed.Round(time.Second), serviceBaselineTimeout)
+				}
+				if state := probe.state(database); !state.Initialized {
+					t.Fatalf("completed database state = %+v, want initialized", state)
+				}
+				requireBaselineFloor(t, probe, databaseName)
+				probe.requireNoBaselineReferences()
+				ybRequireAllIndexesValid(t, name, databaseName)
 
-			complete := probe.catalog(databaseName, source)
-			probe.apply(databaseName, embeddedBaselineForTest(t, source))
-			requireCatalogsEqual(t, "schema/"+source+".sql applied again on YugabyteDB", complete, probe.catalog(databaseName, source))
-		})
+				complete := probe.catalog(databaseName, source)
+				probe.apply(databaseName, rewrite(embeddedBaselineForTest(t, source)))
+				requireCatalogsEqual(t, "schema/"+source+".sql applied again on YugabyteDB", complete, probe.catalog(databaseName, source))
+			})
+		}
 	}
 }

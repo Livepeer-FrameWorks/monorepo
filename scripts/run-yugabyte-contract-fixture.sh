@@ -52,7 +52,7 @@ image="$(resolve_image)" || {
 
 docker run -d --name "$container" -P --hostname "$container" \
   "$image" \
-  bash -c 'exec bin/yugabyted start --background=false --base_dir=/tmp/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=false' \
+  bash -c 'exec bin/yugabyted start --background=false --base_dir=/tmp/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true' \
   >/dev/null
 container_started=true
 

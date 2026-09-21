@@ -20,6 +20,24 @@
   check_mode: false
   changed_when: false
 
+# A master that is starting for the first time writes its tablet metadata before its consensus metadata, and the two
+# checks above are separate reads, so a starting master can look partial for a moment. Only state that stays partial
+# is refused.
+- name: Wait for a starting yb-master to write its consensus metadata
+  ansible.builtin.stat:
+    path: "{{ yugabyte_master_consensus_meta_path }}"
+  register: yugabyte_master_consensus_meta_settled
+  until: yugabyte_master_consensus_meta_settled.stat.exists
+  retries: 30
+  delay: 2
+  failed_when: false
+  check_mode: false
+  changed_when: false
+  when:
+    - not yugabyte_bootstrap_sentinel_stat.stat.exists
+    - yugabyte_master_tablet_meta_stat.stat.exists
+    - not yugabyte_master_consensus_meta_stat.stat.exists
+
 - name: Refuse automatic recovery of partial yb-master state
   ansible.builtin.fail:
     msg: >-
@@ -31,6 +49,7 @@
     - not yugabyte_bootstrap_sentinel_stat.stat.exists
     - yugabyte_master_tablet_meta_stat.stat.exists
     - not yugabyte_master_consensus_meta_stat.stat.exists
+    - not (yugabyte_master_consensus_meta_settled.stat.exists | default(false))
 
 - name: Start and verify yb-master
   block:
@@ -105,3 +124,5 @@
     name: "{{ yugabyte_tserver_service }}"
     state: started
     enabled: true
+  when: yugabyte_restart_scope in ['all', 'tserver']
+  notify: yugabyte record tserver config
