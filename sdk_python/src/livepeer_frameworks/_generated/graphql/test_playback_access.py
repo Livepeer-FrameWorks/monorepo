@@ -4,7 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import AuthErrorFields, NotFoundErrorFields, ValidationErrorFields
+from .fragments import AuthError, NotFoundError, ValidationError
 
 
 class TestPlaybackAccess(BaseModel):
@@ -33,15 +33,15 @@ class TestPlaybackAccessTestPlaybackAccessPlaybackAccessDecision(BaseModel):
     resolved_internal_name: Optional[str] = Field(alias="resolvedInternalName")
 
 
-class TestPlaybackAccessTestPlaybackAccessValidationError(ValidationErrorFields):
+class TestPlaybackAccessTestPlaybackAccessValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class TestPlaybackAccessTestPlaybackAccessNotFoundError(NotFoundErrorFields):
+class TestPlaybackAccessTestPlaybackAccessNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class TestPlaybackAccessTestPlaybackAccessAuthError(AuthErrorFields):
+class TestPlaybackAccessTestPlaybackAccessAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

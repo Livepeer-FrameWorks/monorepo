@@ -4,12 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import (
-    AuthErrorFields,
-    NotFoundErrorFields,
-    StreamKeyFields,
-    ValidationErrorFields,
-)
+from .fragments import AuthError, NotFoundError, StreamKey, ValidationError
 
 
 class CreateStreamKey(BaseModel):
@@ -25,19 +20,19 @@ class CreateStreamKey(BaseModel):
     ] = Field(alias="createStreamKey")
 
 
-class CreateStreamKeyCreateStreamKeyStreamKey(StreamKeyFields):
+class CreateStreamKeyCreateStreamKeyStreamKey(StreamKey):
     typename__: Literal["StreamKey"] = Field(alias="__typename")
 
 
-class CreateStreamKeyCreateStreamKeyValidationError(ValidationErrorFields):
+class CreateStreamKeyCreateStreamKeyValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateStreamKeyCreateStreamKeyNotFoundError(NotFoundErrorFields):
+class CreateStreamKeyCreateStreamKeyNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class CreateStreamKeyCreateStreamKeyAuthError(AuthErrorFields):
+class CreateStreamKeyCreateStreamKeyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

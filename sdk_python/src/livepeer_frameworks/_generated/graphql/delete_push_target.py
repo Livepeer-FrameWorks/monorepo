@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import DeleteSuccessFields
+from .fragments import DeleteSuccess
 
 
 class DeletePushTarget(BaseModel):
@@ -10,5 +10,5 @@ class DeletePushTarget(BaseModel):
     )
 
 
-DeletePushTargetDeletePushTarget = DeleteSuccessFields
+DeletePushTargetDeletePushTarget = DeleteSuccess
 DeletePushTarget.model_rebuild()

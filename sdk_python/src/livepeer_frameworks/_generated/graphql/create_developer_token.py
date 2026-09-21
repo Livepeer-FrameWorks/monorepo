@@ -4,12 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import (
-    AuthErrorFields,
-    DeveloperTokenFields,
-    RateLimitErrorFields,
-    ValidationErrorFields,
-)
+from .fragments import AuthError, DeveloperToken, RateLimitError, ValidationError
 
 
 class CreateDeveloperToken(BaseModel):
@@ -25,19 +20,19 @@ class CreateDeveloperToken(BaseModel):
     ] = Field(alias="createDeveloperToken")
 
 
-class CreateDeveloperTokenCreateDeveloperTokenDeveloperToken(DeveloperTokenFields):
+class CreateDeveloperTokenCreateDeveloperTokenDeveloperToken(DeveloperToken):
     typename__: Literal["DeveloperToken"] = Field(alias="__typename")
 
 
-class CreateDeveloperTokenCreateDeveloperTokenValidationError(ValidationErrorFields):
+class CreateDeveloperTokenCreateDeveloperTokenValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateDeveloperTokenCreateDeveloperTokenRateLimitError(RateLimitErrorFields):
+class CreateDeveloperTokenCreateDeveloperTokenRateLimitError(RateLimitError):
     typename__: Literal["RateLimitError"] = Field(alias="__typename")
 
 
-class CreateDeveloperTokenCreateDeveloperTokenAuthError(AuthErrorFields):
+class CreateDeveloperTokenCreateDeveloperTokenAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

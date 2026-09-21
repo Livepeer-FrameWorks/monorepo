@@ -4,12 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import (
-    AuthErrorFields,
-    RateLimitErrorFields,
-    SigningKeyFields,
-    ValidationErrorFields,
-)
+from .fragments import AuthError, RateLimitError, SigningKey, ValidationError
 
 
 class CreateSigningKey(BaseModel):
@@ -33,18 +28,18 @@ class CreateSigningKeyCreateSigningKeyCreateSigningKeySuccess(BaseModel):
     private_key_pem: str = Field(alias="privateKeyPem")
 
 
-CreateSigningKeyCreateSigningKeyCreateSigningKeySuccessSigningKey = SigningKeyFields
+CreateSigningKeyCreateSigningKeyCreateSigningKeySuccessSigningKey = SigningKey
 
 
-class CreateSigningKeyCreateSigningKeyValidationError(ValidationErrorFields):
+class CreateSigningKeyCreateSigningKeyValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateSigningKeyCreateSigningKeyRateLimitError(RateLimitErrorFields):
+class CreateSigningKeyCreateSigningKeyRateLimitError(RateLimitError):
     typename__: Literal["RateLimitError"] = Field(alias="__typename")
 
 
-class CreateSigningKeyCreateSigningKeyAuthError(AuthErrorFields):
+class CreateSigningKeyCreateSigningKeyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

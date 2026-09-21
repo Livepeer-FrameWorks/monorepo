@@ -24,10 +24,10 @@ def expect_result(value: Any, *success: Any) -> Any:
     raises ResultError for any other member (ValidationError, NotFoundError,
     AuthError, RateLimitError, or an UnknownMember, whose ResultError carries
     its __typename, message, and code). value is a generated model or raw response
-    data; success is the generated success class, which narrows the type, or
+    data; success is the public domain model, which narrows the type, or
     one or more __typename strings:
 
-        stream = expect_result(created.create_stream, CreateStreamCreateStreamStream)
+        stream = expect_result(created.create_stream, Stream)
         stream = expect_result(created.create_stream, "Stream")
     """
     if value is None:

@@ -5,13 +5,13 @@ from pydantic import Field
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (  # noqa: F401
-    AuthErrorFields,
-    NotFoundErrorFields,
-    StreamFields,
-    StreamFieldsMetrics,
-    StreamFieldsPlaybackPolicy,
-    StreamFieldsPullSource,
-    ValidationErrorFields,
+    AuthError,
+    NotFoundError,
+    Stream,
+    StreamMetrics,
+    StreamPlaybackPolicy,
+    StreamPullSource,
+    ValidationError,
 )
 
 
@@ -28,19 +28,19 @@ class RefreshStreamKey(BaseModel):
     ] = Field(alias="refreshStreamKey")
 
 
-class RefreshStreamKeyRefreshStreamKeyStream(StreamFields):
+class RefreshStreamKeyRefreshStreamKeyStream(Stream):
     typename__: Literal["Stream"] = Field(alias="__typename")
 
 
-class RefreshStreamKeyRefreshStreamKeyValidationError(ValidationErrorFields):
+class RefreshStreamKeyRefreshStreamKeyValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class RefreshStreamKeyRefreshStreamKeyNotFoundError(NotFoundErrorFields):
+class RefreshStreamKeyRefreshStreamKeyNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class RefreshStreamKeyRefreshStreamKeyAuthError(AuthErrorFields):
+class RefreshStreamKeyRefreshStreamKeyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

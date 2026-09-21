@@ -11,12 +11,12 @@ pip install livepeer-frameworks
 
 ```python
 from livepeer_frameworks import FrameWorksClient, expect_result, paginate_relay
-from livepeer_frameworks.graphql import ConnectionInput, CreateStreamCreateStreamStream, CreateStreamInput
+from livepeer_frameworks.graphql import ConnectionInput, CreateStreamInput, Stream
 
-with FrameWorksClient("https://bridge.example.com/graphql", token="YOUR_API_TOKEN") as fw:
+with FrameWorksClient(token="YOUR_API_TOKEN") as fw:
     created = fw.create_stream(input=CreateStreamInput(name="Studio A"))
     # Returns the Stream member or raises ResultError for ValidationError/AuthError.
-    stream = expect_result(created.create_stream, CreateStreamCreateStreamStream)
+    stream = expect_result(created.create_stream, Stream)
     print(stream.stream_key, stream.playback_id)
 
     for s in paginate_relay(
@@ -25,7 +25,9 @@ with FrameWorksClient("https://bridge.example.com/graphql", token="YOUR_API_TOKE
         print(s.name)
 ```
 
-The client reads no environment variables; pass the URL and token explicitly. Per-call options are
+The client defaults to `https://bridge.frameworks.network/graphql` and reads no environment
+variables. Pass `url=` only for a self-hosted or staging Bridge, and pass the token explicitly.
+Per-call options are
 keyword arguments of the generated methods: `idempotency_key=` (sent as `Idempotency-Key`; paid
 mutations settled with x402 need one) and `playback_token=` (sent as `X-Frameworks-Playback-JWT`).
 

@@ -4,7 +4,7 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import ThumbnailAssetsFields, ViewerEndpointFields
+from .fragments import ThumbnailAssets, ViewerEndpoint
 
 
 class ResolveViewerEndpoint(BaseModel):
@@ -19,8 +19,8 @@ class ResolveViewerEndpointResolveViewerEndpoint(BaseModel):
     metadata: Optional["ResolveViewerEndpointResolveViewerEndpointMetadata"]
 
 
-ResolveViewerEndpointResolveViewerEndpointPrimary = ViewerEndpointFields
-ResolveViewerEndpointResolveViewerEndpointFallbacks = ViewerEndpointFields
+ResolveViewerEndpointResolveViewerEndpointPrimary = ViewerEndpoint
+ResolveViewerEndpointResolveViewerEndpointFallbacks = ViewerEndpoint
 
 
 class ResolveViewerEndpointResolveViewerEndpointMetadata(BaseModel):
@@ -41,9 +41,7 @@ class ResolveViewerEndpointResolveViewerEndpointMetadata(BaseModel):
     ] = Field(alias="thumbnailAssets")
 
 
-ResolveViewerEndpointResolveViewerEndpointMetadataThumbnailAssets = (
-    ThumbnailAssetsFields
-)
+ResolveViewerEndpointResolveViewerEndpointMetadataThumbnailAssets = ThumbnailAssets
 ResolveViewerEndpoint.model_rebuild()
 ResolveViewerEndpointResolveViewerEndpoint.model_rebuild()
 ResolveViewerEndpointResolveViewerEndpointMetadata.model_rebuild()

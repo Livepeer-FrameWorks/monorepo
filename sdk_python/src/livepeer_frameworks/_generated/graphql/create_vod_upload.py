@@ -5,7 +5,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import AuthErrorFields, ValidationErrorFields
+from .fragments import AuthError, ValidationError
 
 
 class CreateVodUpload(BaseModel):
@@ -36,11 +36,11 @@ class CreateVodUploadCreateVodUploadVodUploadSessionParts(BaseModel):
     presigned_url: str = Field(alias="presignedUrl")
 
 
-class CreateVodUploadCreateVodUploadValidationError(ValidationErrorFields):
+class CreateVodUploadCreateVodUploadValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateVodUploadCreateVodUploadAuthError(AuthErrorFields):
+class CreateVodUploadCreateVodUploadAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

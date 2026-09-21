@@ -32,7 +32,6 @@ from ._server_info import (
     ServerStatus,
     check_minimum,
     check_operation,
-    parse_stable_version,
     server_status,
 )
 from .errors import (
@@ -58,6 +57,8 @@ from .retry import (
 )
 
 OperationKind = Literal["query", "mutation", "subscription"]
+
+DEFAULT_GRAPHQL_URL = "https://bridge.frameworks.network/graphql"
 
 #: A bearer token, or a function returning the current one. None sends no Authorization header.
 Token = Union[str, None, Callable[[], Union[str, None]]]
@@ -353,7 +354,7 @@ class SyncTransport(_TransportCore):
 
     def __init__(
         self,
-        url: str,
+        url: str = DEFAULT_GRAPHQL_URL,
         *,
         token: Token = None,
         http_client: httpx.Client | None = None,
@@ -516,7 +517,7 @@ class AsyncTransport(_TransportCore):
 
     def __init__(
         self,
-        url: str,
+        url: str = DEFAULT_GRAPHQL_URL,
         *,
         token: AsyncToken = None,
         http_client: httpx.AsyncClient | None = None,

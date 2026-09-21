@@ -5,13 +5,13 @@ from pydantic import Field
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (  # noqa: F401
-    AuthErrorFields,
-    NotFoundErrorFields,
-    ValidationErrorFields,
-    VodAssetFields,
-    VodAssetFieldsEffectiveRetention,
-    VodAssetFieldsPlaybackPolicy,
-    VodAssetFieldsThumbnailAssets,
+    AuthError,
+    NotFoundError,
+    ValidationError,
+    VodAsset,
+    VodAssetEffectiveRetention,
+    VodAssetPlaybackPolicy,
+    VodAssetThumbnailAssets,
 )
 
 
@@ -28,19 +28,19 @@ class CompleteVodUpload(BaseModel):
     ] = Field(alias="completeVodUpload")
 
 
-class CompleteVodUploadCompleteVodUploadVodAsset(VodAssetFields):
+class CompleteVodUploadCompleteVodUploadVodAsset(VodAsset):
     typename__: Literal["VodAsset"] = Field(alias="__typename")
 
 
-class CompleteVodUploadCompleteVodUploadValidationError(ValidationErrorFields):
+class CompleteVodUploadCompleteVodUploadValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CompleteVodUploadCompleteVodUploadNotFoundError(NotFoundErrorFields):
+class CompleteVodUploadCompleteVodUploadNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class CompleteVodUploadCompleteVodUploadAuthError(AuthErrorFields):
+class CompleteVodUploadCompleteVodUploadAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import PageInfoFields, StreamKeyFields
+from .fragments import PageInfo, StreamKey
 
 
 class ListStreamKeys(BaseModel):
@@ -16,7 +16,7 @@ class ListStreamKeysStreamKeysConnection(BaseModel):
     total_count: int = Field(alias="totalCount")
 
 
-ListStreamKeysStreamKeysConnectionNodes = StreamKeyFields
-ListStreamKeysStreamKeysConnectionPageInfo = PageInfoFields
+ListStreamKeysStreamKeysConnectionNodes = StreamKey
+ListStreamKeysStreamKeysConnectionPageInfo = PageInfo
 ListStreamKeys.model_rebuild()
 ListStreamKeysStreamKeysConnection.model_rebuild()

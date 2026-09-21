@@ -4,7 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import AuthErrorFields, DeleteSuccessFields, NotFoundErrorFields
+from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteStreamKey(BaseModel):
@@ -19,15 +19,15 @@ class DeleteStreamKey(BaseModel):
     ] = Field(alias="deleteStreamKey")
 
 
-class DeleteStreamKeyDeleteStreamKeyDeleteSuccess(DeleteSuccessFields):
+class DeleteStreamKeyDeleteStreamKeyDeleteSuccess(DeleteSuccess):
     typename__: Literal["DeleteSuccess"] = Field(alias="__typename")
 
 
-class DeleteStreamKeyDeleteStreamKeyNotFoundError(NotFoundErrorFields):
+class DeleteStreamKeyDeleteStreamKeyNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class DeleteStreamKeyDeleteStreamKeyAuthError(AuthErrorFields):
+class DeleteStreamKeyDeleteStreamKeyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

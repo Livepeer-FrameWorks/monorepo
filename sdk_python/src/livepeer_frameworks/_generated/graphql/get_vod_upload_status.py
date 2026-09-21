@@ -6,7 +6,7 @@ from pydantic import Field
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .enums import VodAssetStatus
-from .fragments import AuthErrorFields, NotFoundErrorFields, ValidationErrorFields
+from .fragments import AuthError, NotFoundError, ValidationError
 
 
 class GetVodUploadStatus(BaseModel):
@@ -43,15 +43,15 @@ class GetVodUploadStatusVodUploadStatusVodUploadStatusUploadedParts(BaseModel):
     size_bytes: float = Field(alias="sizeBytes")
 
 
-class GetVodUploadStatusVodUploadStatusValidationError(ValidationErrorFields):
+class GetVodUploadStatusVodUploadStatusValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class GetVodUploadStatusVodUploadStatusNotFoundError(NotFoundErrorFields):
+class GetVodUploadStatusVodUploadStatusNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class GetVodUploadStatusVodUploadStatusAuthError(AuthErrorFields):
+class GetVodUploadStatusVodUploadStatusAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

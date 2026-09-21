@@ -3,7 +3,7 @@
 from ._forward import OpenEnum, UnknownMember
 from ._generated.manifest import MIN_SERVER_VERSION, OPERATIONS, SDK_LINE, SDK_VERSION
 from ._server_info import ServerStatus
-from .client import AsyncFrameWorksClient, FrameWorksClient
+from .client import AsyncFrameWorksClient, DEFAULT_GRAPHQL_URL, FrameWorksClient
 from .errors import (
     AuthenticationError,
     FrameWorksError,
@@ -41,6 +41,7 @@ __all__ = [
     "AsyncFrameWorksClient",
     "AuthenticationError",
     "DEFAULT_RETRY_POLICY",
+    "DEFAULT_GRAPHQL_URL",
     "FrameWorksClient",
     "FrameWorksError",
     "GraphQLError",

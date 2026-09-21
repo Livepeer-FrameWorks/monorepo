@@ -4,7 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import AuthErrorFields, DeleteSuccessFields, NotFoundErrorFields
+from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteDVR(BaseModel):
@@ -19,15 +19,15 @@ class DeleteDVR(BaseModel):
     ] = Field(alias="deleteDVR")
 
 
-class DeleteDVRDeleteDvrDeleteSuccess(DeleteSuccessFields):
+class DeleteDVRDeleteDvrDeleteSuccess(DeleteSuccess):
     typename__: Literal["DeleteSuccess"] = Field(alias="__typename")
 
 
-class DeleteDVRDeleteDvrNotFoundError(NotFoundErrorFields):
+class DeleteDVRDeleteDvrNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class DeleteDVRDeleteDvrAuthError(AuthErrorFields):
+class DeleteDVRDeleteDvrAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

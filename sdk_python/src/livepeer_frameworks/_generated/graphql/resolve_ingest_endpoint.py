@@ -3,7 +3,7 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import IngestEndpointFields
+from .fragments import IngestEndpoint
 
 
 class ResolveIngestEndpoint(BaseModel):
@@ -18,8 +18,8 @@ class ResolveIngestEndpointResolveIngestEndpoint(BaseModel):
     metadata: Optional["ResolveIngestEndpointResolveIngestEndpointMetadata"]
 
 
-ResolveIngestEndpointResolveIngestEndpointPrimary = IngestEndpointFields
-ResolveIngestEndpointResolveIngestEndpointFallbacks = IngestEndpointFields
+ResolveIngestEndpointResolveIngestEndpointPrimary = IngestEndpoint
+ResolveIngestEndpointResolveIngestEndpointFallbacks = IngestEndpoint
 
 
 class ResolveIngestEndpointResolveIngestEndpointMetadata(BaseModel):

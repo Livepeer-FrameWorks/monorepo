@@ -3,7 +3,7 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import DVRChapterRefFields
+from .fragments import DVRChapterRef
 
 
 class ListDVRChapters(BaseModel):
@@ -15,6 +15,6 @@ class ListDVRChaptersDvrChapters(BaseModel):
     next_page_token: Optional[str] = Field(alias="nextPageToken")
 
 
-ListDVRChaptersDvrChaptersChapters = DVRChapterRefFields
+ListDVRChaptersDvrChaptersChapters = DVRChapterRef
 ListDVRChapters.model_rebuild()
 ListDVRChaptersDvrChapters.model_rebuild()

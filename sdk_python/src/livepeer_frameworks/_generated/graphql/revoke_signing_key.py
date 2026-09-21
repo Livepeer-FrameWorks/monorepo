@@ -4,7 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import AuthErrorFields, NotFoundErrorFields, SigningKeyFields
+from .fragments import AuthError, NotFoundError, SigningKey
 
 
 class RevokeSigningKey(BaseModel):
@@ -19,15 +19,15 @@ class RevokeSigningKey(BaseModel):
     ] = Field(alias="revokeSigningKey")
 
 
-class RevokeSigningKeyRevokeSigningKeySigningKey(SigningKeyFields):
+class RevokeSigningKeyRevokeSigningKeySigningKey(SigningKey):
     typename__: Literal["SigningKey"] = Field(alias="__typename")
 
 
-class RevokeSigningKeyRevokeSigningKeyNotFoundError(NotFoundErrorFields):
+class RevokeSigningKeyRevokeSigningKeyNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class RevokeSigningKeyRevokeSigningKeyAuthError(AuthErrorFields):
+class RevokeSigningKeyRevokeSigningKeyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

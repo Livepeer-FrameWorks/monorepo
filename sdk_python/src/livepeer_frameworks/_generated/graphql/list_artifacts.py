@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import StorageArtifactFields
+from .fragments import StorageArtifact
 
 
 class ListArtifacts(BaseModel):
@@ -18,6 +18,6 @@ class ListArtifactsStorageArtifactsConnection(BaseModel):
     offset: int
 
 
-ListArtifactsStorageArtifactsConnectionNodes = StorageArtifactFields
+ListArtifactsStorageArtifactsConnectionNodes = StorageArtifact
 ListArtifacts.model_rebuild()
 ListArtifactsStorageArtifactsConnection.model_rebuild()

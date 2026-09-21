@@ -5,12 +5,12 @@ from pydantic import Field
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (  # noqa: F401
-    AuthErrorFields,
-    StreamFields,
-    StreamFieldsMetrics,
-    StreamFieldsPlaybackPolicy,
-    StreamFieldsPullSource,
-    ValidationErrorFields,
+    AuthError,
+    Stream,
+    StreamMetrics,
+    StreamPlaybackPolicy,
+    StreamPullSource,
+    ValidationError,
 )
 
 
@@ -26,15 +26,15 @@ class CreateStream(BaseModel):
     ] = Field(alias="createStream")
 
 
-class CreateStreamCreateStreamStream(StreamFields):
+class CreateStreamCreateStreamStream(Stream):
     typename__: Literal["Stream"] = Field(alias="__typename")
 
 
-class CreateStreamCreateStreamValidationError(ValidationErrorFields):
+class CreateStreamCreateStreamValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateStreamCreateStreamAuthError(AuthErrorFields):
+class CreateStreamCreateStreamAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

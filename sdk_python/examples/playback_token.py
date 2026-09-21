@@ -14,7 +14,7 @@ def main() -> None:
         expires_in=300,
         claims={"tier": "pro"},
     )
-    with FrameWorksClient("https://bridge.frameworks.network/graphql") as fw:
+    with FrameWorksClient() as fw:
         resolved = fw.resolve_viewer_endpoint(content_id="PLAYBACK_ID", playback_token=token)
         endpoint = resolved.resolve_viewer_endpoint
         if endpoint and endpoint.primary:

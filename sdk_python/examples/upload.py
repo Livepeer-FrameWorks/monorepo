@@ -7,7 +7,7 @@ from livepeer_frameworks import FrameWorksClient, UploadError, upload_vod
 
 
 def main(path: str) -> None:
-    with FrameWorksClient("https://bridge.frameworks.network/graphql", token=os.environ["FRAMEWORKS_API_TOKEN"]) as fw:
+    with FrameWorksClient(token=os.environ["FRAMEWORKS_API_TOKEN"]) as fw:
         try:
             asset = upload_vod(
                 fw,

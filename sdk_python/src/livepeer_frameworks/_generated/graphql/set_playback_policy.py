@@ -4,12 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import (
-    AuthErrorFields,
-    NotFoundErrorFields,
-    PlaybackPolicyFields,
-    ValidationErrorFields,
-)
+from .fragments import AuthError, NotFoundError, PlaybackPolicy, ValidationError
 
 
 class SetPlaybackPolicy(BaseModel):
@@ -35,7 +30,7 @@ class SetPlaybackPolicySetPlaybackPolicyStream(BaseModel):
     ] = Field(alias="playbackPolicy")
 
 
-SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy = PlaybackPolicyFields
+SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy = PlaybackPolicy
 
 
 class SetPlaybackPolicySetPlaybackPolicyVodAsset(BaseModel):
@@ -46,7 +41,7 @@ class SetPlaybackPolicySetPlaybackPolicyVodAsset(BaseModel):
     ] = Field(alias="playbackPolicy")
 
 
-SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy = PlaybackPolicyFields
+SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy = PlaybackPolicy
 
 
 class SetPlaybackPolicySetPlaybackPolicyClip(BaseModel):
@@ -57,18 +52,18 @@ class SetPlaybackPolicySetPlaybackPolicyClip(BaseModel):
     ] = Field(alias="playbackPolicy")
 
 
-SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy = PlaybackPolicyFields
+SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy = PlaybackPolicy
 
 
-class SetPlaybackPolicySetPlaybackPolicyValidationError(ValidationErrorFields):
+class SetPlaybackPolicySetPlaybackPolicyValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class SetPlaybackPolicySetPlaybackPolicyNotFoundError(NotFoundErrorFields):
+class SetPlaybackPolicySetPlaybackPolicyNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class SetPlaybackPolicySetPlaybackPolicyAuthError(AuthErrorFields):
+class SetPlaybackPolicySetPlaybackPolicyAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

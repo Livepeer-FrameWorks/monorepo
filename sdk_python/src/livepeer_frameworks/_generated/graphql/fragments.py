@@ -21,51 +21,51 @@ from .enums import (
 )
 
 
-class AuthErrorFields(BaseModel):
+class AuthError(BaseModel):
     typename__: str = Field(alias="__typename")
     message: str
     code: Optional[str]
 
 
-class EffectiveRetentionFields(BaseModel):
+class EffectiveRetention(BaseModel):
     retention_days: int = Field(alias="retentionDays")
     retention_until: Optional[datetime] = Field(alias="retentionUntil")
     source: RetentionSource
 
 
-class PlaybackPolicyFields(BaseModel):
+class PlaybackPolicy(BaseModel):
     type_: PlaybackPolicyType = Field(alias="type")
-    jwt: Optional["PlaybackPolicyFieldsJwt"]
-    webhook: Optional["PlaybackPolicyFieldsWebhook"]
+    jwt: Optional["PlaybackPolicyJwt"]
+    webhook: Optional["PlaybackPolicyWebhook"]
 
 
-class PlaybackPolicyFieldsJwt(BaseModel):
+class PlaybackPolicyJwt(BaseModel):
     allowed_kids: list[str] = Field(alias="allowedKids")
     required_audience: list[str] = Field(alias="requiredAudience")
-    required_claims_json: list["PlaybackPolicyFieldsJwtRequiredClaimsJson"] = Field(
+    required_claims_json: list["PlaybackPolicyJwtRequiredClaimsJson"] = Field(
         alias="requiredClaimsJson"
     )
 
 
-class PlaybackPolicyFieldsJwtRequiredClaimsJson(BaseModel):
+class PlaybackPolicyJwtRequiredClaimsJson(BaseModel):
     name: str
     json_value: str = Field(alias="jsonValue")
 
 
-class PlaybackPolicyFieldsWebhook(BaseModel):
+class PlaybackPolicyWebhook(BaseModel):
     url: str
     timeout_ms: int = Field(alias="timeoutMs")
     secret_masked: str = Field(alias="secretMasked")
 
 
-class ThumbnailAssetsFields(BaseModel):
+class ThumbnailAssets(BaseModel):
     poster_url: str = Field(alias="posterUrl")
     sprite_vtt_url: str = Field(alias="spriteVttUrl")
     sprite_jpg_url: str = Field(alias="spriteJpgUrl")
     asset_key: str = Field(alias="assetKey")
 
 
-class ClipFields(BaseModel):
+class Clip(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     clip_hash: str = Field(alias="clipHash")
@@ -82,30 +82,26 @@ class ClipFields(BaseModel):
     updated_at: Optional[datetime] = Field(alias="updatedAt")
     expires_at: Optional[datetime] = Field(alias="expiresAt")
     is_expired: bool = Field(alias="isExpired")
-    playback_policy: Optional["ClipFieldsPlaybackPolicy"] = Field(
-        alias="playbackPolicy"
-    )
-    thumbnail_assets: Optional["ClipFieldsThumbnailAssets"] = Field(
-        alias="thumbnailAssets"
-    )
-    effective_retention: Optional["ClipFieldsEffectiveRetention"] = Field(
+    playback_policy: Optional["ClipPlaybackPolicy"] = Field(alias="playbackPolicy")
+    thumbnail_assets: Optional["ClipThumbnailAssets"] = Field(alias="thumbnailAssets")
+    effective_retention: Optional["ClipEffectiveRetention"] = Field(
         alias="effectiveRetention"
     )
 
 
-class ClipFieldsPlaybackPolicy(PlaybackPolicyFields):
+class ClipPlaybackPolicy(PlaybackPolicy):
     pass
 
 
-class ClipFieldsThumbnailAssets(ThumbnailAssetsFields):
+class ClipThumbnailAssets(ThumbnailAssets):
     pass
 
 
-class ClipFieldsEffectiveRetention(EffectiveRetentionFields):
+class ClipEffectiveRetention(EffectiveRetention):
     pass
 
 
-class DVRChapterRefFields(BaseModel):
+class DVRChapterRef(BaseModel):
     chapter_id: str = Field(alias="chapterId")
     mode: DVRChapterMode
     interval_seconds: Optional[int] = Field(alias="intervalSeconds")
@@ -119,7 +115,7 @@ class DVRChapterRefFields(BaseModel):
     last_failure_reason: Optional[str] = Field(alias="lastFailureReason")
 
 
-class DVRRequestFields(BaseModel):
+class DVRRequest(BaseModel):
     typename__: str = Field(alias="__typename")
     id: Optional[str]
     dvr_hash: str = Field(alias="dvrHash")
@@ -138,14 +134,14 @@ class DVRRequestFields(BaseModel):
     error_message: Optional[str] = Field(alias="errorMessage")
 
 
-class DeleteSuccessFields(BaseModel):
+class DeleteSuccess(BaseModel):
     typename__: str = Field(alias="__typename")
     success: bool
     deleted_id: str = Field(alias="deletedId")
     pending: Optional[bool]
 
 
-class DeveloperTokenFields(BaseModel):
+class DeveloperToken(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     token_name: str = Field(alias="tokenName")
@@ -157,19 +153,19 @@ class DeveloperTokenFields(BaseModel):
     created_at: Optional[datetime] = Field(alias="createdAt")
 
 
-class EventArtifactFields(BaseModel):
+class EventArtifact(BaseModel):
     artifact_id: str = Field(alias="artifactId")
     kind: EventArtifactKind
     stream_id: str = Field(alias="streamId")
     playback_id: str = Field(alias="playbackId")
 
 
-class EventMoneyFields(BaseModel):
+class EventMoney(BaseModel):
     amount_minor: int = Field(alias="amountMinor")
     currency: str
 
 
-class IngestEndpointFields(BaseModel):
+class IngestEndpoint(BaseModel):
     node_id: str = Field(alias="nodeId")
     base_url: str = Field(alias="baseUrl")
     whip_url: Optional[str] = Field(alias="whipUrl")
@@ -181,7 +177,7 @@ class IngestEndpointFields(BaseModel):
     cluster_id: str = Field(alias="clusterId")
 
 
-class NotFoundErrorFields(BaseModel):
+class NotFoundError(BaseModel):
     typename__: str = Field(alias="__typename")
     message: str
     code: Optional[str]
@@ -189,14 +185,14 @@ class NotFoundErrorFields(BaseModel):
     resource_id: str = Field(alias="resourceId")
 
 
-class PageInfoFields(BaseModel):
+class PageInfo(BaseModel):
     start_cursor: Optional[str] = Field(alias="startCursor")
     end_cursor: Optional[str] = Field(alias="endCursor")
     has_next_page: bool = Field(alias="hasNextPage")
     has_previous_page: bool = Field(alias="hasPreviousPage")
 
 
-class PushTargetFields(BaseModel):
+class PushTarget(BaseModel):
     id: str
     stream_id: str = Field(alias="streamId")
     platform: Optional[str]
@@ -210,14 +206,14 @@ class PushTargetFields(BaseModel):
     created_at: datetime = Field(alias="createdAt")
 
 
-class RateLimitErrorFields(BaseModel):
+class RateLimitError(BaseModel):
     typename__: str = Field(alias="__typename")
     message: str
     code: Optional[str]
     retry_after: Optional[int] = Field(alias="retryAfter")
 
 
-class SigningKeyFields(BaseModel):
+class SigningKey(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     kid: str
@@ -230,7 +226,7 @@ class SigningKeyFields(BaseModel):
     revoked_at: Optional[datetime] = Field(alias="revokedAt")
 
 
-class StorageArtifactFields(BaseModel):
+class StorageArtifact(BaseModel):
     key: str
     kind: StorageArtifactKind
     id: str
@@ -248,16 +244,16 @@ class StorageArtifactFields(BaseModel):
     expires_at: Optional[datetime] = Field(alias="expiresAt")
     delete_id: str = Field(alias="deleteId")
     duration_seconds: Optional[float] = Field(alias="durationSeconds")
-    thumbnail_assets: Optional["StorageArtifactFieldsThumbnailAssets"] = Field(
+    thumbnail_assets: Optional["StorageArtifactThumbnailAssets"] = Field(
         alias="thumbnailAssets"
     )
 
 
-class StorageArtifactFieldsThumbnailAssets(ThumbnailAssetsFields):
+class StorageArtifactThumbnailAssets(ThumbnailAssets):
     pass
 
 
-class StreamFields(BaseModel):
+class Stream(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     stream_id: str = Field(alias="streamId")
@@ -267,7 +263,7 @@ class StreamFields(BaseModel):
     playback_id: str = Field(alias="playbackId")
     record: bool
     ingest_mode: IngestMode = Field(alias="ingestMode")
-    pull_source: Optional["StreamFieldsPullSource"] = Field(alias="pullSource")
+    pull_source: Optional["StreamPullSource"] = Field(alias="pullSource")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(alias="dvrChapterMode")
@@ -275,23 +271,21 @@ class StreamFields(BaseModel):
         alias="dvrChapterIntervalSeconds"
     )
     monitoring: MonitoringToggle
-    playback_policy: Optional["StreamFieldsPlaybackPolicy"] = Field(
-        alias="playbackPolicy"
-    )
-    metrics: Optional["StreamFieldsMetrics"]
+    playback_policy: Optional["StreamPlaybackPolicy"] = Field(alias="playbackPolicy")
+    metrics: Optional["StreamMetrics"]
 
 
-class StreamFieldsPullSource(BaseModel):
+class StreamPullSource(BaseModel):
     source_uri_redacted: str = Field(alias="sourceUriRedacted")
     enabled: bool
     class_: str = Field(alias="class")
 
 
-class StreamFieldsPlaybackPolicy(PlaybackPolicyFields):
+class StreamPlaybackPolicy(PlaybackPolicy):
     pass
 
 
-class StreamFieldsMetrics(BaseModel):
+class StreamMetrics(BaseModel):
     status: StreamStatus
     is_live: bool = Field(alias="isLive")
     current_viewers: int = Field(alias="currentViewers")
@@ -299,7 +293,7 @@ class StreamFieldsMetrics(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
 
 
-class StreamKeyFields(BaseModel):
+class StreamKey(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     stream_id: str = Field(alias="streamId")
@@ -310,7 +304,7 @@ class StreamKeyFields(BaseModel):
     created_at: datetime = Field(alias="createdAt")
 
 
-class ValidationErrorFields(BaseModel):
+class ValidationError(BaseModel):
     typename__: str = Field(alias="__typename")
     message: str
     code: Optional[str]
@@ -318,7 +312,7 @@ class ValidationErrorFields(BaseModel):
     constraint: Optional[str]
 
 
-class ViewerEndpointFields(BaseModel):
+class ViewerEndpoint(BaseModel):
     node_id: str = Field(alias="nodeId")
     base_url: str = Field(alias="baseUrl")
     protocol: str
@@ -328,7 +322,7 @@ class ViewerEndpointFields(BaseModel):
     outputs: Optional[Any]
 
 
-class VodAssetFields(BaseModel):
+class VodAsset(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     artifact_hash: str = Field(alias="artifactHash")
@@ -348,49 +342,47 @@ class VodAssetFields(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
     expires_at: Optional[datetime] = Field(alias="expiresAt")
     error_message: Optional[str] = Field(alias="errorMessage")
-    playback_policy: Optional["VodAssetFieldsPlaybackPolicy"] = Field(
-        alias="playbackPolicy"
-    )
-    thumbnail_assets: Optional["VodAssetFieldsThumbnailAssets"] = Field(
+    playback_policy: Optional["VodAssetPlaybackPolicy"] = Field(alias="playbackPolicy")
+    thumbnail_assets: Optional["VodAssetThumbnailAssets"] = Field(
         alias="thumbnailAssets"
     )
-    effective_retention: Optional["VodAssetFieldsEffectiveRetention"] = Field(
+    effective_retention: Optional["VodAssetEffectiveRetention"] = Field(
         alias="effectiveRetention"
     )
 
 
-class VodAssetFieldsPlaybackPolicy(PlaybackPolicyFields):
+class VodAssetPlaybackPolicy(PlaybackPolicy):
     pass
 
 
-class VodAssetFieldsThumbnailAssets(ThumbnailAssetsFields):
+class VodAssetThumbnailAssets(ThumbnailAssets):
     pass
 
 
-class VodAssetFieldsEffectiveRetention(EffectiveRetentionFields):
+class VodAssetEffectiveRetention(EffectiveRetention):
     pass
 
 
-AuthErrorFields.model_rebuild()
-EffectiveRetentionFields.model_rebuild()
-PlaybackPolicyFields.model_rebuild()
-ThumbnailAssetsFields.model_rebuild()
-ClipFields.model_rebuild()
-DVRChapterRefFields.model_rebuild()
-DVRRequestFields.model_rebuild()
-DeleteSuccessFields.model_rebuild()
-DeveloperTokenFields.model_rebuild()
-EventArtifactFields.model_rebuild()
-EventMoneyFields.model_rebuild()
-IngestEndpointFields.model_rebuild()
-NotFoundErrorFields.model_rebuild()
-PageInfoFields.model_rebuild()
-PushTargetFields.model_rebuild()
-RateLimitErrorFields.model_rebuild()
-SigningKeyFields.model_rebuild()
-StorageArtifactFields.model_rebuild()
-StreamFields.model_rebuild()
-StreamKeyFields.model_rebuild()
-ValidationErrorFields.model_rebuild()
-ViewerEndpointFields.model_rebuild()
-VodAssetFields.model_rebuild()
+AuthError.model_rebuild()
+EffectiveRetention.model_rebuild()
+PlaybackPolicy.model_rebuild()
+ThumbnailAssets.model_rebuild()
+Clip.model_rebuild()
+DVRChapterRef.model_rebuild()
+DVRRequest.model_rebuild()
+DeleteSuccess.model_rebuild()
+DeveloperToken.model_rebuild()
+EventArtifact.model_rebuild()
+EventMoney.model_rebuild()
+IngestEndpoint.model_rebuild()
+NotFoundError.model_rebuild()
+PageInfo.model_rebuild()
+PushTarget.model_rebuild()
+RateLimitError.model_rebuild()
+SigningKey.model_rebuild()
+StorageArtifact.model_rebuild()
+Stream.model_rebuild()
+StreamKey.model_rebuild()
+ValidationError.model_rebuild()
+ViewerEndpoint.model_rebuild()
+VodAsset.model_rebuild()

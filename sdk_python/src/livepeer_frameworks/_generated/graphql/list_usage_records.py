@@ -4,7 +4,7 @@ from typing import Any, Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import PageInfoFields
+from .fragments import PageInfo
 
 
 class ListUsageRecords(BaseModel):
@@ -35,6 +35,6 @@ class ListUsageRecordsUsageRecordsConnectionNodes(BaseModel):
     granularity: Optional[str]
 
 
-ListUsageRecordsUsageRecordsConnectionPageInfo = PageInfoFields
+ListUsageRecordsUsageRecordsConnectionPageInfo = PageInfo
 ListUsageRecords.model_rebuild()
 ListUsageRecordsUsageRecordsConnection.model_rebuild()

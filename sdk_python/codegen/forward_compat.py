@@ -40,12 +40,51 @@ class ForwardCompatPlugin(Plugin):
     def generate_result_types_module(
         self, module: ast.Module, operation_definition: ExecutableDefinitionNode
     ) -> ast.Module:
-        return _open_unions(module)
+        return _domain_fragment_names(_open_unions(module))
 
     def generate_fragments_module(
         self, module: ast.Module, fragments_definitions: dict[str, FragmentDefinitionNode]
     ) -> ast.Module:
-        return _open_unions(module)
+        return _domain_fragment_names(_open_unions(module))
+
+    def generate_init_module(self, module: ast.Module) -> ast.Module:
+        return _domain_fragment_names(module)
+
+
+def _domain_fragment_names(module: ast.Module) -> ast.Module:
+    """Remove the GraphQL fragment convention's ``Fields`` suffix from
+    generated Python model names and every reference to them."""
+
+    def clean(name: str) -> str:
+        return name.replace("Fields", "")
+
+    class Rename(ast.NodeTransformer):
+        def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
+            node.name = clean(node.name)
+            return self.generic_visit(node)
+
+        def visit_Name(self, node: ast.Name) -> ast.AST:
+            node.id = clean(node.id)
+            return node
+
+        def visit_alias(self, node: ast.alias) -> ast.AST:
+            node.name = clean(node.name)
+            if node.asname:
+                node.asname = clean(node.asname)
+            return node
+
+        def visit_Constant(self, node: ast.Constant) -> ast.AST:
+            if (
+                isinstance(node.value, str)
+                and node.value.isidentifier()
+                and node.value[:1].isupper()
+            ):
+                node.value = clean(node.value)
+            return node
+
+    result = Rename().visit(module)
+    assert isinstance(result, ast.Module)
+    return result
 
 
 def _open_unions(module: ast.Module) -> ast.Module:

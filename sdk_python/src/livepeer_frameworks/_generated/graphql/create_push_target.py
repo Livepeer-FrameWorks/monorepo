@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import PushTargetFields
+from .fragments import PushTarget
 
 
 class CreatePushTarget(BaseModel):
@@ -10,5 +10,5 @@ class CreatePushTarget(BaseModel):
     )
 
 
-CreatePushTargetCreatePushTarget = PushTargetFields
+CreatePushTargetCreatePushTarget = PushTarget
 CreatePushTarget.model_rebuild()

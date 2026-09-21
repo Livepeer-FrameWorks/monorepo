@@ -26,7 +26,7 @@ from .retry import DEFAULT_RETRY_POLICY, RETRYABLE_STATUSES, RetryPolicy, backof
 if TYPE_CHECKING:
     from ._generated.graphql.async_client import AsyncGraphQLClient
     from ._generated.graphql.client import GraphQLClient
-    from ._generated.graphql.fragments import VodAssetFields
+    from ._generated.graphql.fragments import VodAsset
 
 #: Bytes, a file path, or a binary file opened for reading.
 UploadSource = Union[bytes, bytearray, memoryview, str, "os.PathLike[str]", IO[bytes]]
@@ -135,10 +135,10 @@ def upload_vod(
     on_progress: Callable[[int, int], None] | None = None,
     http_client: httpx.Client | None = None,
     _sleep: Callable[[float], None] = time.sleep,
-) -> VodAssetFields:
+) -> VodAsset:
     """Uploads a file as a VOD asset and returns the asset completeVodUpload returned."""
-    from ._generated.graphql.complete_vod_upload import CompleteVodUploadCompleteVodUploadVodAsset
     from ._generated.graphql.create_vod_upload import CreateVodUploadCreateVodUploadVodUploadSession
+    from ._generated.graphql.fragments import VodAsset
     from ._generated.graphql.input_types import (
         CompleteVodUploadInput,
         CreateVodUploadInput,
@@ -210,7 +210,7 @@ def upload_vod(
                     parts=[VodUploadCompletedPart(part_number=p.number, etag=etags.get(p.number, "")) for p in parts],
                 )
             )
-            return expect_result(completed.complete_vod_upload, CompleteVodUploadCompleteVodUploadVodAsset)
+            return expect_result(completed.complete_vod_upload, VodAsset)
         except BaseException:
             try:
                 client.abort_vod_upload(upload_id=session.id)
@@ -236,10 +236,10 @@ async def async_upload_vod(
     on_progress: Callable[[int, int], None] | None = None,
     http_client: httpx.AsyncClient | None = None,
     _sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> VodAssetFields:
+) -> VodAsset:
     """Async upload_vod."""
-    from ._generated.graphql.complete_vod_upload import CompleteVodUploadCompleteVodUploadVodAsset
     from ._generated.graphql.create_vod_upload import CreateVodUploadCreateVodUploadVodUploadSession
+    from ._generated.graphql.fragments import VodAsset
     from ._generated.graphql.input_types import (
         CompleteVodUploadInput,
         CreateVodUploadInput,
@@ -303,7 +303,7 @@ async def async_upload_vod(
                     parts=[VodUploadCompletedPart(part_number=p.number, etag=etags.get(p.number, "")) for p in parts],
                 )
             )
-            return expect_result(completed.complete_vod_upload, CompleteVodUploadCompleteVodUploadVodAsset)
+            return expect_result(completed.complete_vod_upload, VodAsset)
         except BaseException:
             try:
                 await client.abort_vod_upload(upload_id=session.id)

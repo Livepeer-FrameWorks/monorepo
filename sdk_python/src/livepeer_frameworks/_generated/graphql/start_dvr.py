@@ -4,12 +4,7 @@ from pydantic import Field
 
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
-from .fragments import (
-    AuthErrorFields,
-    DVRRequestFields,
-    NotFoundErrorFields,
-    ValidationErrorFields,
-)
+from .fragments import AuthError, DVRRequest, NotFoundError, ValidationError
 
 
 class StartDVR(BaseModel):
@@ -25,19 +20,19 @@ class StartDVR(BaseModel):
     ] = Field(alias="startDVR")
 
 
-class StartDVRStartDvrDVRRequest(DVRRequestFields):
+class StartDVRStartDvrDVRRequest(DVRRequest):
     typename__: Literal["DVRRequest"] = Field(alias="__typename")
 
 
-class StartDVRStartDvrValidationError(ValidationErrorFields):
+class StartDVRStartDvrValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class StartDVRStartDvrNotFoundError(NotFoundErrorFields):
+class StartDVRStartDvrNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class StartDVRStartDvrAuthError(AuthErrorFields):
+class StartDVRStartDvrAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

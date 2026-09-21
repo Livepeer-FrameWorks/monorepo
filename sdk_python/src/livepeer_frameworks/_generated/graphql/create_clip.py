@@ -5,13 +5,13 @@ from pydantic import Field
 from ..._forward import OpenUnion, UnknownMember
 from .base_model import BaseModel
 from .fragments import (  # noqa: F401
-    AuthErrorFields,
-    ClipFields,
-    ClipFieldsEffectiveRetention,
-    ClipFieldsPlaybackPolicy,
-    ClipFieldsThumbnailAssets,
-    NotFoundErrorFields,
-    ValidationErrorFields,
+    AuthError,
+    Clip,
+    ClipEffectiveRetention,
+    ClipPlaybackPolicy,
+    ClipThumbnailAssets,
+    NotFoundError,
+    ValidationError,
 )
 
 
@@ -28,19 +28,19 @@ class CreateClip(BaseModel):
     ] = Field(alias="createClip")
 
 
-class CreateClipCreateClipClip(ClipFields):
+class CreateClipCreateClipClip(Clip):
     typename__: Literal["Clip"] = Field(alias="__typename")
 
 
-class CreateClipCreateClipValidationError(ValidationErrorFields):
+class CreateClipCreateClipValidationError(ValidationError):
     typename__: Literal["ValidationError"] = Field(alias="__typename")
 
 
-class CreateClipCreateClipNotFoundError(NotFoundErrorFields):
+class CreateClipCreateClipNotFoundError(NotFoundError):
     typename__: Literal["NotFoundError"] = Field(alias="__typename")
 
 
-class CreateClipCreateClipAuthError(AuthErrorFields):
+class CreateClipCreateClipAuthError(AuthError):
     typename__: Literal["AuthError"] = Field(alias="__typename")
 
 

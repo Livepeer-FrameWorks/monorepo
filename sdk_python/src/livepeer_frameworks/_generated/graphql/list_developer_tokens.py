@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import DeveloperTokenFields, PageInfoFields
+from .fragments import DeveloperToken, PageInfo
 
 
 class ListDeveloperTokens(BaseModel):
@@ -18,7 +18,7 @@ class ListDeveloperTokensDeveloperTokensConnection(BaseModel):
     total_count: int = Field(alias="totalCount")
 
 
-ListDeveloperTokensDeveloperTokensConnectionNodes = DeveloperTokenFields
-ListDeveloperTokensDeveloperTokensConnectionPageInfo = PageInfoFields
+ListDeveloperTokensDeveloperTokensConnectionNodes = DeveloperToken
+ListDeveloperTokensDeveloperTokensConnectionPageInfo = PageInfo
 ListDeveloperTokens.model_rebuild()
 ListDeveloperTokensDeveloperTokensConnection.model_rebuild()

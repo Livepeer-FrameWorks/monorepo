@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import PageInfoFields, SigningKeyFields
+from .fragments import PageInfo, SigningKey
 
 
 class ListSigningKeys(BaseModel):
@@ -16,7 +16,7 @@ class ListSigningKeysSigningKeysConnection(BaseModel):
     total_count: int = Field(alias="totalCount")
 
 
-ListSigningKeysSigningKeysConnectionNodes = SigningKeyFields
-ListSigningKeysSigningKeysConnectionPageInfo = PageInfoFields
+ListSigningKeysSigningKeysConnectionNodes = SigningKey
+ListSigningKeysSigningKeysConnectionPageInfo = PageInfo
 ListSigningKeys.model_rebuild()
 ListSigningKeysSigningKeysConnection.model_rebuild()

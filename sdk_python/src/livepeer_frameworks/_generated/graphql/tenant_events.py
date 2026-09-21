@@ -13,7 +13,7 @@ from .enums import (
     EventPaymentFailureReason,
     EventSuspensionReason,
 )
-from .fragments import EventArtifactFields, EventMoneyFields
+from .fragments import EventArtifact, EventMoney
 
 
 class TenantEvents(BaseModel):
@@ -95,7 +95,7 @@ class TenantEventsTenantEventsDataInvoiceCreated(BaseModel):
     due_at: Optional[datetime] = Field(alias="dueAt")
 
 
-TenantEventsTenantEventsDataInvoiceCreatedAmountDue = EventMoneyFields
+TenantEventsTenantEventsDataInvoiceCreatedAmountDue = EventMoney
 
 
 class TenantEventsTenantEventsDataInvoicePaid(BaseModel):
@@ -106,7 +106,7 @@ class TenantEventsTenantEventsDataInvoicePaid(BaseModel):
     )
 
 
-TenantEventsTenantEventsDataInvoicePaidAmountPaid = EventMoneyFields
+TenantEventsTenantEventsDataInvoicePaidAmountPaid = EventMoney
 
 
 class TenantEventsTenantEventsDataPaymentFailed(BaseModel):
@@ -121,7 +121,7 @@ class TenantEventsTenantEventsDataPaymentFailed(BaseModel):
     provider_reference_id: str = Field(alias="providerReferenceId")
 
 
-TenantEventsTenantEventsDataPaymentFailedAmount = EventMoneyFields
+TenantEventsTenantEventsDataPaymentFailedAmount = EventMoney
 
 
 class TenantEventsTenantEventsDataTopupCredited(BaseModel):
@@ -130,7 +130,7 @@ class TenantEventsTenantEventsDataTopupCredited(BaseModel):
     amount: Optional["TenantEventsTenantEventsDataTopupCreditedAmount"]
 
 
-TenantEventsTenantEventsDataTopupCreditedAmount = EventMoneyFields
+TenantEventsTenantEventsDataTopupCreditedAmount = EventMoney
 
 
 class TenantEventsTenantEventsDataClipFailed(BaseModel):
@@ -139,7 +139,7 @@ class TenantEventsTenantEventsDataClipFailed(BaseModel):
     media_failure_reason: EventMediaFailureReason = Field(alias="mediaFailureReason")
 
 
-TenantEventsTenantEventsDataClipFailedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataClipFailedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataClipReady(BaseModel):
@@ -149,7 +149,7 @@ class TenantEventsTenantEventsDataClipReady(BaseModel):
     size_bytes: int = Field(alias="sizeBytes")
 
 
-TenantEventsTenantEventsDataClipReadyArtifact = EventArtifactFields
+TenantEventsTenantEventsDataClipReadyArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataClipRequested(BaseModel):
@@ -158,7 +158,7 @@ class TenantEventsTenantEventsDataClipRequested(BaseModel):
     duration_ms: int = Field(alias="durationMs")
 
 
-TenantEventsTenantEventsDataClipRequestedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataClipRequestedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataCustomDomainFailed(BaseModel):
@@ -189,7 +189,7 @@ class TenantEventsTenantEventsDataRecordingFailed(BaseModel):
     media_failure_reason: EventMediaFailureReason = Field(alias="mediaFailureReason")
 
 
-TenantEventsTenantEventsDataRecordingFailedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataRecordingFailedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataRecordingReady(BaseModel):
@@ -199,7 +199,7 @@ class TenantEventsTenantEventsDataRecordingReady(BaseModel):
     size_bytes: int = Field(alias="sizeBytes")
 
 
-TenantEventsTenantEventsDataRecordingReadyArtifact = EventArtifactFields
+TenantEventsTenantEventsDataRecordingReadyArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataStreamConnected(BaseModel):
@@ -246,7 +246,7 @@ class TenantEventsTenantEventsDataUploadAborted(BaseModel):
     artifact: Optional["TenantEventsTenantEventsDataUploadAbortedArtifact"]
 
 
-TenantEventsTenantEventsDataUploadAbortedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataUploadAbortedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataUploadCompleted(BaseModel):
@@ -255,7 +255,7 @@ class TenantEventsTenantEventsDataUploadCompleted(BaseModel):
     size_bytes: int = Field(alias="sizeBytes")
 
 
-TenantEventsTenantEventsDataUploadCompletedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataUploadCompletedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataUploadCreated(BaseModel):
@@ -265,7 +265,7 @@ class TenantEventsTenantEventsDataUploadCreated(BaseModel):
     expected_size_bytes: int = Field(alias="expectedSizeBytes")
 
 
-TenantEventsTenantEventsDataUploadCreatedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataUploadCreatedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataUploadFailed(BaseModel):
@@ -274,7 +274,7 @@ class TenantEventsTenantEventsDataUploadFailed(BaseModel):
     media_failure_reason: EventMediaFailureReason = Field(alias="mediaFailureReason")
 
 
-TenantEventsTenantEventsDataUploadFailedArtifact = EventArtifactFields
+TenantEventsTenantEventsDataUploadFailedArtifact = EventArtifact
 
 
 class TenantEventsTenantEventsDataUploadReady(BaseModel):
@@ -284,7 +284,7 @@ class TenantEventsTenantEventsDataUploadReady(BaseModel):
     size_bytes: int = Field(alias="sizeBytes")
 
 
-TenantEventsTenantEventsDataUploadReadyArtifact = EventArtifactFields
+TenantEventsTenantEventsDataUploadReadyArtifact = EventArtifact
 TenantEvents.model_rebuild()
 TenantEventsTenantEvents.model_rebuild()
 TenantEventsTenantEventsDataInvoiceCreated.model_rebuild()

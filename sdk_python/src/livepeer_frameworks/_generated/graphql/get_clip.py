@@ -1,12 +1,12 @@
 from typing import Optional
 
 from .base_model import BaseModel
-from .fragments import ClipFields
+from .fragments import Clip
 
 
 class GetClip(BaseModel):
     clip: Optional["GetClipClip"]
 
 
-GetClipClip = ClipFields
+GetClipClip = Clip
 GetClip.model_rebuild()
