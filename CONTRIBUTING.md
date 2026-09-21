@@ -91,6 +91,10 @@ make verify                            # Pre-commit verification
 
 See `docs/standards/testing.md` for testing philosophy and best practices.
 
+For CPU-, memory-, or database-heavy work, use the VPN-only shared build host with an isolated task
+slot. See [Remote development](docs/development/remote-development.md); the short path is
+`scripts/remote-dev.sh sync <slot>` followed by `scripts/remote-dev.sh run <slot> make <target>`.
+
 ## Release Build Infrastructure
 
 The release pipeline (`.github/workflows/release.yml`) uses two runner types:
