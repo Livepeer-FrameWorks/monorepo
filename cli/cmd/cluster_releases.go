@@ -16,12 +16,14 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/gitops"
+	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
@@ -272,10 +274,10 @@ func normalizeReleaseTargetVersion(version string) string {
 func normalizeReleaseTargetChannel(channel string) (string, error) {
 	channel = strings.ToLower(strings.TrimSpace(channel))
 	switch channel {
-	case "stable", "candidate", "rc":
+	case "stable", "rc":
 		return channel, nil
 	default:
-		return "", fmt.Errorf("unsupported release channel %q", channel)
+		return "", fmt.Errorf("unsupported persisted release channel %q (use target sync --version candidate to resolve the GitOps candidate selector)", channel)
 	}
 }
 
@@ -312,7 +314,22 @@ func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.
 	if err != nil {
 		return nil, err
 	}
-	return upsertEdgeReleaseManifest(cmd, qm, ctxCfg, manifest, channel, remoteOS, remoteArch)
+	catalogChannel, err := edgeReleaseCatalogChannel(manifest)
+	if err != nil {
+		return nil, err
+	}
+	return upsertEdgeReleaseManifest(cmd, qm, ctxCfg, manifest, catalogChannel, remoteOS, remoteArch)
+}
+
+func edgeReleaseCatalogChannel(manifest *gitops.Manifest) (string, error) {
+	if manifest == nil {
+		return "", fmt.Errorf("release manifest is required")
+	}
+	channel, err := fwversion.ChannelForTag(manifest.PlatformVersion)
+	if err != nil {
+		return "", fmt.Errorf("resolve edge release channel: %w", err)
+	}
+	return string(channel), nil
 }
 
 func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, manifest *gitops.Manifest, channel, remoteOS, remoteArch string) (*quartermasterpb.EdgeReleaseResponse, error) {
@@ -377,6 +394,10 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	if err != nil {
 		return fmt.Errorf("fetch edge release manifest for target sync: %w", err)
 	}
+	catalogChannel, err := edgeReleaseCatalogChannel(releaseManifest)
+	if err != nil {
+		return fmt.Errorf("resolve edge release catalog channel: %w", err)
+	}
 	targetVersion := releaseTargetVersionForSelector(targetSelector, releaseManifest.PlatformVersion)
 	qm, ctxCfg, cleanup, err := edgeReleaseQMClientForGitOpsSync(cmd, rc, sharedEnv)
 	if err != nil {
@@ -386,10 +407,10 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	defer func() { _ = qm.Close() }()
 
 	if shouldPublishReleaseForTarget(ctxCfg) {
-		if _, err := upsertEdgeReleaseManifestContext(operationCtx, qm, ctxCfg, releaseManifest, channel, "", ""); err != nil {
+		if _, err := upsertEdgeReleaseManifestContext(operationCtx, qm, ctxCfg, releaseManifest, catalogChannel, "", ""); err != nil {
 			return fmt.Errorf("publish edge release from GitOps manifest: %w", err)
 		}
-	} else if err := ensureReleaseTargetExistsContext(operationCtx, qm, ctxCfg, channel, targetVersion); err != nil {
+	} else if err := ensureReleaseTargetExistsContext(operationCtx, qm, ctxCfg, catalogChannel, targetVersion); err != nil {
 		return err
 	}
 
@@ -404,7 +425,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 			defer cancel()
 			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
-				Channel:         channel,
+				Channel:         catalogChannel,
 				TargetVersion:   targetVersion,
 				RolloutPlanJson: rolloutPlan,
 				Paused:          paused,
@@ -419,7 +440,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 		Key: "edge-release-target",
 		OK:  true,
 		Detail: fmt.Sprintf("track=%s version=%s clusters=%d",
-			channel, firstNonEmpty(targetVersion, "latest"), len(clusterIDs)),
+			catalogChannel, firstNonEmpty(targetVersion, "latest"), len(clusterIDs)),
 	}})
 	return nil
 }
@@ -501,8 +522,13 @@ func existingReleaseTargetControls(ctx context.Context, qm edgeReleaseQMClient, 
 
 func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, sharedEnv map[string]string) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
 	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
-	if err == nil {
+	if err == nil && rc != nil && contextTargetsManifest(ctxCfg, rc.Manifest) {
 		return qm, ctxCfg, cleanup, nil
+	}
+	if err == nil {
+		_ = qm.Close()
+		cleanup()
+		err = fmt.Errorf("active context cluster %q is not declared by the selected manifest", ctxCfg.ClusterID)
 	}
 	if rc == nil || rc.Manifest == nil {
 		return nil, fwcfg.Context{}, nil, err
@@ -570,6 +596,22 @@ func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, s
 		Persona: fwcfg.PersonaPlatform,
 		Auth:    fwcfg.Auth{ServiceToken: serviceToken},
 	}, func() { _ = sess.Close() }, nil
+}
+
+func contextTargetsManifest(ctxCfg fwcfg.Context, manifest *inventory.Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	clusterID := strings.TrimSpace(ctxCfg.ClusterID)
+	if clusterID == "" {
+		return false
+	}
+	for _, manifestClusterID := range manifest.AllClusterIDs() {
+		if clusterID == manifestClusterID {
+			return true
+		}
+	}
+	return false
 }
 
 func edgeReleaseQMClientForCommand(cmd *cobra.Command) (*qmclient.GRPCClient, fwcfg.Context, []string, func(), error) {

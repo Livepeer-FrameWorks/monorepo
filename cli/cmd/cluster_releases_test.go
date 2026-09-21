@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/gitops"
+	"frameworks/cli/pkg/inventory"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -41,7 +43,6 @@ func TestNormalizeReleaseTargetChannel(t *testing.T) {
 	}{
 		{" stable ", "stable"},
 		{"STABLE", "stable"},
-		{"Candidate", "candidate"},
 		{"Rc", "rc"},
 	}
 
@@ -53,6 +54,66 @@ func TestNormalizeReleaseTargetChannel(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("normalizeReleaseTargetChannel(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestNormalizeReleaseTargetChannelRejectsCandidateSelector(t *testing.T) {
+	t.Parallel()
+
+	if _, err := normalizeReleaseTargetChannel("candidate"); err == nil {
+		t.Fatal("normalizeReleaseTargetChannel accepted candidate without resolving a GitOps manifest; want error")
+	}
+}
+
+func TestEdgeReleaseCatalogChannelUsesConcreteManifestVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{version: "v1.2.3", want: "stable"},
+		{version: "v1.2.4-rc1", want: "rc"},
+	}
+	for _, tc := range tests {
+		got, err := edgeReleaseCatalogChannel(&gitops.Manifest{PlatformVersion: tc.version})
+		if err != nil {
+			t.Fatalf("edgeReleaseCatalogChannel(%q): %v", tc.version, err)
+		}
+		if got != tc.want {
+			t.Fatalf("edgeReleaseCatalogChannel(%q) = %q, want %q", tc.version, got, tc.want)
+		}
+	}
+}
+
+func TestEdgeReleaseCatalogChannelRejectsNonConcreteVersions(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"", "stable", "rc", "candidate", "latest", "garbage", "v1.2", "v1.2.3-01"} {
+		t.Run(version, func(t *testing.T) {
+			if channel, err := edgeReleaseCatalogChannel(&gitops.Manifest{PlatformVersion: version}); err == nil {
+				t.Fatalf("accepted non-concrete version %q as %q", version, channel)
+			}
+		})
+	}
+	if _, err := edgeReleaseCatalogChannel(nil); err == nil {
+		t.Fatal("accepted nil manifest")
+	}
+}
+
+func TestContextTargetsManifestRequiresDeclaredCluster(t *testing.T) {
+	t.Parallel()
+
+	manifest := &inventory.Manifest{Clusters: map[string]inventory.ClusterConfig{
+		"staging-core": {},
+	}}
+	if !contextTargetsManifest(fwcfg.Context{ClusterID: "staging-core"}, manifest) {
+		t.Fatal("declared staging cluster should match the selected manifest")
+	}
+	if contextTargetsManifest(fwcfg.Context{ClusterID: "production-core"}, manifest) {
+		t.Fatal("an unrelated active context must not override the selected manifest")
+	}
+	if contextTargetsManifest(fwcfg.Context{}, manifest) {
+		t.Fatal("an empty context cluster must not override the selected manifest")
 	}
 }
 
