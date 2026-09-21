@@ -134,15 +134,6 @@ enum GQL {
   }
   """
 
-  static let DeleteSuccessFields = """
-  fragment DeleteSuccessFields on DeleteSuccess {
-    __typename
-    success
-    deletedId
-    pending
-  }
-  """
-
   static let DVRRequestFields = """
   # All fields available on DVRRequest type
   fragment DVRRequestFields on DVRRequest {
@@ -174,6 +165,15 @@ enum GQL {
       spriteJpgUrl
       assetKey
     }
+  }
+  """
+
+  static let DeleteSuccessFields = """
+  fragment DeleteSuccessFields on DeleteSuccess {
+    __typename
+    success
+    deletedId
+    pending
   }
   """
 
@@ -1469,31 +1469,6 @@ enum GQL {
   }
   """
 
-  static let GetClustersAccess = """
-  # Fetch cluster access permissions and resource limits for the current tenant
-  query GetClustersAccess {
-    clustersAccess {
-      clusterId
-      clusterName
-      accessLevel
-      resourceLimits
-      allowPrivatePullSources
-    }
-  }
-  """
-
-  static let GetClustersAvailable = """
-  # Fetch list of clusters available for tenant enrollment with tier requirements
-  query GetClustersAvailable {
-    clustersAvailable {
-      clusterId
-      clusterName
-      tiers
-      autoEnroll
-    }
-  }
-  """
-
   static let GetClusterTrafficMatrix = """
   # Cross-cluster routing traffic matrix from hourly rollups
   query GetClusterTrafficMatrix($timeRange: TimeRangeInput, $noCache: Boolean = false) {
@@ -1534,6 +1509,31 @@ enum GQL {
           errorCount
         }
       }
+    }
+  }
+  """
+
+  static let GetClustersAccess = """
+  # Fetch cluster access permissions and resource limits for the current tenant
+  query GetClustersAccess {
+    clustersAccess {
+      clusterId
+      clusterName
+      accessLevel
+      resourceLimits
+      allowPrivatePullSources
+    }
+  }
+  """
+
+  static let GetClustersAvailable = """
+  # Fetch list of clusters available for tenant enrollment with tier requirements
+  query GetClustersAvailable {
+    clustersAvailable {
+      clusterId
+      clusterName
+      tiers
+      autoEnroll
     }
   }
   """
@@ -2541,20 +2541,6 @@ enum GQL {
   }
   """
 
-  static let GetOrchestratorsConnection = """
-  # Fetch the orchestrator list for the federation map. Vantage-independent
-  # state only; the map merges this with `orchestratorVantages` to render
-  # multi-IP / multi-region observation.
-  query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
-    orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
-      nodes {
-        ...OrchestratorListFields
-      }
-      totalCount
-    }
-  }
-  """
-
   static let GetOrchestratorVantages = """
   # Public per-vantage Livepeer observations for the federation map's pin toggle.
   # Filter by `orchAddr` from the side panel.
@@ -2576,6 +2562,20 @@ enum GQL {
       score
       dialedRecently
       lastSeen
+    }
+  }
+  """
+
+  static let GetOrchestratorsConnection = """
+  # Fetch the orchestrator list for the federation map. Vantage-independent
+  # state only; the map merges this with `orchestratorVantages` to render
+  # multi-IP / multi-region observation.
+  query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
+    orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
+      nodes {
+        ...OrchestratorListFields
+      }
+      totalCount
     }
   }
   """
@@ -4158,31 +4158,6 @@ enum GQL {
   }
   """
 
-  static let GetStreamingConfig = """
-  query GetStreamingConfig {
-    streamingConfig {
-      preferredClusterLabel
-      ingestDomain
-      edgeDomain
-      playDomain
-      officialClusterLabel
-      officialIngestDomain
-      officialEdgeDomain
-      officialPlayDomain
-      globalIngestDomain
-      globalEdgeDomain
-      globalPlayDomain
-      globalLivepeerDomain
-      tenantIngestDomain
-      tenantEdgeDomain
-      tenantPlayDomain
-      tenantLivepeerDomain
-      srtPort
-      rtmpPort
-    }
-  }
-  """
-
   static let GetStreamKeys = """
   # Fetch paginated list of stream keys for a specific stream
   # Returns active/inactive keys with usage timestamps for credential management
@@ -4347,27 +4322,6 @@ enum GQL {
   }
   """
 
-  static let GetStreamsConnection = """
-  # Fetch paginated list of streams with core fields and live status metrics
-  query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
-    streamsConnection(page: { first: $first, after: $after }, search: $search) {
-      edges {
-        cursor
-        node {
-          ...StreamCoreFields
-          metrics {
-            ...StreamMetricsListFields
-          }
-        }
-      }
-      pageInfo {
-        ...PageInfoFields
-      }
-      totalCount
-    }
-  }
-  """
-
   static let GetStreamSessions = """
   # Fetch paginated viewer sessions for a stream.
   # Use GetStreamAnalyticsSummary and GetClientQoeSummary for aggregate counters.
@@ -4403,6 +4357,52 @@ enum GQL {
           totalCount
         }
       }
+    }
+  }
+  """
+
+  static let GetStreamingConfig = """
+  query GetStreamingConfig {
+    streamingConfig {
+      preferredClusterLabel
+      ingestDomain
+      edgeDomain
+      playDomain
+      officialClusterLabel
+      officialIngestDomain
+      officialEdgeDomain
+      officialPlayDomain
+      globalIngestDomain
+      globalEdgeDomain
+      globalPlayDomain
+      globalLivepeerDomain
+      tenantIngestDomain
+      tenantEdgeDomain
+      tenantPlayDomain
+      tenantLivepeerDomain
+      srtPort
+      rtmpPort
+    }
+  }
+  """
+
+  static let GetStreamsConnection = """
+  # Fetch paginated list of streams with core fields and live status metrics
+  query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
+    streamsConnection(page: { first: $first, after: $after }, search: $search) {
+      edges {
+        cursor
+        node {
+          ...StreamCoreFields
+          metrics {
+            ...StreamMetricsListFields
+          }
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
     }
   }
   """

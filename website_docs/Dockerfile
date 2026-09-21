@@ -49,6 +49,10 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
 # copy the remaining sources now that deps are cached
 COPY website_docs/ website_docs/
 COPY docs/skills/ docs/skills/
+COPY npm_api/tsconfig.json npm_api/tsconfig.json
+COPY npm_api/examples/ npm_api/examples/
+COPY sdk_go/examples/ sdk_go/examples/
+COPY sdk_python/examples/ sdk_python/examples/
 
 # build the docs site
 COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh

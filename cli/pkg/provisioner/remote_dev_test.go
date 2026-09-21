@@ -26,8 +26,8 @@ func TestRemoteDevRunPreservesRemoteEnvironmentAndArguments(t *testing.T) {
 		t.Fatalf("render remote command: %v: %s", err, out)
 	}
 	for _, want := range []string{
-		`export PATH="$PNPM_HOME:$HOME/go/bin:$CARGO_HOME/bin:$PATH"`,
-		`mkdir -p "$GOCACHE" "$GOMODCACHE" "$PNPM_HOME" "$PNPM_STORE_DIR" "$CARGO_HOME"`,
+		`export PATH="$PNPM_HOME/bin:$PNPM_HOME:$HOME/go/bin:$CARGO_HOME/bin:$PATH"`,
+		`mkdir -p "$GOCACHE" "$GOMODCACHE" "$PNPM_HOME/bin" "$PNPM_STORE_DIR" "$CARGO_HOME"`,
 		`exec printf a\ b\;\$HOME`,
 		`flock -n "$lock_fd"`,
 	} {
