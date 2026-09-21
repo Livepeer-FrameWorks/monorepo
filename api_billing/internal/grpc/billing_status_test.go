@@ -126,7 +126,7 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 			"stripe_customer_id", "stripe_subscription_id", "stripe_subscription_status", "stripe_current_period_end", "dunning_attempts",
 			"mollie_subscription_id",
 			"pending_tier_id", "pending_effective_at", "pending_reason",
-			"created_at", "updated_at",
+			"created_at", "updated_at", "presentment_currency",
 		}).AddRow(
 			subID, tenantID, tierID, "active", nil,
 			now, nil, nil, nil,
@@ -136,7 +136,7 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 			nil, nil, nil, nil, nil,
 			nil,
 			nil, nil, nil,
-			now, now,
+			now, now, "EUR",
 		))
 	mock.ExpectQuery(`FROM purser\.billing_tiers`).
 		WithArgs(tierID).

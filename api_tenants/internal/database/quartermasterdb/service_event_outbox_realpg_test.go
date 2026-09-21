@@ -38,31 +38,45 @@ func TestServiceEventOutboxScopeAndLeaseToken_RealPG(t *testing.T) {
 		return s
 	}
 
-	tenantRow, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventType: "cluster_invite_created", TenantID: tenantID, Scope: "tenant", Payload: "{}"})
+	const (
+		tenantEventID   = "01900000-0000-7000-8000-000000000001"
+		platformEventID = "01900000-0000-7000-8000-000000000002"
+	)
+	tenantRow, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventID: tenantEventID, EventType: "cluster_invite_created", TenantID: tenantID, Scope: "tenant", Payload: "{}"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	platformRow, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventType: "cluster_created", Scope: "platform", Payload: "{}"})
+	platformRow, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventID: platformEventID, EventType: "cluster_created", Scope: "platform", Payload: "{}"})
 	if err != nil {
 		t.Fatalf("platform-scoped event without tenant: %v", err)
 	}
 	if got := state(platformRow); got.scope != "platform" || !got.tenantNil {
 		t.Fatalf("platform row = %+v", got)
 	}
-	if _, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventType: "cluster_invite_created", Scope: "tenant", Payload: "{}"}); err == nil {
+	if _, err := q.EnqueueServiceEvent(ctx, EnqueueServiceEventParams{EventID: "01900000-0000-7000-8000-000000000003", EventType: "cluster_invite_created", Scope: "tenant", Payload: "{}"}); err == nil {
 		t.Fatal("tenant-scoped event without tenant_id was accepted")
+	}
+	// A row written before event_id existed claims with an empty event ID.
+	if _, err := db.ExecContext(ctx, `INSERT INTO quartermaster.service_event_outbox (event_type, tenant_id, scope, payload)
+		VALUES ('tenant_updated', $1::uuid, 'tenant', '{}')`, tenantID); err != nil {
+		t.Fatal(err)
 	}
 
 	rows, err := q.ClaimServiceEventOutboxBatch(ctx, ClaimServiceEventOutboxBatchParams{LeaseInterval: "60 seconds", BatchSize: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimable := map[string]bool{}
+	claimable := map[string]string{}
 	for _, row := range rows {
-		claimable[row.ID] = true
+		claimable[row.ID] = row.EventID
 	}
-	if !claimable[tenantRow] || !claimable[platformRow] {
-		t.Fatalf("claim batch %v misses the enqueued rows", rows)
+	if claimable[tenantRow] != tenantEventID || claimable[platformRow] != platformEventID || len(rows) != 3 {
+		t.Fatalf("claim batch %+v misses the enqueued rows or their event IDs", rows)
+	}
+	for _, row := range rows {
+		if row.ID != tenantRow && row.ID != platformRow && row.EventID != "" {
+			t.Fatalf("pre-event_id row claimed with event ID %q", row.EventID)
+		}
 	}
 	if err := q.MarkServiceEventOutboxClaimed(ctx, MarkServiceEventOutboxClaimedParams{LeaseToken: claimToken, Ids: []string{tenantRow, platformRow}}); err != nil {
 		t.Fatal(err)

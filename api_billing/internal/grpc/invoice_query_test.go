@@ -87,10 +87,12 @@ func TestGetInvoice_TenantScoped(t *testing.T) {
 			"id", "tenant_id", "amount", "base_amount", "metered_amount", "prepaid_credit_applied",
 			"currency", "status", "due_date", "paid_at", "usage_details", "created_at", "updated_at",
 			"tier_id", "period_start", "period_end", "gross_metered_amount",
+			"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date", "finalized_at",
 		}).AddRow(
 			inv, tenant, 79.20, 79.00, 0.20, 0.00,
 			"EUR", "paid", now, nil, []byte(`{}`), now, now,
 			"", nil, nil, 0.20,
+			int64(8712), "USD", "1.1000000000", now, now,
 		))
 	// loadInvoiceLineItems follow-up query.
 	mock.ExpectQuery(`FROM purser\.invoice_line_items`).
@@ -104,6 +106,12 @@ func TestGetInvoice_TenantScoped(t *testing.T) {
 	}
 	if resp.GetInvoice().GetId() != inv || resp.GetInvoice().GetStatus() != "paid" {
 		t.Errorf("invoice header mapped wrong: %+v", resp.GetInvoice())
+	}
+	presented := resp.GetInvoice()
+	if presented.PresentmentAmountCents == nil || presented.GetPresentmentAmountCents() != 8712 || presented.GetPresentmentCurrency() != "USD" ||
+		presented.GetPresentmentUnitsPerEur() != "1.1" || presented.GetPresentmentReferenceDate() != now.UTC().Format(time.DateOnly) ||
+		presented.GetFinalizedAt() == nil {
+		t.Errorf("invoice presentment mapped wrong: %+v", presented)
 	}
 	if len(resp.GetInvoice().GetLineItems()) != 2 {
 		t.Errorf("expected 2 line items, got %d", len(resp.GetInvoice().GetLineItems()))

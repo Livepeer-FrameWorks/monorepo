@@ -1,3 +1,13 @@
+-- name: LockChapterParentRecording :exec
+-- Locks the chapter's parent recording before the chapter and its playback
+-- artifact. The chapter's domain event advances the parent's revision, and the
+-- recording-delete cascade also locks the parent before its chapter artifacts.
+SELECT p.artifact_hash
+FROM foghorn.artifacts p
+JOIN foghorn.dvr_chapters c ON c.artifact_hash = p.artifact_hash
+WHERE c.chapter_id = $1
+FOR UPDATE OF p;
+
 -- name: LockChapterFinalizeArtifact :one
 SELECT c.state, COALESCE(c.playback_artifact_hash, '')::text AS playback_artifact_hash,
        a.tenant_id::text AS tenant_id, a.status AS artifact_status,
@@ -25,6 +35,13 @@ WHERE artifact_hash = sqlc.arg(artifact_hash) AND status = 'finalizing';
 SELECT c.playback_artifact_hash, a.tenant_id::text AS tenant_id
 FROM foghorn.dvr_chapters c
 JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
+WHERE c.chapter_id = $1;
+
+-- name: GetChapterRecordingContext :one
+SELECT c.artifact_hash AS recording_hash, COALESCE(p.stream_id::text, '')::text AS stream_id,
+       c.start_ms, c.end_ms
+FROM foghorn.dvr_chapters c
+JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash
 WHERE c.chapter_id = $1;
 
 -- name: UpsertChapterVodMetadata :exec

@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
@@ -30,38 +31,64 @@ func TestControlPortFromBindAddr(t *testing.T) {
 }
 
 func TestFoghornRelayAdvertiseAddr(t *testing.T) {
-	t.Run("explicit addr wins", func(t *testing.T) {
-		t.Setenv("FOGHORN_RELAY_ADVERTISE_ADDR", "regional-eu-1.internal:18019")
-		t.Setenv("FOGHORN_RELAY_ADVERTISE_HOST", "ignored.internal")
+	relayConfig := func(internalBindAddr string) *appconfig.Foghorn {
+		cfg := &appconfig.Foghorn{}
+		cfg.InternalGRPCBindAddr = internalBindAddr
+		return cfg
+	}
 
-		got := foghornRelayAdvertiseAddr(":19000", "public.example:18029")
+	t.Run("explicit addr wins", func(t *testing.T) {
+		cfg := relayConfig(":19000")
+		cfg.RelayAdvertiseAddr = "regional-eu-1.internal:18019"
+		cfg.RelayAdvertiseHost = "ignored.internal"
+
+		got := foghornRelayAdvertiseAddr(cfg, "public.example:18029")
 		if got != "regional-eu-1.internal:18019" {
 			t.Fatalf("relay addr=%q, want explicit", got)
 		}
 	})
 
 	t.Run("host override uses internal bind port", func(t *testing.T) {
-		t.Setenv("FOGHORN_RELAY_ADVERTISE_HOST", "regional-eu-2.internal")
+		cfg := relayConfig("0.0.0.0:18019")
+		cfg.RelayAdvertiseHost = "regional-eu-2.internal"
 
-		got := foghornRelayAdvertiseAddr("0.0.0.0:18019", "foghorn.media-eu-1.example:18029")
+		got := foghornRelayAdvertiseAddr(cfg, "foghorn.media-eu-1.example:18029")
 		if got != "regional-eu-2.internal:18019" {
 			t.Fatalf("relay addr=%q", got)
 		}
 	})
 
+	t.Run("registered host precedes the fallback address", func(t *testing.T) {
+		cfg := relayConfig(":18019")
+		cfg.AdvertiseHost = "foghorn-eu-3.internal"
+
+		got := foghornRelayAdvertiseAddr(cfg, "foghorn.media-eu-1.example:18029")
+		if got != "foghorn-eu-3.internal:18019" {
+			t.Fatalf("relay addr=%q", got)
+		}
+	})
+
 	t.Run("fallback host is only a last resort", func(t *testing.T) {
-		got := foghornRelayAdvertiseAddr(":18019", "foghorn.media-eu-1.example:18029")
+		got := foghornRelayAdvertiseAddr(relayConfig(":18019"), "foghorn.media-eu-1.example:18029")
 		if got != "foghorn.media-eu-1.example:18019" {
 			t.Fatalf("relay addr=%q", got)
 		}
 	})
 
 	t.Run("production rejects loopback fallback", func(t *testing.T) {
-		t.Setenv("BUILD_ENV", "production")
+		cfg := relayConfig(":18019")
+		cfg.BuildEnv = "production"
 
-		got := foghornRelayAdvertiseAddr(":18019", "")
+		got := foghornRelayAdvertiseAddr(cfg, "")
 		if got != "" {
 			t.Fatalf("relay addr=%q, want empty without production-safe advertise host", got)
+		}
+	})
+
+	t.Run("development falls back to loopback", func(t *testing.T) {
+		got := foghornRelayAdvertiseAddr(relayConfig(":18019"), "")
+		if got != "127.0.0.1:18019" {
+			t.Fatalf("relay addr=%q, want loopback", got)
 		}
 	})
 }

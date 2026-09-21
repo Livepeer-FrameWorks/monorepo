@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package frameworks.events;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events;eventspb";
+
+import "google/protobuf/timestamp.proto";
+
+// Actor identifies who caused a domain event, in the same terms Bridge's API
+// usage batches record, so audit rows join usage rows.
+message Actor {
+  // auth_type is the authenticated principal kind from the gRPC context
+  // ("jwt", "api_token", "wallet", "service", ...).
+  string auth_type = 1;
+  string user_id = 2;
+  // token_hash is the HMAC of the API token ID with Bridge's usage hash
+  // secret, truncated to 64 bits. Zero when no API token was used.
+  uint64 token_hash = 3;
+}
+
+// DomainEvent is one outbox row on its way to Decklog. Every field is set by
+// the producer at enqueue time and never rewritten on retry, so a redelivery
+// after a lost acknowledgment carries the same id.
+message DomainEvent {
+  // id is the UUIDv7 stored at enqueue; it becomes ce_id and the consumer
+  // dedup key.
+  string id = 1;
+  // type must be registered in pkg/events (an EventSpec type).
+  string type = 2;
+  // source names the producing service, for example "commodore".
+  string source = 3;
+  // time is when the state change happened.
+  google.protobuf.Timestamp time = 4;
+  // tenant_id is required for SCOPE_TENANT types and must be empty for
+  // SCOPE_PLATFORM types.
+  string tenant_id = 5;
+  // aggregate_id is the ID of the aggregate named by the type's EventSpec;
+  // the Kafka key is "<aggregate>/<aggregate_id>".
+  string aggregate_id = 6;
+  // aggregate_version orders events of one aggregate when the producer has a
+  // revision for it; zero when it has none.
+  int64 aggregate_version = 7;
+  Actor actor = 8;
+  // data is the binary protobuf encoding of the registered message.
+  bytes data = 9;
+  string source_region = 10;
+  string source_cluster_id = 11;
+}
+
+message DomainEventBatch {
+  repeated DomainEvent events = 1;
+}
+
+message PublishDomainEventsResponse {
+  // published is the number of records Kafka acknowledged.
+  uint32 published = 1;
+}

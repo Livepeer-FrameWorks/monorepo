@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	eventspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
@@ -20,6 +21,9 @@ type capturingClient struct {
 	lastService   *ipcpb.ServiceEvent
 	lastCtx       context.Context
 	serviceCalled chan struct{}
+	lastBatch     *eventspb.DomainEventBatch
+	publishErr    error
+	publishShort  bool
 }
 
 func newCapturingClient() *capturingClient {
@@ -44,6 +48,60 @@ func (f *capturingClient) SendServiceEvent(_ context.Context, in *ipcpb.ServiceE
 
 func (f *capturingClient) SendGatewayTelemetry(_ context.Context, _ *ipcpb.GatewayTelemetryEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
+}
+
+func (f *capturingClient) PublishDomainEvents(ctx context.Context, in *eventspb.DomainEventBatch, _ ...grpc.CallOption) (*eventspb.PublishDomainEventsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastBatch = in
+	f.lastCtx = ctx
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
+	published := uint32(len(in.GetEvents()))
+	if f.publishShort {
+		published--
+	}
+	return &eventspb.PublishDomainEventsResponse{Published: published}, nil
+}
+
+func TestPublishDomainEventsKeepsProducerIDsAndStampsOrigin(t *testing.T) {
+	fake := newCapturingClient()
+	client := &BatchedClient{client: fake, logger: logging.NewLogger(), source: "commodore", serviceToken: "svc", clusterID: "cell-eu", sourceRegion: "eu-west"}
+	batch := &eventspb.DomainEventBatch{Events: []*eventspb.DomainEvent{
+		{Id: "", Type: "stream.created"},
+		{Id: "0192f5e4-0000-7000-8000-000000000001", Type: "stream.deleted", SourceRegion: "us-east", SourceClusterId: "cell-us"},
+	}}
+	if err := client.PublishDomainEvents(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	got := fake.lastBatch.GetEvents()
+	if got[0].GetId() != "" || got[1].GetId() != "0192f5e4-0000-7000-8000-000000000001" {
+		t.Fatalf("client rewrote event ids: %q, %q", got[0].GetId(), got[1].GetId())
+	}
+	if got[0].GetSourceRegion() != "eu-west" || got[0].GetSourceClusterId() != "cell-eu" {
+		t.Fatalf("origin not stamped: %+v", got[0])
+	}
+	if got[1].GetSourceRegion() != "us-east" || got[1].GetSourceClusterId() != "cell-us" {
+		t.Fatalf("producer origin overwritten: %+v", got[1])
+	}
+	md, _ := metadata.FromOutgoingContext(fake.lastCtx)
+	if auth := md.Get("authorization"); len(auth) != 1 || auth[0] != "Bearer svc" {
+		t.Fatalf("authorization metadata = %v", auth)
+	}
+}
+
+func TestPublishDomainEventsFailsUnlessEveryEventIsAcknowledged(t *testing.T) {
+	fake := newCapturingClient()
+	fake.publishShort = true
+	client := newTestClient(fake)
+	batch := &eventspb.DomainEventBatch{Events: []*eventspb.DomainEvent{{Id: "a"}, {Id: "b"}}}
+	if err := client.PublishDomainEvents(context.Background(), batch); err == nil {
+		t.Fatal("a partial acknowledgment must fail the publish")
+	}
+	if err := (&BatchedClient{logger: logging.NewLogger()}).PublishDomainEvents(context.Background(), batch); err == nil {
+		t.Fatal("a client without a target must fail instead of dropping the batch")
+	}
 }
 
 func newTestClient(fake *capturingClient) *BatchedClient {

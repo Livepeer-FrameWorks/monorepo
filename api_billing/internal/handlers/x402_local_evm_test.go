@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -69,7 +70,7 @@ func setAnvilState(t *testing.T, rpc *RPCClient, network NetworkConfig, method s
 
 func TestEmbeddedFacilitatorAgainstLocalEVMFaults(t *testing.T) { //nolint:funlen // One chain instance proves broadcast, finality, reorg, and revert behavior.
 	network := Networks["base"]
-	t.Setenv(network.RPCEndpointEnv, startX402Anvil(t, network.ChainID))
+	appconfigtest.Set(t, network.RPCEndpointEnv, startX402Anvil(t, network.ChainID))
 	rpc := NewRPCClient()
 	setAnvilState(t, rpc, network, "anvil_setCode", []any{network.USDCContract, "0x" + mockEIP3009Runtime})
 

@@ -1,0 +1,8 @@
+# The SDKs probe serverInfo once per URL before other operations; it is
+# public and needs no token.
+query ServerInfo {
+  serverInfo {
+    version
+    features
+  }
+}

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package frameworks.events.public.v1;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1";
+
+import "google/protobuf/timestamp.proto";
+import "events/options.proto";
+import "events/public/v1/common.proto";
+
+message InvoiceCreated {
+  option (frameworks.events.event) = {type: "billing.invoice_created", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "invoices"};
+  string invoice_id = 1;
+  Money amount_due = 2;
+  google.protobuf.Timestamp period_start = 3;
+  google.protobuf.Timestamp period_end = 4;
+  google.protobuf.Timestamp due_at = 5;
+}
+
+message InvoicePaid {
+  option (frameworks.events.event) = {type: "billing.invoice_paid", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "invoices"};
+  string invoice_id = 1;
+  Money amount_paid = 2;
+}
+
+enum PaymentFailureReason {
+  PAYMENT_FAILURE_REASON_UNSPECIFIED = 0;
+  PAYMENT_FAILURE_REASON_DECLINED = 1;
+  PAYMENT_FAILURE_REASON_INSUFFICIENT_FUNDS = 2;
+  PAYMENT_FAILURE_REASON_EXPIRED_METHOD = 3;
+  PAYMENT_FAILURE_REASON_AUTHENTICATION_REQUIRED = 4;
+  PAYMENT_FAILURE_REASON_PROCESSING_ERROR = 5;
+}
+
+// PaymentFailed reports a failed charge. A charge Purser initiated names its
+// payment and invoice. A charge the payment provider initiated on its own
+// subscription (a Stripe subscription invoice) leaves payment_id and
+// invoice_id empty and names the provider's object instead.
+message PaymentFailed {
+  option (frameworks.events.event) = {type: "billing.payment_failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "payments"};
+  string payment_id = 1;
+  string invoice_id = 2;
+  Money amount = 3;
+  PaymentFailureReason reason = 4;
+  // provider names the payment provider that initiated the charge, e.g.
+  // "stripe"; set only when payment_id is empty.
+  string provider = 5;
+  // provider_reference_id is the provider's identifier for the failed charge
+  // (the Stripe invoice ID for a Stripe subscription charge).
+  string provider_reference_id = 6;
+}
+
+message TopupCredited {
+  option (frameworks.events.event) = {type: "billing.topup_credited", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "topups"};
+  string topup_id = 1;
+  Money amount = 2;
+}
+
+message BillingDetailsUpdated {
+  option (frameworks.events.event) = {type: "billing.details_updated", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "tenants"};
+  // changed_fields lists the billing detail fields that changed, by API name.
+  repeated string changed_fields = 1;
+}

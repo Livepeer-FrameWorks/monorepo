@@ -1191,7 +1191,12 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     -- collapses redeliveries to one row, while legacy event_id='' rows carry no trustworthy
     -- dedup identity and pass through the view verbatim (one view row per base row). The engine
     -- stays a plain ReplicatedMergeTree (no engine collapse).
-    event_id String DEFAULT ''
+    event_id String DEFAULT '',
+    -- Which projection wrote the row: 'analytics_events' for Foghorn's lifecycle rows (the
+    -- default, so rows written before the column existed read as such) or 'domain_events' for
+    -- Periscope Ingest's domain.events projection, which carries no node, path, URL, or
+    -- progress fields. artifact_events_deduped uses it to prefer the lifecycle row.
+    record_source LowCardinality(String) DEFAULT 'analytics_events'
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
@@ -1202,20 +1207,28 @@ TTL timestamp + INTERVAL 90 DAY;
 -- Every reader (api_analytics_query counts/lists/summaries and the Metabase artifact cards)
 -- reads this view so they share ONE identity and counts agree with the rows they list.
 --
--- Invariant: only rows carrying a non-empty event_id (the stable outbox row id) are deduped.
--- The second UNION ALL branch collapses their redeliveries with LIMIT 1 BY event_id (one row
--- per event_id). Legacy rows (event_id='') have NO trustworthy dedup identity, so the first
--- branch passes them through verbatim — one view row per base row. Two legacy rows that share
--- tenant/stream/second/request_id/stage but differ in any other column (percent, message,
+-- Invariant: only rows carrying a non-empty event_id (the stable outbox row id) are deduped,
+-- to one row per event_id. Legacy rows (event_id='') have NO trustworthy dedup identity, so the
+-- first branch passes them through verbatim — one view row per base row. Two legacy rows that
+-- share tenant/stream/second/request_id/stage but differ in any other column (percent, message,
 -- file_path, s3_url, size_bytes, …) are therefore BOTH kept; history is never collapsed away.
--- Per ClickHouse UNION ALL semantics LIMIT 1 BY binds to its own SELECT, not the whole union,
--- so it never touches the legacy branch. The first branch is SELECT * FROM artifact_events so
--- downstream column inheritance still resolves to the base table.
+--
+-- One event ID can have a lifecycle row (record_source 'analytics_events') and a domain.events
+-- row, because Foghorn writes both under the domain event's ID. The lifecycle row always wins:
+-- it carries file_path, s3_url, expires_at, percent, node, and speed fields the domain row lacks,
+-- and the clip, DVR, and VOD readers use them. Ranking within (tenant_id, event_id)
+-- prefers that row without a platform-wide anti-join; tenant filters can be
+-- pushed into the window's partition input.
 -- A plain (non-materialized) VIEW is metadata-only, so adding it is rolling-safe.
 CREATE VIEW IF NOT EXISTS artifact_events_deduped AS
 SELECT * FROM artifact_events WHERE event_id = ''
 UNION ALL
-SELECT * FROM artifact_events WHERE event_id != '' LIMIT 1 BY event_id;
+SELECT * EXCEPT (_dedup_rank) FROM (
+    SELECT *, row_number() OVER (
+        PARTITION BY tenant_id, event_id ORDER BY record_source = 'domain_events'
+    ) AS _dedup_rank
+    FROM artifact_events WHERE event_id != ''
+) WHERE _dedup_rank = 1;
 
 
 -- artifact_state_current is a BEST-EFFORT analytics projection of an artifact's storage lifecycle —
@@ -1279,6 +1292,37 @@ CREATE TABLE IF NOT EXISTS artifact_state_current (
     has_local_copy Nullable(Bool)
 ) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, request_id);
+
+-- artifact_state_current_v2 is the latest public lifecycle state of each clip, recording, and upload,
+-- projected from the artifact events on domain.events. It carries no internal names, node IDs, paths, or
+-- URLs. One row per (tenant_id, artifact_id); the row with the highest version wins.
+--
+-- version orders the events of one artifact:
+--   - an event that carries an aggregate version sorts as (1 << 63) | aggregate_version, so any stamped
+--     version outranks every unstamped one;
+--   - an unstamped event sorts by its UUIDv7 event ID as (unix_ms << 12) | rand_a. The producer mints the
+--     ID in the transaction that commits the transition, and the generator keeps (unix_ms << 12) | rand_a
+--     strictly increasing within a process, so a replayed or mirrored older event never outranks a newer
+--     one;
+--   - rows seeded from artifact_state_current sort as (updated_at_ms << 12) on the same scale.
+-- A local and a mirrored copy of one event write identical rows.
+CREATE TABLE IF NOT EXISTS artifact_state_current_v2 (
+    tenant_id UUID,
+    artifact_id String,
+    content_type LowCardinality(String),
+    stream_id UUID,
+    stage LowCardinality(String),
+    event_type LowCardinality(String) DEFAULT '',
+    failure_reason LowCardinality(String) DEFAULT '',
+    filename Nullable(String),
+    size_bytes Nullable(UInt64),
+    duration_ms Nullable(Int64),
+    updated_at DateTime64(3),
+    event_id String DEFAULT '',
+    aggregate_version UInt64 DEFAULT 0,
+    version UInt64
+) ENGINE = ReplicatedReplacingMergeTree(version)
+ORDER BY (tenant_id, artifact_id);
 
 -- Per-(artifact, node) transitions for transient LOCAL NODE COPIES of an artifact
 -- (producer/origin copy or synced cache copy) — not the durable copy, which lives in
@@ -1540,7 +1584,10 @@ CREATE TABLE IF NOT EXISTS api_requests (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Sorted GraphQL root fields the aggregate's requests resolved. operation_name is chosen by the
+    -- client and empty for anonymous operations; root fields name what was actually used.
+    root_fields Array(LowCardinality(String)) DEFAULT []
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)
@@ -1595,6 +1642,10 @@ CREATE TABLE IF NOT EXISTS api_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
+    -- Actor of a domain event (ce_actorauthtype, ce_actortokenhash); user_id holds ce_actoruserid.
+    -- The token hash is the same keyed hash Bridge records in api_requests.token_hashes.
+    actor_auth_type LowCardinality(String) DEFAULT '',
+    actor_token_hash UInt64 DEFAULT 0,
 
     INDEX idx_event_type event_type TYPE bloom_filter GRANULARITY 4,
     INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4
@@ -1602,6 +1653,28 @@ CREATE TABLE IF NOT EXISTS api_events (
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, event_type, timestamp)
 TTL timestamp + INTERVAL 1 YEAR;
+
+-- Read surface for api_events with one row per event. A domain event reaches Periscope Ingest from the
+-- local topic and from each mirrored copy, and while producers write a legacy service event under the
+-- same ID it arrives on service_events too, so one event ID can have several base rows. Rows are kept
+-- once per (event_id, tenant_id): an api_request_batch audit writes one row per tenant under a single
+-- event ID. Rows without an event ID (the zero UUID) have no dedup identity and pass through unchanged.
+--
+-- When an event ID has a domain row and a legacy service-event row, the domain row wins: it carries
+-- the actor and the registered dotted type (stream.created), while the legacy row has the underscore
+-- name (stream_created) and no actor. Domain types always contain a dot and legacy types never do,
+-- so event_type tells them apart. The view therefore shows the domain type for every event a domain
+-- producer recorded; a legacy name appears only on events with no domain counterpart.
+-- Tenant-partitioned ranking avoids a platform-wide anti-join.
+CREATE VIEW IF NOT EXISTS api_events_deduped AS
+SELECT * FROM api_events WHERE event_id = toUUID('00000000-0000-0000-0000-000000000000')
+UNION ALL
+SELECT * EXCEPT (_dedup_rank) FROM (
+    SELECT *, row_number() OVER (
+        PARTITION BY tenant_id, event_id ORDER BY position(event_type, '.') = 0
+    ) AS _dedup_rank
+    FROM api_events WHERE event_id != toUUID('00000000-0000-0000-0000-000000000000')
+) WHERE _dedup_rank = 1;
 
 -- ============================================================================
 -- ORCHESTRATOR VISIBILITY
@@ -2705,7 +2778,9 @@ CREATE TABLE IF NOT EXISTS api_usage_5m (
     llm_output_tokens UInt64 DEFAULT 0,
     unique_users_state AggregateFunction(uniqCombined, UInt64),
     unique_tokens_state AggregateFunction(uniqCombined, UInt64),
-    projection_version_ms Int64
+    projection_version_ms Int64,
+    -- Sorted root-field signature of the window's requests (api_requests.root_fields).
+    root_fields Array(LowCardinality(String)) DEFAULT []
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, auth_type, operation_type, operation_name, window_start)
@@ -2713,11 +2788,14 @@ TTL toDateTime(projection_version_ms / 1000) + INTERVAL 365 DAY;
 
 -- unique_*_state columns are AggregateFunction(uniqCombined, …) — not
 -- argMaxState — so we pick the latest projection's state with argMax(value,
--- key), which works on any column type including aggregate states.
+-- key), which works on any column type including aggregate states. A
+-- projection holds one row per root-field signature and a source event's
+-- signature never changes between projections, so the view keys on it and each
+-- signature's latest row is current; readers sum across rows.
 CREATE VIEW IF NOT EXISTS api_usage_5m_v AS
 SELECT
     window_start, tenant_id, auth_type, operation_type, operation_name,
-    service, llm_model, llm_provider,
+    service, llm_model, llm_provider, root_fields,
     min(projection_version_ms) AS billable_at_ms,
     argMax(requests,            projection_version_ms) AS requests,
     argMax(errors,              projection_version_ms) AS errors,
@@ -2730,7 +2808,7 @@ SELECT
     max(projection_version_ms) AS latest_projection_version_ms
 FROM api_usage_5m
 GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
-         service, llm_model, llm_provider;
+         service, llm_model, llm_provider, root_fields;
 
 -- ============================================================================
 -- OPERATIONAL GUARDRAIL — projection divergence audit

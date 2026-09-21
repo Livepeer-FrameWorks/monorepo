@@ -3,6 +3,8 @@ package handlers
 import (
 	"testing"
 	"time"
+
+	"frameworks/api_balancing/internal/appconfig"
 )
 
 // Foghorn advertises SIGHUP env reload. Settings frozen at construction would
@@ -13,8 +15,10 @@ func TestIngestRateLimiterPicksUpEnvReload(t *testing.T) {
 	ingestLimiter = newIngestRateLimiter()
 	t.Cleanup(func() { ingestLimiter = prev })
 
-	t.Setenv("INGEST_RESOLVE_BURST", "2")
-	t.Setenv("INGEST_RESOLVE_RATE_PER_MIN", "1")
+	settings := &appconfig.Foghorn{}
+	settings.IngestResolveBurst = "2"
+	settings.IngestResolveRatePerMinute = "1"
+	useFoghornConfig(t, settings)
 
 	now := time.Now()
 	if allowed, _ := ingestLimiter.allow("198.51.100.1", now); !allowed {
@@ -28,7 +32,7 @@ func TestIngestRateLimiterPicksUpEnvReload(t *testing.T) {
 	}
 
 	// Widening the limit mid-process must also apply.
-	t.Setenv("INGEST_RESOLVE_BURST", "50")
+	settings.IngestResolveBurst = "50"
 	if allowed, _ := ingestLimiter.allow("198.51.100.2", now); !allowed {
 		t.Fatal("a fresh caller must be allowed under the widened burst")
 	}
@@ -38,15 +42,17 @@ func TestIngestRateLimiterPicksUpEnvReload(t *testing.T) {
 }
 
 func TestIngestRateLimiterClampsExistingAllowanceWhenBurstShrinks(t *testing.T) {
-	t.Setenv("INGEST_RESOLVE_BURST", "5")
-	t.Setenv("INGEST_RESOLVE_RATE_PER_MIN", "1")
+	settings := &appconfig.Foghorn{}
+	settings.IngestResolveBurst = "5"
+	settings.IngestResolveRatePerMinute = "1"
+	useFoghornConfig(t, settings)
 	limiter := newIngestRateLimiter()
 	now := time.Now()
 	if allowed, _ := limiter.allow("198.51.100.1", now); !allowed {
 		t.Fatal("initial request must be allowed")
 	}
 
-	t.Setenv("INGEST_RESOLVE_BURST", "2")
+	settings.IngestResolveBurst = "2"
 	for i := 0; i < 2; i++ {
 		if allowed, _ := limiter.allow("198.51.100.1", now); !allowed {
 			t.Fatalf("request %d within the lowered allowance was refused", i+1)
@@ -61,7 +67,9 @@ func TestIngestRateLimiterClampsExistingAllowanceWhenBurstShrinks(t *testing.T) 
 // it without bound; eviction is least-recently-used.
 func TestIngestRateLimiterEvictsAtCap(t *testing.T) {
 	prev := ingestLimiter
-	t.Setenv("INGEST_RESOLVE_MAX_BUCKETS", "3")
+	settings := &appconfig.Foghorn{}
+	settings.IngestResolveMaxBuckets = "3"
+	useFoghornConfig(t, settings)
 	ingestLimiter = newIngestRateLimiter()
 	t.Cleanup(func() { ingestLimiter = prev })
 

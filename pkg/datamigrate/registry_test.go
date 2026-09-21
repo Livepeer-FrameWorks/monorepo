@@ -2,7 +2,9 @@ package datamigrate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +122,33 @@ func TestScopeKey_String(t *testing.T) {
 	tenant := ScopeKey{Kind: "tenant", Value: "abc"}
 	if got := tenant.String(); got != "tenant=abc" {
 		t.Errorf("ScopeKey String got %q", got)
+	}
+}
+
+func TestHandleList_ReportsIrreversible(t *testing.T) {
+	resetForTest()
+	noop := func(_ context.Context, _ DB, _ RunOptions) (Progress, error) {
+		return Progress{Done: true}, nil
+	}
+	Register(Migration{ID: "one_way", Service: "purser", IntroducedIn: "v0.3.6", Irreversible: true, Run: noop})
+	Register(Migration{ID: "two_way", Service: "purser", IntroducedIn: "v0.3.6", Run: noop})
+
+	var out strings.Builder
+	if err := HandleList(&out, []string{"--format", "json"}); err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		ID           string `json:"id"`
+		Irreversible bool   `json:"irreversible"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &entries); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, entry := range entries {
+		got[entry.ID] = entry.Irreversible
+	}
+	if !got["one_way"] || got["two_way"] || len(got) != 2 {
+		t.Fatalf("irreversible flags = %v", got)
 	}
 }

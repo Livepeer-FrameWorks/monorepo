@@ -64,7 +64,7 @@ func TestGraphQLOperationRateLimitThrottlesAnonymousWebSocket(t *testing.T) {
 
 	ctx := wsOperationContext(t, "203.0.113.9", "", "resolveIngestEndpoint")
 
-	limit, burst := publicRateLimits()
+	limit, burst := rl.publicRateLimits()
 	allowedCount := 0
 	for i := 0; i < limit+burst+10; i++ {
 		if runOp(mw, ctx) {
@@ -87,7 +87,7 @@ func TestGraphQLOperationRateLimitBucketsPerClientIP(t *testing.T) {
 	defer rl.Stop()
 	mw := GraphQLOperationRateLimit(rl, func(string) (int, int) { return 0, 0 })
 
-	limit, burst := publicRateLimits()
+	limit, burst := rl.publicRateLimits()
 	exhausted := wsOperationContext(t, "203.0.113.9", "", "resolveIngestEndpoint")
 	for i := 0; i < limit+burst+10; i++ {
 		runOp(mw, exhausted)
@@ -106,7 +106,7 @@ func TestGraphQLOperationRateLimitSkipsHTTPOperations(t *testing.T) {
 	defer rl.Stop()
 	mw := GraphQLOperationRateLimit(rl, func(string) (int, int) { return 0, 0 })
 
-	limit, burst := publicRateLimits()
+	limit, burst := rl.publicRateLimits()
 	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx := wsOperationContext(t, "203.0.113.9", "", "resolveIngestEndpoint")
 	ctx = context.WithValue(ctx, ctxkeys.KeyGinContext, ginCtx)
@@ -126,7 +126,7 @@ func TestGraphQLOperationRateLimitThrottlesIntrospection(t *testing.T) {
 	mw := GraphQLOperationRateLimit(rl, func(string) (int, int) { return 0, 0 })
 
 	ctx := wsOperationContext(t, "203.0.113.9", "", "__schema")
-	limit, burst := publicRateLimits()
+	limit, burst := rl.publicRateLimits()
 	allowed := 0
 	for i := 0; i < limit+burst+10; i++ {
 		if runOp(mw, ctx) {
@@ -143,17 +143,20 @@ func TestGraphQLOperationRateLimitThrottlesIntrospection(t *testing.T) {
 func TestRateLimitsForBucketUsesPublicLimitsForAnonymous(t *testing.T) {
 	tenantCalls := 0
 	tenantLimits := func(string) (int, int) { tenantCalls++; return 0, 0 }
+	rl := NewRateLimiter(RateLimitConfig{Settings: func() AccessSettings {
+		return AccessSettings{PublicLimitPerMinute: 11, PublicBurst: 4}
+	}})
+	defer rl.Stop()
 
-	limit, burst := RateLimitsForBucket("public:203.0.113.9", tenantLimits)
-	wantLimit, wantBurst := publicRateLimits()
-	if limit != wantLimit || burst != wantBurst {
-		t.Fatalf("public bucket limits = (%d,%d), want (%d,%d)", limit, burst, wantLimit, wantBurst)
+	limit, burst := RateLimitsForBucket(rl, "public:203.0.113.9", tenantLimits)
+	if limit != 11 || burst != 4 {
+		t.Fatalf("public bucket limits = (%d,%d), want (11,4)", limit, burst)
 	}
 	if tenantCalls != 0 {
 		t.Errorf("public bucket consulted tenant limits %d times", tenantCalls)
 	}
 
-	if limit, burst := RateLimitsForBucket("tenant-abc", func(string) (int, int) { return 42, 7 }); limit != 42 || burst != 7 {
+	if limit, burst := RateLimitsForBucket(rl, "tenant-abc", func(string) (int, int) { return 42, 7 }); limit != 42 || burst != 7 {
 		t.Fatalf("tenant bucket limits = (%d,%d), want (42,7)", limit, burst)
 	}
 }

@@ -12,9 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"strings"
-	"syscall"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
@@ -22,6 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 )
 
 const (
@@ -377,7 +376,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 	mac.Write(body)
 	sig := hex.EncodeToString(mac.Sum(nil))
 
-	httpClient := newSSRFHardenedClient(timeout)
+	httpClient := newPlaybackWebhookClient(timeout, restream.PublicDestinationPolicy())
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, policy.GetUrl(), bytes.NewReader(body))
@@ -397,7 +396,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 		// "customer misconfigured a private-IP webhook" from "their server
 		// timed out."
 		reason := "webhook-network"
-		if errors.Is(err, errSSRFBlocked) {
+		if errors.Is(err, restream.ErrDialBlocked) {
 			reason = "webhook-blocked-ssrf"
 		} else {
 			var netErr net.Error
@@ -472,78 +471,28 @@ func (p *Processor) logPlaybackDeny(internalName string, userNew *ipcpb.ViewerCo
 }
 
 // ----------------------------------------------------------------------------
-// SSRF-hardened HTTP client
+// Webhook HTTP client
 // ----------------------------------------------------------------------------
 
-// errSSRFBlocked is returned by the dialer Control hook when a resolved IP
-// falls in the blocklist. Wrapped in OpError by the net stack; we use
-// errors.Is to detect via the sentinel.
-var errSSRFBlocked = errors.New("dial blocked: target IP is in the SSRF deny-list")
-
-func newSSRFHardenedClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
-		Timeout: timeout,
-		// Control runs after DNS, before connect. Re-validating here is the
-		// only defense against DNS rebinding (host returns a public IP at
-		// create-time validation, then a private IP at dial-time).
-		Control: func(network, address string, c syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return err
-			}
-			ip, err := netip.ParseAddr(host)
-			if err != nil {
-				return err
-			}
-			if isBlockedDialIP(ip) {
-				return errSSRFBlocked
-			}
-			return nil
-		},
-	}
+// newPlaybackWebhookClient returns the client for one playback-auth webhook
+// call. The destination policy runs in the dialer's Control hook on the
+// address actually being connected, after DNS resolution, so a name that
+// passed Commodore's save-time check and now resolves to a forbidden address
+// (DNS rebinding) is refused. There is no proxy, no connection reuse (every
+// call resolves and dials afresh), and redirects are returned rather than
+// followed, because a redirect target is a new destination.
+func newPlaybackWebhookClient(timeout time.Duration, policy restream.DestinationPolicy) *http.Client {
+	dialer := &net.Dialer{Timeout: timeout, Control: policy.DialControl()}
 	transport := &http.Transport{
-		DialContext: dialer.DialContext,
-		// Disable connection reuse to force re-resolution on every webhook.
-		// Customer DNS might rotate; safer to dial fresh than reuse a
-		// previously-validated connection.
+		Proxy:             nil,
+		DialContext:       dialer.DialContext,
 		DisableKeepAlives: true,
 	}
 	return &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
-		// Don't follow redirects — customers should return 200 directly. A
-		// redirect target could re-resolve to a blocked IP.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-}
-
-// isBlockedDialIP enforces the SSRF blocklist at dial time.
-// Mirrors the create-time validator in api_control/internal/grpc/playback_access_control.go.
-func isBlockedDialIP(ip netip.Addr) bool {
-	if !ip.IsValid() {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() || ip.IsPrivate() ||
-		ip.IsInterfaceLocalMulticast() {
-		return true
-	}
-	if ip.Is4() {
-		v4 := ip.As4()
-		// 100.64.0.0/10 (CGNAT).
-		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-			return true
-		}
-		// 0.0.0.0/8.
-		if v4[0] == 0 {
-			return true
-		}
-	}
-	if ip.Is4In6() {
-		return isBlockedDialIP(ip.Unmap())
-	}
-	return false
 }

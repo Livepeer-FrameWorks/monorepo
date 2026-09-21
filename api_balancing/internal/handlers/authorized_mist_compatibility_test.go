@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
@@ -18,8 +19,9 @@ import (
 
 func TestAuthorizedMistCompatibilityAcceptsInputBalancerRequestShape(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "capability-test-secret")
+	settings := &appconfig.Foghorn{BalancerCapabilitySecret: "capability-test-secret"}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
 
 	manager := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
@@ -50,8 +52,9 @@ func TestAuthorizedMistCompatibilityAcceptsInputBalancerRequestShape(t *testing.
 
 func TestAuthorizedMistCompatibilityRejectsOperationsOutsideSourceLookup(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "capability-test-secret")
+	settings := &appconfig.Foghorn{BalancerCapabilitySecret: "capability-test-secret"}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
 
 	manager := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })

@@ -11,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -358,7 +359,12 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		}
 		et := endedAt.Unix()
 		dvrData.EndedAt = &et
-		if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, finTx, dvrData); enqErr != nil {
+		ready := &publicv1.RecordingReady{
+			Artifact:   artifactoutbox.RecordingArtifact(dvrHash, rowStreamID),
+			DurationMs: max(opts.DurationSeconds, 0) * 1000,
+			SizeBytes:  int64(opts.SizeBytes),
+		}
+		if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, finTx, dvrData, ready); enqErr != nil {
 			logger.WithError(enqErr).WithField("dvr_hash", dvrHash).Error("Failed to enqueue terminal DVR lifecycle event")
 			return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("enqueue dvr terminal lifecycle: %w", enqErr)
 		}
@@ -536,7 +542,11 @@ func setArtifactFailed(ctx context.Context, dvrHash, reason string, retentionUnt
 	}
 	et := endedAt.Unix()
 	dvrData.EndedAt = &et
-	if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
+	failed := &publicv1.RecordingFailed{
+		Artifact: artifactoutbox.RecordingArtifact(dvrHash, rowStreamID),
+		Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+	}
+	if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, tx, dvrData, failed); enqErr != nil {
 		return false, fmt.Errorf("enqueue dvr failed lifecycle: %w", enqErr)
 	}
 	if commitErr := tx.Commit(); commitErr != nil {

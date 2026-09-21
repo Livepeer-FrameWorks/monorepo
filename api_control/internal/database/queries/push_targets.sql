@@ -68,6 +68,12 @@ SELECT id, platform, name, target_uri
 FROM commodore.push_targets
 WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true;
 
+-- name: LockPushTargetStatus :one
+SELECT status
+FROM commodore.push_targets
+WHERE id = sqlc.arg(id) AND tenant_id = sqlc.arg(tenant_id)
+FOR UPDATE;
+
 -- name: UpdatePushTargetStatus :one
 UPDATE commodore.push_targets
 SET status = sqlc.arg(status),

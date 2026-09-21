@@ -65,7 +65,7 @@ func TestCheckBalance(t *testing.T) {
 	// Positive balance → no blocker.
 	c := checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: prepaidBillingStatus,
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 1000, AvailableBalanceCents: 1000}, nil
 		},
 	})
@@ -76,7 +76,7 @@ func TestCheckBalance(t *testing.T) {
 	// Zero balance → INSUFFICIENT_BALANCE blocker, with x402 options attached.
 	c = checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: prepaidBillingStatus,
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 		},
 		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
@@ -125,7 +125,7 @@ func TestCheckBalance(t *testing.T) {
 
 	// Balance fetch error + prepaid model → treated as 0 → blocker (no x402 here).
 	c = checkerWith(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return nil, errors.New("no balance row")
 		},
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
@@ -155,7 +155,7 @@ func TestGetBlockers(t *testing.T) {
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: false}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{}, nil
 		},
 		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
@@ -189,7 +189,7 @@ func TestRequireBalanceAndBillingWrapBlockers(t *testing.T) {
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 		},
 		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {

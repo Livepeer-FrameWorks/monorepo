@@ -5,6 +5,7 @@ package shared;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared;sharedpb";
 
 import "google/protobuf/timestamp.proto";
+import "common.proto";
 
 // SHARED MESSAGES FOR CLIPS AND DVR
 // Used by both Foghorn and Commodore services
@@ -50,6 +51,9 @@ message CreateClipRequest {
   // report committed/rejected/in-flight for THIS create attempt without inferring
   // from artifact-row presence. Empty for direct-Foghorn callers with no intent.
   optional string request_id = 21;
+  // Principal the calling service creates the clip for; Foghorn attributes
+  // clip.requested to it. Unset for system-initiated clips.
+  common.RequestActor actor = 22;
 }
 
 // CreateClipResponse - response from clip creation
@@ -126,6 +130,9 @@ message GetClipRequest {
 message DeleteClipRequest {
   string clip_hash = 1;
   string tenant_id = 2;  // Required for tenant isolation
+  // User who requested the deletion, for the artifact_deleted audit event.
+  // Attribution only; empty for system-initiated deletions.
+  string requested_by_user_id = 3;
 }
 
 // DeleteClipResponse - response from clip deletion
@@ -241,6 +248,9 @@ message StopDVRResponse {
 message DeleteDVRRequest {
   string dvr_hash = 1;
   string tenant_id = 2;  // Required for tenant isolation
+  // User who requested the deletion, for the artifact_deleted audit event.
+  // Attribution only; empty for system-initiated deletions.
+  string requested_by_user_id = 3;
 }
 
 // DeleteDVRResponse - response from DVR deletion
@@ -508,6 +518,9 @@ message CreateVodUploadRequest {
   // report committed/rejected/in-flight for THIS create attempt. Empty for
   // direct-Foghorn callers with no intent.
   optional string request_id = 13;
+  // Principal the calling service creates the upload for; Foghorn attributes
+  // upload.created to it.
+  common.RequestActor actor = 14;
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -535,6 +548,9 @@ message CompleteVodUploadRequest {
   string upload_id = 2;
   repeated VodCompletedPart parts = 3;  // ETags from uploaded parts
   string processes_json = 4;     // Pre-computed MistServer process config for VOD processing
+  // Principal the calling service completes the upload for; Foghorn
+  // attributes upload.completed to it.
+  common.RequestActor actor = 5;
 }
 
 // VodCompletedPart - ETag from uploaded part
@@ -580,6 +596,9 @@ message GetVodUploadStatusResponse {
 message AbortVodUploadRequest {
   string tenant_id = 1;
   string upload_id = 2;
+  // Principal the calling service aborts the upload for; Foghorn attributes
+  // upload.aborted to it.
+  common.RequestActor actor = 3;
 }
 
 // AbortVodUploadResponse - abort confirmation
@@ -592,6 +611,9 @@ message AbortVodUploadResponse {
 message DeleteVodAssetRequest {
   string tenant_id = 1;
   string artifact_hash = 2;
+  // User who requested the deletion, for the artifact_deleted audit event.
+  // Attribution only; empty for system-initiated deletions.
+  string requested_by_user_id = 3;
 }
 
 // DeleteVodAssetResponse - delete confirmation

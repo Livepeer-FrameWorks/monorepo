@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 
@@ -23,7 +24,9 @@ import (
 
 func testFederationServerWithCache(t *testing.T) (*FederationServer, *RemoteEdgeCache, *miniredis.Miniredis) {
 	t.Helper()
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "source-pull-test-secret")
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn {
+		return &appconfig.Foghorn{BalancerCapabilitySecret: "source-pull-test-secret"}
+	}))
 	mr := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	cache := NewRemoteEdgeCache(client, "cluster-a", logging.NewLogger())

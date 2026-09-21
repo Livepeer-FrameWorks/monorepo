@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,12 +57,54 @@ func ctxAs(userID, tenantID, role string) context.Context {
 	return ctx
 }
 
+// mistAdminTestMaxMints bounds the audit-event transactions the test database
+// accepts; no test mints more often with one server.
+const mistAdminTestMaxMints = 4
+
 func newMistAdminTestServer(t *testing.T) *CommodoreServer {
 	t.Helper()
-	t.Setenv("JWT_SECRET", "test-secret-please-do-not-use-in-prod")
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// Every successful mint records its audit event in its own transaction.
+	for range mistAdminTestMaxMints {
+		mock.ExpectBegin()
+		expectLegacyEventInsert(mock, eventMistAdminSessionMinted)
+		mock.ExpectCommit()
+	}
 	// quartermasterClient stays nil because these tests replace the
 	// ownership lookup functions.
-	return &CommodoreServer{logger: logrus.New()}
+	return &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: func() RuntimeSettings {
+		return RuntimeSettings{JWTSecret: []byte("test-secret-please-do-not-use-in-prod")}
+	}}
+}
+
+// A mint whose audit event cannot be recorded returns no token.
+func TestMintMistAdminSession_AuditFailureWithholdsToken(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close() //nolint:errcheck
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+	srv := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: func() RuntimeSettings {
+		return RuntimeSettings{JWTSecret: []byte("test-secret-please-do-not-use-in-prod")}
+	}}
+	stubOwnership(t,
+		platformOfficialOwner("edge-us-1", "media-us-1"), nil,
+		clusterResp("media-us-1", true), nil,
+	)
+	resp, err := srv.MintMistAdminSession(ctxAsOperator("platform-user", "tenant-ops", "owner"), &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	if status.Code(err) != codes.Internal || resp.GetToken() != "" {
+		t.Fatalf("mint with failed audit = (%v, %v), want Internal and no token", resp, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
 }
 
 func platformOfficialOwner(node, cluster string) *quartermasterpb.NodeOwnerResponse {

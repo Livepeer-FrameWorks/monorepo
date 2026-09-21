@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -18,7 +19,7 @@ import (
 
 func TestHandleDesiredStateUpdatePersistsResultOnSendFailure(t *testing.T) {
 	outboxDir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
 	outboxMu.Lock()
 	outbox = nil
 	outboxMu.Unlock()

@@ -15,8 +15,8 @@ type Resolver struct {
 }
 
 // NewResolver creates a new GraphQL resolver using our existing resolver implementation
-func NewResolver(clients *clients.ServiceClients, logger logging.Logger, metrics *resolvers.GraphQLMetrics, serviceToken string) *Resolver {
+func NewResolver(clients *clients.ServiceClients, logger logging.Logger, metrics *resolvers.GraphQLMetrics, cfg resolvers.ResolverConfig) *Resolver {
 	return &Resolver{
-		Resolver: resolvers.NewResolver(clients, logger, metrics, serviceToken),
+		Resolver: resolvers.NewResolver(clients, logger, metrics, cfg),
 	}
 }

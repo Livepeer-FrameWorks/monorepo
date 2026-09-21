@@ -1,0 +1,11 @@
+fragment EventArtifactFields on EventArtifact {
+  artifactId
+  kind
+  streamId
+  playbackId
+}
+
+fragment EventMoneyFields on EventMoney {
+  amountMinor
+  currency
+}

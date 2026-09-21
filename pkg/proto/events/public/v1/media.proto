@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package frameworks.events.public.v1;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1";
+
+import "events/options.proto";
+import "events/public/v1/common.proto";
+
+message ClipRequested {
+  option (frameworks.events.event) = {type: "clip.requested", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  // duration_ms is the requested clip length.
+  int64 duration_ms = 2;
+}
+
+message ClipReady {
+  option (frameworks.events.event) = {type: "clip.ready", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  int64 duration_ms = 2;
+  int64 size_bytes = 3;
+}
+
+message ClipFailed {
+  option (frameworks.events.event) = {type: "clip.failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  MediaFailureReason reason = 2;
+}
+
+message RecordingReady {
+  option (frameworks.events.event) = {type: "recording.ready", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  int64 duration_ms = 2;
+  int64 size_bytes = 3;
+}
+
+message RecordingFailed {
+  option (frameworks.events.event) = {type: "recording.failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  MediaFailureReason reason = 2;
+}
+
+message UploadCreated {
+  option (frameworks.events.event) = {type: "upload.created", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  // filename is the name the tenant supplied for the upload.
+  string filename = 2;
+  int64 expected_size_bytes = 3;
+}
+
+message UploadCompleted {
+  option (frameworks.events.event) = {type: "upload.completed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  int64 size_bytes = 2;
+}
+
+message UploadAborted {
+  option (frameworks.events.event) = {type: "upload.aborted", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+}
+
+message UploadReady {
+  option (frameworks.events.event) = {type: "upload.ready", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  int64 duration_ms = 2;
+  int64 size_bytes = 3;
+}
+
+message UploadFailed {
+  option (frameworks.events.event) = {type: "upload.failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  MediaFailureReason reason = 2;
+}

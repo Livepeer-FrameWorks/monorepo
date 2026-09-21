@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/ingesterrors"
@@ -735,8 +736,7 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 }
 
 func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "frameworks.network", BalancerCapabilitySecret: "test-capability-secret"})
 	state.DefaultManager().SetNodeConnectionInfo(context.Background(), "edge-eu-1", "edge-eu-1:18090", "", "media-eu-1", nil)
 	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
@@ -858,8 +858,7 @@ func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 // landing directly on an edge before /play arranged the pull can discover a
 // remote origin (US-ingest / EU-playback).
 func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "frameworks.network", BalancerCapabilitySecret: "test-capability-secret"})
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })

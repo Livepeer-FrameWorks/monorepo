@@ -38,12 +38,11 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	mock.ExpectQuery(`WITH failed AS`).
 		WithArgs("job-clip", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
-			AddRow("hash-clip", "clip", "tenant-1", "stream-1", "live+demo", "max retries exceeded"))
+			AddRow("hash-clip", "clip", mockTenantUUID, "stream-1", "live+demo", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-clip", "max retries exceeded", "tenant-1").
+		WithArgs("hash-clip", "max retries exceeded", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "clip.failed", "hash-clip", "clip_lifecycle", mockTenantUUID, "stream-1", "hash-clip")
 	mock.ExpectCommit()
 
 	// 4. job-vod: atomic fail tx.
@@ -51,12 +50,11 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	mock.ExpectQuery(`WITH failed AS`).
 		WithArgs("job-vod", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
-			AddRow("hash-vod", "vod", "tenant-2", "", "", "max retries exceeded"))
+			AddRow("hash-vod", "vod", "22222222-2222-4222-8222-222222222222", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-vod", "max retries exceeded", "tenant-2").
+		WithArgs("hash-vod", "max retries exceeded", "22222222-2222-4222-8222-222222222222").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "hash-vod", "vod_lifecycle", "22222222-2222-4222-8222-222222222222", "", "hash-vod")
 	mock.ExpectCommit()
 
 	d := newRecoveryDispatcher(t, db)

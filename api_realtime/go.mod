@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
+	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sirupsen/logrus v1.9.4
 	google.golang.org/grpc v1.80.0
@@ -32,7 +33,6 @@ require (
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect

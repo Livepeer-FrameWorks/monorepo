@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -63,22 +62,21 @@ type StreamInfo struct {
 	Metadata map[string]interface{} `json:"metadata"`
 }
 
-// NewClient creates a new MistServer API client
-func NewClient(logger logging.Logger) *Client {
-	user := os.Getenv("MIST_API_USERNAME")
-	if user == "" {
-		user = "test"
-	}
+// ClientConfig locates and authenticates a MistServer API.
+type ClientConfig struct {
+	// BaseURL is the MistServer API base URL, for example http://localhost:4242.
+	// An empty BaseURL makes every API call fail.
+	BaseURL  string
+	Username string
+	Password string
+}
 
-	pass := os.Getenv("MIST_API_PASSWORD")
-	if pass == "" {
-		pass = "test"
-	}
-
+// NewClient creates a MistServer API client for cfg.
+func NewClient(logger logging.Logger, cfg ClientConfig) *Client {
 	return &Client{
-		BaseURL:  os.Getenv("MISTSERVER_URL"), // e.g., "http://localhost:4242"
-		Username: user,
-		Password: pass,
+		BaseURL:  cfg.BaseURL,
+		Username: cfg.Username,
+		Password: cfg.Password,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},

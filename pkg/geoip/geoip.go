@@ -21,6 +21,7 @@
 package geoip
 
 import (
+	"fmt"
 	"math"
 	"net"
 	"os"
@@ -341,26 +342,22 @@ func (r *Reader) IsLoaded() bool {
 	return r.db != nil
 }
 
-// Shared reader singleton for process-wide reuse
-var sharedGeo struct {
-	once   sync.Once
-	reader *Reader
-}
-
-// GetSharedReader returns a singleton Reader initialized from GEOIP_MMDB_PATH.
-// Returns nil if the database path is empty or the file cannot be opened.
-func GetSharedReader() *Reader {
-	sharedGeo.once.Do(func() {
-		path := os.Getenv("GEOIP_MMDB_PATH")
-		if path == "" {
-			return
-		}
-		r, err := NewReader(path)
-		if err == nil {
-			sharedGeo.reader = r
-		}
-	})
-	return sharedGeo.reader
+// Open opens the configured MMDB database for a service. An empty path
+// returns nil, nil so GeoIP stays disabled; a path that does not exist or
+// cannot be opened returns an error, unlike NewReader, which treats a missing
+// file as disabled.
+func Open(mmdbPath string) (*Reader, error) {
+	if mmdbPath == "" {
+		return nil, nil
+	}
+	reader, err := NewReader(mmdbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open GeoIP database %s: %w", mmdbPath, err)
+	}
+	if reader == nil {
+		return nil, fmt.Errorf("open GeoIP database %s: file does not exist", mmdbPath)
+	}
+	return reader, nil
 }
 
 // EnrichEvent adds geo fields to an event map if geo data is available

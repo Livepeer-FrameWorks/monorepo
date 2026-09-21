@@ -3,6 +3,7 @@ package grpc
 import (
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
@@ -14,20 +15,27 @@ import (
 // non-nil Cluster instead of nil would be indistinguishable downstream, but the
 // nil/non-nil split is what the comment at the call site documents, so it's
 // asserted here.
+// useDVRClusterPolicy configures the cluster DVR ceilings for the rest of the test.
+func useDVRClusterPolicy(t *testing.T, maxWindowSeconds, maxEntries int) {
+	t.Helper()
+	settings := &appconfig.Foghorn{}
+	settings.DVRClusterMaxWindowSeconds = maxWindowSeconds
+	settings.DVRClusterMaxEntries = maxEntries
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn { return settings }))
+}
+
 func TestDVRClusterPolicy(t *testing.T) {
 	s := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
 	t.Run("both unset returns nil (tier ceilings stand)", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 0, 0)
 		if got := s.dvrClusterPolicy(); got != nil {
 			t.Fatalf("unset env must yield nil, got %+v", got)
 		}
 	})
 
 	t.Run("window only", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "600")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 600, 0)
 		got := s.dvrClusterPolicy()
 		if got == nil || got.MaxWindowSeconds != 600 || got.MaxEntries != 0 {
 			t.Fatalf("window-only env = %+v, want {600,0}", got)
@@ -35,8 +43,7 @@ func TestDVRClusterPolicy(t *testing.T) {
 	})
 
 	t.Run("entries only", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "120")
+		useDVRClusterPolicy(t, 0, 120)
 		got := s.dvrClusterPolicy()
 		if got == nil || got.MaxWindowSeconds != 0 || got.MaxEntries != 120 {
 			t.Fatalf("entries-only env = %+v, want {0,120}", got)
@@ -44,8 +51,7 @@ func TestDVRClusterPolicy(t *testing.T) {
 	})
 
 	t.Run("both set", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "3600")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "300")
+		useDVRClusterPolicy(t, 3600, 300)
 		got := s.dvrClusterPolicy()
 		if got == nil || got.MaxWindowSeconds != 3600 || got.MaxEntries != 300 {
 			t.Fatalf("both env = %+v, want {3600,300}", got)
@@ -71,8 +77,7 @@ func TestResolveEffectiveDVRConfig(t *testing.T) {
 	}
 
 	t.Run("request within tier max is honored", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 0, 0)
 		req := &sharedpb.StartDVRRequest{DvrPolicy: tierPolicy, DvrWindowSeconds: i32(1200)}
 		eff := s.resolveEffectiveDVRConfig(req)
 		if eff.DVRWindowSeconds != 1200 {
@@ -84,8 +89,7 @@ func TestResolveEffectiveDVRConfig(t *testing.T) {
 	})
 
 	t.Run("request above tier max is clamped to tier max", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 0, 0)
 		req := &sharedpb.StartDVRRequest{DvrPolicy: tierPolicy, DvrWindowSeconds: i32(999999)}
 		eff := s.resolveEffectiveDVRConfig(req)
 		if eff.DVRWindowSeconds != 3600 {
@@ -94,8 +98,7 @@ func TestResolveEffectiveDVRConfig(t *testing.T) {
 	})
 
 	t.Run("cluster env ceiling clamps below tier max", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "600")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 600, 0)
 		req := &sharedpb.StartDVRRequest{DvrPolicy: tierPolicy, DvrWindowSeconds: i32(3000)}
 		eff := s.resolveEffectiveDVRConfig(req)
 		if eff.DVRWindowSeconds != 600 {
@@ -104,8 +107,7 @@ func TestResolveEffectiveDVRConfig(t *testing.T) {
 	})
 
 	t.Run("missing tier policy trips the platform fallback", func(t *testing.T) {
-		t.Setenv("DVR_CLUSTER_MAX_WINDOW_SECONDS", "")
-		t.Setenv("DVR_CLUSTER_MAX_ENTRIES", "")
+		useDVRClusterPolicy(t, 0, 0)
 		// No DvrPolicy and no requested window: a live recording still has to
 		// pick a window, so the resolver emits the 1h platform fallback.
 		req := &sharedpb.StartDVRRequest{}

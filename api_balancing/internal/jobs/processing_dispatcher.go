@@ -21,6 +21,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
@@ -128,7 +129,7 @@ func prepareProcessingDispatchConfig(processesJSON string, job *processingJob, n
 	if !job.ArtifactHash.Valid || artifactHash == "" {
 		return "", errors.New("livepeer processing dispatch has no artifact manifest")
 	}
-	return control.StampTranscodeJobConfigFromEnvironment(processesJSON, control.TranscodeJobClaims{
+	return control.StampTranscodeJobConfigWithConfiguredSecret(processesJSON, control.TranscodeJobClaims{
 		ManifestID:          "processing+" + artifactHash,
 		JobID:               job.JobID,
 		AttemptOrGeneration: strconv.Itoa(job.RetryCount),
@@ -786,16 +787,25 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 			if streamInternalName != "" {
 				clipData.StreamInternalName = &streamInternalName
 			}
-			if enqErr := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); enqErr != nil {
+			failed := &publicv1.ClipFailed{
+				Artifact: artifactoutbox.ClipArtifact(artifactHash.String, streamID),
+				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+			}
+			if enqErr := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); enqErr != nil {
 				d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue clip failure lifecycle; rolling back")
 				return
 			}
 		} else {
+			// Processing jobs exist only for clips and uploads, so a 'vod' artifact here is an upload.
 			vodData := &ipcpb.VodLifecycleData{Status: ipcpb.VodLifecycleData_STATUS_FAILED, VodHash: artifactHash.String, Error: &errorMsg}
 			if tenantID != "" {
 				vodData.TenantId = &tenantID
 			}
-			if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+			failed := &publicv1.UploadFailed{
+				Artifact: artifactoutbox.UploadArtifact(artifactHash.String),
+				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+			}
+			if enqErr := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); enqErr != nil {
 				d.logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue vod failure lifecycle; rolling back")
 				return
 			}

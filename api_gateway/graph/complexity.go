@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"time"
+
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/graph/model"
 )
@@ -31,6 +33,10 @@ const ConnectionMetaOverhead = 2
 // the cost tracks the real per-row fan-out rather than the cheap scalars projected
 // alongside it. Scalar projections off the already-loaded row cost nothing.
 const PerItemFetchCost = 5
+
+// capabilitiesSourceCount is how many downstream services Query.capabilities
+// reads when every section misses its cache.
+const capabilitiesSourceCount = 3
 
 // getPageMultiplier extracts the pagination size from ConnectionInput.
 // Returns DefaultPageSize if page is nil or neither first/last is set.
@@ -254,6 +260,21 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	}
 	c.Query.UsageRecordsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput) int {
 		return connectionComplexity(childComplexity, page)
+	}
+	c.Query.WebhookEndpointsConnection = func(childComplexity int, page *model.ConnectionInput) int {
+		return connectionComplexity(childComplexity, page)
+	}
+	c.Query.WebhookDeliveriesConnection = func(childComplexity int, _ *string, _ []model.WebhookDeliveryStatus, _ *string, _ *string, _ *time.Time, _ *time.Time, page *model.ConnectionInput) int {
+		return connectionComplexity(childComplexity, page)
+	}
+
+	// Query.capabilities reads three downstream sources per cache miss (Purser
+	// billing status for the retention cap, Purser subscription + tier for the
+	// processing flag, Quartermaster for domains and clusters), so it carries one
+	// fetch cost per source rather than the default object cost. Query.serverInfo
+	// answers from process state and keeps the default cost.
+	c.Query.Capabilities = func(childComplexity int) int {
+		return capabilitiesSourceCount*PerItemFetchCost + childComplexity
 	}
 
 	// Cluster.nodesConnection

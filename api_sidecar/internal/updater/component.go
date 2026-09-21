@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"frameworks/api_sidecar/internal/appconfig"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"hash"
 	"io"
@@ -57,7 +58,7 @@ func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 	// in-place swap here would target processes that don't exist. Refuse
 	// with an actionable message; those nodes migrate by re-provisioning
 	// onto the single edge image.
-	if deployMode := strings.TrimSpace(os.Getenv("DEPLOY_MODE")); deployMode != "" && deployMode != "native" && !s6SupervisionPresent() {
+	if deployMode := strings.TrimSpace(appconfig.Runtime().DeployMode); deployMode != "" && deployMode != "native" && !s6SupervisionPresent() {
 		return Result{Detail: "containerized helmsman without s6 supervision (retired multi-container layout); re-provision with the single edge image to enable in-place updates"}
 	}
 	if strings.TrimSpace(component.GetArtifactUrl()) == "" {

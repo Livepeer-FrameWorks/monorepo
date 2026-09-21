@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -281,7 +282,7 @@ func TestSyncDtshOnlyVodRegeneratesInvalidSidecar(t *testing.T) {
 		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv("MISTSERVER_URL", server.URL)
+	appconfigtest.Setenv(t, "MISTSERVER_URL", server.URL)
 
 	err := sm.SyncDtshOnly(context.Background(), &ipcpb.DtshSyncRequest{
 		RequestId:       "req-dtsh",

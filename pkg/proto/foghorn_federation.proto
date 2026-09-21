@@ -5,6 +5,7 @@ package foghorn_federation;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation;foghornfederationpb";
 
 import "media_placement.proto";
+import "common.proto";
 
 // FoghornFederation enables cross-cluster communication between Foghorn instances.
 // Unary RPCs (QueryStream, NotifyOriginPull, PrepareArtifact) are stateless and
@@ -238,6 +239,7 @@ message RemoteClipRequest {
   int64 stop_ms = 11;
   int64 duration_sec = 12;
   string requesting_cluster = 13;
+  common.RequestActor actor = 14;     // Optional, principal clip.requested is attributed to
 }
 
 message RemoteClipResponse {
@@ -511,6 +513,7 @@ message ForwardArtifactCommandRequest {
   string artifact_hash = 2;  // Clip hash, DVR hash, or VOD hash
   string tenant_id = 3;
   string stream_id = 4;      // Optional, used by StopDVR for stream context
+  string requested_by_user_id = 5;  // Optional, deletion requester for the artifact_deleted audit event
 }
 
 message ForwardArtifactCommandResponse {

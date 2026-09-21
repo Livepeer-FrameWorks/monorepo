@@ -2,7 +2,6 @@ package logic
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/go-acme/lego/v4/lego"
@@ -32,10 +31,28 @@ type caConfig struct {
 	EABHMACKey string
 }
 
-// resolveCAConfig returns the lego configuration for the given CA in
-// the current ACME environment (production vs staging from ACME_ENV).
-func resolveCAConfig(p CAProvider) (caConfig, error) {
-	staging := strings.EqualFold(strings.TrimSpace(os.Getenv("ACME_ENV")), "staging")
+// IssuanceSettings are the operator settings CertManager reads on every
+// certificate order. CertManager asks its settings source for a fresh value
+// at each use, so a replaced source value applies to the next order.
+type IssuanceSettings struct {
+	// ACMEEnv selects the staging directories when it equals staging.
+	ACMEEnv string
+	// CAOrder is a comma-separated CA preference list; empty uses the
+	// automatic order.
+	CAOrder                 string
+	GoogleTrustDirectoryURL string
+	GoogleTrustEABKeyID     string
+	GoogleTrustEABHMACKey   string
+	// AllowedSuffixes is a comma-separated issuance allowlist; empty falls
+	// back to RootDomain, and an empty RootDomain allows every domain.
+	AllowedSuffixes string
+	RootDomain      string
+}
+
+// resolveCAConfig returns the lego configuration for the given CA in the
+// configured ACME environment (production vs staging).
+func resolveCAConfig(p CAProvider, settings IssuanceSettings) (caConfig, error) {
+	staging := strings.EqualFold(strings.TrimSpace(settings.ACMEEnv), "staging")
 	switch p {
 	case CALetsEncrypt:
 		if staging {
@@ -43,7 +60,7 @@ func resolveCAConfig(p CAProvider) (caConfig, error) {
 		}
 		return caConfig{Provider: CALetsEncrypt, DirectoryURL: lego.LEDirectoryProduction}, nil
 	case CAGoogleTrust:
-		dir := strings.TrimSpace(os.Getenv("NAVIGATOR_GOOGLE_TRUST_DIRECTORY_URL"))
+		dir := strings.TrimSpace(settings.GoogleTrustDirectoryURL)
 		if dir == "" {
 			if staging {
 				dir = "https://dv.acme-v02.test-api.pki.goog/directory"
@@ -51,8 +68,8 @@ func resolveCAConfig(p CAProvider) (caConfig, error) {
 				dir = "https://dv.acme-v02.api.pki.goog/directory"
 			}
 		}
-		kid := strings.TrimSpace(os.Getenv("NAVIGATOR_GOOGLE_TRUST_EAB_KID"))
-		hmac := strings.TrimSpace(os.Getenv("NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY"))
+		kid := strings.TrimSpace(settings.GoogleTrustEABKeyID)
+		hmac := strings.TrimSpace(settings.GoogleTrustEABHMACKey)
 		if kid == "" || hmac == "" {
 			return caConfig{}, fmt.Errorf("google-trust CA requires NAVIGATOR_GOOGLE_TRUST_EAB_KID and NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY")
 		}
@@ -72,11 +89,11 @@ func resolveCAConfig(p CAProvider) (caConfig, error) {
 // automagic: Let's Encrypt first, with Google Trust Services added when EAB
 // credentials are present. NAVIGATOR_ACME_CA_ORDER remains as a test/ops
 // override, not a required deployment knob.
-func caOrder() []CAProvider {
-	raw := strings.TrimSpace(os.Getenv("NAVIGATOR_ACME_CA_ORDER"))
+func caOrder(settings IssuanceSettings) []CAProvider {
+	raw := strings.TrimSpace(settings.CAOrder)
 	if raw == "" {
 		order := []CAProvider{CALetsEncrypt}
-		if googleTrustConfigured() {
+		if googleTrustConfigured(settings) {
 			order = append(order, CAGoogleTrust)
 		}
 		return order
@@ -99,9 +116,9 @@ func caOrder() []CAProvider {
 	return out
 }
 
-func googleTrustConfigured() bool {
-	return strings.TrimSpace(os.Getenv("NAVIGATOR_GOOGLE_TRUST_EAB_KID")) != "" &&
-		strings.TrimSpace(os.Getenv("NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY")) != ""
+func googleTrustConfigured(settings IssuanceSettings) bool {
+	return strings.TrimSpace(settings.GoogleTrustEABKeyID) != "" &&
+		strings.TrimSpace(settings.GoogleTrustEABHMACKey) != ""
 }
 
 // isRateLimitError returns true if err looks like an ACME rate-limit

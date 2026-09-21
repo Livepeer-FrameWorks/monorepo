@@ -31,7 +31,7 @@ func expectArtifactDeletionWatermarkLock(mock sqlmock.Sqlmock, hash string, _ in
 func expectNodeCopyOutbox(mock sqlmock.Sqlmock, hash string) {
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs(hash).
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(mockTenantUUID))
 	expectNodeCopyEmit(mock, hash, int64(1))
 }
 
@@ -40,13 +40,13 @@ func expectNodeCopyOutbox(mock sqlmock.Sqlmock, hash string) {
 func expectNodeCopyLostOutbox(mock sqlmock.Sqlmock, hash string) {
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs(hash).
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(mockTenantUUID))
 	expectNodeCopyEmit(mock, hash, int64(0))
 }
 
 // expectNodeCopyEmit is the tenant-less tail (key-scoped version → last_emitted_version UPDATE →
-// outbox insert) enqueueNodeCopy performs; rowVersion is what it records on the row
-// (the live version for present events, 0 for LOST).
+// artifact.node_copy_changed domain event → legacy outbox row with the same ID) enqueueNodeCopy
+// performs; rowVersion is what it records on the row (the live version for present events, 0 for LOST).
 func expectNodeCopyEmit(mock sqlmock.Sqlmock, hash string, rowVersion int64) {
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
 		WithArgs(hash, "node-1").
@@ -54,9 +54,7 @@ func expectNodeCopyEmit(mock sqlmock.Sqlmock, hash string, rowVersion int64) {
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(rowVersion, hash, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WithArgs("artifact_node_copy", "tenant-1", "", hash, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "artifact.node_copy_changed", hash, "artifact_node_copy", mockTenantUUID, "", hash)
 }
 
 // A finalize that first marks an artifact complete emits a durable GAINED (origin).
@@ -354,7 +352,7 @@ func TestRefreshNodeCopy_EmitsWhenAbsent(t *testing.T) {
 	mock.ExpectQuery("SELECT an.role, an.is_complete.*FROM foghorn.artifact_nodes an.*JOIN foghorn.artifacts.*FOR UPDATE OF an").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete", "size_bytes", "last_emitted_version", "tenant_id"}).
-			AddRow("origin", false, int64(0), int64(0), "tenant-1"))
+			AddRow("origin", false, int64(0), int64(0), mockTenantUUID))
 	expectNodeCopyEmit(mock, "hash-1", int64(1))
 	mock.ExpectCommit()
 
@@ -405,7 +403,7 @@ func TestReconcileNodeCopies_SeedsUnemitted(t *testing.T) {
 	mock.ExpectQuery("SELECT an.role, an.is_complete.*FROM foghorn.artifact_nodes an.*JOIN foghorn.artifacts.*FOR UPDATE OF an").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete", "size_bytes", "last_emitted_version", "tenant_id"}).
-			AddRow("origin", true, int64(100), int64(0), "tenant-1"))
+			AddRow("origin", true, int64(100), int64(0), mockTenantUUID))
 	expectNodeCopyEmit(mock, "hash-1", int64(1))
 	mock.ExpectCommit()
 

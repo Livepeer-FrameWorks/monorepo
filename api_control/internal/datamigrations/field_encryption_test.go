@@ -24,7 +24,7 @@ func (v3CiphertextArgument) Match(value driver.Value) bool {
 func fieldEncryptionTestCheckpoint(t *testing.T, legacySecret string) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(fieldEncryptionCheckpoint{
-		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint(legacySecret),
+		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint(testFieldEncryptionSettings(legacySecret), legacySecret),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,11 +32,31 @@ func fieldEncryptionTestCheckpoint(t *testing.T, legacySecret string) []byte {
 	return encoded
 }
 
+// testFieldEncryptionSettings is the loaded configuration with the test active
+// key, the default key ID, and the given JWT_SECRET.
+func testFieldEncryptionSettings(jwtSecret string) FieldEncryptionSettings {
+	return FieldEncryptionSettings{
+		ActiveKeyID: "primary",
+		ActiveKey:   "active-field-key-material-32-bytes",
+		JWTSecret:   jwtSecret,
+	}
+}
+
+// The CLI requires a fresh backup before running an irreversible data migration; re-encrypted fields cannot be read
+// by the previous release's key handling.
+func TestFieldEncryptionIsRegisteredIrreversible(t *testing.T) {
+	if datamigrate.Lookup(FieldEncryptionID) == nil {
+		registerFieldEncryption(testFieldEncryptionSettings("jwt"))
+	}
+	m := datamigrate.Lookup(FieldEncryptionID)
+	if m == nil || !m.Irreversible {
+		t.Fatalf("%s must be registered as irreversible: %+v", FieldEncryptionID, m)
+	}
+}
+
 func TestRunFieldEncryptionRewritesLegacyRowsWithActiveKey(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", `{"previous":"previous-field-key-material-32-bytes"}`)
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
+	settings.PreviousKeys = `{"previous":"previous-field-key-material-32-bytes"}`
 	legacyCipher, err := fieldcrypt.DeriveFieldEncryptor([]byte("legacy-jwt-key-material-32-bytes"), "push-target-uri")
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +112,7 @@ func TestRunFieldEncryptionRewritesLegacyRowsWithActiveKey(t *testing.T) {
 	}
 	expectFieldEncryptionOrphanPrune(mock)
 
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 3, Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes")})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 3, Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes")}, settings)
 	if err != nil {
 		t.Fatalf("runFieldEncryption: %v", err)
 	}
@@ -105,10 +125,7 @@ func TestRunFieldEncryptionRewritesLegacyRowsWithActiveKey(t *testing.T) {
 }
 
 func TestRunFieldEncryptionQuarantinesCorruptRowAndContinues(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
 	legacyCipher, err := fieldcrypt.DeriveFieldEncryptor([]byte("legacy-jwt-key-material-32-bytes"), "push-target-uri")
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +155,7 @@ func TestRunFieldEncryptionQuarantinesCorruptRowAndContinues(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM commodore.field_encryption_quarantine WHERE table_name = $1 AND column_name = $2 AND row_id = $3`)).
 		WithArgs(spec.table, spec.column, "target-good").WillReturnResult(sqlmock.NewResult(0, 0))
 
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2, Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes")})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2, Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes")}, settings)
 	if err != nil {
 		t.Fatalf("runFieldEncryption: %v", err)
 	}
@@ -158,10 +175,7 @@ func TestRunFieldEncryptionQuarantinesCorruptRowAndContinues(t *testing.T) {
 }
 
 func TestRunFieldEncryptionDryRunReportsWithoutWriting(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
 	legacyCipher, err := fieldcrypt.DeriveFieldEncryptor([]byte("legacy-jwt-key-material-32-bytes"), "push-target-uri")
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +202,7 @@ func TestRunFieldEncryptionDryRunReportsWithoutWriting(t *testing.T) {
 		DryRun:    true,
 		Checkpoint: fieldEncryptionTestCheckpoint(t,
 			"legacy-jwt-key-material-32-bytes"),
-	})
+	}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,10 +215,7 @@ func TestRunFieldEncryptionDryRunReportsWithoutWriting(t *testing.T) {
 }
 
 func TestVerifyFieldEncryptionRejectsRemainingLegacyRows(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -213,17 +224,13 @@ func TestVerifyFieldEncryptionRejectsRemainingLegacyRows(t *testing.T) {
 	spec := encryptedColumns[0]
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s AS source WHERE source.%s IS NOT NULL AND LEFT(source.%s, char_length($1)) <> $1 AND NOT EXISTS (SELECT 1 FROM %s AS quarantine WHERE quarantine.table_name = $2 AND quarantine.column_name = $3 AND quarantine.row_id = source.%s::text AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex'))`, spec.table, spec.column, spec.column, fieldEncryptionQuarantineTable, spec.id, spec.column)
 	mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs("enc:v3:primary:", spec.table, spec.column).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	if err := verifyFieldEncryption(context.Background(), db); err == nil || !strings.Contains(err.Error(), "has 1 legacy rows") {
+	if err := verifyFieldEncryption(context.Background(), db, settings); err == nil || !strings.Contains(err.Error(), "has 1 legacy rows") {
 		t.Fatalf("expected legacy-row verification failure, got %v", err)
 	}
 }
 
 func TestVerifyFieldEncryptionRejectsUnacknowledgedQuarantine(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
-	t.Setenv(fieldEncryptionAllowQuarantine, "")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +248,7 @@ func TestVerifyFieldEncryptionRejectsUnacknowledgedQuarantine(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(activeQuery)).WithArgs(spec.table, spec.column).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
 	}
-	if err := verifyFieldEncryption(context.Background(), db); err == nil || !strings.Contains(err.Error(), "3 quarantined rows") {
+	if err := verifyFieldEncryption(context.Background(), db, settings); err == nil || !strings.Contains(err.Error(), "3 quarantined rows") {
 		t.Fatalf("expected quarantine verification failure, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -250,26 +257,22 @@ func TestVerifyFieldEncryptionRejectsUnacknowledgedQuarantine(t *testing.T) {
 }
 
 func TestRunFieldEncryptionRejectsUnpreservedJWTChange(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "new-legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("new-legacy-jwt-key-material-32-bytes")
 	checkpoint := fmt.Sprintf(`{"column":0,"legacy_key_fingerprint":%q}`, fieldEncryptionFingerprint("old-legacy-jwt-key-material-32-bytes"))
-	if _, err := runFieldEncryption(context.Background(), nil, datamigrate.RunOptions{BatchSize: 2, Checkpoint: []byte(checkpoint)}); err == nil || !strings.Contains(err.Error(), "JWT_SECRET changed") {
+	if _, err := runFieldEncryption(context.Background(), nil, datamigrate.RunOptions{BatchSize: 2, Checkpoint: []byte(checkpoint)}, settings); err == nil || !strings.Contains(err.Error(), "JWT_SECRET changed") {
 		t.Fatalf("expected legacy-key rotation fence, got %v", err)
 	}
 }
 
 func TestRunFieldEncryptionPersistsKeyFenceBeforeScanning(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	expectEmptyLegacyFieldProbe(mock)
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +283,7 @@ func TestRunFieldEncryptionPersistsKeyFenceBeforeScanning(t *testing.T) {
 	if err := json.Unmarshal(progress.Checkpoint, &checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.LegacyKeyFingerprint != fieldEncryptionLegacyKeyFingerprint("legacy-jwt-key-material-32-bytes") {
+	if checkpoint.LegacyKeyFingerprint != fieldEncryptionLegacyKeyFingerprint(settings, "legacy-jwt-key-material-32-bytes") {
 		t.Fatalf("legacy key fingerprint was not persisted: %+v", checkpoint)
 	}
 	if checkpoint.LegacyKeyFingerprint == fieldEncryptionFingerprint("legacy-jwt-key-material-32-bytes") {
@@ -289,10 +292,7 @@ func TestRunFieldEncryptionPersistsKeyFenceBeforeScanning(t *testing.T) {
 }
 
 func TestRunFieldEncryptionRejectsWrongInitialLegacyKey(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "wrong-legacy-jwt-key-material-32-bytes")
+	settings := testFieldEncryptionSettings("wrong-legacy-jwt-key-material-32-bytes")
 	legacyCipher, err := fieldcrypt.DeriveFieldEncryptor([]byte("correct-legacy-jwt-key-material-32-bytes"), encryptedColumns[0].purpose)
 	if err != nil {
 		t.Fatal(err)
@@ -314,22 +314,20 @@ func TestRunFieldEncryptionRejectsWrongInitialLegacyKey(t *testing.T) {
 		}
 		mock.ExpectQuery(regexp.QuoteMeta(query)).WithArgs(fieldEncryptionLegacyProbeRows).WillReturnRows(rows)
 	}
-	if _, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{}); err == nil || !strings.Contains(err.Error(), "cannot decrypt any sampled legacy field") {
+	if _, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{}, settings); err == nil || !strings.Contains(err.Error(), "cannot decrypt any sampled legacy field") {
 		t.Fatalf("wrong initial legacy key armed migration fence: %v", err)
 	}
 }
 
 func TestRunFieldEncryptionRejectsMissingJWTBeforeScanning(t *testing.T) {
-	t.Setenv("JWT_SECRET", "")
-	if _, err := runFieldEncryption(context.Background(), nil, datamigrate.RunOptions{}); err == nil || !strings.Contains(err.Error(), "JWT_SECRET is required") {
+	if _, err := runFieldEncryption(context.Background(), nil, datamigrate.RunOptions{}, testFieldEncryptionSettings("")); err == nil || !strings.Contains(err.Error(), "JWT_SECRET is required") {
 		t.Fatalf("expected missing JWT fence, got %v", err)
 	}
 }
 
 func TestFieldEncryptionQuarantineRequeueIsCheckpointed(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
-	t.Setenv(fieldEncryptionRetryQuarantine, "repair-2026-09-06-a")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
+	settings.RequeueQuarantine = "repair-2026-09-06-a"
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +336,7 @@ func TestFieldEncryptionQuarantineRequeueIsCheckpointed(t *testing.T) {
 	expectEmptyLegacyFieldProbe(mock)
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint`)).
 		WillReturnRows(sqlmock.NewRows([]string{"epoch_millis"}).AddRow(int64(1234)))
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,11 +357,8 @@ func TestFieldEncryptionQuarantineRequeueIsCheckpointed(t *testing.T) {
 }
 
 func TestFieldEncryptionQuarantineRequeueAcceptsANewToken(t *testing.T) {
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
-	t.Setenv(fieldEncryptionRetryQuarantine, "repair-b")
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
+	settings.RequeueQuarantine = "repair-b"
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -379,13 +374,13 @@ func TestFieldEncryptionQuarantineRequeueAcceptsANewToken(t *testing.T) {
 	expectFieldEncryptionOrphanPrune(mock)
 	checkpoint, err := json.Marshal(fieldEncryptionCheckpoint{
 		Column: 3, AfterID: "stale-position",
-		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint("legacy-jwt-key-material-32-bytes"),
+		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint(settings, "legacy-jwt-key-material-32-bytes"),
 		QuarantineRetryAfter: 1, QuarantineRetryToken: "repair-a",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 1, Checkpoint: checkpoint})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 1, Checkpoint: checkpoint}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}

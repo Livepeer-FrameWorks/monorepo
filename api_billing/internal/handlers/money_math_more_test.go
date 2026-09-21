@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"net/http"
 	"testing"
 	"time"
 
@@ -11,57 +10,6 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
-
-// convertToEurCents multiplies USD cents by the ECB EUR/USD rate and rounds to
-// the nearest integer cent. A fresh cache makes the rate deterministic (no
-// network). Rounding is half-away-from-zero (Go math.Round).
-func TestConvertToEurCents(t *testing.T) {
-	h := &X402Handler{logger: logging.NewLogger()}
-
-	cases := []struct {
-		name     string
-		rate     float64
-		usdCents int64
-		want     int64
-	}{
-		{"plain multiply", 0.92, 1000, 920},
-		{"rounds half away from zero", 0.5, 3, 2},    // 1.5 -> 2
-		{"rounds down below half", 0.9255, 200, 185}, // 185.1 -> 185
-		{"zero amount", 1.0, 0, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			setECBCache(tc.rate, time.Now())
-			t.Cleanup(resetECBCache)
-
-			got, err := h.convertToEurCents(tc.usdCents)
-			if err != nil {
-				t.Fatalf("convertToEurCents: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("convertToEurCents(%d) @ %.4f = %d, want %d", tc.usdCents, tc.rate, got, tc.want)
-			}
-		})
-	}
-}
-
-// When the rate is uncached and the fetch fails with no stale fallback,
-// convertToEurCents must surface the error rather than silently returning 0
-// cents — a zero conversion would under-bill the tenant.
-func TestConvertToEurCentsPropagatesRateError(t *testing.T) {
-	resetECBCache()
-	t.Cleanup(resetECBCache)
-	withDefaultHTTPClient(t, &http.Client{
-		Transport: testRoundTripFunc(func(*http.Request) (*http.Response, error) {
-			return nil, errors.New("network down")
-		}),
-	})
-
-	h := &X402Handler{logger: logging.NewLogger()}
-	if _, err := h.convertToEurCents(1000); err == nil {
-		t.Fatal("expected error when rate is unavailable, got nil")
-	}
-}
 
 func newCodecJM(t *testing.T) (*JobManager, sqlmock.Sqlmock) {
 	t.Helper()

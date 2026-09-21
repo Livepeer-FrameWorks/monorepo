@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/meteringdb"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 
@@ -49,15 +48,23 @@ type Scheduler struct {
 	initialDelay      time.Duration
 }
 
+// Config is the startup configuration of a Scheduler.
+type Config struct {
+	Billing handlers.BillingConfig
+	// WorkerID is the metering lease owner. Empty uses the host name plus a
+	// random UUID.
+	WorkerID string
+}
+
 // NewScheduler creates a new scheduler instance
-func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string, optionalMetrics ...*handlers.BillingMetrics) *Scheduler {
-	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger, sourceID, sourceRegion, optionalMetrics...)
-	hostname, hostnameErr := os.Hostname()
-	if hostnameErr != nil || hostname == "" {
-		hostname = "periscope-metering"
-	}
-	ownerID := config.GetEnv("METERING_WORKER_ID", "")
+func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, cfg Config) *Scheduler {
+	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger, cfg.Billing)
+	ownerID := cfg.WorkerID
 	if ownerID == "" {
+		hostname, hostnameErr := os.Hostname()
+		if hostnameErr != nil || hostname == "" {
+			hostname = "periscope-metering"
+		}
 		ownerID = hostname + "-" + uuid.NewString()
 	}
 
@@ -66,7 +73,7 @@ func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseCo
 		billingSummarizer: billingSummarizer,
 		stopChan:          make(chan struct{}),
 		queries:           meteringdb.New(yugaDB),
-		sourceID:          sourceID,
+		sourceID:          cfg.Billing.SourceID,
 		ownerID:           ownerID,
 		initialDelay:      10 * time.Second,
 	}

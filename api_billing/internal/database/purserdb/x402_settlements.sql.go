@@ -199,8 +199,13 @@ func (q *Queries) GetCryptoDocumentBillingProfile(ctx context.Context, tenantID 
 }
 
 const getCryptoWalletTaxSnapshot = `-- name: GetCryptoWalletTaxSnapshot :one
-SELECT tax_document_kind, tax_profile_snapshot,
-       quoted_usd_to_eur_rate::text AS quoted_usd_to_eur_rate, quoted_at
+SELECT tax_document_kind, tax_profile_snapshot, quoted_at,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.crypto_wallets
 WHERE tenant_id = $1::text::uuid
   AND tx_hash = $2
@@ -215,10 +220,15 @@ type GetCryptoWalletTaxSnapshotParams struct {
 }
 
 type GetCryptoWalletTaxSnapshotRow struct {
-	TaxDocumentKind    string          `db:"tax_document_kind" json:"tax_document_kind"`
-	TaxProfileSnapshot json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
-	QuotedUsdToEurRate string          `db:"quoted_usd_to_eur_rate" json:"quoted_usd_to_eur_rate"`
-	QuotedAt           sql.NullTime    `db:"quoted_at" json:"quoted_at"`
+	TaxDocumentKind     string          `db:"tax_document_kind" json:"tax_document_kind"`
+	TaxProfileSnapshot  json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	QuotedAt            sql.NullTime    `db:"quoted_at" json:"quoted_at"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetCryptoWalletTaxSnapshot(ctx context.Context, arg GetCryptoWalletTaxSnapshotParams) (GetCryptoWalletTaxSnapshotRow, error) {
@@ -227,8 +237,13 @@ func (q *Queries) GetCryptoWalletTaxSnapshot(ctx context.Context, arg GetCryptoW
 	err := row.Scan(
 		&i.TaxDocumentKind,
 		&i.TaxProfileSnapshot,
-		&i.QuotedUsdToEurRate,
 		&i.QuotedAt,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -411,8 +426,13 @@ func (q *Queries) GetX402SettlementByIdentity(ctx context.Context, arg GetX402Se
 }
 
 const getX402TaxSnapshot = `-- name: GetX402TaxSnapshot :one
-SELECT quote.tax_document_kind, quote.tax_profile_snapshot,
-       quote.eur_per_usd_rate::text AS eur_per_usd_rate, quote.created_at
+SELECT quote.tax_document_kind, quote.tax_profile_snapshot, quote.created_at,
+       COALESCE(quote.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(quote.original_currency, '')::text AS original_currency,
+       COALESCE(quote.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(quote.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(quote.fx_source, '')::text AS fx_source,
+       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.x402_nonces nonce
 JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
 WHERE nonce.tenant_id = $1::text::uuid
@@ -427,10 +447,15 @@ type GetX402TaxSnapshotParams struct {
 }
 
 type GetX402TaxSnapshotRow struct {
-	TaxDocumentKind    string          `db:"tax_document_kind" json:"tax_document_kind"`
-	TaxProfileSnapshot json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
-	EurPerUsdRate      string          `db:"eur_per_usd_rate" json:"eur_per_usd_rate"`
-	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
+	TaxDocumentKind     string          `db:"tax_document_kind" json:"tax_document_kind"`
+	TaxProfileSnapshot  json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	CreatedAt           time.Time       `db:"created_at" json:"created_at"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshotParams) (GetX402TaxSnapshotRow, error) {
@@ -439,8 +464,13 @@ func (q *Queries) GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshot
 	err := row.Scan(
 		&i.TaxDocumentKind,
 		&i.TaxProfileSnapshot,
-		&i.EurPerUsdRate,
 		&i.CreatedAt,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -450,7 +480,8 @@ INSERT INTO purser.crypto_invoices (
     invoice_number, tenant_id, reference_type, reference_id,
     gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
     vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-    currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
+    currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
+    fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
@@ -464,17 +495,19 @@ INSERT INTO purser.crypto_invoices (
     $7, $8,
     $9, $10::text::date,
     $11::text::date, $12,
-    $13, $14, $15,
-    $16, $17,
-    $18, $19,
-    $20, $21,
-    $22, $23,
-    $24, $25, $26,
-    $27, $28,
-    $29, CURRENT_DATE,
-    $30, $31, $32,
-    $33::jsonb, $34,
-    $35, NOW()
+    $13, $14,
+    $15::bigint, $16::bigint,
+    $17::text::numeric, $18::date,
+    $19, $20,
+    $21, $22,
+    $23, $24,
+    $25, $26,
+    $27, $28, $29,
+    $30, $31,
+    $32, CURRENT_DATE,
+    $33, $34, $35,
+    $36::jsonb, $37,
+    $38, NOW()
 )
 `
 
@@ -493,7 +526,10 @@ type InsertCryptoTopupInvoiceParams struct {
 	TaxValidationStatus        string          `db:"tax_validation_status" json:"tax_validation_status"`
 	Currency                   string          `db:"currency" json:"currency"`
 	AmountEurCents             int64           `db:"amount_eur_cents" json:"amount_eur_cents"`
-	EcbRate                    sql.NullString  `db:"ecb_rate" json:"ecb_rate"`
+	NetEurCents                int64           `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64           `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 	FxRateSource               sql.NullString  `db:"fx_rate_source" json:"fx_rate_source"`
 	FxRateObservedAt           sql.NullTime    `db:"fx_rate_observed_at" json:"fx_rate_observed_at"`
 	EvidenceIpCountry          sql.NullString  `db:"evidence_ip_country" json:"evidence_ip_country"`
@@ -532,7 +568,10 @@ func (q *Queries) InsertCryptoTopupInvoice(ctx context.Context, arg InsertCrypto
 		arg.TaxValidationStatus,
 		arg.Currency,
 		arg.AmountEurCents,
-		arg.EcbRate,
+		arg.NetEurCents,
+		arg.VatEurCents,
+		arg.FxUnitsPerEur,
+		arg.FxReferenceDate,
 		arg.FxRateSource,
 		arg.FxRateObservedAt,
 		arg.EvidenceIpCountry,
@@ -604,7 +643,8 @@ INSERT INTO purser.simplified_invoices (
     invoice_number, tenant_id, reference_type, reference_id,
     gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
     vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-    currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
+    currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
+    fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
@@ -616,14 +656,16 @@ INSERT INTO purser.simplified_invoices (
     $7, $8,
     $9, $10::text::date,
     $11::text::date, $12,
-    $13, $14, $15,
-    $16, $17,
-    $18, $19,
-    $20, $21,
-    $22, $23,
-    $24, $25, $26,
-    $27, $28,
-    $29, CURRENT_DATE, NOW()
+    $13, $14,
+    $15::bigint, $16::bigint,
+    $17::text::numeric, $18::date,
+    $19, $20,
+    $21, $22,
+    $23, $24,
+    $25, $26,
+    $27, $28, $29,
+    $30, $31,
+    $32, CURRENT_DATE, NOW()
 )
 `
 
@@ -642,7 +684,10 @@ type InsertSimplifiedCryptoTopupInvoiceParams struct {
 	TaxValidationStatus        string         `db:"tax_validation_status" json:"tax_validation_status"`
 	Currency                   string         `db:"currency" json:"currency"`
 	AmountEurCents             int64          `db:"amount_eur_cents" json:"amount_eur_cents"`
-	EcbRate                    sql.NullString `db:"ecb_rate" json:"ecb_rate"`
+	NetEurCents                int64          `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64          `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 	FxRateSource               sql.NullString `db:"fx_rate_source" json:"fx_rate_source"`
 	FxRateObservedAt           sql.NullTime   `db:"fx_rate_observed_at" json:"fx_rate_observed_at"`
 	EvidenceIpCountry          sql.NullString `db:"evidence_ip_country" json:"evidence_ip_country"`
@@ -675,7 +720,10 @@ func (q *Queries) InsertSimplifiedCryptoTopupInvoice(ctx context.Context, arg In
 		arg.TaxValidationStatus,
 		arg.Currency,
 		arg.AmountEurCents,
-		arg.EcbRate,
+		arg.NetEurCents,
+		arg.VatEurCents,
+		arg.FxUnitsPerEur,
+		arg.FxReferenceDate,
 		arg.FxRateSource,
 		arg.FxRateObservedAt,
 		arg.EvidenceIpCountry,
@@ -982,6 +1030,35 @@ type RecordX402EmbeddedBroadcastOutcomeParams struct {
 
 func (q *Queries) RecordX402EmbeddedBroadcastOutcome(ctx context.Context, arg RecordX402EmbeddedBroadcastOutcomeParams) error {
 	_, err := q.db.ExecContext(ctx, recordX402EmbeddedBroadcastOutcome, arg.State, arg.Detail, arg.SettlementID)
+	return err
+}
+
+const recordX402SettlementConfirmedAfterQuoteExpiry = `-- name: RecordX402SettlementConfirmedAfterQuoteExpiry :exec
+INSERT INTO purser.crypto_accounting_anomalies (
+    tenant_id, kind, network, reference_type, reference_id,
+    amount_cents, currency, detail, evidence_json
+)
+SELECT nonce.tenant_id, 'x402_settlement_confirmed_after_quote_expiry', nonce.network,
+       'x402_nonce', nonce.id::text, nonce.amount_cents, quote.credit_currency,
+       'x402 settlement confirmed after its quote expired; credited at the quoted amount',
+       jsonb_build_object(
+           'quote_id', quote.id::text,
+           'quote_expires_at', quote.expires_at,
+           'usd_per_eur_rate', quote.fx_units_per_eur::text,
+           'fx_reference_date', quote.fx_reference_date,
+           'tx_hash', nonce.tx_hash
+       )
+FROM purser.x402_nonces nonce
+JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
+WHERE nonce.id = $1::text::uuid
+  AND quote.expires_at < NOW()
+ON CONFLICT (kind, reference_type, reference_id) DO NOTHING
+`
+
+// The settlement keeps the amount fixed by its quote; confirming it after the
+// quote expired is recorded for accounting review instead of re-pricing.
+func (q *Queries) RecordX402SettlementConfirmedAfterQuoteExpiry(ctx context.Context, nonceID string) error {
+	_, err := q.db.ExecContext(ctx, recordX402SettlementConfirmedAfterQuoteExpiry, nonceID)
 	return err
 }
 

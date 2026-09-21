@@ -24,7 +24,7 @@ func newMockQuartermasterServer(t *testing.T) (*QuartermasterServer, *sql.DB, sq
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return &QuartermasterServer{db: db, logger: logrus.New()}, db, mock
+	return &QuartermasterServer{db: db, logger: logrus.New(), eventTokenHasher: testEventTokenHasher(t)}, db, mock
 }
 
 func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {

@@ -10,12 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph"
 	"frameworks/api_gateway/graph/generated"
+	"frameworks/api_gateway/internal/appconfig"
 	"frameworks/api_gateway/internal/clients"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/handlers"
@@ -23,12 +23,11 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/api_gateway/internal/webhooks"
-	pkgauth "github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
@@ -57,32 +56,53 @@ func main() {
 
 	logger.Info("Starting Bridge GraphQL Gateway")
 
-	skills := loadSkillFiles(logger)
+	configOptions := config.Options{Service: "bridge", Logger: logger}
+	cfg, err := config.Load[appconfig.Bridge](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	liveConfig := config.NewLive(cfg, configOptions)
+	serviceToken := cfg.ServiceToken
+	jwtSecret := cfg.JWTSecret
+
+	skills := loadSkillFiles(logger, cfg.SkillFilesDir, cfg.X402GasWalletAddress)
 
 	// Initialize service clients (all gRPC-based)
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	serviceClients, err := clients.NewServiceClients(clients.Config{
-		ServiceToken: serviceToken,
-		JWTSecret:    []byte(jwtSecret),
-		Logger:       logger,
-	})
+	serviceClients, err := clients.NewServiceClients(serviceClientsConfig(cfg, logger))
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize service clients")
 	}
 
 	// Initialize auth handlers (gRPC-based)
-	authHandlers := handlers.NewAuthHandlers(serviceClients.Commodore, logger)
+	authHandlers := handlers.NewAuthHandlers(serviceClients.Commodore, logger, handlers.AuthConfig{
+		CookieDomain: cfg.CookieDomain,
+		Runtime: func() handlers.AuthRuntime {
+			current := liveConfig.Get()
+			return handlers.AuthRuntime{
+				SecureCookies:   !current.IsDevelopment(),
+				WebappPublicURL: current.WebappPublicURL,
+			}
+		},
+	})
 
 	// Initialize rate limiter with tenant cache (fetches limits from Quartermaster)
 	rateLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
 		Logger: logger,
+		Settings: func() middleware.AccessSettings {
+			current := liveConfig.Get()
+			return middleware.AccessSettings{
+				PublicLimitPerMinute: current.PublicRateLimitPerMinute,
+				PublicBurst:          current.PublicRateLimitBurst,
+				DocsPublicURL:        current.DocsPublicURL,
+			}
+		},
 	})
 	defer rateLimiter.Stop()
 
 	tenantCache := middleware.NewTenantCache(serviceClients.Quartermaster, logger)
 
-	usageHashSecret := config.GetEnv("USAGE_HASH_SECRET", "")
+	usageHashSecret := cfg.UsageHashSecret
 	middleware.InitHasher(usageHashSecret)
 	if usageHashSecret == "" {
 		logger.Warn("USAGE_HASH_SECRET not set; using ephemeral random secret (hashes will not survive restarts)")
@@ -92,15 +112,15 @@ func main() {
 	usageTracker := middleware.NewUsageTracker(middleware.UsageTrackerConfig{
 		Decklog:    serviceClients.Decklog,
 		Logger:     logger,
-		SourceNode: config.GetEnv("HOSTNAME", "bridge"),
+		SourceNode: cfg.SourceNode,
 	})
 	defer usageTracker.Stop()
 
-	// Env-backed so a SIGHUP env reload takes effect, and so Bridge and Foghorn
-	// cannot drift apart on who a caller is after a change.
+	// Read through the live config so a SIGHUP env-file reload takes effect, and
+	// so Bridge and Foghorn cannot drift apart on who a caller is after a change.
 	trustedProxies := middleware.TrustedProxiesFromEnv(
 		"TRUSTED_PROXY_CIDRS",
-		func(key string) string { return config.GetEnv(key, "") },
+		func(string) string { return liveConfig.Get().TrustedProxyCIDRs },
 		func(invalid []string) {
 			logger.WithField("invalid_entries", strings.Join(invalid, ", ")).
 				Warn("Ignoring invalid trusted proxy entries")
@@ -108,21 +128,15 @@ func main() {
 	)
 
 	// Parse CORS allowed origins for WebSocket CheckOrigin
-	wsDevMode := config.GetEnv("GIN_MODE", "debug") != "release"
+	wsDevMode := !cfg.Release()
 	wsAllowedOrigins := make(map[string]bool)
 	var wsWildcardSuffixes []string
-	if originsStr := config.GetEnv("ALLOWED_ORIGINS", ""); originsStr != "" {
-		for _, o := range strings.Split(originsStr, ",") {
-			trimmed := strings.TrimSpace(o)
-			if trimmed == "" {
-				continue
-			}
-			trimmed = strings.TrimRight(trimmed, "/")
-			if strings.HasPrefix(trimmed, "*.") {
-				wsWildcardSuffixes = append(wsWildcardSuffixes, trimmed[1:])
-			} else {
-				wsAllowedOrigins[trimmed] = true
-			}
+	for _, origin := range cfg.AllowedOrigins {
+		trimmed := strings.TrimRight(origin, "/")
+		if strings.HasPrefix(trimmed, "*.") {
+			wsWildcardSuffixes = append(wsWildcardSuffixes, trimmed[1:])
+		} else {
+			wsAllowedOrigins[trimmed] = true
 		}
 	}
 	originAllowed := func(origin string) bool {
@@ -144,11 +158,9 @@ func main() {
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("bridge", version.Version, version.GitCommit)
 
-	// Add health checks (all internal services are now gRPC)
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"JWT_SECRET":    jwtSecret,
-		"SERVICE_TOKEN": serviceToken,
-	}))
+	// Bridge owns no datastore and reaches every service lazily over gRPC, so
+	// readiness reports serving until shutdown starts.
+	readiness := monitoring.NewReadinessChecker("bridge", version.Version)
 
 	// Create custom GraphQL metrics. signalman_streams_active tracks upstream
 	// bridge→Signalman subscription streams per tenant (not browser WS);
@@ -165,7 +177,8 @@ func main() {
 	}
 
 	// Initialize GraphQL resolver and server
-	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, serviceToken)
+	resolverCfg := resolverConfig(liveConfig)
+	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
 
 	// Setup complexity functions for pagination-aware query cost calculation
 	var complexity generated.ComplexityRoot
@@ -198,7 +211,7 @@ func main() {
 	// Add query complexity limit to prevent expensive queries. Cost is computed with
 	// scalar/enum leaves valued at zero, so it reflects object structure and per-row
 	// fetch work rather than how many cheap scalars a row projects (see graph package).
-	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 1000)
+	complexityLimit := cfg.GraphQLComplexityLimit
 	if complexityLimit > 0 {
 		gqlHandler.Use(&graph.ScalarFreeComplexityLimit{
 			Func: func(_ context.Context, opCtx *graphql.OperationContext) int {
@@ -212,7 +225,7 @@ func main() {
 	}
 
 	// Add query depth limit to prevent deeply nested queries
-	maxDepth := config.GetEnvInt("GRAPHQL_MAX_DEPTH", 10)
+	maxDepth := cfg.GraphQLMaxDepth
 	if maxDepth > 0 {
 		gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
 			if !graphql.HasOperationContext(ctx) {
@@ -252,6 +265,7 @@ func main() {
 					if opCtx := graphql.GetOperationContext(ctx); opCtx.Operation != nil {
 						ginCtx.Set(string(ctxkeys.KeyGraphQLOperationType), string(opCtx.Operation.Operation))
 						ginCtx.Set(string(ctxkeys.KeyGraphQLOperationName), opCtx.Operation.Name)
+						ginCtx.Set(string(ctxkeys.KeyGraphQLRootFields), middleware.GraphQLRootFields(ctx))
 					}
 				}
 				if stats := extension.GetComplexityStats(ctx); stats != nil {
@@ -272,6 +286,7 @@ func main() {
 			tenantID, authType, userID, tokenHash := extractUsageContext(ctx)
 			opName := opCtx.Operation.Name
 			opType := string(opCtx.Operation.Operation)
+			rootFields := middleware.GraphQLRootFields(ctx)
 			complexity := uint32(0)
 			if stats := extension.GetComplexityStats(ctx); stats != nil {
 				complexity = uint32(stats.Complexity)
@@ -279,7 +294,7 @@ func main() {
 			go func(subCtx context.Context) {
 				<-subCtx.Done()
 				durationMs := time.Since(start).Milliseconds()
-				usageTracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
+				usageTracker.Record(start, tenantID, authType, opType, opName, rootFields, userID, tokenHash, uint64(durationMs), complexity, 0)
 			}(ctx)
 		}
 		return next(ctx)
@@ -292,138 +307,24 @@ func main() {
 	// Add transport options
 	gqlHandler.AddTransport(transport.POST{})
 	gqlHandler.AddTransport(transport.GET{})
-	gqlHandler.AddTransport(transport.Websocket{
-		KeepAlivePingInterval: 10 * time.Second,
-		Upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return originAllowed(r.Header.Get("Origin"))
-			},
+	gqlHandler.AddTransport(middleware.GraphQLWebsocketTransport(serviceClients, []byte(jwtSecret), logger, websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return originAllowed(r.Header.Get("Origin"))
 		},
-		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
-			// Try to get token from connectionParams first, then fall back to cookie in context
-			var token string
-
-			// 1. Try connectionParams.Authorization (for clients that can pass tokens)
-			authHeader := initPayload.Authorization()
-			if authHeader != "" {
-				parts := strings.Split(authHeader, " ")
-				if len(parts) == 2 && parts[0] == "Bearer" {
-					token = parts[1]
-				}
-			}
-
-			// 2. Fall back to cookie token passed via Gin context
-			if token == "" {
-				if cookieToken, ok := ctx.Value(ctxkeys.KeyWSCookieToken).(string); ok && cookieToken != "" {
-					token = cookieToken
-				}
-			}
-
-			// 3. Wallet auth via original HTTP request headers
-			if token == "" {
-				if req, ok := ctx.Value(ctxkeys.KeyHTTPRequest).(*http.Request); ok && req != nil {
-					walletAddress := req.Header.Get("X-Wallet-Address")
-					if walletAddress != "" {
-						signature := req.Header.Get("X-Wallet-Signature")
-						message := req.Header.Get("X-Wallet-Message")
-						if signature != "" && message != "" {
-							resp, walletErr := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature, nil)
-							if walletErr == nil && resp != nil && resp.User != nil {
-								email := ""
-								if resp.User.Email != nil {
-									email = *resp.User.Email
-								}
-								ctx = context.WithValue(ctx, ctxkeys.KeyUserID, resp.User.Id)
-								ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, resp.User.TenantId)
-								ctx = context.WithValue(ctx, ctxkeys.KeyEmail, email)
-								ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.User.Role)
-								ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "wallet")
-								ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, walletAddress)
-								if resp.Token != "" {
-									ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, resp.Token)
-								}
-
-								if resp.User.PlatformOperator {
-									ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
-								}
-								user := &middleware.UserContext{
-									UserID:           resp.User.Id,
-									TenantID:         resp.User.TenantId,
-									Email:            email,
-									Role:             resp.User.Role,
-									PlatformOperator: resp.User.PlatformOperator,
-								}
-								ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
-								return ctx, &initPayload, nil
-							}
-						}
-					}
-				}
-			}
-
-			if token != "" {
-				// Try JWT validation
-				claims, claimsErr := pkgauth.ValidateInteractiveJWT(token, []byte(jwtSecret))
-				if claimsErr == nil {
-					ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
-					ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
-					ctx = context.WithValue(ctx, ctxkeys.KeyEmail, claims.Email)
-					ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
-					ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
-					ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
-
-					platformOperator := claims.HasRole(pkgauth.RolePlatformOperator)
-					if platformOperator {
-						ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
-					}
-					user := &middleware.UserContext{
-						UserID:           claims.UserID,
-						TenantID:         claims.TenantID,
-						Email:            claims.Email,
-						Role:             claims.Role,
-						PlatformOperator: platformOperator,
-					}
-					ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
-				} else {
-					// Try API Token via Commodore
-					resp, apiErr := serviceClients.Commodore.ValidateAPIToken(ctx, token)
-					if apiErr == nil && resp.Valid {
-						ctx = context.WithValue(ctx, ctxkeys.KeyUserID, resp.UserId)
-						ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, resp.TenantId)
-						ctx = context.WithValue(ctx, ctxkeys.KeyEmail, resp.Email)
-						ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.Role)
-						ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "api_token")
-						ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, token)
-						ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, resp.TokenId)
-						if resp.TokenId != "" {
-							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(resp.TokenId))
-						} else {
-							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(token))
-						}
-						if len(resp.Permissions) > 0 {
-							ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, resp.Permissions)
-						}
-						// API tokens do not inherit platform-operator authority
-						// (see auth_request.go); operator power requires an
-						// interactive JWT session, not a programmatic credential.
-						user := &middleware.UserContext{
-							UserID:      resp.UserId,
-							TenantID:    resp.TenantId,
-							Email:       resp.Email,
-							Role:        resp.Role,
-							Permissions: resp.Permissions,
-						}
-						ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
-					}
-				}
-			}
-
-			return ctx, &initPayload, nil
-		},
-	})
+	}, 10*time.Second))
 
 	// Setup router with unified monitoring
-	app := server.SetupServiceRouter(logger, "bridge", healthChecker, metricsCollector)
+	app := server.NewServiceRouter(server.RouterSpec{
+		Service:            "bridge",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         serviceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
 
 	// Public API routes (no auth required)
 	{
@@ -598,7 +499,7 @@ func main() {
 	// verifies the telemetry token. Boot (one-shot startup) and session
 	// (viewer-experienced QoE deltas) beacons share one intake/cache.
 	{
-		telemetrySecret := []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", ""))
+		telemetrySecret := []byte(cfg.TelemetryTokenSecret)
 		if len(telemetrySecret) == 0 {
 			logger.Warn("TELEMETRY_TOKEN_SECRET not set; player telemetry will not include serving-cluster attribution")
 		}
@@ -631,7 +532,7 @@ func main() {
 	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.
 	// No auth middleware - signature verification happens in the target service.
 	// Route pattern: /webhooks/{service}/{provider}
-	webhookRouter := webhooks.NewRouter(logger)
+	webhookRouter := webhooks.NewRouter(logger, cfg.WebhookRateLimitPerMin)
 	webhookRouter.RegisterService("billing", serviceClients.Purser) // Stripe, Mollie webhooks
 	{
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/webhooks/:service/:provider", webhookRouter.Handle)
@@ -675,7 +576,7 @@ func main() {
 			gqlHandler.ServeHTTP(c.Writer, c.Request)
 		})
 		// Enable playground based on explicit config or GIN_MODE (default: enabled in non-release mode)
-		playgroundEnabled := config.GetEnvBool("GRAPHQL_PLAYGROUND_ENABLED", config.GetEnv("GIN_MODE", "debug") != "release")
+		playgroundEnabled := cfg.PlaygroundEnabled()
 		if playgroundEnabled {
 			server.HandleOptionalTrailingSlash(app, http.MethodGet, "/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
 			logger.Info("GraphQL Playground enabled at /graphql/playground")
@@ -687,7 +588,7 @@ func main() {
 	// Lazy-connect to Skipper spoke MCP for proxying ask_consultant.
 	// The actual connection is deferred until the first tool call so bridge can
 	// start before skipper without losing tool registrations.
-	skipperSpokeURL := config.GetEnv("SKIPPER_SPOKE_URL", "http://skipper:18018/mcp/spoke")
+	skipperSpokeURL := cfg.SkipperSpokeURL
 	skipperClient := mcpserver.NewLazySkipperClient(mcpserver.SkipperClientConfig{
 		SpokeURL:     skipperSpokeURL,
 		ServiceToken: serviceToken,
@@ -698,16 +599,17 @@ func main() {
 	// MCP (Model Context Protocol) endpoint for AI agent access
 	// Auth is handled inside the MCP server via request headers
 	mcpServer, err := mcpserver.NewServer(mcpserver.Config{
-		ServiceClients: serviceClients,
-		Resolver:       resolver.Resolver,
-		Logger:         logger,
-		JWTSecret:      []byte(jwtSecret),
-		RateLimiter:    rateLimiter,
-		TenantCache:    tenantCache,
-		UsageTracker:   usageTracker,
-		TrustedProxies: trustedProxies,
-		SkipperClient:  skipperClient,
-		OriginAllowed:  originAllowed,
+		ServiceClients:    serviceClients,
+		Resolver:          resolver.Resolver,
+		Logger:            logger,
+		JWTSecret:         []byte(jwtSecret),
+		RateLimiter:       rateLimiter,
+		TenantCache:       tenantCache,
+		UsageTracker:      usageTracker,
+		TrustedProxies:    trustedProxies,
+		SkipperClient:     skipperClient,
+		OriginAllowed:     originAllowed,
+		GatewayGraphQLURL: cfg.GatewayGraphQLURL(),
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize MCP server")
@@ -716,39 +618,25 @@ func main() {
 	app.Any("/mcp/*path", gin.WrapH(mcpServer.HTTPHandler()))
 	logger.Info("MCP endpoint enabled at /mcp")
 
-	// Use standard server startup with graceful shutdown
-	serverConfig := server.DefaultConfig("bridge", "18000")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Best-effort service registration in Quartermaster (gRPC, before server starts)
+	// Best-effort service registration in Quartermaster (gRPC)
 	go func() {
-		port, _ := strconv.Atoi(serverConfig.Port)
-		if port <= 0 || port > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "bridge",
+			Port:          cfg.Port,
+			AdvertiseHost: cfg.AdvertiseHost,
+			ClusterID:     cfg.ClusterID,
+			NodeID:        cfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		healthEndpoint := "/health"
-		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "bridge",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(port),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		resp, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("bridge"))
-		if err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (bridge) failed")
+		resp, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, serviceClients.Quartermaster, req, logger, qmbootstrap.DefaultRetryConfig("bridge"))
+		if bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (bridge) failed")
 		} else {
 			if resp != nil && resp.GetOwnerTenantId() != "" {
 				usageTracker.SetServiceTenantID(resp.GetOwnerTenantId())
@@ -758,15 +646,92 @@ func main() {
 		}
 	}()
 
-	// Start server with standard graceful shutdown handling
 	server.RegisterEnvFileReload("bridge", logger)
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.Fatal("Failed to start server: " + err.Error())
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service:  "bridge",
+		Logger:   logger,
+		Ready:    readiness,
+		HTTP:     []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: app}},
+		OnReload: []server.ReloadCallback{liveConfig.Reload},
+		OnShutdown: []func(context.Context){func(context.Context) {
+			// Shutdown the resolver to clean up WebSocket connections
+			if shutdownErr := resolver.Shutdown(); shutdownErr != nil {
+				logger.WithError(shutdownErr).Error("Error shutting down resolver")
+			}
+		}},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
+}
 
-	// Shutdown the resolver to clean up WebSocket connections
-	if err := resolver.Shutdown(); err != nil {
-		logger.Error("Error shutting down resolver: " + err.Error())
+func seconds(n int) time.Duration {
+	return time.Duration(n) * time.Second
+}
+
+// serviceClientsConfig builds the downstream gRPC client configuration. The
+// clients are dialed once at startup.
+func serviceClientsConfig(cfg *appconfig.Bridge, logger logging.Logger) clients.Config {
+	return clients.Config{
+		ServiceToken:  cfg.ServiceToken,
+		JWTSecret:     []byte(cfg.JWTSecret),
+		Logger:        logger,
+		AllowInsecure: cfg.GRPCAllowInsecure,
+		CACertFile:    cfg.GRPCTLSCAPath,
+		Commodore:     clients.Endpoint{Addr: cfg.CommodoreGRPCAddr, TLSServerName: cfg.CommodoreGRPCTLSServerName},
+		Periscope:     clients.Endpoint{Addr: cfg.PeriscopeGRPCAddr, TLSServerName: cfg.PeriscopeGRPCTLSServerName},
+		Purser:        clients.Endpoint{Addr: cfg.PurserGRPCAddr, TLSServerName: cfg.PurserGRPCTLSServerName},
+		Quartermaster: clients.Endpoint{Addr: cfg.QuartermasterGRPCAddr, TLSServerName: cfg.QuartermasterGRPCTLSServerName},
+		Signalman:     clients.Endpoint{Addr: cfg.SignalmanGRPCAddr, TLSServerName: cfg.SignalmanGRPCTLSServerName},
+		Decklog:       clients.Endpoint{Addr: cfg.DecklogGRPCAddr, TLSServerName: cfg.DecklogGRPCTLSServerName},
+		Navigator:     clients.Endpoint{Addr: cfg.NavigatorGRPCAddr, TLSServerName: cfg.NavigatorGRPCTLSServerName},
+		Deckhand:      clients.Endpoint{Addr: cfg.DeckhandGRPCAddr, TLSServerName: cfg.DeckhandGRPCTLSServerName},
+		Skipper:       clients.Endpoint{Addr: cfg.SkipperGRPCAddr, TLSServerName: cfg.SkipperGRPCTLSServerName},
+		Lookout:       clients.Endpoint{Addr: cfg.LookoutGRPCAddr, TLSServerName: cfg.LookoutGRPCTLSServerName},
+		Bosun:         clients.Endpoint{Addr: cfg.BosunGRPCAddr, TLSServerName: cfg.BosunGRPCTLSServerName},
+		QuartermasterCache: cache.Options{
+			TTL:                  seconds(cfg.QuartermasterCacheTTLSeconds),
+			StaleWhileRevalidate: seconds(cfg.QuartermasterCacheSWRSeconds),
+			NegativeTTL:          seconds(cfg.QuartermasterCacheNegTTLSeconds),
+			MaxEntries:           cfg.QuartermasterCacheMax,
+		},
+		ClusterID: cfg.ClusterID,
+		Region:    cfg.Region,
+	}
+}
+
+// resolverConfig builds the GraphQL resolver configuration. streamingConfig
+// values are read from the live snapshot at use time; everything else,
+// including the pooled Signalman dialer settings, is fixed at startup.
+func resolverConfig(live *config.Live[appconfig.Bridge]) resolvers.ResolverConfig {
+	cfg := live.Get()
+	return resolvers.ResolverConfig{
+		ServiceToken:              cfg.ServiceToken,
+		SignalmanAddr:             cfg.SignalmanGRPCAddr,
+		SignalmanAddrs:            cfg.SignalmanGRPCAddrs,
+		MaxSubscriptionsPerTenant: cfg.WSMaxSubscriptionsPerTenant,
+		SignalmanDial: resolvers.SignalmanDialSettings{
+			OpenTimeout:   seconds(cfg.SignalmanConnectTimeoutSecs),
+			AllowInsecure: cfg.GRPCAllowInsecure,
+			CACertFile:    cfg.GRPCTLSCAPath,
+			TLSServerName: cfg.SignalmanGRPCTLSServerName,
+		},
+		PeriscopeCache: cache.Options{
+			TTL:                  seconds(cfg.PeriscopeCacheTTLSeconds),
+			StaleWhileRevalidate: seconds(cfg.PeriscopeCacheSWRSeconds),
+			NegativeTTL:          seconds(cfg.PeriscopeCacheNegTTLSeconds),
+			MaxEntries:           cfg.PeriscopeCacheMax,
+		},
+		PeriscopeLoadTimeout: seconds(cfg.PeriscopeCacheLoadTimeoutSeconds),
+		TelemetrySecret:      []byte(cfg.TelemetryTokenSecret),
+		LocalClusterID:       cfg.ClusterID,
+		Streaming: func() resolvers.StreamingSettings {
+			current := live.Get()
+			return resolvers.StreamingSettings{
+				SRTPort:    current.StreamingSRTPort,
+				RTMPPort:   current.StreamingRTMPPort,
+				RootDomain: current.PlatformRootDomain,
+			}
+		},
 	}
 }
 
@@ -811,10 +776,13 @@ type skillFiles struct {
 	oauthPRM    []byte
 }
 
-func loadSkillFiles(logger logging.Logger) skillFiles {
+// loadSkillFiles finds the agent discovery files. configuredDir (SKILL_FILES_DIR)
+// is checked before the built-in candidates; gasWalletAddress is substituted
+// into did.json.
+func loadSkillFiles(logger logging.Logger, configuredDir, gasWalletAddress string) skillFiles {
 	candidates := []string{}
-	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
-		candidates = append(candidates, envDir)
+	if explicitDir := strings.TrimSpace(configuredDir); explicitDir != "" {
+		candidates = append(candidates, explicitDir)
 	}
 	candidates = append(candidates, ".", "/app", "docs/skills", "../docs/skills")
 
@@ -855,7 +823,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	}
 
 	if sf.didJSON != nil {
-		if addr := strings.TrimSpace(os.Getenv("X402_GAS_WALLET_ADDRESS")); addr != "" {
+		if addr := strings.TrimSpace(gasWalletAddress); addr != "" {
 			sf.didJSON = bytes.ReplaceAll(sf.didJSON, []byte("{{X402_GAS_WALLET_ADDRESS}}"), []byte(addr))
 		} else {
 			var doc map[string]interface{}

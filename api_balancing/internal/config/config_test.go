@@ -4,49 +4,40 @@ import (
 	"reflect"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
+
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 )
 
-func clearRedisEnv(t *testing.T) {
-	t.Helper()
-	for _, key := range []string{
-		"REDIS_URL",
-		"REDIS_MODE",
-		"REDIS_ADDRS",
-		"REDIS_MASTER_NAME",
-		"REDIS_USERNAME",
-		"REDIS_PASSWORD",
-		"REDIS_SENTINEL_USERNAME",
-		"REDIS_SENTINEL_PASSWORD",
-	} {
-		t.Setenv(key, "")
-	}
-}
-
-func TestLoadSingleNodeRedisURL(t *testing.T) {
-	clearRedisEnv(t)
-	t.Setenv("REDIS_URL", "redis://foghorn-redis:6379/0")
-
-	cfg := Load()
+func TestNewSingleNodeRedisURL(t *testing.T) {
+	cfg := New(&appconfig.Foghorn{FoghornRedis: appconfig.FoghornRedis{RedisURL: "redis://foghorn-redis:6379/0"}})
 	if cfg.RedisURL != "redis://foghorn-redis:6379/0" {
 		t.Fatalf("RedisURL = %q", cfg.RedisURL)
 	}
 	if cfg.Redis.Mode != "" || len(cfg.Redis.Addrs) != 0 {
 		t.Fatalf("topology config unexpectedly populated: %+v", cfg.Redis)
 	}
+	if cfg.ClusterID != "default" {
+		t.Fatalf("ClusterID = %q, want default for an unset CLUSTER_ID", cfg.ClusterID)
+	}
 }
 
-func TestLoadSentinelRedisTopology(t *testing.T) {
-	clearRedisEnv(t)
-	t.Setenv("REDIS_MODE", "sentinel")
-	t.Setenv("REDIS_ADDRS", "sentinel-1:26379,sentinel-2:26379,sentinel-3:26379")
-	t.Setenv("REDIS_MASTER_NAME", "foghorn")
-	t.Setenv("REDIS_USERNAME", "foghorn-app")
-	t.Setenv("REDIS_PASSWORD", "data-secret")
-	t.Setenv("REDIS_SENTINEL_USERNAME", "sentinel-app")
-	t.Setenv("REDIS_SENTINEL_PASSWORD", "sentinel-secret")
-
-	cfg := Load()
+func TestNewSentinelRedisTopology(t *testing.T) {
+	cfg := New(&appconfig.Foghorn{
+		ClusterID: "media-eu-1",
+		FoghornRedis: appconfig.FoghornRedis{
+			RedisMode:             "sentinel",
+			RedisAddrs:            []string{"sentinel-1:26379", "sentinel-2:26379", "sentinel-3:26379"},
+			RedisMasterName:       "foghorn",
+			RedisUsername:         "foghorn-app",
+			RedisPassword:         "data-secret",
+			RedisSentinelUsername: "sentinel-app",
+			RedisSentinelPassword: "sentinel-secret",
+		},
+	})
+	if cfg.ClusterID != "media-eu-1" {
+		t.Fatalf("ClusterID = %q", cfg.ClusterID)
+	}
 	if cfg.Redis.Mode != pkgredis.ModeSentinel {
 		t.Fatalf("Mode = %q", cfg.Redis.Mode)
 	}

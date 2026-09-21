@@ -5,33 +5,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
+// Config is the notification delivery configuration built from Skipper's
+// typed startup configuration.
 type Config struct {
 	SMTP               email.Config
+	Branding           config.EmailBranding
+	BrandingSource     func() config.EmailBranding
 	DefaultPreferences PreferenceDefaults
 	DefaultRecipient   string
 	WebAppURL          string
-}
-
-func LoadConfig() Config {
-	fromEmail := config.GetEnv("FROM_EMAIL", "noreply@frameworks.network")
-	fromName := config.GetEnv("FROM_NAME", "FrameWorks")
-
-	return Config{
-		SMTP: email.Config{
-			Host:          config.GetEnv("SMTP_HOST", ""),
-			Port:          config.GetEnv("SMTP_PORT", "587"),
-			User:          config.GetEnv("SMTP_USER", ""),
-			Password:      config.GetEnv("SMTP_PASSWORD", ""),
-			From:          fromEmail,
-			FromName:      fromName,
-			AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
-		},
-		DefaultPreferences: PreferenceDefaults{
-			Email:     config.GetEnvBool("SKIPPER_NOTIFY_EMAIL", false),
-			Websocket: config.GetEnvBool("SKIPPER_NOTIFY_WEBSOCKET", true),
-			MCP:       config.GetEnvBool("SKIPPER_NOTIFY_MCP", true),
-		},
-		DefaultRecipient: config.GetEnv("TO_EMAIL", ""),
-		WebAppURL:        config.GetEnv("WEBAPP_PUBLIC_URL", ""),
-	}
 }

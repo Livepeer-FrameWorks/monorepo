@@ -58,7 +58,7 @@ func TestDefaultAuthorizerUnknownActionDenies(t *testing.T) {
 }
 
 func TestDefaultAuthorizerTenantLifecycleActions(t *testing.T) {
-	actions := []Action{ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionReadPrivateInfrastructure}
+	actions := []Action{ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionManageWebhooks, ActionReadPrivateInfrastructure}
 	cases := []struct {
 		name string
 		id   Identity

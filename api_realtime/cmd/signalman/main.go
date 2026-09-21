@@ -3,23 +3,24 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_realtime/internal/appconfig"
 	signalmangrpc "frameworks/api_realtime/internal/grpc"
 	"frameworks/api_realtime/internal/metrics"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
@@ -47,6 +48,13 @@ func main() {
 
 	logger.Info("Starting Signalman (Real-time Event Hub)")
 
+	configOptions := config.Options{Service: "signalman", Logger: logger}
+	cfg, err := config.Load[appconfig.Signalman](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("signalman", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("signalman", version.Version, version.GitCommit)
@@ -62,13 +70,13 @@ func main() {
 	// Create Kafka metrics
 	serviceMetrics.KafkaMessages, serviceMetrics.KafkaDuration, serviceMetrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
 	serviceMetrics.KafkaDuplicateEvents = metricsCollector.NewCounter("kafka_duplicate_events_total", "Kafka events dropped because their event ID was already broadcast", []string{"topic"})
+	serviceMetrics.DomainEventsDropped = metricsCollector.NewCounter("domain_events_dropped_total", "domain.events records withheld from tenant subscribers", []string{"reason"})
 
 	// Initialize gRPC server
 	signalmanServer := signalmangrpc.NewSignalmanServer(logger, serviceMetrics)
 	grpcHub := signalmanServer.GetHub()
-	maxConnectionsPerTenant := config.GetEnvInt("SIGNALMAN_MAX_CONNECTIONS_PER_TENANT", 0)
-	if maxConnectionsPerTenant > 0 {
-		grpcHub.SetMaxConnectionsPerTenant(maxConnectionsPerTenant)
+	if cfg.MaxConnectionsPerTenant > 0 {
+		grpcHub.SetMaxConnectionsPerTenant(cfg.MaxConnectionsPerTenant)
 	}
 
 	// Setup Kafka consumer. Signalman runs N replicas per region with one
@@ -76,37 +84,27 @@ func main() {
 	// KAFKA_GROUP_ID=signalman-{host}) so every replica receives every event
 	// for broadcast fanout. A fresh group has no committed offsets, so reset
 	// must be `latest` to avoid replaying retained history to live clients.
-	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
-	groupID := config.GetEnv("KAFKA_GROUP_ID", "signalman-group")
-	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
-	clientID := config.GetEnv("KAFKA_CLIENT_ID", "signalman")
-	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", topology.TopicAnalyticsEvents)
-	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", topology.TopicServiceEvents)
-	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", topology.TopicDecklogDLQ)
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	analyticsTopic := cfg.AnalyticsTopic
+	serviceEventsTopic := cfg.ServiceEventsTopic
+	dlqTopic := cfg.DLQTopic
 
 	consumerOpts := []kafka.ConsumerOption{
 		kafka.WithLagTracker(kafka.LagTrackerConfig{Gauge: serviceMetrics.KafkaLag}),
 	}
-	if strings.EqualFold(config.GetEnv("KAFKA_CONSUME_RESET_OFFSET", "latest"), "latest") {
+	if cfg.ResetOffsetLatest() {
 		consumerOpts = append(consumerOpts, kafka.WithResetOffsetLatest())
 	}
 
-	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger, consumerOpts...)
+	consumer, err := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaGroupID, cfg.KafkaClusterID, cfg.KafkaClientID, logger, consumerOpts...)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize Kafka consumer")
 	}
-	defer consumer.Close()
 
 	var dlqProducer *kafka.KafkaProducer
-	dlqProducer, err = kafka.NewKafkaProducer(brokers, dlqTopic, clusterID, logger)
+	dlqProducer, err = kafka.NewKafkaProducer(cfg.KafkaBrokers, dlqTopic, cfg.KafkaClusterID, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
 		dlqProducer = nil
-	} else {
-		defer dlqProducer.Close()
 	}
 
 	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
@@ -151,6 +149,8 @@ func main() {
 					headers["tenant_id"] = tenantID
 				}
 				if eventType, ok := msg.Headers["event_type"]; ok {
+					headers["event_type"] = eventType
+				} else if eventType, ok := msg.Headers[events.HeaderType]; ok {
 					headers["event_type"] = eventType
 				}
 
@@ -278,13 +278,16 @@ func main() {
 	// MIRROR_REGION_PREFIXES lists the MirrorMaker2 source aliases whose realtime
 	// topic copies land in this region's Kafka cluster, so subscribers attached
 	// here also receive events produced in other regions.
-	for prefix := range strings.SplitSeq(config.GetEnv("MIRROR_REGION_PREFIXES", ""), ",") {
-		if prefix = strings.TrimSpace(prefix); prefix == "" {
-			continue
-		}
+	for _, prefix := range cfg.MirrorRegionPrefixes {
 		consumer.AddHandler(topology.MirroredTopicName(prefix, analyticsTopic), wrapWithDLQ("signalman-analytics-mirror:"+prefix, analyticsHandler))
 		consumer.AddHandler(topology.MirroredTopicName(prefix, serviceEventsTopic), wrapWithDLQ("signalman-service-mirror:"+prefix, serviceHandler))
 	}
+
+	// Public domain events go to their tenant's CHANNEL_EVENTS subscribers.
+	domainHandler := newDomainEventHandler(grpcHub, newEventIDWindow(signalmanEventDedupCapacity, signalmanEventDedupTTL), serviceMetrics, logger)
+	registerDomainEventSubscriptions(consumer, cfg.MirrorRegionPrefixes, domainHandler, func(name string, handler kafka.Handler) kafka.Handler {
+		return wrapWithDLQ(name, handler)
+	})
 
 	// Add health checks
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
@@ -292,147 +295,181 @@ func main() {
 		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
 	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"KAFKA_BROKERS":           strings.Join(brokers, ","),
-		"KAFKA_TOPICS":            strings.Join([]string{analyticsTopic, serviceEventsTopic}, ","),
+		"KAFKA_BROKERS":           strings.Join(cfg.KafkaBrokers, ","),
+		"KAFKA_TOPICS":            strings.Join([]string{analyticsTopic, serviceEventsTopic, topology.TopicDomainEvents}, ","),
 		"DECKLOG_DLQ_KAFKA_TOPIC": dlqTopic,
 	}))
 
-	// Start Kafka consumer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Readiness carries no dependency checks: a replica without Kafka still
+	// accepts Subscribe streams. It reports draining during shutdown.
+	readiness := monitoring.NewReadinessChecker("signalman", version.Version)
 
+	// HTTP serves health, readiness, and metrics only; realtime traffic is the
+	// gRPC Subscribe stream.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "signalman",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
+	})
+
+	// runCtx ends the process; consumerCtx stops the Kafka consumer. A
+	// consumer failure cancels runCtx so the listeners drain before exit.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
+	defer consumerCancel()
+
+	consumerFailure := make(chan error, 1)
 	go func() {
-		if err := consumer.Start(ctx); err != nil {
-			logger.WithError(err).Fatal("Kafka consumer exited")
+		if err := consumer.Start(consumerCtx); err != nil && !errors.Is(err, context.Canceled) {
+			consumerFailure <- err
+			runCancel()
 		}
 	}()
-
-	// Start gRPC server in a goroutine
-	grpcPort := config.GetEnv("GRPC_PORT", "19005")
-	go func() {
-		grpcAddr := fmt.Sprintf(":%s", grpcPort)
-		lis, err := net.Listen("tcp", grpcAddr)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		// Auth interceptor for service-to-service calls
-		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-			ServiceToken: serviceToken,
-			JWTSecret:    jwtSecret,
-			Logger:       logger,
-			SkipMethods: []string{
-				"/grpc.health.v1.Health/Check",
-				"/grpc.health.v1.Health/Watch",
-			},
-		})
-
-		streamAuthInterceptor := middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
-			ServiceToken: serviceToken,
-			JWTSecret:    jwtSecret,
-			Logger:       logger,
-			SkipMethods: []string{
-				"/grpc.health.v1.Health/Check",
-				"/grpc.health.v1.Health/Watch",
-			},
-		})
-
-		serverOpts := []grpc.ServerOption{
-			grpc.ChainUnaryInterceptor(
-				grpcutil.SanitizeUnaryServerInterceptor(),
-				authInterceptor,
-			),
-			grpc.ChainStreamInterceptor(streamAuthInterceptor),
-		}
-		tlsCfg := grpcutil.ServerTLSConfig{
-			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		}
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
-			logger.WithError(waitErr).Fatal("Timed out waiting for Signalman gRPC TLS files")
-		}
-		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to configure Signalman gRPC TLS")
-		}
-		if tlsOpt != nil {
-			serverOpts = append(serverOpts, tlsOpt)
-		}
-		grpcSrv := grpc.NewServer(serverOpts...)
-		signalmanpb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
-
-		// gRPC health service so Quartermaster's gRPC probe passes
-		hs := health.NewServer()
-		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-		hs.SetServingStatus(signalmanpb.SignalmanService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
-		reflection.Register(grpcSrv)
-
-		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
-		if err := grpcSrv.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
-		}
-	}()
-
-	// Setup HTTP router for health/metrics only
-	router := server.SetupServiceRouter(logger, "signalman", healthChecker, metricsCollector)
-
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("signalman", "18009")
 
 	// Best-effort service registration in Quartermaster (using gRPC)
-	// Must be launched BEFORE server.Start() which blocks
-	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
-			Timeout:       10 * time.Second,
-			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
-			return
-		}
-		defer qc.Close()
-		grpcPortInt, _ := strconv.Atoi(grpcPort)
-		if grpcPortInt <= 0 || grpcPortInt > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
-			return
-		}
-		advertiseHost := config.GetEnv("SIGNALMAN_HOST", "signalman")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:          "signalman",
-			Version:       version.Version,
-			Protocol:      "grpc",
-			Port:          int32(grpcPortInt),
-			AdvertiseHost: &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("signalman")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
-		} else {
-			logger.Info("Quartermaster bootstrap (signalman) ok")
-		}
-	}()
+	go registerWithQuartermaster(runCtx, cfg, logger)
 
 	server.RegisterEnvFileReload("signalman", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("HTTP server startup failed")
+	runErr := server.Run(runCtx, server.RunSpec{
+		Service: "signalman",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
+		// The gRPC server is built after the port is bound, so HTTP health
+		// serves while the TLS files are still being synced.
+		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: func(ctx context.Context) (*grpc.Server, error) {
+			return newGRPCServer(ctx, cfg, logger, signalmanServer)
+		}}},
+		OnDrain: []func(context.Context){closeStreamsHook(signalmanServer)},
+		OnShutdown: []func(context.Context){func(context.Context) {
+			consumerCancel()
+			if dlqProducer != nil {
+				_ = dlqProducer.Close()
+			}
+			_ = consumer.Close()
+		}},
+	})
+	select {
+	case consumerErr := <-consumerFailure:
+		logger.WithError(consumerErr).Fatal("Kafka consumer exited")
+	default:
+	}
+	if runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
+	}
+}
+
+// streamCloser ends every open Subscribe stream.
+type streamCloser interface {
+	Shutdown()
+}
+
+// closeStreamsHook returns the drain hook that ends every Subscribe stream
+// once the instance starts draining. A Subscribe stream stays open until the
+// client leaves, so without it the gRPC graceful stop would wait out the whole
+// shutdown timeout; clients instead receive Unavailable and reconnect to
+// another replica.
+func closeStreamsHook(streams streamCloser) func(context.Context) {
+	return func(context.Context) {
+		streams.Shutdown()
+	}
+}
+
+// newGRPCServer builds the Signalman gRPC server. It waits up to two minutes
+// for the TLS files, and stops waiting when ctx ends.
+func newGRPCServer(ctx context.Context, cfg *appconfig.Signalman, logger logging.Logger, signalmanServer *signalmangrpc.SignalmanServer) (*grpc.Server, error) {
+	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	authConfig := middleware.GRPCAuthConfig{
+		ServiceToken:   cfg.ServiceToken,
+		JWTSecret:      []byte(cfg.JWTSecret),
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
+		SkipMethods: []string{
+			"/grpc.health.v1.Health/Check",
+			"/grpc.health.v1.Health/Watch",
+		},
+	}
+
+	serverOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			grpcutil.SanitizeUnaryServerInterceptor(),
+			middleware.GRPCAuthInterceptor(authConfig),
+		),
+		grpc.ChainStreamInterceptor(middleware.GRPCStreamAuthInterceptor(authConfig)),
+	}
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertPath,
+		KeyFile:       cfg.KeyPath,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
+		return nil, fmt.Errorf("wait for Signalman gRPC TLS files: %w", err)
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Signalman gRPC TLS: %w", err)
+	}
+	if tlsOpt != nil {
+		serverOpts = append(serverOpts, tlsOpt)
+	}
+	grpcSrv := grpc.NewServer(serverOpts...)
+	signalmanpb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
+
+	// gRPC health service so Quartermaster's gRPC probe passes
+	hs := health.NewServer()
+	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	hs.SetServingStatus(signalmanpb.SignalmanService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+	server.RegisterHealthServer(grpcSrv, hs)
+	reflection.Register(grpcSrv)
+	return grpcSrv, nil
+}
+
+// registerWithQuartermaster registers the gRPC port with protocol grpc and no
+// health endpoint.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.Signalman, logger logging.Logger) {
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		return
+	}
+	defer func() { _ = qc.Close() }()
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:        "signalman",
+		Protocol:           "grpc",
+		Port:               cfg.GRPCListen.Port,
+		AdvertiseHost:      cfg.AdvertiseHost,
+		ClusterID:          cfg.ClusterID,
+		NodeID:             cfg.NodeID,
+		OmitHealthEndpoint: true,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("signalman")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
+	} else {
+		logger.Info("Quartermaster bootstrap (signalman) ok")
 	}
 }
 

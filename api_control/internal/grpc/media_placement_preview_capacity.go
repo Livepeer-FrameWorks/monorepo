@@ -142,13 +142,7 @@ func (s *CommodoreServer) collectPreviewCapacity(ctx context.Context, preview *m
 			}
 			for _, candidate := range row.Candidates {
 				peer := inventory.peers[candidate.ClusterID]
-				verbs := []placement.Verb{}
-				if peer.GetMediaConsent().GetAllowIngest() {
-					verbs = append(verbs, placement.Ingest)
-				}
-				if peer.GetMediaConsent().GetAllowServe() {
-					verbs = append(verbs, placement.Serve)
-				}
+				verbs := placement.ConsentVerbs(peer.GetMediaConsent())
 				allowed := slices.Clone(candidate.AllowedVerbs)
 				slices.Sort(allowed)
 				if candidate.OwnerTenantID != peer.GetOwnerTenantId() || candidate.Official != (peer.GetClusterClass() == "platform_official") || candidate.Region != peer.GetRegionId() || !slices.Equal(allowed, verbs) {

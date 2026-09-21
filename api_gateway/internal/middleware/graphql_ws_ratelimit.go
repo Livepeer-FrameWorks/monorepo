@@ -17,10 +17,10 @@ import (
 // treats a nonpositive limit as "misconfigured, allow" — so routing an
 // anonymous caller through tenant lookup silently disables the limit it was
 // meant to enforce, and costs a validation RPC per operation. Public buckets
-// therefore use the fixed public limits, exactly as the HTTP path does.
-func RateLimitsForBucket(bucket string, tenantLimits func(string) (int, int)) (limit, burst int) {
+// therefore use rl's public limits, exactly as the HTTP path does.
+func RateLimitsForBucket(rl *RateLimiter, bucket string, tenantLimits func(string) (int, int)) (limit, burst int) {
 	if isPublicTenant(bucket) {
-		return publicRateLimits()
+		return rl.publicRateLimits()
 	}
 	if tenantLimits == nil {
 		return 0, 0
@@ -47,7 +47,7 @@ func GraphQLOperationRateLimit(rl *RateLimiter, tenantLimits func(string) (int, 
 			return next(ctx)
 		}
 		bucket := RateLimitBucketKey(ctxkeys.GetTenantID(ctx), ctxkeys.GetClientIP(ctx))
-		limit, burst := RateLimitsForBucket(bucket, tenantLimits)
+		limit, burst := RateLimitsForBucket(rl, bucket, tenantLimits)
 		if allowed, _, resetSeconds := rl.Allow(bucket, limit, burst); !allowed {
 			return func(ctx context.Context) *graphql.Response {
 				return graphql.ErrorResponse(ctx, "rate limit exceeded, retry in %ds", resetSeconds)

@@ -7,7 +7,11 @@ import (
 	"fmt"
 	"testing"
 
+	"frameworks/api_tenants/internal/serviceeventoutbox"
+
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
@@ -33,36 +37,36 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "no_fields_to_update",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			assert: func(t *testing.T, err error) {
 				assertGRPCCode(t, err, codes.InvalidArgument)
 			},
 		},
 		{
 			name: "active_subscription_allowed",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id"}).AddRow("cluster-old"))
 				mock.ExpectQuery("SELECT EXISTS").
-					WithArgs("tenant-1", "cluster-new").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 				mock.ExpectQuery("SELECT cluster_type FROM quartermaster.infrastructure_clusters").
 					WithArgs("cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"cluster_type"}).AddRow("edge"))
 				mock.ExpectBegin()
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
-					WithArgs("cluster-new", "tenant-1").
+					WithArgs("cluster-new", "11111111-1111-4111-8111-111111111111").
 					WillReturnResult(sqlmock.NewResult(0, 1))
-				expectServiceEventOutbox(mock, "tenant_updated", "tenant-1")
-				expectServiceEventOutbox(mock, "tenant_cluster_assigned", "tenant-1")
+				expectServiceEventOutbox(mock, "tenant_updated", "11111111-1111-4111-8111-111111111111")
+				expectServiceEventOutbox(mock, "tenant_cluster_assigned", "11111111-1111-4111-8111-111111111111")
 				mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active`).
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 						AddRow("Tenant", nil, false, true, observedBillingEntitlementsAt, true))
 				mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 						AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 				mock.ExpectCommit()
@@ -75,13 +79,13 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "pending_subscription_denied",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-pending")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111", PrimaryClusterId: strPtr("cluster-pending")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id"}).AddRow("cluster-old"))
 				mock.ExpectQuery("SELECT EXISTS").
-					WithArgs("tenant-1", "cluster-pending").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-pending").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 			},
 			assert: func(t *testing.T, err error) {
@@ -113,13 +117,13 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "db_error_on_access_check",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id"}).AddRow("cluster-old"))
 				mock.ExpectQuery("SELECT EXISTS").
-					WithArgs("tenant-1", "cluster-new").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-new").
 					WillReturnError(fmt.Errorf("connection refused"))
 			},
 			assert: func(t *testing.T, err error) {
@@ -128,20 +132,20 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "db_error_on_update",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id"}).AddRow("cluster-old"))
 				mock.ExpectQuery("SELECT EXISTS").
-					WithArgs("tenant-1", "cluster-new").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 				mock.ExpectQuery("SELECT cluster_type FROM quartermaster.infrastructure_clusters").
 					WithArgs("cluster-new").
 					WillReturnRows(sqlmock.NewRows([]string{"cluster_type"}).AddRow("edge"))
 				mock.ExpectBegin()
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
-					WithArgs("cluster-new", "tenant-1").
+					WithArgs("cluster-new", "11111111-1111-4111-8111-111111111111").
 					WillReturnError(fmt.Errorf("connection refused"))
 				mock.ExpectRollback()
 			},
@@ -151,13 +155,13 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "update_deployment_model_only",
-			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", DeploymentModel: strPtr("dedicated")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "11111111-1111-4111-8111-111111111111", DeploymentModel: strPtr("dedicated")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectBegin()
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
-					WithArgs("dedicated", "tenant-1").
+					WithArgs("dedicated", "11111111-1111-4111-8111-111111111111").
 					WillReturnResult(sqlmock.NewResult(0, 1))
-				expectServiceEventOutbox(mock, "tenant_updated", "tenant-1")
+				expectServiceEventOutbox(mock, "tenant_updated", "11111111-1111-4111-8111-111111111111")
 				mock.ExpectCommit()
 			},
 			assert: func(t *testing.T, err error) {
@@ -189,7 +193,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 				test.setupMock(mock)
 			}
 
-			server := &QuartermasterServer{db: db, logger: logrus.New()}
+			server := &QuartermasterServer{db: db, logger: logrus.New(), eventTokenHasher: testEventTokenHasher(t)}
 			_, err := server.UpdateTenantCluster(ctx, test.req)
 			test.assert(t, err)
 
@@ -219,6 +223,7 @@ func TestGetClusterRouting(t *testing.T) {
 		"health_status", "deployment_model", "owner_tenant_id", "access_level", "access_source", "access_expires_at",
 		"resource_limits", "allow_private_pull_sources",
 		"foghorn_advertise_host", "foghorn_port",
+		"media_allow_ingest", "media_allow_serve",
 	}
 
 	tests := []struct {
@@ -248,10 +253,10 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "db_error_on_tenant",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnError(fmt.Errorf("connection refused"))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
@@ -260,14 +265,14 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "capacity_exceeded",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 						AddRow("cluster-full", "", "pro"))
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-full", "tenant-1").
+					WithArgs("cluster-full", "11111111-1111-4111-8111-111111111111").
 					WillReturnError(sql.ErrNoRows)
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
@@ -276,30 +281,30 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "revoked_preferred_falls_back_to_official",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 						AddRow("market-revoked", "official-1", "pro"))
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("market-revoked", "tenant-1").
+					WithArgs("market-revoked", "11111111-1111-4111-8111-111111111111").
 					WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("official-1", "tenant-1").
+					WithArgs("official-1", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("official-1", "Official Cluster", "shared-community", "official.frameworks.cloud",
 							pq.StringArray{"broker:9092"}, nil, nil, "tenant1_", int32(100), "healthy"))
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-					WithArgs("tenant-1", "official-1").
+					WithArgs("11111111-1111-4111-8111-111111111111", "official-1").
 					WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 					WithArgs("official-1").
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.official", int32(50051)))
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("official-1", "Official Cluster", "shared-community", "official.frameworks.cloud", "", "", "", "", true, "", "", "platform_official", "official-1", pq.StringArray{"official-1"}, "healthy", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.official", int32(50051)))
+						AddRow("official-1", "Official Cluster", "shared-community", "official.frameworks.cloud", "", "", "", "", true, "", "", "platform_official", "official-1", pq.StringArray{"official-1"}, "healthy", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.official", int32(50051), true, true))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -312,23 +317,23 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "happy_path",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 						AddRow("cluster-1", "cluster-1", "pro"))
 				// 2. Cluster routing with capacity check
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-1", "tenant-1").
+					WithArgs("cluster-1", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud",
 							pq.StringArray{"broker:9092"}, nil, nil, "tenant1_",
 							int32(100), "healthy"))
 				// 3. Tenant resource limits
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-					WithArgs("tenant-1", "cluster-1").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-1").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
@@ -337,9 +342,9 @@ func TestGetClusterRouting(t *testing.T) {
 					// 5. Official cluster is primary, so no second identity lookup
 					// 6. Cluster peers
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-1", pq.StringArray{"cluster-1"}, "", "platform_managed", "", "shared", "platform_tier", nil, `{"max_streams":7,"max_viewers":9}`, true, "foghorn.cluster-1", int32(50051)))
+						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-1", pq.StringArray{"cluster-1"}, "", "platform_managed", "", "shared", "platform_tier", nil, `{"max_streams":7,"max_viewers":9}`, true, "foghorn.cluster-1", int32(50051), true, true))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -382,15 +387,15 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "routing_peer_query_failure_is_not_a_confident_empty_admission_set",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("tenant-1").
+				mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).AddRow("cluster-1", "cluster-1", "pro"))
-				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-1", "tenant-1").
+				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-1", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", pq.StringArray{}, nil, nil, "", int32(100), "healthy"))
-				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").WithArgs("tenant-1", "cluster-1").WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").WithArgs("11111111-1111-4111-8111-111111111111", "cluster-1").WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").WithArgs("cluster-1").WillReturnRows(sqlmock.NewRows(foghornCols))
-				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").WithArgs("tenant-1").WillReturnError(errors.New("peer list unavailable"))
+				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").WithArgs("11111111-1111-4111-8111-111111111111").WillReturnError(errors.New("peer list unavailable"))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if resp != nil {
@@ -401,23 +406,23 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "official_cluster_populated",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup — official differs from primary
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 						AddRow("cluster-eu", "cluster-us", "pro"))
 				// 2. Cluster routing
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-eu", "tenant-1").
+					WithArgs("cluster-eu", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud",
 							pq.StringArray{"broker:9092"}, nil, nil, "",
 							int32(0), "healthy"))
 				// 3. Tenant resource limits
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-					WithArgs("tenant-1", "cluster-eu").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-eu").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address (primary)
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
@@ -425,7 +430,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.eu", int32(50051)))
 				// 5. Official cluster info
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-us", "tenant-1").
+					WithArgs("cluster-us", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud",
 							pq.StringArray{"broker:9092"}, nil, nil, "", int32(0), "healthy"))
@@ -435,10 +440,10 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(foghornCols).AddRow("foghorn.us", int32(50051)))
 					// 7. Cluster peers
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.eu", int32(50051)).
-						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-us", pq.StringArray{"cluster-us"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.us", int32(50051)))
+						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.eu", int32(50051), true, true).
+						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-us", pq.StringArray{"cluster-us"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.us", int32(50051), true, true))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -466,19 +471,19 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "active_official_with_past_due_grant_is_omitted",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("tenant-1").
+				mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).AddRow("cluster-eu", "cluster-us", "pro"))
-				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-eu", "tenant-1").
+				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-eu", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", pq.StringArray{}, nil, nil, "", int32(0), "healthy"))
-				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").WithArgs("tenant-1", "cluster-eu").WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").WithArgs("11111111-1111-4111-8111-111111111111", "cluster-eu").WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").WithArgs("cluster-eu").WillReturnRows(sqlmock.NewRows(foghornCols))
 				// The infrastructure cluster may be active, but the entitlement-filtered
 				// routing query returns no row for a past_due grant.
-				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-us", "tenant-1").WillReturnError(sql.ErrNoRows)
-				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").WithArgs("tenant-1").
-					WillReturnRows(sqlmock.NewRows(peerCols).AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "", int32(0)))
+				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-us", "11111111-1111-4111-8111-111111111111").WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").WithArgs("11111111-1111-4111-8111-111111111111").
+					WillReturnRows(sqlmock.NewRows(peerCols).AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "", int32(0), true, true))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -491,23 +496,23 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "cluster_peers_roles",
-			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup — has both primary and official
 				mock.ExpectQuery("FROM quartermaster.tenants").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 						AddRow("cluster-eu", "cluster-us", "pro"))
 				// 2. Cluster routing
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-eu", "tenant-1").
+					WithArgs("cluster-eu", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud",
 							pq.StringArray{}, nil, nil, "",
 							int32(0), "healthy"))
 				// 3. Tenant resource limits
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-					WithArgs("tenant-1", "cluster-eu").
+					WithArgs("11111111-1111-4111-8111-111111111111", "cluster-eu").
 					WillReturnError(sql.ErrNoRows)
 				// 4. Foghorn address
 				mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
@@ -515,7 +520,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(foghornCols))
 				// 5. Official cluster
 				mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-					WithArgs("cluster-us", "tenant-1").
+					WithArgs("cluster-us", "11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(clusterCols).
 						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud",
 							pq.StringArray{}, nil, nil, "", int32(0), "healthy"))
@@ -525,11 +530,11 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(foghornCols))
 					// 7. Three peers: preferred, official, subscribed
 				mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-					WithArgs("tenant-1").
+					WithArgs("11111111-1111-4111-8111-111111111111").
 					WillReturnRows(sqlmock.NewRows(peerCols).
-						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.eu", int32(50051)).
-						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-us", pq.StringArray{"cluster-us"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.us", int32(50051)).
-						AddRow("cluster-ap", "AP Cluster", "shared-community", "ap.frameworks.cloud", "", "", "", "", true, "", "", "", "control-ap", pq.StringArray{"control-ap"}, "", "tenant_hosted_edge", "tenant-2", "dedicated", "private_invite", nil, "{}", true, "foghorn.ap", int32(50051)))
+						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-eu", pq.StringArray{"cluster-eu"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.eu", int32(50051), true, true).
+						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-us", pq.StringArray{"cluster-us"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "foghorn.us", int32(50051), true, true).
+						AddRow("cluster-ap", "AP Cluster", "shared-community", "ap.frameworks.cloud", "", "", "", "", true, "", "", "", "control-ap", pq.StringArray{"control-ap"}, "", "tenant_hosted_edge", "tenant-2", "dedicated", "private_invite", nil, "{}", true, "foghorn.ap", int32(50051), true, true))
 			},
 			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
@@ -588,11 +593,11 @@ func TestGetClusterRoutingMemberReturnsOnlyPublicStreamingFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("tenant-1").WillReturnRows(
+	mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("11111111-1111-4111-8111-111111111111").WillReturnRows(
 		sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 			AddRow("cluster-1", "cluster-1", "production"),
 	)
-	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-1", "tenant-1").WillReturnRows(
+	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-1", "11111111-1111-4111-8111-111111111111").WillReturnRows(
 		sqlmock.NewRows([]string{
 			"cluster_id", "cluster_name", "cluster_type", "base_url", "kafka_brokers", "database_url",
 			"periscope_url", "topic_prefix", "max_concurrent_streams", "health_status",
@@ -601,7 +606,7 @@ func TestGetClusterRoutingMemberReturnsOnlyPublicStreamingFacts(t *testing.T) {
 	)
 
 	resp, err := (&QuartermasterServer{db: db, logger: logrus.New()}).GetClusterRouting(
-		tenantCtx("tenant-1", "member"), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+		tenantCtx("11111111-1111-4111-8111-111111111111", "member"), &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"},
 	)
 	if err != nil {
 		t.Fatalf("member routing read failed: %v", err)
@@ -637,32 +642,33 @@ func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
 		"health_status", "deployment_model", "owner_tenant_id", "access_level", "access_source", "access_expires_at",
 		"resource_limits", "allow_private_pull_sources",
 		"foghorn_advertise_host", "foghorn_port",
+		"media_allow_ingest", "media_allow_serve",
 	}
 	controlListenerFilter := `(?s)FROM quartermaster\.service_cluster_assignments.*\(si\.metadata->>'foghorn_listener' = 'internal_control' OR si\.port = 18019 OR si\.metadata->>'foghorn_listener' = 'control'\)`
 
 	mock.ExpectQuery("FROM quartermaster.tenants").
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 			AddRow("cluster-1", "", "pro"))
 	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-		WithArgs("cluster-1", "tenant-1").
+		WithArgs("cluster-1", "11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows(clusterCols).
 			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud",
 				pq.StringArray{"broker:9092"}, nil, nil, "tenant1_",
 				int32(100), "healthy"))
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-		WithArgs("tenant-1", "cluster-1").
+		WithArgs("11111111-1111-4111-8111-111111111111", "cluster-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(controlListenerFilter).
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"advertise_host", "port"}).AddRow("10.88.158.227", int32(18019)))
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows(peerCols).
-			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-1", pq.StringArray{"cluster-1"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "10.88.158.227", int32(18019)))
+			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-1", pq.StringArray{"cluster-1"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "10.88.158.227", int32(18019), true, true))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}
@@ -688,14 +694,29 @@ func assertGRPCCode(t *testing.T, err error, expected codes.Code) {
 	}
 }
 
+// expectServiceEventOutbox expects the domain event insert for types with a
+// domain counterpart, then the legacy service event row.
 func expectServiceEventOutbox(mock sqlmock.Sqlmock, eventType, tenantID string) {
 	scope := "tenant"
 	if tenantID == "" {
 		scope = "platform"
 	}
+	if domain, err := serviceeventoutbox.DomainFor(&ipcpb.ServiceEvent{EventType: eventType}); domain != nil || err != nil {
+		mock.ExpectExec("INSERT INTO quartermaster.domain_event_outbox").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	mock.ExpectQuery("INSERT INTO quartermaster.service_event_outbox").
-		WithArgs(eventType, tenantID, scope, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), eventType, tenantID, scope, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("outbox-1"))
+}
+
+func testEventTokenHasher(t *testing.T) *events.TokenHasher {
+	t.Helper()
+	hasher, err := events.NewTokenHasher("test-usage-hash-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hasher
 }
 
 func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
@@ -751,29 +772,30 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 		"health_status", "deployment_model", "owner_tenant_id", "access_level", "access_source", "access_expires_at",
 		"resource_limits", "allow_private_pull_sources",
 		"foghorn_advertise_host", "foghorn_port",
+		"media_allow_ingest", "media_allow_serve",
 	}
 
 	mock.ExpectQuery("FROM quartermaster.tenants").
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
 			AddRow("cluster-v6", "", "pro"))
 	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
-		WithArgs("cluster-v6", "tenant-1").
+		WithArgs("cluster-v6", "11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows(clusterCols).
 			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", pq.StringArray{}, nil, nil, "", int32(0), "healthy"))
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
-		WithArgs("tenant-1", "cluster-v6").
+		WithArgs("11111111-1111-4111-8111-111111111111", "cluster-v6").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("FROM quartermaster.service_cluster_assignments").
 		WithArgs("cluster-v6").
 		WillReturnRows(sqlmock.NewRows([]string{"advertise_host", "port"}).AddRow("2001:db8::10", int32(50051)))
 	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows(peerCols).
-			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-v6", pq.StringArray{"cluster-v6"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "2001:db8::10", int32(50051)))
+			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-v6", pq.StringArray{"cluster-v6"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "2001:db8::10", int32(50051), true, true))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "11111111-1111-4111-8111-111111111111"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}

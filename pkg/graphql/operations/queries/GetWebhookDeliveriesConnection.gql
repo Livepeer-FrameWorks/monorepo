@@ -1,0 +1,35 @@
+# Webhook delivery log, newest first, with optional filters
+query GetWebhookDeliveriesConnection(
+  $endpointId: ID
+  $statuses: [WebhookDeliveryStatus!]
+  $eventType: String
+  $eventId: ID
+  $createdAfter: Time
+  $createdBefore: Time
+  $first: Int = 50
+  $after: String
+) {
+  webhookDeliveriesConnection(
+    endpointId: $endpointId
+    statuses: $statuses
+    eventType: $eventType
+    eventId: $eventId
+    createdAfter: $createdAfter
+    createdBefore: $createdBefore
+    page: { first: $first, after: $after }
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        ...WebhookDeliveryFields @mask_disable
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

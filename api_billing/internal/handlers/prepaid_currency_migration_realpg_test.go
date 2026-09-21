@@ -25,8 +25,13 @@ func TestPrepaidBalanceCurrencyRepairMigration_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
 	ctx := context.Background()
 
-	// The v0.3.6 schema has no currency-shape constraint; lowercase rows exist there.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE purser.prepaid_balances DROP CONSTRAINT chk_prepaid_balances_currency_iso`); err != nil {
+	// The schema this migration repairs has no currency constraint on prepaid
+	// balances; lowercase and non-EUR rows exist there.
+	if _, err := db.ExecContext(ctx, `
+		ALTER TABLE purser.prepaid_balances
+		    DROP CONSTRAINT chk_prepaid_balances_currency_iso,
+		    DROP CONSTRAINT IF EXISTS chk_prepaid_balances_ledger_currency
+	`); err != nil {
 		t.Fatalf("restore pre-contract prepaid balance shape: %v", err)
 	}
 

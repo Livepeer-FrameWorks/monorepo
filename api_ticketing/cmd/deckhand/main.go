@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
+	"frameworks/api_ticketing/internal/appconfig"
 	"frameworks/api_ticketing/internal/chatwoot"
 	deckhandgrpc "frameworks/api_ticketing/internal/grpc"
 	"frameworks/api_ticketing/internal/handlers"
@@ -20,7 +19,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -29,7 +27,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -43,32 +40,24 @@ func main() {
 
 	logger.Info("Starting Deckhand (Support Messaging API)")
 
-	// Required config
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	jwtSecret := config.GetEnv("JWT_SECRET", "")
-	chatwootAPIToken := config.RequireEnv("CHATWOOT_API_TOKEN")
-	chatwootHost := config.GetEnv("CHATWOOT_HOST", "chatwoot")
-	chatwootPort := config.GetEnv("CHATWOOT_PORT", "3000")
-	chatwootAccountID := config.GetEnvInt("CHATWOOT_ACCOUNT_ID", 1)
-	chatwootInboxID := config.GetEnvInt("CHATWOOT_INBOX_ID", 1)
-
-	// gRPC addresses for dependencies
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
-
-	// Ports
-	httpPort := config.GetEnv("DECKHAND_PORT", "18015")
-	grpcPort := config.GetEnv("DECKHAND_GRPC_PORT", "19006")
-	webhookLimitPerMin := config.GetEnvInt("DECKHAND_WEBHOOK_RATE_LIMIT_PER_MIN", 600)
+	configOptions := config.Options{Service: "deckhand", Logger: logger}
+	cfg, err := config.Load[appconfig.Deckhand](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("deckhand", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("deckhand", version.Version, version.GitCommit)
 
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"CHATWOOT_HOST": chatwootHost,
+		"CHATWOOT_HOST": cfg.ChatwootHost,
 	}))
+
+	// Readiness carries no dependency checks; /health/chatwoot reports
+	// Chatwoot reachability separately. It reports draining during shutdown.
+	readiness := monitoring.NewReadinessChecker("deckhand", version.Version)
 
 	// Create handler metrics. The CreateConversation gRPC method is
 	// already covered by grpc_requests_total{method="CreateConversation"};
@@ -89,13 +78,13 @@ func main() {
 
 	// Create Quartermaster gRPC client (for tenant info)
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      quartermasterGRPCAddr,
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -108,13 +97,13 @@ func main() {
 
 	// Create Purser gRPC client (for billing info)
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserGRPCAddr,
+		GRPCAddr:      cfg.PurserGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.PurserGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Purser gRPC client")
@@ -123,15 +112,15 @@ func main() {
 
 	// Create Decklog gRPC client (for real-time events)
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "deckhand",
-		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Decklog gRPC client")
@@ -139,18 +128,17 @@ func main() {
 	defer func() { _ = decklogClient.Close() }()
 
 	// Build Chatwoot API URL
-	chatwootBaseURL := fmt.Sprintf("http://%s:%s", chatwootHost, chatwootPort)
+	chatwootBaseURL := cfg.ChatwootBaseURL()
 	chatwootClient := chatwoot.NewClient(chatwoot.Config{
 		BaseURL:   chatwootBaseURL,
-		APIToken:  chatwootAPIToken,
-		AccountID: chatwootAccountID,
-		InboxID:   chatwootInboxID,
+		APIToken:  cfg.ChatwootAPIToken,
+		AccountID: cfg.ChatwootAccountID,
+		InboxID:   cfg.ChatwootInboxID,
 	})
 
-	redisAddr := config.GetEnv("REDIS_ADDR", "")
 	var redisClient *redis.Client
-	if redisAddr != "" {
-		redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
+	if cfg.RedisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			logger.WithError(err).Warn("Failed to connect to Redis; webhook deduplication disabled")
@@ -169,7 +157,7 @@ func main() {
 		Decklog:             decklogClient,
 		Redis:               redisClient,
 		ChatwootBaseURL:     chatwootBaseURL,
-		ChatwootToken:       chatwootAPIToken,
+		ChatwootToken:       cfg.ChatwootAPIToken,
 	}
 	handlers.Init(deps)
 
@@ -178,77 +166,31 @@ func main() {
 		Logger:          logger,
 		Metrics:         grpcMetrics,
 		ChatwootBaseURL: chatwootBaseURL,
-		ChatwootToken:   chatwootAPIToken,
-		ChatwootAccount: chatwootAccountID,
-		ChatwootInbox:   chatwootInboxID,
+		ChatwootToken:   cfg.ChatwootAPIToken,
+		ChatwootAccount: cfg.ChatwootAccountID,
+		ChatwootInbox:   cfg.ChatwootInboxID,
 		Quartermaster:   qmClient,
 		Purser:          purserClient,
 	})
 
-	// Create gRPC auth interceptor
-	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: serviceToken,
-		JWTSecret:    []byte(jwtSecret),
-		Logger:       logger,
-		SkipMethods: []string{
-			"/grpc.health.v1.Health/Check",
-			"/grpc.health.v1.Health/Watch",
-		},
+	// HTTP serves the Chatwoot webhook plus health, readiness, and metrics.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "deckhand",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
 	})
-
-	// Start gRPC server in goroutine
-	go func() {
-		grpcLis, err := net.Listen("tcp", ":"+grpcPort)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		serverOpts := []grpc.ServerOption{
-			grpc.ChainUnaryInterceptor(
-				grpcutil.SanitizeUnaryServerInterceptor(),
-				authInterceptor,
-				middleware.GRPCLoggingInterceptor(logger),
-			),
-		}
-		tlsCfg := grpcutil.ServerTLSConfig{
-			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		}
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
-			logger.WithError(waitErr).Fatal("Timed out waiting for Deckhand gRPC TLS files")
-		}
-		tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to configure Deckhand gRPC TLS")
-		}
-		if tlsOpt != nil {
-			serverOpts = append(serverOpts, tlsOpt)
-		}
-		grpcSrv := grpc.NewServer(serverOpts...)
-		deckhandpb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
-
-		// Register gRPC health checking service
-		hs := health.NewServer()
-		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
-		reflection.Register(grpcSrv)
-
-		logger.WithField("port", grpcPort).Info("Starting gRPC server")
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
-		}
-	}()
-
-	// Setup HTTP router for webhooks (SetupServiceRouter adds /health and /metrics)
-	router := server.SetupServiceRouter(logger, "deckhand", healthChecker, metricsCollector)
 
 	// Webhook routes (no auth - Chatwoot calls these)
 	webhooks := router.Group("/webhooks")
 	{
-		if webhookLimitPerMin > 0 {
-			limiter := handlers.NewWebhookRateLimiter(webhookLimitPerMin, time.Minute, 10*time.Minute)
+		if cfg.WebhookRateLimitPerMin > 0 {
+			limiter := handlers.NewWebhookRateLimiter(cfg.WebhookRateLimitPerMin, time.Minute, 10*time.Minute)
 			webhooks.Use(handlers.WebhookRateLimitMiddleware(limiter))
 		}
 		webhooks.POST("/chatwoot", handlers.HandleChatwootWebhook)
@@ -266,44 +208,96 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// Best-effort service registration in Quartermaster
-	go func() {
-		httpPortInt, _ := strconv.Atoi(httpPort)
-		if httpPortInt <= 0 || httpPortInt > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
-			return
-		}
-		healthEndpoint := "/health"
-		advertiseHost := config.GetEnv("DECKHAND_HOST", "deckhand")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "deckhand",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPortInt),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("deckhand")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (deckhand) failed")
-		} else {
-			logger.Info("Quartermaster bootstrap (deckhand) ok")
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("deckhand", httpPort)
-	server.RegisterEnvFileReload("deckhand", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("HTTP server failed")
+	// Best-effort service registration in Quartermaster
+	go registerWithQuartermaster(ctx, cfg, qmClient, logger)
+
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "deckhand",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: router}},
+		// The gRPC server is built after the port is bound, so HTTP health
+		// and the Chatwoot webhook serve while the TLS files are still being synced.
+		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(ctx context.Context) (*grpc.Server, error) {
+			return newGRPCServer(ctx, cfg, logger, deckhandServer)
+		}}},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
+	}
+}
+
+// newGRPCServer builds the Deckhand gRPC server. It waits up to two minutes
+// for the TLS files, and stops waiting when ctx ends.
+func newGRPCServer(ctx context.Context, cfg *appconfig.Deckhand, logger logging.Logger, deckhandServer deckhandpb.DeckhandServiceServer) (*grpc.Server, error) {
+	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken:   cfg.ServiceToken,
+		JWTSecret:      []byte(cfg.JWTSecret),
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
+		SkipMethods: []string{
+			"/grpc.health.v1.Health/Check",
+			"/grpc.health.v1.Health/Watch",
+		},
+	})
+
+	serverOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			grpcutil.SanitizeUnaryServerInterceptor(),
+			authInterceptor,
+			middleware.GRPCLoggingInterceptor(logger),
+		),
+	}
+	tlsCfg := grpcutil.ServerTLSConfig{
+		CertFile:      cfg.CertPath,
+		KeyFile:       cfg.KeyPath,
+		AllowInsecure: cfg.AllowInsecure,
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
+		return nil, fmt.Errorf("wait for Deckhand gRPC TLS files: %w", err)
+	}
+	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configure Deckhand gRPC TLS: %w", err)
+	}
+	if tlsOpt != nil {
+		serverOpts = append(serverOpts, tlsOpt)
+	}
+	grpcSrv := grpc.NewServer(serverOpts...)
+	deckhandpb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
+
+	// Register gRPC health checking service
+	hs := health.NewServer()
+	server.RegisterHealthServer(grpcSrv, hs)
+	reflection.Register(grpcSrv)
+	return grpcSrv, nil
+}
+
+// registerWithQuartermaster registers the HTTP port with the /health endpoint
+// from servicedefs.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.Deckhand, qmClient qmbootstrap.BootstrapClient, logger logging.Logger) {
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:   "deckhand",
+		Port:          cfg.HTTPListenPort(),
+		AdvertiseHost: cfg.AdvertiseHost,
+		ClusterID:     cfg.ClusterID,
+		NodeID:        cfg.NodeID,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qmClient, req, logger, qmbootstrap.DefaultRetryConfig("deckhand")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap (deckhand) failed")
+	} else {
+		logger.Info("Quartermaster bootstrap (deckhand) ok")
 	}
 }

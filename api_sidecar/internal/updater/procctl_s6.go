@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"frameworks/api_sidecar/internal/appconfig"
 )
 
 // s6Controller drives the peer services inside the single-image edge
@@ -90,7 +91,8 @@ func waitCaddyAdminReady(ctx context.Context, client *http.Client, baseURL strin
 // config manager: CADDY_ADMIN_SOCKET (unix socket) wins over CADDY_ADMIN_URL,
 // with the Caddy default TCP admin address as fallback.
 func caddyAdminHTTPClient() (*http.Client, string) {
-	if socketPath := os.Getenv("CADDY_ADMIN_SOCKET"); socketPath != "" {
+	rt := appconfig.Runtime()
+	if socketPath := rt.CaddyAdminSocket; socketPath != "" {
 		client := &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
@@ -103,7 +105,7 @@ func caddyAdminHTTPClient() (*http.Client, string) {
 		return client, "http://caddy"
 	}
 	baseURL := "http://localhost:2019"
-	if adminURL := os.Getenv("CADDY_ADMIN_URL"); adminURL != "" {
+	if adminURL := rt.CaddyAdminURL; adminURL != "" {
 		baseURL = strings.TrimRight(adminURL, "/")
 	}
 	return &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}, baseURL

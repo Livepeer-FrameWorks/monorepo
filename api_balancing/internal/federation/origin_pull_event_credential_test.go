@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 )
 
@@ -13,7 +14,9 @@ import (
 // path. This is a regression guard: the sibling ORIGIN_PULL_ARRANGED emit was
 // written redacted from the start and this one was not.
 func TestOriginPullCompletedEventCarriesNoSourceCredential(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "origin-pull-event-test-secret")
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn {
+		return &appconfig.Foghorn{BalancerCapabilitySecret: "origin-pull-event-test-secret"}
+	}))
 	const base = "dtsc://origin.example:4200/live+demo"
 	pull := control.OutboundPull{
 		AttemptID: "attempt-1", TenantID: "tenant-a", SourceNodeID: "origin-1",

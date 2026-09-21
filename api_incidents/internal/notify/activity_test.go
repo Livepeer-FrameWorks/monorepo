@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/incidents"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
@@ -163,7 +162,6 @@ func TestActivityDispatcherPostsSlackMessage(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	t.Setenv(config.EnvSlackWebhookURL, server.URL)
 
 	payload, err := json.Marshal(ActivityPayload{
 		Headline: "New tenant signup", Category: "growth",
@@ -174,6 +172,7 @@ func TestActivityDispatcherPostsSlackMessage(t *testing.T) {
 	}
 	dispatcher := &ActivityDispatcher{Webhook: &Dispatcher{
 		Channels: activityChannelsStub{enabled: map[string]bool{incidents.ChannelSlack: true}},
+		Settings: staticSettings(Settings{SlackWebhookURL: server.URL}),
 		HTTP:     server.Client(),
 	}}
 	if _, err := dispatcher.Dispatch(context.Background(), ActivityDelivery{

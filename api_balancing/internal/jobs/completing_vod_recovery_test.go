@@ -51,7 +51,7 @@ func newRecoveryJob(t *testing.T, s3 CompletingVodRecoveryS3) (*CompletingVodRec
 func recoveryScanRows(pastGrace bool) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "backend_id", "vod_completion_descriptor", "past_fail_grace",
-	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", "", pastGrace)
+	}).AddRow("hash-1", mockTenantUUID, "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", "", pastGrace)
 }
 
 // recoveryScanRowsWithDescriptor builds a scan row carrying a durable completion descriptor, so
@@ -60,7 +60,7 @@ func recoveryScanRowsWithDescriptor(pastGrace bool) *sqlmock.Rows {
 	descriptor := `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"etag-1"}]}`
 	return sqlmock.NewRows([]string{
 		"artifact_hash", "tenant_id", "user_id", "size_bytes", "s3_key", "s3_upload_id", "processes_json", "backend_id", "vod_completion_descriptor", "past_fail_grace",
-	}).AddRow("hash-1", "t1", "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", descriptor, pastGrace)
+	}).AddRow("hash-1", mockTenantUUID, "user-1", int64(2048), "vod/t1/hash-1/video.mp4", "up-1", "", "backend-x", descriptor, pastGrace)
 }
 
 // A stranded 'completing' row whose object is PRESENT converges to 'processing' (+ PROCESSING lifecycle
@@ -77,7 +77,7 @@ func TestCompletingVodRecovery_ConvergesPresentObjectToProcessing(t *testing.T) 
 	// row (guarded artifact_type='clip') but still executes.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -86,9 +86,8 @@ func TestCompletingVodRecovery_ConvergesPresentObjectToProcessing(t *testing.T) 
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectTransitionInsert(mock, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()
@@ -112,10 +111,9 @@ func TestCompletingVodRecovery_MarksAbsentPastGraceFailed(t *testing.T) {
 		WillReturnRows(recoveryScanRows(true)) // past_fail_grace = true
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'failed'`).
-		WithArgs(sqlmock.AnyArg(), "hash-1", "t1").
+		WithArgs(sqlmock.AnyArg(), "hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()
@@ -171,7 +169,7 @@ func TestCompletingVodRecovery_DescriptorRetryCompletesConverges(t *testing.T) {
 		WillReturnRows(recoveryScanRowsWithDescriptor(false))
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -180,9 +178,8 @@ func TestCompletingVodRecovery_DescriptorRetryCompletesConverges(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectTransitionInsert(mock, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()
@@ -210,7 +207,7 @@ func TestCompletingVodRecovery_DescriptorRetryErrorButObjectPresentConverges(t *
 		WillReturnRows(recoveryScanRowsWithDescriptor(true))
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -219,9 +216,8 @@ func TestCompletingVodRecovery_DescriptorRetryErrorButObjectPresentConverges(t *
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectTransitionInsert(mock, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()

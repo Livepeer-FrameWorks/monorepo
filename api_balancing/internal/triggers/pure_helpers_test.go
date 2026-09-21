@@ -52,20 +52,20 @@ func TestJWTDenyReason(t *testing.T) {
 // against an operator typo silently zeroing the gateway budget.
 func TestLivepeerVODDeadlineMs(t *testing.T) {
 	t.Run("unset falls back to default", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_DEADLINE_MS", "")
+		useFoghornConfig(t, livepeerVODSettings("", ""))
 		if got := livepeerVODDeadlineMs(); got != mist.LivepeerVODSegmentDeadlineMs {
 			t.Fatalf("got %d, want default %d", got, mist.LivepeerVODSegmentDeadlineMs)
 		}
 	})
 	t.Run("valid override wins", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_DEADLINE_MS", "12345")
+		useFoghornConfig(t, livepeerVODSettings("12345", ""))
 		if got := livepeerVODDeadlineMs(); got != 12345 {
 			t.Fatalf("got %d, want 12345", got)
 		}
 	})
 	for _, bad := range []string{"abc", "0", "-5"} {
 		t.Run("rejects "+bad, func(t *testing.T) {
-			t.Setenv("LIVEPEER_VOD_DEADLINE_MS", bad)
+			useFoghornConfig(t, livepeerVODSettings(bad, ""))
 			if got := livepeerVODDeadlineMs(); got != mist.LivepeerVODSegmentDeadlineMs {
 				t.Fatalf("override %q should fall back, got %d", bad, got)
 			}
@@ -75,20 +75,20 @@ func TestLivepeerVODDeadlineMs(t *testing.T) {
 
 func TestLivepeerVODMinSpeed(t *testing.T) {
 	t.Run("unset falls back to default", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_MIN_SPEED", "")
+		useFoghornConfig(t, livepeerVODSettings("", ""))
 		if got := livepeerVODMinSpeed(); got != mist.LivepeerVODMinSpeed {
 			t.Fatalf("got %v, want default %v", got, mist.LivepeerVODMinSpeed)
 		}
 	})
 	t.Run("valid override wins", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_MIN_SPEED", "1.25")
+		useFoghornConfig(t, livepeerVODSettings("", "1.25"))
 		if got := livepeerVODMinSpeed(); got != 1.25 {
 			t.Fatalf("got %v, want 1.25", got)
 		}
 	})
 	for _, bad := range []string{"fast", "0", "-1.0"} {
 		t.Run("rejects "+bad, func(t *testing.T) {
-			t.Setenv("LIVEPEER_VOD_MIN_SPEED", bad)
+			useFoghornConfig(t, livepeerVODSettings("", bad))
 			if got := livepeerVODMinSpeed(); got != mist.LivepeerVODMinSpeed {
 				t.Fatalf("override %q should fall back, got %v", bad, got)
 			}

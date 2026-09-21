@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -56,38 +58,23 @@ func TestSeedAccessors(t *testing.T) {
 	})
 }
 
-func TestParseFloat64(t *testing.T) {
-	cases := map[string]float64{
-		"":     0,
-		"0.85": 0.85,
-		"-1.5": -1.5,
-		"abc":  0, // parse error → silent zero
-		"12":   12,
-	}
-	for in, want := range cases {
-		if got := parseFloat64(in); got != want {
-			t.Errorf("parseFloat64(%q) = %v, want %v", in, got, want)
-		}
-	}
-}
-
 func TestGetStorageCapacityBytes(t *testing.T) {
-	t.Setenv("HELMSMAN_STORAGE_CAPACITY_BYTES", "1048576")
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_CAPACITY_BYTES", "1048576")
 	if got := GetStorageCapacityBytes(); got != 1048576 {
 		t.Fatalf("GetStorageCapacityBytes = %d, want 1048576", got)
 	}
-	t.Setenv("HELMSMAN_STORAGE_CAPACITY_BYTES", "")
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_CAPACITY_BYTES", "")
 	if got := GetStorageCapacityBytes(); got != 0 {
 		t.Fatalf("GetStorageCapacityBytes (unset) = %d, want 0", got)
 	}
 }
 
 func TestGrpcCABundlePath(t *testing.T) {
-	t.Setenv("GRPC_TLS_CA_PATH", "/custom/ca.crt")
+	appconfigtest.Setenv(t, "GRPC_TLS_CA_PATH", "/custom/ca.crt")
 	if got := grpcCABundlePath(); got != "/custom/ca.crt" {
 		t.Fatalf("grpcCABundlePath = %q, want /custom/ca.crt", got)
 	}
-	t.Setenv("GRPC_TLS_CA_PATH", "  ") // whitespace-only → default
+	appconfigtest.Setenv(t, "GRPC_TLS_CA_PATH", "  ") // whitespace-only → default
 	if got := grpcCABundlePath(); got != "/etc/frameworks/pki/ca.crt" {
 		t.Fatalf("grpcCABundlePath (blank) = %q, want default", got)
 	}

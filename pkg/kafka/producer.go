@@ -75,6 +75,18 @@ func (p *KafkaProducer) ProduceMessage(topic string, key []byte, value []byte, h
 	return nil
 }
 
+// ProduceRecords produces every record and returns once Kafka acknowledged all
+// of them, or the first error. Records sharing a partition keep their order.
+func (p *KafkaProducer) ProduceRecords(ctx context.Context, records []*kgo.Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if err := p.client.ProduceSync(ctx, records...).FirstErr(); err != nil {
+		return fmt.Errorf("failed to produce records: %w", err)
+	}
+	return nil
+}
+
 func (p *KafkaProducer) HealthCheck() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

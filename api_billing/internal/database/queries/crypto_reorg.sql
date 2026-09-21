@@ -92,7 +92,8 @@ ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, 
 DO NOTHING;
 
 -- name: LockConfirmedCryptoInvoicePayment :one
-SELECT id::text AS id, (amount * 100)::bigint AS amount_cents, currency
+SELECT id::text AS id, (amount * 100)::bigint AS amount_cents, currency,
+       COALESCE(eur_amount_cents, (amount * 100)::bigint)::bigint AS eur_amount_cents
 FROM purser.billing_payments
 WHERE invoice_id = sqlc.arg(invoice_id)::text::uuid
   AND tx_id = sqlc.arg(tx_hash)
@@ -100,16 +101,23 @@ WHERE invoice_id = sqlc.arg(invoice_id)::text::uuid
 FOR UPDATE;
 
 -- name: InsertCryptoReorgPaymentReversal :one
+-- A reorg reverses the whole payment, so the reversal carries the payment's FX
+-- fields unchanged.
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, invoice_id, provider, reversal_type,
     provider_reversal_id, amount_cents, currency, status, reason,
-    operator_review_required, actor_kind, evidence_ref
-) VALUES (
-    sqlc.arg(tenant_id)::text::uuid, sqlc.arg(payment_id)::text::uuid,
-    sqlc.arg(invoice_id)::text::uuid, 'manual', 'manual',
-    sqlc.arg(provider_reversal_id), sqlc.arg(amount_cents), sqlc.arg(currency),
-    'succeeded', sqlc.arg(reason), TRUE, 'job', sqlc.arg(evidence_ref)
+    operator_review_required, actor_kind, evidence_ref,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 )
+SELECT sqlc.arg(tenant_id)::text::uuid, payment.id,
+       sqlc.arg(invoice_id)::text::uuid, 'manual', 'manual',
+       sqlc.arg(provider_reversal_id), sqlc.arg(amount_cents), sqlc.arg(currency),
+       'succeeded', sqlc.arg(reason), TRUE, 'job', sqlc.arg(evidence_ref),
+       payment.original_amount_cents, payment.original_currency, payment.eur_amount_cents,
+       payment.fx_units_per_eur, payment.fx_source, payment.fx_reference_date
+FROM purser.billing_payments payment
+WHERE payment.id = sqlc.arg(payment_id)::text::uuid
 ON CONFLICT (provider, provider_reversal_id) DO NOTHING
 RETURNING id::text AS id;
 

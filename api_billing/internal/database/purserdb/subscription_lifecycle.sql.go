@@ -199,7 +199,8 @@ SELECT id, tenant_id, tier_id, status, billing_email, started_at,
        stripe_current_period_end, dunning_attempts, mollie_subscription_id,
        pending_tier_id, pending_effective_at, pending_reason,
        COALESCE(created_at, TIMESTAMP 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
+       presentment_currency::text AS presentment_currency
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -236,6 +237,7 @@ type GetCurrentTenantSubscriptionRow struct {
 	PendingReason            sql.NullString `db:"pending_reason" json:"pending_reason"`
 	CreatedAt                sql.NullTime   `db:"created_at" json:"created_at"`
 	UpdatedAt                sql.NullTime   `db:"updated_at" json:"updated_at"`
+	PresentmentCurrency      string         `db:"presentment_currency" json:"presentment_currency"`
 }
 
 func (q *Queries) GetCurrentTenantSubscription(ctx context.Context, tenantID string) (GetCurrentTenantSubscriptionRow, error) {
@@ -271,6 +273,7 @@ func (q *Queries) GetCurrentTenantSubscription(ctx context.Context, tenantID str
 		&i.PendingReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PresentmentCurrency,
 	)
 	return i, err
 }
@@ -371,7 +374,7 @@ func (q *Queries) GetTenantSubscriptionTierID(ctx context.Context, tenantID stri
 }
 
 const getUpdatedSubscriptionEventState = `-- name: GetUpdatedSubscriptionEventState :one
-SELECT id, status, COALESCE(payment_method, '') AS payment_method
+SELECT id, status, COALESCE(payment_method, '') AS payment_method, tier_id::text AS tier_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY started_at DESC, id DESC
@@ -382,12 +385,18 @@ type GetUpdatedSubscriptionEventStateRow struct {
 	ID            uuid.UUID `db:"id" json:"id"`
 	Status        string    `db:"status" json:"status"`
 	PaymentMethod string    `db:"payment_method" json:"payment_method"`
+	TierID        string    `db:"tier_id" json:"tier_id"`
 }
 
 func (q *Queries) GetUpdatedSubscriptionEventState(ctx context.Context, tenantID string) (GetUpdatedSubscriptionEventStateRow, error) {
 	row := q.db.QueryRowContext(ctx, getUpdatedSubscriptionEventState, tenantID)
 	var i GetUpdatedSubscriptionEventStateRow
-	err := row.Scan(&i.ID, &i.Status, &i.PaymentMethod)
+	err := row.Scan(
+		&i.ID,
+		&i.Status,
+		&i.PaymentMethod,
+		&i.TierID,
+	)
 	return i, err
 }
 
@@ -395,30 +404,31 @@ const insertTenantSubscription = `-- name: InsertTenantSubscription :exec
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
     trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-    payment_method, custom_features, created_at, updated_at
+    payment_method, custom_features, presentment_currency, created_at, updated_at
 ) VALUES (
     $1, $2::text::uuid, $3::text::uuid,
     'active', $4, $5, $6,
     $7, $8,
     $9, $10,
     $11::text, $12::jsonb,
-    $6, $6
+    $13::text, $6, $6
 )
 `
 
 type InsertTenantSubscriptionParams struct {
-	ID                 uuid.UUID       `db:"id" json:"id"`
-	TenantID           string          `db:"tenant_id" json:"tenant_id"`
-	TierID             string          `db:"tier_id" json:"tier_id"`
-	BillingEmail       sql.NullString  `db:"billing_email" json:"billing_email"`
-	BillingModel       string          `db:"billing_model" json:"billing_model"`
-	Now                time.Time       `db:"now" json:"now"`
-	TrialEndsAt        sql.NullTime    `db:"trial_ends_at" json:"trial_ends_at"`
-	NextBillingDate    sql.NullTime    `db:"next_billing_date" json:"next_billing_date"`
-	BillingPeriodStart sql.NullTime    `db:"billing_period_start" json:"billing_period_start"`
-	BillingPeriodEnd   sql.NullTime    `db:"billing_period_end" json:"billing_period_end"`
-	PaymentMethod      string          `db:"payment_method" json:"payment_method"`
-	CustomFeatures     json.RawMessage `db:"custom_features" json:"custom_features"`
+	ID                  uuid.UUID       `db:"id" json:"id"`
+	TenantID            string          `db:"tenant_id" json:"tenant_id"`
+	TierID              string          `db:"tier_id" json:"tier_id"`
+	BillingEmail        sql.NullString  `db:"billing_email" json:"billing_email"`
+	BillingModel        string          `db:"billing_model" json:"billing_model"`
+	Now                 time.Time       `db:"now" json:"now"`
+	TrialEndsAt         sql.NullTime    `db:"trial_ends_at" json:"trial_ends_at"`
+	NextBillingDate     sql.NullTime    `db:"next_billing_date" json:"next_billing_date"`
+	BillingPeriodStart  sql.NullTime    `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd    sql.NullTime    `db:"billing_period_end" json:"billing_period_end"`
+	PaymentMethod       string          `db:"payment_method" json:"payment_method"`
+	CustomFeatures      json.RawMessage `db:"custom_features" json:"custom_features"`
+	PresentmentCurrency string          `db:"presentment_currency" json:"presentment_currency"`
 }
 
 func (q *Queries) InsertTenantSubscription(ctx context.Context, arg InsertTenantSubscriptionParams) error {
@@ -435,6 +445,7 @@ func (q *Queries) InsertTenantSubscription(ctx context.Context, arg InsertTenant
 		arg.BillingPeriodEnd,
 		arg.PaymentMethod,
 		arg.CustomFeatures,
+		arg.PresentmentCurrency,
 	)
 	return err
 }

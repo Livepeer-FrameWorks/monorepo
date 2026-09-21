@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -83,7 +84,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
 
-	mistClient := mist.NewClient(h.logger)
+	mistClient := mist.NewClient(h.logger, appconfig.MistClient())
 	if h.mistServerURL != "" {
 		mistClient.BaseURL = h.mistServerURL
 	}

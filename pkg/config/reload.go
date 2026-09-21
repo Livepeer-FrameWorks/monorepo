@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sort"
 	"sync"
@@ -58,7 +60,7 @@ func ReloadFromFile(path string) (ReloadResult, error) {
 	}
 	next, err := godotenv.Read(path)
 	if err != nil {
-		return ReloadResult{}, fmt.Errorf("reload env: read %s: %w", path, err)
+		return ReloadResult{}, envFileReadError("reload env", path, err)
 	}
 
 	envFileMu.Lock()
@@ -113,7 +115,7 @@ func PrimeEnvFileOwnership(path string) error {
 	}
 	current, err := godotenv.Read(path)
 	if err != nil {
-		return fmt.Errorf("prime env ownership: read %s: %w", path, err)
+		return envFileReadError("prime env ownership", path, err)
 	}
 
 	envFileMu.Lock()
@@ -122,6 +124,17 @@ func PrimeEnvFileOwnership(path string) error {
 		ownedKeys[key] = struct{}{}
 	}
 	return nil
+}
+
+// envFileReadError reports a failed env-file read. A filesystem error is
+// passed on; a parse error is not, because the parser quotes the offending
+// line, which can hold a secret.
+func envFileReadError(op, path string, err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: read %s: %w", op, path, err)
+	}
+	return fmt.Errorf("%s: %s is not a valid env file", op, path)
 }
 
 // resetReloadStateForTest clears the owned-keys snapshot. Tests use this

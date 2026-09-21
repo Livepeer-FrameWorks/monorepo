@@ -44,10 +44,11 @@ func (q *Queries) AddBillingPaymentReversedAmount(ctx context.Context, arg AddBi
 	return err
 }
 
-const addPendingTopupRefundedAmount = `-- name: AddPendingTopupRefundedAmount :exec
+const addPendingTopupRefundedAmount = `-- name: AddPendingTopupRefundedAmount :one
 UPDATE purser.pending_topups
 SET refunded_amount_cents = refunded_amount_cents + $1, updated_at = NOW()
 WHERE id = $2::text::uuid
+RETURNING refunded_amount_cents, amount_cents
 `
 
 type AddPendingTopupRefundedAmountParams struct {
@@ -55,9 +56,16 @@ type AddPendingTopupRefundedAmountParams struct {
 	TopupID     string `db:"topup_id" json:"topup_id"`
 }
 
-func (q *Queries) AddPendingTopupRefundedAmount(ctx context.Context, arg AddPendingTopupRefundedAmountParams) error {
-	_, err := q.db.ExecContext(ctx, addPendingTopupRefundedAmount, arg.AmountCents, arg.TopupID)
-	return err
+type AddPendingTopupRefundedAmountRow struct {
+	RefundedAmountCents int64 `db:"refunded_amount_cents" json:"refunded_amount_cents"`
+	AmountCents         int64 `db:"amount_cents" json:"amount_cents"`
+}
+
+func (q *Queries) AddPendingTopupRefundedAmount(ctx context.Context, arg AddPendingTopupRefundedAmountParams) (AddPendingTopupRefundedAmountRow, error) {
+	row := q.db.QueryRowContext(ctx, addPendingTopupRefundedAmount, arg.AmountCents, arg.TopupID)
+	var i AddPendingTopupRefundedAmountRow
+	err := row.Scan(&i.RefundedAmountCents, &i.AmountCents)
+	return i, err
 }
 
 const attachAndUpdateClusterStripeSubscription = `-- name: AttachAndUpdateClusterStripeSubscription :execrows
@@ -174,6 +182,29 @@ func (q *Queries) ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventPa
 	return i, err
 }
 
+const completeClaimedWebhookEvent = `-- name: CompleteClaimedWebhookEvent :execrows
+UPDATE purser.webhook_events
+SET status = 'processed', processed_at = NOW(), last_error = NULL
+WHERE provider = $1 AND event_id = $2
+  AND status = 'claimed'
+`
+
+type CompleteClaimedWebhookEventParams struct {
+	Provider string `db:"provider" json:"provider"`
+	EventID  string `db:"event_id" json:"event_id"`
+}
+
+// Settles a claimed event inside the transaction of its effects. It matches
+// only a row still 'claimed', so once one delivery commits, a redelivery or a
+// claim taken over after the lease settles nothing and must record nothing.
+func (q *Queries) CompleteClaimedWebhookEvent(ctx context.Context, arg CompleteClaimedWebhookEventParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeClaimedWebhookEvent, arg.Provider, arg.EventID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getBillingInvoiceAmountCents = `-- name: GetBillingInvoiceAmountCents :one
 SELECT (amount * 100)::bigint AS amount_cents
 FROM purser.billing_invoices
@@ -274,19 +305,34 @@ func (q *Queries) GetInternalSubscriptionID(ctx context.Context, tenantID string
 
 const getInvoicePaymentForReversal = `-- name: GetInvoicePaymentForReversal :one
 SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
-       invoice.tenant_id::text AS tenant_id, payment.currency
+       invoice.tenant_id::text AS tenant_id, payment.currency,
+       ROUND(payment.amount * 100)::bigint AS amount_cents,
+       COALESCE(payment.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(payment.original_currency, '')::text AS original_currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_source, '')::text AS fx_source,
+       COALESCE(payment.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON payment.invoice_id = invoice.id
 WHERE payment.method = 'card' AND payment.tx_id = $1
 ORDER BY payment.created_at DESC
 LIMIT 1
+FOR UPDATE OF payment
 `
 
 type GetInvoicePaymentForReversalRow struct {
-	PaymentID string `db:"payment_id" json:"payment_id"`
-	InvoiceID string `db:"invoice_id" json:"invoice_id"`
-	TenantID  string `db:"tenant_id" json:"tenant_id"`
-	Currency  string `db:"currency" json:"currency"`
+	PaymentID           string    `db:"payment_id" json:"payment_id"`
+	InvoiceID           string    `db:"invoice_id" json:"invoice_id"`
+	TenantID            string    `db:"tenant_id" json:"tenant_id"`
+	Currency            string    `db:"currency" json:"currency"`
+	AmountCents         int64     `db:"amount_cents" json:"amount_cents"`
+	OriginalAmountCents int64     `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string    `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64     `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string    `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string    `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetInvoicePaymentForReversal(ctx context.Context, providerPaymentID sql.NullString) (GetInvoicePaymentForReversalRow, error) {
@@ -297,6 +343,13 @@ func (q *Queries) GetInvoicePaymentForReversal(ctx context.Context, providerPaym
 		&i.InvoiceID,
 		&i.TenantID,
 		&i.Currency,
+		&i.AmountCents,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -319,6 +372,30 @@ func (q *Queries) GetMollieAppliedReversalCents(ctx context.Context, arg GetMoll
 	var amount_cents int64
 	err := row.Scan(&amount_cents)
 	return amount_cents, err
+}
+
+const getMollieFirstPaymentIntentCurrency = `-- name: GetMollieFirstPaymentIntentCurrency :one
+SELECT currency::text AS currency
+FROM purser.payment_provider_intents
+WHERE tenant_id = $1::text::uuid
+  AND provider = 'mollie'
+  AND purpose = 'mollie_first_payment'
+  AND provider_payment_id = $2
+`
+
+type GetMollieFirstPaymentIntentCurrencyParams struct {
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	ProviderPaymentID sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
+}
+
+// The currency a Mollie first payment was created in. CreateFirstPayment
+// creates it in the tenant's presentment currency: the EUR base fee for an EUR
+// tenant, a zero-amount mandate payment otherwise.
+func (q *Queries) GetMollieFirstPaymentIntentCurrency(ctx context.Context, arg GetMollieFirstPaymentIntentCurrencyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getMollieFirstPaymentIntentCurrency, arg.TenantID, arg.ProviderPaymentID)
+	var currency string
+	err := row.Scan(&currency)
+	return currency, err
 }
 
 const getMollieObservationDrainInvoice = `-- name: GetMollieObservationDrainInvoice :one
@@ -351,28 +428,79 @@ func (q *Queries) GetMollieObservationDrainInvoice(ctx context.Context, invoiceI
 	return i, err
 }
 
-const getPaymentStatusEmailDetails = `-- name: GetPaymentStatusEmailDetails :one
-SELECT invoice.tenant_id::text AS tenant_id, invoice.amount::float8 AS amount,
-       invoice.currency, subscription.billing_email
-FROM purser.billing_invoices invoice
-JOIN purser.tenant_subscriptions subscription ON invoice.tenant_id = subscription.tenant_id
-WHERE invoice.id = $1::text::uuid
+const getPaymentEmailFX = `-- name: GetPaymentEmailFX :one
+SELECT COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)::bigint AS amount_cents,
+       COALESCE(payment.original_currency, UPPER(payment.currency))::text AS currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_reference_date::text, '')::text AS fx_reference_date
+FROM purser.billing_payments payment
+WHERE payment.id = $1::text::uuid
 `
 
-type GetPaymentStatusEmailDetailsRow struct {
-	TenantID     string         `db:"tenant_id" json:"tenant_id"`
-	Amount       float64        `db:"amount" json:"amount"`
-	Currency     string         `db:"currency" json:"currency"`
-	BillingEmail sql.NullString `db:"billing_email" json:"billing_email"`
+type GetPaymentEmailFXRow struct {
+	AmountCents     int64  `db:"amount_cents" json:"amount_cents"`
+	Currency        string `db:"currency" json:"currency"`
+	EurAmountCents  int64  `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur   string `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate string `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
-func (q *Queries) GetPaymentStatusEmailDetails(ctx context.Context, invoiceID string) (GetPaymentStatusEmailDetailsRow, error) {
-	row := q.db.QueryRowContext(ctx, getPaymentStatusEmailDetails, invoiceID)
+func (q *Queries) GetPaymentEmailFX(ctx context.Context, paymentID string) (GetPaymentEmailFXRow, error) {
+	row := q.db.QueryRowContext(ctx, getPaymentEmailFX, paymentID)
+	var i GetPaymentEmailFXRow
+	err := row.Scan(
+		&i.AmountCents,
+		&i.Currency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxReferenceDate,
+	)
+	return i, err
+}
+
+const getPaymentStatusEmailDetails = `-- name: GetPaymentStatusEmailDetails :one
+SELECT invoice.tenant_id::text AS tenant_id,
+       COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)::bigint AS amount_cents,
+       COALESCE(payment.original_currency, UPPER(payment.currency))::text AS currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_reference_date::text, '')::text AS fx_reference_date,
+       subscription.billing_email
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+JOIN purser.tenant_subscriptions subscription ON invoice.tenant_id = subscription.tenant_id
+WHERE payment.id = $1::text::uuid
+  AND invoice.id = $2::text::uuid
+`
+
+type GetPaymentStatusEmailDetailsParams struct {
+	PaymentID string `db:"payment_id" json:"payment_id"`
+	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+}
+
+type GetPaymentStatusEmailDetailsRow struct {
+	TenantID        string         `db:"tenant_id" json:"tenant_id"`
+	AmountCents     int64          `db:"amount_cents" json:"amount_cents"`
+	Currency        string         `db:"currency" json:"currency"`
+	EurAmountCents  int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur   string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate string         `db:"fx_reference_date" json:"fx_reference_date"`
+	BillingEmail    sql.NullString `db:"billing_email" json:"billing_email"`
+}
+
+// The payment's original amount is what the payer was charged; the FX fields
+// state the EUR amount applied to the invoice and the rate.
+func (q *Queries) GetPaymentStatusEmailDetails(ctx context.Context, arg GetPaymentStatusEmailDetailsParams) (GetPaymentStatusEmailDetailsRow, error) {
+	row := q.db.QueryRowContext(ctx, getPaymentStatusEmailDetails, arg.PaymentID, arg.InvoiceID)
 	var i GetPaymentStatusEmailDetailsRow
 	err := row.Scan(
 		&i.TenantID,
-		&i.Amount,
+		&i.AmountCents,
 		&i.Currency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxReferenceDate,
 		&i.BillingEmail,
 	)
 	return i, err
@@ -418,25 +546,115 @@ func (q *Queries) GetPendingBillingPaymentForInvoice(ctx context.Context, arg Ge
 	return i, err
 }
 
+const getPendingTopupCreditState = `-- name: GetPendingTopupCreditState :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.balance_transactions credit
+    WHERE credit.tenant_id = $1::text::uuid
+      AND credit.reference_type = 'topup'
+      AND credit.reference_id = $2::text::uuid
+      AND credit.amount_cents > 0
+)::boolean AS credited
+`
+
+type GetPendingTopupCreditStateParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	TopupID  string `db:"topup_id" json:"topup_id"`
+}
+
+// The positive balance transaction keyed by the top-up is the authority for
+// whether the top-up was credited to a balance.
+func (q *Queries) GetPendingTopupCreditState(ctx context.Context, arg GetPendingTopupCreditStateParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getPendingTopupCreditState, arg.TenantID, arg.TopupID)
+	var credited bool
+	err := row.Scan(&credited)
+	return credited, err
+}
+
 const getPendingTopupForReversal = `-- name: GetPendingTopupForReversal :one
-SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency
+SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.pending_topups
 WHERE provider_payment_id = $1
    OR checkout_id = $1
 ORDER BY created_at DESC
 LIMIT 1
+FOR UPDATE
 `
 
 type GetPendingTopupForReversalRow struct {
-	TopupID  string `db:"topup_id" json:"topup_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	Currency string `db:"currency" json:"currency"`
+	TopupID             string    `db:"topup_id" json:"topup_id"`
+	TenantID            string    `db:"tenant_id" json:"tenant_id"`
+	Currency            string    `db:"currency" json:"currency"`
+	Status              string    `db:"status" json:"status"`
+	AmountCents         int64     `db:"amount_cents" json:"amount_cents"`
+	OriginalAmountCents int64     `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string    `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64     `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string    `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string    `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
+// Locks the top-up so a reversal and the checkout credit path serialize.
+// Credit state is read by GetPendingTopupCreditState in a later statement,
+// which sees a credit committed while this lock was waited on.
 func (q *Queries) GetPendingTopupForReversal(ctx context.Context, providerPaymentID sql.NullString) (GetPendingTopupForReversalRow, error) {
 	row := q.db.QueryRowContext(ctx, getPendingTopupForReversal, providerPaymentID)
 	var i GetPendingTopupForReversalRow
-	err := row.Scan(&i.TopupID, &i.TenantID, &i.Currency)
+	err := row.Scan(
+		&i.TopupID,
+		&i.TenantID,
+		&i.Currency,
+		&i.Status,
+		&i.AmountCents,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
+	)
+	return i, err
+}
+
+const getPriorReversalTotals = `-- name: GetPriorReversalTotals :one
+SELECT COALESCE(SUM(amount_cents), 0)::bigint AS original_cents,
+       COALESCE(SUM(eur_amount_cents), 0)::bigint AS eur_cents
+FROM purser.payment_reversals
+WHERE status = 'succeeded'
+  AND NOT (provider = $1 AND provider_reversal_id = $2)
+  AND (payment_id = $3::text::uuid OR pending_topup_id = $4::text::uuid)
+`
+
+type GetPriorReversalTotalsParams struct {
+	Provider           string         `db:"provider" json:"provider"`
+	ProviderReversalID string         `db:"provider_reversal_id" json:"provider_reversal_id"`
+	PaymentID          sql.NullString `db:"payment_id" json:"payment_id"`
+	PendingTopupID     sql.NullString `db:"pending_topup_id" json:"pending_topup_id"`
+}
+
+type GetPriorReversalTotalsRow struct {
+	OriginalCents int64 `db:"original_cents" json:"original_cents"`
+	EurCents      int64 `db:"eur_cents" json:"eur_cents"`
+}
+
+// The original and EUR amounts already reversed from one payment or top-up by
+// succeeded reversals other than provider_reversal_id. The caller holds the
+// payment or top-up row lock, so concurrent reversals see each other.
+func (q *Queries) GetPriorReversalTotals(ctx context.Context, arg GetPriorReversalTotalsParams) (GetPriorReversalTotalsRow, error) {
+	row := q.db.QueryRowContext(ctx, getPriorReversalTotals,
+		arg.Provider,
+		arg.ProviderReversalID,
+		arg.PaymentID,
+		arg.PendingTopupID,
+	)
+	var i GetPriorReversalTotalsRow
+	err := row.Scan(&i.OriginalCents, &i.EurCents)
 	return i, err
 }
 
@@ -573,19 +791,29 @@ func (q *Queries) IncrementTenantDunningAttempts(ctx context.Context, tenantID s
 
 const insertMollieSubscriptionPayment = `-- name: InsertMollieSubscriptionPayment :exec
 INSERT INTO purser.billing_payments (
-    invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, 'card', $2::numeric,
-    $3, $4, 'pending', NOW(), NOW()
+    $3::text, $4, 'pending', NOW(), NOW(),
+    $5::bigint, $3::text, $6::bigint,
+    $7::text::numeric, $8::text,
+    $9::date
 )
 ON CONFLICT DO NOTHING
 `
 
 type InsertMollieSubscriptionPaymentParams struct {
-	InvoiceID     string         `db:"invoice_id" json:"invoice_id"`
-	Amount        string         `db:"amount" json:"amount"`
-	Currency      string         `db:"currency" json:"currency"`
-	TransactionID sql.NullString `db:"transaction_id" json:"transaction_id"`
+	InvoiceID           string         `db:"invoice_id" json:"invoice_id"`
+	Amount              string         `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TransactionID       sql.NullString `db:"transaction_id" json:"transaction_id"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) InsertMollieSubscriptionPayment(ctx context.Context, arg InsertMollieSubscriptionPaymentParams) error {
@@ -594,6 +822,11 @@ func (q *Queries) InsertMollieSubscriptionPayment(ctx context.Context, arg Inser
 		arg.Amount,
 		arg.Currency,
 		arg.TransactionID,
+		arg.OriginalAmountCents,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	return err
 }
@@ -602,11 +835,18 @@ const insertPendingStripeDispute = `-- name: InsertPendingStripeDispute :exec
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, provider, reversal_type,
     provider_reversal_id, provider_charge_id,
-    amount_cents, currency, status, reason
+    amount_cents, currency, status, reason,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 )
 SELECT invoice.tenant_id, payment.id, 'stripe', 'dispute',
-       $1, $2, $3,
-       $4, 'pending', $5
+       $1, $2, $3::bigint,
+       $4::text, 'pending', $5,
+       $3::bigint, $4::text,
+       CASE WHEN payment.fx_source = 'identity' THEN $3::bigint
+            ELSE ROUND(payment.eur_amount_cents::numeric * $3::bigint
+                       / payment.original_amount_cents)::bigint END,
+       payment.fx_units_per_eur, payment.fx_source, payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON payment.invoice_id = invoice.id
 WHERE payment.tx_id = $6
@@ -625,6 +865,8 @@ type InsertPendingStripeDisputeParams struct {
 	PaymentIntentID sql.NullString `db:"payment_intent_id" json:"payment_intent_id"`
 }
 
+// The pending row takes the disputed share of the payment's EUR amount at the
+// payment's rate, so the later funds_withdrawn transition moves the same EUR.
 func (q *Queries) InsertPendingStripeDispute(ctx context.Context, arg InsertPendingStripeDisputeParams) error {
 	_, err := q.db.ExecContext(ctx, insertPendingStripeDispute,
 		arg.DisputeID,
@@ -805,18 +1047,41 @@ func (q *Queries) ListOperatorAccrualsForInvoice(ctx context.Context, invoiceID 
 	return items, nil
 }
 
+const lockBillingPaymentStatus = `-- name: LockBillingPaymentStatus :one
+SELECT payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.id = $1::text::uuid
+  AND invoice.tenant_id = $2::text::uuid
+FOR UPDATE OF payment
+`
+
+type LockBillingPaymentStatusParams struct {
+	PaymentID string `db:"payment_id" json:"payment_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) LockBillingPaymentStatus(ctx context.Context, arg LockBillingPaymentStatusParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockBillingPaymentStatus, arg.PaymentID, arg.TenantID)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
 const markFullySettledBillingInvoicePaid = `-- name: MarkFullySettledBillingInvoicePaid :execrows
 UPDATE purser.billing_invoices invoice
 SET status = 'paid', paid_at = COALESCE(invoice.paid_at, $1), updated_at = NOW()
 WHERE invoice.id = $2::text::uuid
   AND invoice.status IN ('pending', 'overdue')
   AND (
-      SELECT COALESCE(SUM(payment.amount - COALESCE(payment.reversed_amount_cents, 0)::numeric / 100), 0)
+      SELECT COALESCE(SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                          - COALESCE(payment.reversed_amount_cents, 0)), 0)
       FROM purser.billing_payments payment
       WHERE payment.invoice_id = invoice.id
         AND payment.status = 'confirmed'
-        AND payment.currency = invoice.currency
-  ) >= invoice.amount
+        AND COALESCE(payment.original_currency, UPPER(payment.currency))
+            = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+  ) >= COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)
 `
 
 type MarkFullySettledBillingInvoicePaidParams struct {
@@ -824,6 +1089,8 @@ type MarkFullySettledBillingInvoicePaidParams struct {
 	InvoiceID string       `db:"invoice_id" json:"invoice_id"`
 }
 
+// Coverage is measured in the currency the invoice was presented in: the
+// original amounts of confirmed payments in that currency, net of reversals.
 func (q *Queries) MarkFullySettledBillingInvoicePaid(ctx context.Context, arg MarkFullySettledBillingInvoicePaidParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markFullySettledBillingInvoicePaid, arg.PaidAt, arg.InvoiceID)
 	if err != nil {
@@ -938,14 +1205,16 @@ UPDATE purser.billing_invoices invoice
 SET status = 'pending', reopened_at = NOW(), updated_at = NOW()
 WHERE invoice.id = $1::text::uuid
   AND invoice.status = 'paid'
-  AND invoice.currency = $2
+  AND COALESCE(invoice.presentment_currency, UPPER(invoice.currency)) = UPPER($2::text)
   AND (
-      SELECT COALESCE(SUM(payment.amount - COALESCE(payment.reversed_amount_cents, 0)::numeric / 100), 0)
+      SELECT COALESCE(SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                          - COALESCE(payment.reversed_amount_cents, 0)), 0)
       FROM purser.billing_payments payment
       WHERE payment.invoice_id = invoice.id
         AND payment.status = 'confirmed'
-        AND payment.currency = invoice.currency
-  ) < invoice.amount
+        AND COALESCE(payment.original_currency, UPPER(payment.currency))
+            = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+  ) < COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)
 `
 
 type ReopenUnderpaidBillingInvoiceParams struct {
@@ -953,6 +1222,8 @@ type ReopenUnderpaidBillingInvoiceParams struct {
 	Currency  string `db:"currency" json:"currency"`
 }
 
+// Coverage is measured in the currency the invoice was presented in: the
+// original amounts of confirmed payments in that currency, net of reversals.
 func (q *Queries) ReopenUnderpaidBillingInvoice(ctx context.Context, arg ReopenUnderpaidBillingInvoiceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, reopenUnderpaidBillingInvoice, arg.InvoiceID, arg.Currency)
 	if err != nil {
@@ -969,6 +1240,31 @@ WHERE tenant_id = $1::text::uuid
 
 func (q *Queries) ResetTenantDunningAttempts(ctx context.Context, tenantID string) error {
 	_, err := q.db.ExecContext(ctx, resetTenantDunningAttempts, tenantID)
+	return err
+}
+
+const resolveMollieFirstPaymentIntent = `-- name: ResolveMollieFirstPaymentIntent :exec
+UPDATE purser.payment_provider_intents
+SET status = $1::text,
+    succeeded_at = CASE WHEN $1::text = 'succeeded' THEN COALESCE(succeeded_at, NOW()) ELSE succeeded_at END,
+    updated_at = NOW()
+WHERE tenant_id = $2::text::uuid
+  AND provider = 'mollie'
+  AND purpose = 'mollie_first_payment'
+  AND provider_payment_id = $3
+  AND status IN ('pending', 'provider_open')
+`
+
+type ResolveMollieFirstPaymentIntentParams struct {
+	Status            string         `db:"status" json:"status"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	ProviderPaymentID sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
+}
+
+// Records the outcome of a Mollie first payment on its intent, which ends the
+// presentment-currency lock the open intent holds.
+func (q *Queries) ResolveMollieFirstPaymentIntent(ctx context.Context, arg ResolveMollieFirstPaymentIntentParams) error {
+	_, err := q.db.ExecContext(ctx, resolveMollieFirstPaymentIntent, arg.Status, arg.TenantID, arg.ProviderPaymentID)
 	return err
 }
 
@@ -1011,6 +1307,32 @@ func (q *Queries) ResolveMollieSubscriptionInvoice(ctx context.Context, arg Reso
 	var invoice_id string
 	err := row.Scan(&invoice_id)
 	return invoice_id, err
+}
+
+const resolvePendingTopupReviewHolds = `-- name: ResolvePendingTopupReviewHolds :execrows
+UPDATE purser.payment_reversals
+SET status = 'succeeded', operator_review_required = FALSE,
+    evidence_ref = $1, updated_at = NOW()
+WHERE tenant_id = $2::text::uuid
+  AND pending_topup_id = $3::text::uuid
+  AND reversal_type = 'manual'
+  AND status = 'needs_review'
+`
+
+type ResolvePendingTopupReviewHoldsParams struct {
+	EvidenceRef sql.NullString `db:"evidence_ref" json:"evidence_ref"`
+	TenantID    string         `db:"tenant_id" json:"tenant_id"`
+	TopupID     string         `db:"topup_id" json:"topup_id"`
+}
+
+// Closes the operator review holds of an uncredited top-up whose paid amount
+// the provider has fully returned; evidence_ref names the closing reversal.
+func (q *Queries) ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolvePendingTopupReviewHolds, arg.EvidenceRef, arg.TenantID, arg.TopupID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const subtractPrepaidBalance = `-- name: SubtractPrepaidBalance :execrows
@@ -1371,19 +1693,30 @@ const upsertSucceededPaymentReversal = `-- name: UpsertSucceededPaymentReversal 
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, pending_topup_id, invoice_id,
     provider, reversal_type, provider_reversal_id, provider_charge_id,
-    amount_cents, currency, status, reason
+    amount_cents, currency, status, reason,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, $2::text::uuid,
     $3::text::uuid, $4::text::uuid,
     $5, $6, $7,
-    $8, $9, $10,
-    'succeeded', $11
+    $8, $9::bigint, $10::text,
+    'succeeded', $11,
+    $9::bigint, $10::text, $12::bigint,
+    $13::text::numeric, $14::text,
+    $15::date
 )
 ON CONFLICT (provider, provider_reversal_id) DO UPDATE SET
     payment_id = COALESCE(purser.payment_reversals.payment_id, EXCLUDED.payment_id),
     pending_topup_id = COALESCE(purser.payment_reversals.pending_topup_id, EXCLUDED.pending_topup_id),
     invoice_id = COALESCE(purser.payment_reversals.invoice_id, EXCLUDED.invoice_id),
     provider_charge_id = COALESCE(purser.payment_reversals.provider_charge_id, EXCLUDED.provider_charge_id),
+    original_amount_cents = COALESCE(purser.payment_reversals.original_amount_cents, EXCLUDED.original_amount_cents),
+    original_currency = COALESCE(purser.payment_reversals.original_currency, EXCLUDED.original_currency),
+    eur_amount_cents = COALESCE(purser.payment_reversals.eur_amount_cents, EXCLUDED.eur_amount_cents),
+    fx_units_per_eur = COALESCE(purser.payment_reversals.fx_units_per_eur, EXCLUDED.fx_units_per_eur),
+    fx_source = COALESCE(purser.payment_reversals.fx_source, EXCLUDED.fx_source),
+    fx_reference_date = COALESCE(purser.payment_reversals.fx_reference_date, EXCLUDED.fx_reference_date),
     status = 'succeeded', updated_at = NOW()
 WHERE purser.payment_reversals.status = 'pending'
 RETURNING id::text AS id
@@ -1401,6 +1734,10 @@ type UpsertSucceededPaymentReversalParams struct {
 	AmountCents        int64          `db:"amount_cents" json:"amount_cents"`
 	Currency           string         `db:"currency" json:"currency"`
 	Reason             sql.NullString `db:"reason" json:"reason"`
+	EurAmountCents     int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur      string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource           string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate    time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) UpsertSucceededPaymentReversal(ctx context.Context, arg UpsertSucceededPaymentReversalParams) (string, error) {
@@ -1416,6 +1753,10 @@ func (q *Queries) UpsertSucceededPaymentReversal(ctx context.Context, arg Upsert
 		arg.AmountCents,
 		arg.Currency,
 		arg.Reason,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	var id string
 	err := row.Scan(&id)

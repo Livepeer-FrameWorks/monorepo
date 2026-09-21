@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"frameworks/api_mesh/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
 
@@ -152,7 +152,9 @@ func loadEnrollmentState(path string) (*enrollmentState, error) {
 //
 // Returns (nil, nil) when no enrollment action is needed (key already
 // present, or no token supplied).
-func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFile, dataDir string) (*enrollmentState, error) {
+func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, cfg *appconfig.Privateer) (*enrollmentState, error) {
+	privateKeyFile := cfg.PrivateKeyFile
+	dataDir := cfg.DataDir
 	if privateKeyFile == "" {
 		return nil, nil
 	}
@@ -162,12 +164,12 @@ func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFil
 		return nil, fmt.Errorf("stat %s: %w", privateKeyFile, statErr)
 	}
 
-	token := readJoinToken()
+	token := strings.TrimSpace(cfg.JoinToken)
 	if token == "" {
 		return nil, nil
 	}
 
-	bootstrapURL := strings.TrimSpace(os.Getenv("BRIDGE_BOOTSTRAP_ADDR"))
+	bootstrapURL := strings.TrimSpace(cfg.BridgeBootstrapAddr)
 	if bootstrapURL == "" {
 		return nil, fmt.Errorf("enrollment: BRIDGE_BOOTSTRAP_ADDR is required when MESH_JOIN_TOKEN is set")
 	}
@@ -208,13 +210,13 @@ func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFil
 	pub := pending.PublicKey
 	nodeID := pending.NodeID
 
-	hostname := strings.TrimSpace(os.Getenv("MESH_NODE_NAME"))
+	hostname := strings.TrimSpace(cfg.NodeName)
 	if hostname == "" {
 		if h, herr := os.Hostname(); herr == nil {
 			hostname = h
 		}
 	}
-	nodeType := strings.TrimSpace(os.Getenv("MESH_NODE_TYPE"))
+	nodeType := strings.TrimSpace(cfg.NodeType)
 	if nodeType == "" {
 		nodeType = "core"
 	}
@@ -226,17 +228,17 @@ func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFil
 		"hostname":             hostname,
 		"wireguard_public_key": pub,
 	}
-	if ext := strings.TrimSpace(os.Getenv("MESH_EXTERNAL_IP")); ext != "" {
+	if ext := strings.TrimSpace(cfg.ExternalIP); ext != "" {
 		reqBody["external_ip"] = ext
 	}
-	if intIP := strings.TrimSpace(os.Getenv("MESH_INTERNAL_IP")); intIP != "" {
+	if intIP := strings.TrimSpace(cfg.InternalIP); intIP != "" {
 		reqBody["internal_ip"] = intIP
 	}
-	if cluster := strings.TrimSpace(os.Getenv("CLUSTER_ID")); cluster != "" {
+	if cluster := strings.TrimSpace(cfg.ClusterID); cluster != "" {
 		reqBody["target_cluster_id"] = cluster
 	}
 
-	resp, err := postBootstrap(ctx, logger, bootstrapURL, reqBody)
+	resp, err := postBootstrap(ctx, logger, bootstrapURL, reqBody, cfg.BootstrapInsecure)
 	if err != nil {
 		// Request failed before any response was decoded. If the error
 		// happened before the server committed, the token is still valid
@@ -254,7 +256,7 @@ func tryEnrollIfNeeded(ctx context.Context, logger logging.Logger, privateKeyFil
 		return nil, fmt.Errorf("enrollment: bootstrap response missing cluster_id")
 	}
 
-	staticPeersFile := strings.TrimSpace(os.Getenv("PRIVATEER_STATIC_PEERS_FILE"))
+	staticPeersFile := strings.TrimSpace(cfg.StaticPeersFile)
 	if staticPeersFile == "" {
 		staticPeersFile = "/etc/privateer/static-peers.json"
 	}
@@ -453,11 +455,6 @@ func stagePeersTmp(target string, resp *bootstrapResponse) (string, error) {
 	return tmpPath, nil
 }
 
-// readJoinToken returns MESH_JOIN_TOKEN from the environment.
-func readJoinToken() string {
-	return strings.TrimSpace(os.Getenv("MESH_JOIN_TOKEN"))
-}
-
 // bootstrapPeer mirrors the JSON shape returned by Bridge's
 // /v1/bootstrap/infrastructure-node handler (api_gateway/internal/handlers/bootstrap_infra.go).
 type bootstrapPeer struct {
@@ -483,7 +480,7 @@ type bootstrapResponse struct {
 
 // postBootstrap POSTs the enrollment request to Bridge and decodes the JSON
 // response.
-func postBootstrap(ctx context.Context, logger logging.Logger, baseURL string, body map[string]any) (*bootstrapResponse, error) {
+func postBootstrap(ctx context.Context, logger logging.Logger, baseURL string, body map[string]any, insecure bool) (*bootstrapResponse, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal bootstrap request: %w", err)
@@ -499,7 +496,7 @@ func postBootstrap(ctx context.Context, logger logging.Logger, baseURL string, b
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	if config.GetEnvBool("FRAMEWORKS_BOOTSTRAP_INSECURE", false) && strings.HasPrefix(url, "https://") {
+	if insecure && strings.HasPrefix(url, "https://") {
 		if logger != nil {
 			logger.WithField("url", url).Warn("bootstrap HTTPS verification disabled via FRAMEWORKS_BOOTSTRAP_INSECURE")
 		}

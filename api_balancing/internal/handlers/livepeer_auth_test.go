@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
@@ -23,7 +24,7 @@ import (
 
 func configureLivepeerAuthNode(t *testing.T, healthy, ingest, processing bool) *state.StreamStateManager {
 	t.Helper()
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-job-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "test-job-secret"})
 	oldCluster := clusterID
 	clusterID = "media-gateway"
 	t.Cleanup(func() { clusterID = oldCluster })
@@ -182,7 +183,7 @@ func TestAuthorizeSignedLivepeerLiveJobBindsGenerationAndCanonicalSpec(t *testin
 }
 
 func TestAuthorizeSignedLivepeerProcessingJobReturnsStoredCanonicalContract(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-job-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "test-job-secret"})
 	oldCluster := clusterID
 	clusterID = "media-gateway"
 	t.Cleanup(func() { clusterID = oldCluster })

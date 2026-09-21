@@ -216,12 +216,11 @@ func TestFailExhaustedJobAtomic_CommitsAllOrNothing(t *testing.T) {
 	mock.ExpectQuery(`WITH failed AS`).
 		WithArgs("job-vodfail", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
-			AddRow("vod-fail-hash-recon", "vod", "tenant-vodfail", "", "", "max retries exceeded"))
+			AddRow("vod-fail-hash-recon", "vod", mockTenantUUID, "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("vod-fail-hash-recon", "max retries exceeded", "tenant-vodfail").
+		WithArgs("vod-fail-hash-recon", "max retries exceeded", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "vod-fail-hash-recon", "vod_lifecycle", mockTenantUUID, "", "vod-fail-hash-recon")
 	mock.ExpectCommit()
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})

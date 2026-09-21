@@ -23,6 +23,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
 const (
@@ -141,22 +142,22 @@ func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
 	router.OPTIONS("/assets/:assetKey/:file", h.handleAssetOptions)
 	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
 	router.HEAD("/assets/:assetKey/:file", h.handleGetAsset)
-	// Readiness: proves ONLY that this instance can read its immutable backend (store probe). No resolver, no Foghorn.
-	router.GET("/ready", h.handleReady)
 	if h.serviceToken != "" {
 		router.POST("/internal/assets/cache/invalidate", auth.ServiceAuthMiddleware(h.serviceToken), h.handleInvalidateCache)
 	}
 }
 
-// handleReady reports whether this Chandler can read its immutable backend — the only thing a dumb static-object
-// server needs to prove. A reachable store is 200; anything else is 503. No resolver, no Foghorn, no publication
-// coupling (docs/architecture/thumbnails.md).
-func (h *AssetHandler) handleReady(c *gin.Context) {
-	if h.probeStoreReachable(c.Request.Context()) {
-		c.JSON(http.StatusOK, gin.H{"ready": true, "store": true})
-		return
+// StoreReadinessCheck reports whether this Chandler can read its immutable backend, the only thing a static-object
+// server needs to prove before serving. Registered on the service ReadinessChecker, it makes /ready answer 200 when
+// the store is readable and 503 otherwise. It involves no resolver, no Foghorn, and no publication state
+// (docs/architecture/thumbnails.md).
+func (h *AssetHandler) StoreReadinessCheck() monitoring.HealthCheck {
+	return func() monitoring.CheckResult {
+		if h.probeStoreReachable(context.Background()) {
+			return monitoring.CheckResult{Status: monitoring.StatusHealthy}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusUnhealthy, Message: "readiness sentinel is not readable from the object store"}
 	}
-	c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "store": false})
 }
 
 // probeStoreReachable does a bounded GetObject of the readiness sentinel (mediakeys.ReadinessSentinelKey, written by

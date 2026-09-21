@@ -24,6 +24,10 @@ type SignalmanServer struct {
 	hub     *Hub
 	logger  logging.Logger
 	metrics *metrics.Metrics
+
+	// shutdown is closed by Shutdown and ends every open Subscribe stream.
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
 }
 
 // Hub manages all connected gRPC streaming clients
@@ -54,6 +58,12 @@ type Client struct {
 	mutex            sync.RWMutex
 }
 
+// clientRecv is one Recv result handed from the stream reader to Subscribe.
+type clientRecv struct {
+	msg *signalmanpb.ClientMessage
+	err error
+}
+
 // NewSignalmanServer creates a new gRPC server for Signalman
 func NewSignalmanServer(logger logging.Logger, m *metrics.Metrics) *SignalmanServer {
 	hub := &Hub{
@@ -66,15 +76,24 @@ func NewSignalmanServer(logger logging.Logger, m *metrics.Metrics) *SignalmanSer
 	}
 
 	server := &SignalmanServer{
-		hub:     hub,
-		logger:  logger,
-		metrics: m,
+		hub:      hub,
+		logger:   logger,
+		metrics:  m,
+		shutdown: make(chan struct{}),
 	}
 
 	// Start hub event loop
 	go hub.run()
 
 	return server
+}
+
+// Shutdown ends every open Subscribe stream with codes.Unavailable so clients
+// reconnect to another replica, and rejects new streams the same way. A
+// Subscribe stream otherwise stays open until its client leaves, which would
+// hold a graceful gRPC stop open. Safe to call more than once.
+func (s *SignalmanServer) Shutdown() {
+	s.shutdownOnce.Do(func() { close(s.shutdown) })
 }
 
 // GetHub returns the hub for external event broadcasting (e.g., from Kafka consumer)
@@ -281,10 +300,12 @@ func (c *Client) shouldReceive(event *signalmanpb.SignalmanEvent) bool {
 		return c.platformAudience && slices.Contains(c.channels, signalmanpb.Channel_CHANNEL_PLATFORM)
 	}
 
-	// Check channel subscription
+	// Check channel subscription. CHANNEL_ALL covers the legacy channels only:
+	// CHANNEL_EVENTS carries a different payload contract, so its subscribers
+	// name it.
 	subscribed := false
 	for _, ch := range c.channels {
-		if ch == event.Channel || ch == signalmanpb.Channel_CHANNEL_ALL {
+		if ch == event.Channel || (ch == signalmanpb.Channel_CHANNEL_ALL && event.Channel != signalmanpb.Channel_CHANNEL_EVENTS) {
 			subscribed = true
 			break
 		}
@@ -375,9 +396,31 @@ func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_Subscrib
 		}).Info("gRPC client disconnected")
 	}()
 
-	// Read client messages
+	// Read client messages on a separate goroutine so Shutdown can end the
+	// stream while Recv is blocked. Messages are still handled in order here.
+	recvCh := make(chan clientRecv)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			select {
+			case recvCh <- clientRecv{msg: msg, err: err}:
+			case <-client.done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
-		msg, err := stream.Recv()
+		var received clientRecv
+		select {
+		case <-s.shutdown:
+			return status.Error(codes.Unavailable, "signalman is shutting down")
+		case received = <-recvCh:
+		}
+		msg, err := received.msg, received.err
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
@@ -579,6 +622,8 @@ func channelToString(ch signalmanpb.Channel) string {
 		return "ai"
 	case signalmanpb.Channel_CHANNEL_PLATFORM:
 		return "platform"
+	case signalmanpb.Channel_CHANNEL_EVENTS:
+		return "events"
 	default:
 		return "unknown"
 	}
@@ -635,6 +680,8 @@ func eventTypeToString(et signalmanpb.EventType) string {
 		return "message_lifecycle"
 	case signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
 		return "skipper_investigation"
+	case signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT:
+		return "tenant_event"
 	default:
 		return "unknown"
 	}

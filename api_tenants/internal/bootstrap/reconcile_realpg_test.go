@@ -86,6 +86,23 @@ func TestBootstrapRepositoryReplay_RealPG(t *testing.T) {
 	if created != 1 || updated != 1 {
 		t.Fatalf("cluster outbox events: created=%d updated=%d, want 1 and 1", created, updated)
 	}
+	// Each of them is also a platform-scoped domain event under the same ID,
+	// with no actor because bootstrap runs outside an API call.
+	var domainCreated, domainUpdated int
+	if err := db.QueryRowContext(ctx, `
+		SELECT
+			count(*) FILTER (WHERE d.event_type = 'cluster.created'),
+			count(*) FILTER (WHERE d.event_type = 'cluster.updated')
+		FROM quartermaster.domain_event_outbox d
+		JOIN quartermaster.service_event_outbox s ON s.event_id = d.event_id
+		WHERE d.aggregate_type = 'clusters' AND d.aggregate_id = 'core-test'
+		  AND d.scope = 'platform' AND d.tenant_id IS NULL AND d.actor_auth_type = ''
+	`).Scan(&domainCreated, &domainUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if domainCreated != 1 || domainUpdated != 1 {
+		t.Fatalf("cluster domain events: created=%d updated=%d, want 1 and 1", domainCreated, domainUpdated)
+	}
 
 	var tenantCount, clusterCount, nodeCount, serviceCount int
 	if err := db.QueryRowContext(ctx, `

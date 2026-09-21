@@ -142,7 +142,7 @@ func TestRevokeDNSEntitlementsAdvancesFalseObservation(t *testing.T) {
 	}
 }
 
-func (f *fakeQM) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, _ *tenantlimitspb.TenantResourceLimits) error {
+func (f *fakeQM) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, _ *tenantlimitspb.TenantResourceLimits, _ *commonpb.RequestActor) error {
 	f.calls = append(f.calls, "grant:"+clusterID)
 	return f.bootstrapErr
 }

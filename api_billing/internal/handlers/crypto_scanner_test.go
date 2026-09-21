@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -63,12 +64,12 @@ func TestHexQuantityToDecimal(t *testing.T) {
 }
 
 func TestCryptoScannerStartBlockRequiresProductionAnchor(t *testing.T) {
-	t.Setenv("BUILD_ENV", "production")
-	t.Setenv("CRYPTO_SCAN_START_BLOCK_BASE", "")
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "")
 	if _, err := cryptoScannerStartBlock("base", 10_000); err == nil {
 		t.Fatal("production scanner accepted an implicit start block")
 	}
-	t.Setenv("CRYPTO_SCAN_START_BLOCK_BASE", "1234")
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "1234")
 	got, err := cryptoScannerStartBlock("base", 10_000)
 	if err != nil || got != 1234 {
 		t.Fatalf("start block = %d, %v", got, err)
@@ -76,8 +77,8 @@ func TestCryptoScannerStartBlockRequiresProductionAnchor(t *testing.T) {
 }
 
 func TestCryptoScannerDevelopmentBootstrapIsBounded(t *testing.T) {
-	t.Setenv("BUILD_ENV", "development")
-	t.Setenv("CRYPTO_SCAN_START_BLOCK_BASE", "")
+	appconfigtest.Set(t, "BUILD_ENV", "development")
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "")
 	got, err := cryptoScannerStartBlock("base", 10_000)
 	if err != nil || got != 9_000 {
 		t.Fatalf("start block = %d, %v", got, err)
@@ -106,7 +107,7 @@ func TestRPCBlockByNumberDecodesHashOnlyTransactions(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 
 	monitor := &CryptoMonitor{rpc: NewRPCClient()}
 	block, err := monitor.rpcBlockByNumber(context.Background(), Networks["base"], 42, false)
@@ -146,9 +147,9 @@ func TestScanUSDCLogsShardsLargeDestinationSet(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": payload.ID, "result": []any{}})
 	}))
 	defer server.Close()
-	t.Setenv("TEST_SCANNER_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
 	monitor := &CryptoMonitor{rpc: NewRPCClient()}
-	network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_SCANNER_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
+	network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
 	if _, err := monitor.scanUSDCLogs(context.Background(), network, 1, 100, scannerAddresses(2500)); err != nil {
 		t.Fatal(err)
 	}
@@ -181,9 +182,9 @@ func TestScanUSDCLogsRecursivelySplitsRejectedShard(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(response)
 	}))
 	defer server.Close()
-	t.Setenv("TEST_SCANNER_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
 	monitor := &CryptoMonitor{rpc: NewRPCClient()}
-	network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_SCANNER_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
+	network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
 	if _, err := monitor.scanUSDCLogs(context.Background(), network, 1, 100, scannerAddresses(80)); err != nil {
 		t.Fatal(err)
 	}
@@ -213,9 +214,9 @@ func TestScanUSDCLogsFailedShardCanReplayWholeRange(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(response)
 	}))
 	defer server.Close()
-	t.Setenv("TEST_SCANNER_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
 	monitor := &CryptoMonitor{rpc: NewRPCClient()}
-	network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_SCANNER_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
+	network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT", USDCContract: "0x1111111111111111111111111111111111111111"}
 	addresses := scannerAddresses(1)
 	if _, err := monitor.scanUSDCLogs(context.Background(), network, 50, 60, addresses); err == nil {
 		t.Fatal("failed shard unexpectedly succeeded")

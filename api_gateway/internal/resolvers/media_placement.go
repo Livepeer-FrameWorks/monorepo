@@ -28,22 +28,34 @@ type placementAPIError interface {
 	model.MediaCapacityConsentChangeResult
 }
 
-func (r *Resolver) placementAccess(ctx context.Context, manage bool) placementAPIError {
-	if middleware.IsDemoMode(ctx) {
-		return placementDemoAccess(ctx, manage)
-	}
+// placementAuthorization applies the placement reader (or manager) rule
+// Quartermaster and Commodore enforce: a tenant user, the placement:read (or
+// placement:write) scope on an API token, and the media placement action on
+// the caller's own tenant. It returns an Unauthenticated or PermissionDenied
+// status error whose message is safe to show the caller.
+func placementAuthorization(ctx context.Context, manage bool) error {
 	permission, action := "placement:read", authz.ActionReadMediaPlacement
 	if manage {
 		permission, action = "placement:write", authz.ActionManageMediaPlacement
 	}
 	if ctxkeys.GetTenantID(ctx) == "" || ctxkeys.GetUserID(ctx) == "" {
-		return &model.AuthError{Message: "Tenant authentication is required."}
+		return status.Error(codes.Unauthenticated, "Tenant authentication is required.")
 	}
 	if ctxkeys.GetAuthType(ctx) == "api_token" && !slices.ContainsFunc(ctxkeys.GetPermissions(ctx), func(value string) bool { return strings.TrimSpace(value) == permission }) {
-		return &model.AuthError{Message: "The API token does not include the required placement scope."}
+		return status.Error(codes.PermissionDenied, "The API token does not include the required placement scope.")
 	}
 	if err := middleware.RequireTenantAction(ctx, permission, action, ctxkeys.GetTenantID(ctx)); err != nil {
-		return &model.AuthError{Message: "This identity cannot access the requested placement operation."}
+		return status.Error(codes.PermissionDenied, "This identity cannot access the requested placement operation.")
+	}
+	return nil
+}
+
+func (r *Resolver) placementAccess(ctx context.Context, manage bool) placementAPIError {
+	if middleware.IsDemoMode(ctx) {
+		return placementDemoAccess(ctx, manage)
+	}
+	if err := placementAuthorization(ctx, manage); err != nil {
+		return &model.AuthError{Message: status.Convert(err).Message()}
 	}
 	if r == nil || r.Clients == nil || r.Clients.Commodore == nil {
 		return placementFailure(status.Error(codes.Unavailable, "placement service unavailable"))

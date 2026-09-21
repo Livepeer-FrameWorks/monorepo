@@ -30,7 +30,12 @@ SELECT bi.id, bi.tenant_id,
        COALESCE(bi.created_at, TIMESTAMPTZ 'epoch') AS created_at,
        COALESCE(bi.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
        bi.period_start, bi.period_end,
-       bi.gross_metered_amount::float8 AS gross_metered_amount
+       bi.gross_metered_amount::float8 AS gross_metered_amount,
+       bi.presentment_amount_cents,
+       COALESCE(bi.presentment_currency, '')::text AS presentment_currency,
+       COALESCE(bi.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       bi.presentment_reference_date,
+       bi.finalized_at
 FROM purser.billing_invoices bi
 WHERE bi.tenant_id = $1::text::uuid
   AND bi.status IN ('pending', 'overdue')
@@ -38,22 +43,27 @@ ORDER BY bi.due_date ASC, bi.id ASC
 `
 
 type ListPayableInvoicesRow struct {
-	ID                   uuid.UUID       `db:"id" json:"id"`
-	TenantID             uuid.UUID       `db:"tenant_id" json:"tenant_id"`
-	AmountDue            float64         `db:"amount_due" json:"amount_due"`
-	BaseAmount           float64         `db:"base_amount" json:"base_amount"`
-	MeteredAmount        float64         `db:"metered_amount" json:"metered_amount"`
-	PrepaidCreditApplied float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
-	Currency             string          `db:"currency" json:"currency"`
-	Status               string          `db:"status" json:"status"`
-	DueDate              time.Time       `db:"due_date" json:"due_date"`
-	PaidAt               sql.NullTime    `db:"paid_at" json:"paid_at"`
-	UsageDetails         json.RawMessage `db:"usage_details" json:"usage_details"`
-	CreatedAt            sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt            sql.NullTime    `db:"updated_at" json:"updated_at"`
-	PeriodStart          sql.NullTime    `db:"period_start" json:"period_start"`
-	PeriodEnd            sql.NullTime    `db:"period_end" json:"period_end"`
-	GrossMeteredAmount   float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	ID                       uuid.UUID       `db:"id" json:"id"`
+	TenantID                 uuid.UUID       `db:"tenant_id" json:"tenant_id"`
+	AmountDue                float64         `db:"amount_due" json:"amount_due"`
+	BaseAmount               float64         `db:"base_amount" json:"base_amount"`
+	MeteredAmount            float64         `db:"metered_amount" json:"metered_amount"`
+	PrepaidCreditApplied     float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
+	Currency                 string          `db:"currency" json:"currency"`
+	Status                   string          `db:"status" json:"status"`
+	DueDate                  time.Time       `db:"due_date" json:"due_date"`
+	PaidAt                   sql.NullTime    `db:"paid_at" json:"paid_at"`
+	UsageDetails             json.RawMessage `db:"usage_details" json:"usage_details"`
+	CreatedAt                sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt                sql.NullTime    `db:"updated_at" json:"updated_at"`
+	PeriodStart              sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd                sql.NullTime    `db:"period_end" json:"period_end"`
+	GrossMeteredAmount       float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	PresentmentAmountCents   sql.NullInt64   `db:"presentment_amount_cents" json:"presentment_amount_cents"`
+	PresentmentCurrency      string          `db:"presentment_currency" json:"presentment_currency"`
+	PresentmentUnitsPerEur   string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate sql.NullTime    `db:"presentment_reference_date" json:"presentment_reference_date"`
+	FinalizedAt              sql.NullTime    `db:"finalized_at" json:"finalized_at"`
 }
 
 func (q *Queries) ListPayableInvoices(ctx context.Context, tenantID string) ([]ListPayableInvoicesRow, error) {
@@ -82,6 +92,11 @@ func (q *Queries) ListPayableInvoices(ctx context.Context, tenantID string) ([]L
 			&i.PeriodStart,
 			&i.PeriodEnd,
 			&i.GrossMeteredAmount,
+			&i.PresentmentAmountCents,
+			&i.PresentmentCurrency,
+			&i.PresentmentUnitsPerEur,
+			&i.PresentmentReferenceDate,
+			&i.FinalizedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -100,7 +115,13 @@ const listRecentPayments = `-- name: ListRecentPayments :many
 SELECT bp.id, bp.invoice_id, bp.method, bp.amount::float8 AS amount, bp.currency,
        bp.tx_id, bp.status, bp.confirmed_at,
        COALESCE(bp.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(bp.updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(bp.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       bp.original_amount_cents,
+       bp.original_currency::text AS original_currency,
+       bp.eur_amount_cents,
+       bp.fx_units_per_eur::text AS fx_units_per_eur,
+       bp.fx_source,
+       bp.fx_reference_date
 FROM purser.billing_payments bp
 JOIN purser.billing_invoices bi ON bp.invoice_id = bi.id
 WHERE bi.tenant_id = $1::text::uuid
@@ -114,16 +135,22 @@ type ListRecentPaymentsParams struct {
 }
 
 type ListRecentPaymentsRow struct {
-	ID          uuid.UUID      `db:"id" json:"id"`
-	InvoiceID   uuid.UUID      `db:"invoice_id" json:"invoice_id"`
-	Method      string         `db:"method" json:"method"`
-	Amount      float64        `db:"amount" json:"amount"`
-	Currency    string         `db:"currency" json:"currency"`
-	TxID        sql.NullString `db:"tx_id" json:"tx_id"`
-	Status      string         `db:"status" json:"status"`
-	ConfirmedAt sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
-	CreatedAt   sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt   sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ID                  uuid.UUID      `db:"id" json:"id"`
+	InvoiceID           uuid.UUID      `db:"invoice_id" json:"invoice_id"`
+	Method              string         `db:"method" json:"method"`
+	Amount              float64        `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TxID                sql.NullString `db:"tx_id" json:"tx_id"`
+	Status              string         `db:"status" json:"status"`
+	ConfirmedAt         sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
+	CreatedAt           sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt           sql.NullTime   `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) ListRecentPayments(ctx context.Context, arg ListRecentPaymentsParams) ([]ListRecentPaymentsRow, error) {
@@ -146,6 +173,12 @@ func (q *Queries) ListRecentPayments(ctx context.Context, arg ListRecentPayments
 			&i.ConfirmedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 		); err != nil {
 			return nil, err
 		}

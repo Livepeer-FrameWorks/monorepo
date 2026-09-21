@@ -396,7 +396,7 @@ FROM purser.mollie_customers mc
 JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
 WHERE mc.tenant_id = $1::text::uuid
   AND ts.status = 'active'
-  AND ts.mollie_subscription_id IS NOT NULL
+  AND (ts.mollie_subscription_id IS NOT NULL OR ts.payment_method = 'mollie')
 `
 
 type GetActiveMollieCollectionDetailsRow struct {
@@ -417,7 +417,8 @@ SELECT stripe_customer_id, stripe_subscription_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid
   AND status = 'active'
-  AND stripe_subscription_id IS NOT NULL
+  AND (stripe_subscription_id IS NOT NULL
+       OR (payment_method = 'stripe' AND stripe_customer_id IS NOT NULL))
 `
 
 type GetActiveStripeCollectionDetailsRow struct {
@@ -425,6 +426,8 @@ type GetActiveStripeCollectionDetailsRow struct {
 	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
 }
 
+// A Stripe customer is collectable through its subscription or, without a
+// subscription, through the default payment method saved by setup checkout.
 func (q *Queries) GetActiveStripeCollectionDetails(ctx context.Context, tenantID string) (GetActiveStripeCollectionDetailsRow, error) {
 	row := q.db.QueryRowContext(ctx, getActiveStripeCollectionDetails, tenantID)
 	var i GetActiveStripeCollectionDetailsRow
@@ -1045,6 +1048,11 @@ SELECT ts.tenant_id::text AS tenant_id,
        ts.stripe_subscription_id,
        ts.mollie_subscription_id,
        ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
        bt.billing_period
@@ -1074,6 +1082,9 @@ type ListSubscriptionsDueForInvoiceRow struct {
 	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
 	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
 	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
+	PresentmentCurrency   string         `db:"presentment_currency" json:"presentment_currency"`
+	HasMollieCustomer     bool           `db:"has_mollie_customer" json:"has_mollie_customer"`
 	TierName              string         `db:"tier_name" json:"tier_name"`
 	DisplayName           string         `db:"display_name" json:"display_name"`
 	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
@@ -1099,6 +1110,9 @@ func (q *Queries) ListSubscriptionsDueForInvoice(ctx context.Context, now time.T
 			&i.StripeSubscriptionID,
 			&i.MollieSubscriptionID,
 			&i.PaymentMethod,
+			&i.StripeCustomerID,
+			&i.PresentmentCurrency,
+			&i.HasMollieCustomer,
 			&i.TierName,
 			&i.DisplayName,
 			&i.BillingPeriod,
@@ -1823,11 +1837,16 @@ func (q *Queries) UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSo
 
 const upsertPendingProviderBillingPayment = `-- name: UpsertPendingProviderBillingPayment :one
 INSERT INTO purser.billing_payments (
-    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, $2::text::uuid,
-    'card', $3::text::numeric, $4,
-    $5, 'pending', NOW(), NOW()
+    'card', $3::text::numeric, $4::text,
+    $5, 'pending', NOW(), NOW(),
+    $6::bigint, $4::text, $7::bigint,
+    $8::text::numeric, $9::text,
+    $10::date
 )
 ON CONFLICT (id) DO UPDATE
 SET updated_at = purser.billing_payments.updated_at
@@ -1835,11 +1854,16 @@ RETURNING COALESCE(tx_id, '') AS tx_id, status
 `
 
 type UpsertPendingProviderBillingPaymentParams struct {
-	PaymentID string         `db:"payment_id" json:"payment_id"`
-	InvoiceID string         `db:"invoice_id" json:"invoice_id"`
-	Amount    string         `db:"amount" json:"amount"`
-	Currency  string         `db:"currency" json:"currency"`
-	TxID      sql.NullString `db:"tx_id" json:"tx_id"`
+	PaymentID           string         `db:"payment_id" json:"payment_id"`
+	InvoiceID           string         `db:"invoice_id" json:"invoice_id"`
+	Amount              string         `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TxID                sql.NullString `db:"tx_id" json:"tx_id"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 type UpsertPendingProviderBillingPaymentRow struct {
@@ -1854,6 +1878,11 @@ func (q *Queries) UpsertPendingProviderBillingPayment(ctx context.Context, arg U
 		arg.Amount,
 		arg.Currency,
 		arg.TxID,
+		arg.OriginalAmountCents,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	var i UpsertPendingProviderBillingPaymentRow
 	err := row.Scan(&i.TxID, &i.Status)

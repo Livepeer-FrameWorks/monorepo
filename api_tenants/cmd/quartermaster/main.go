@@ -5,15 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
 	"net/http"
-	"net/netip"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_tenants/internal/appconfig"
 	"frameworks/api_tenants/internal/database/quartermasterdb"
 	quartermastermigrations "frameworks/api_tenants/internal/datamigrations"
 	qmgrpc "frameworks/api_tenants/internal/grpc"
@@ -27,15 +24,18 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	dns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
 )
 
 // servedClustersForInstanceName resolves the active service_cluster_assignments
@@ -61,16 +61,16 @@ func servedClustersForInstanceName(ctx context.Context, db database.PostgresConn
 	return out
 }
 
-func quartermasterPurserClientConfig(grpcAddr, serviceToken string, logger logging.Logger) purserclient.GRPCConfig {
+func quartermasterPurserClientConfig(cfg *appconfig.Quartermaster, logger logging.Logger) purserclient.GRPCConfig {
 	return purserclient.GRPCConfig{
-		GRPCAddr:           grpcAddr,
+		GRPCAddr:           cfg.PurserGRPCAddr,
 		Timeout:            5 * time.Second,
 		Logger:             logger,
-		ServiceToken:       serviceToken,
+		ServiceToken:       cfg.ServiceToken,
 		PreferServiceToken: true,
-		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+		AllowInsecure:      cfg.AllowInsecure,
+		CACertFile:         cfg.CAPath,
+		ServerName:         cfg.PurserGRPCTLSServerName,
 	}
 }
 
@@ -82,10 +82,14 @@ func main() {
 		logger := logging.NewLoggerWithService("quartermaster")
 		config.LoadEnv(logger)
 		quartermastermigrations.Register()
+		pg, err := config.Load[config.Postgres](config.Options{Service: "quartermaster", Logger: logger})
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid data migration configuration")
+		}
 		dbConfig := database.DefaultConfig()
 		dbConfig.ServiceName = "quartermaster"
-		dbConfig.URL = config.RequireEnv("DATABASE_URL")
-		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+		dbConfig.URL = pg.DatabaseURL
+		err = datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
 			return database.Connect(dbConfig, logger)
 		}, os.Stdout, os.Args[1:])
 		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
@@ -109,22 +113,33 @@ func main() {
 
 	logger.Info("Starting Quartermaster (Tenant Management API)")
 
-	dbURL := config.RequireEnv("DATABASE_URL")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	consentReviewKeyID := config.GetEnv("CAPACITY_CONSENT_REVIEW_KEY_ID", "")
-	consentReviewPrivateKey, consentKeyErr := consentReviewSigningConfig(consentReviewKeyID, config.GetEnv("CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64", ""))
-	if consentKeyErr != nil {
-		logger.WithError(consentKeyErr).Fatal("Invalid capacity consent review configuration")
+	configOptions := config.Options{Service: "quartermaster", Logger: logger}
+	cfg, err := config.Load[appconfig.Quartermaster](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
-	clusterAccessMaterializationSecret := config.RequireEnv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "") // Optional: enables DNS features.
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	geoipReader, err := geoip.Open(cfg.MMDBPath)
+	if err != nil {
+		logger.WithError(err).Warn("GeoIP unavailable; continuing without geolocation")
+	}
+	if geoipReader != nil {
+		logger.WithField("provider", geoipReader.GetProvider()).Info("GeoIP reader loaded")
+	}
+	liveConfig := config.NewLive(cfg, configOptions)
+	consentReviewPrivateKey, err := consentReviewSigningConfig(cfg.ConsentReviewKeyID, cfg.ConsentReviewPrivateKeyPEMB64)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid capacity consent review configuration")
+	}
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "quartermaster"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
@@ -134,11 +149,9 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":                          dbURL,
-		"SERVICE_TOKEN":                         serviceToken,
-		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": clusterAccessMaterializationSecret,
-	}))
+
+	readiness := monitoring.NewReadinessChecker("quartermaster", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
 	// Per-method counts + duration are captured by GRPCMetricsInterceptor
 	// on the GRPCRequests / GRPCDuration vectors; separate tenant_/cluster_/
@@ -163,17 +176,16 @@ func main() {
 
 	// Initialize Navigator client
 	var navigatorClient *navigator.Client
-	var err error
 
-	if navigatorGRPCAddr != "" {
+	if cfg.NavigatorGRPCAddr != "" {
 		navigatorClient, err = navigator.NewClient(navigator.Config{
-			Addr:          navigatorGRPCAddr,
+			Addr:          cfg.NavigatorGRPCAddr,
 			Timeout:       5 * time.Second,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.NavigatorGRPCTLSServerName,
 		})
 		if err != nil {
 			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
@@ -185,68 +197,80 @@ func main() {
 	}
 
 	// Create Decklog gRPC client for service events
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "quartermaster",
-		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
 		defer func() { _ = decklogClient.Close() }()
-		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+		logger.WithField("addr", cfg.DecklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+
+	eventTokenHasher, err := events.NewTokenHasher(cfg.UsageHashSecret)
+	if err != nil {
+		logger.WithError(err).Fatal("USAGE_HASH_SECRET is required for domain event actor attribution")
 	}
 
 	// Create Purser gRPC client for billing status lookups (cross-service via gRPC, not DB)
-	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	var purserClient *purserclient.GRPCClient
-	purserClient, err = purserclient.NewGRPCClient(quartermasterPurserClientConfig(purserGRPCAddr, serviceToken, logger))
+	purserClient, err = purserclient.NewGRPCClient(quartermasterPurserClientConfig(cfg, logger))
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
 		purserClient = nil
 	} else {
 		defer func() { _ = purserClient.Close() }()
-		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
+		logger.WithField("addr", cfg.PurserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
-	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
 	var commodoreClient *commodoreclient.GRPCClient
 	commodoreClient, err = commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
-		GRPCAddr:      commodoreGRPCAddr,
+		GRPCAddr:      cfg.CommodoreGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.CommodoreGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Commodore gRPC client - media authority refresh delivery will be disabled")
 		commodoreClient = nil
 	} else {
 		defer func() { _ = commodoreClient.Close() }()
-		logger.WithField("addr", commodoreGRPCAddr).Info("Connected to Commodore gRPC")
+		logger.WithField("addr", cfg.CommodoreGRPCAddr).Info("Connected to Commodore gRPC")
 	}
 
 	// Initialize handlers used by the health poller.
 	handlers.Init(db, logger)
 
-	// Expose health and metrics over HTTP; tenant and cluster APIs are served over gRPC.
-	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
+	// Expose health, readiness, and metrics over HTTP; tenant and cluster APIs are served over gRPC.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "quartermaster",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
 	router.GET("/internal/ingress-sites", func(c *gin.Context) {
-		if !requirePrivateInternalRequest(c) {
+		if !server.RequirePrivateClient(c) {
 			return
 		}
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
-		if authz != "Bearer "+serviceToken {
+		if authz != "Bearer "+cfg.ServiceToken {
 			c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -331,127 +355,141 @@ func main() {
 	}
 
 	// Start health poller before serving
-	handlers.StartHealthPoller()
+	handlers.StartHealthPoller(handlers.HealthPollerConfig{
+		PollIntervalSeconds: cfg.HealthPollIntervalSeconds,
+		TimeoutMS:           cfg.HealthTimeoutMS,
+		MaxConcurrency:      cfg.HealthMaxConcurrency,
+		BatchSize:           cfg.HealthBatchSize,
+		MinAgeSeconds:       cfg.HealthMinAge(),
+		GRPCWatch:           cfg.HealthGRPCWatch,
+		WatchRefreshSeconds: cfg.HealthWatchRefreshSeconds,
+		WatchBackoffSeconds: cfg.HealthWatchBackoffSeconds,
+		WatchDialTimeoutMS:  cfg.HealthWatchDialTimeoutMS,
+		WatchMaxConcurrency: cfg.HealthWatchMaxConcurrency,
+		TLS: func(serviceID string) handlers.HealthWatchTLS {
+			current := liveConfig.Get()
+			return handlers.HealthWatchTLS{
+				CAPath:        current.CAPath,
+				ServerName:    current.HealthWatchTLSServerName(serviceID),
+				AllowInsecure: current.AllowInsecure,
+			}
+		},
+	})
 
-	// Start gRPC server in a goroutine
-	grpcPort := config.GetEnv("GRPC_PORT", "19002")
-	go func() {
-		grpcAddr := fmt.Sprintf(":%s", grpcPort)
-		lis, err := net.Listen("tcp", grpcAddr)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		geoipReader := geoip.GetSharedReader()
-		if geoipReader != nil {
-			logger.WithField("provider", geoipReader.GetProvider()).Info("GeoIP reader loaded")
-		}
-
-		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
-			ConsentReviewKeyID:          consentReviewKeyID,
+	// NewGRPCServer waits for the gRPC TLS files, so the server builds in the
+	// background while HTTP health already serves.
+	peerWatchCtx, stopPeerWatches := context.WithCancel(context.Background())
+	defer stopPeerWatches()
+	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
+		return qmgrpc.NewGRPCServer(ctx, qmgrpc.GRPCServerConfig{
+			PeerWatchContext:            peerWatchCtx,
+			ConsentReviewKeyID:          cfg.ConsentReviewKeyID,
 			ConsentReviewPrivateKey:     consentReviewPrivateKey,
 			DB:                          db,
 			Logger:                      logger,
-			ServiceToken:                serviceToken,
-			JWTSecret:                   []byte(jwtSecret),
+			ServiceToken:                cfg.ServiceToken,
+			JWTSecret:                   []byte(cfg.JWTSecret),
+			MetadataPolicy:              metadataPolicy,
 			NavigatorClient:             navigatorClient,
 			DecklogClient:               decklogClient,
 			PurserClient:                purserClient,
 			MediaAuthorityRefreshClient: commodoreClient,
 			GeoIPReader:                 geoipReader,
 			Metrics:                     serverMetrics,
-			CertFile:                    config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:                     config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:               config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			AdvertiseGRPCAddr:           quartermasterGRPCAddr,
-			PlatformRootDomain:          config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
+			CertFile:                    cfg.CertPath,
+			KeyFile:                     cfg.KeyPath,
+			AllowInsecure:               cfg.AllowInsecure,
+			AdvertiseGRPCAddr:           cfg.QuartermasterGRPCAddr,
+			PlatformRootDomain:          cfg.PlatformRootDomain,
 			// Same var Navigator reads, so the public_instance_host freshness gate and
 			// Navigator's physical-DNS publish freshness can't drift.
-			PhysicalEndpointStaleSeconds: config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300),
+			PhysicalEndpointStaleSeconds:       cfg.PhysicalEndpointStaleSeconds,
+			ClusterAccessMaterializationSecret: cfg.ClusterAccessMaterializationSecret,
+			EventTokenHasher:                   eventTokenHasher,
 		})
-		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+	}
 
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The domain event relay drains quartermaster.domain_event_outbox to
+	// Decklog on every replica; leases and SKIP LOCKED keep replicas from
+	// delivering the same row concurrently. It stops after the listeners, so a
+	// row committed by the last in-flight RPC is still picked up.
+	var onShutdown []func(context.Context)
+	if decklogClient != nil {
+		relay, relayErr := eventoutbox.NewRelay(db, "quartermaster", decklogClient, logger)
+		if relayErr != nil {
+			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
 		}
-	}()
-
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("quartermaster", "18002")
-	serverConfig.TLSCertFile = config.GetEnv("QUARTERMASTER_HTTP_TLS_CERT_FILE", "")
-	serverConfig.TLSKeyFile = config.GetEnv("QUARTERMASTER_HTTP_TLS_KEY_FILE", "")
+		relayCtx, stopRelay := context.WithCancel(context.Background())
+		relayDone := make(chan struct{})
+		go func() {
+			defer close(relayDone)
+			relay.Run(relayCtx)
+		}()
+		onShutdown = append(onShutdown, func(shutdownCtx context.Context) {
+			stopRelay()
+			select {
+			case <-relayDone:
+			case <-shutdownCtx.Done():
+			}
+		})
+	} else {
+		logger.Warn("Domain event relay disabled: no Decklog client")
+	}
 
 	// Best-effort self-registration in Quartermaster (idempotent, using gRPC)
-	// Must be launched BEFORE server.Start() which blocks
 	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
+		qc, qcErr := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.QuartermasterGRPCTLSServerName,
 		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client for self-registration")
+		if qcErr != nil {
+			logger.WithError(qcErr).Warn("Failed to create Quartermaster gRPC client for self-registration")
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		healthEndpoint := "/health"
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "quartermaster",
+			Port:          cfg.HTTPListen.Port,
+			AdvertiseHost: cfg.AdvertiseHost,
+			ClusterID:     cfg.ClusterID,
+			NodeID:        cfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("QUARTERMASTER_HOST", "quartermaster")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "quartermaster",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("quartermaster")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (quartermaster) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("quartermaster")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (quartermaster) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (quartermaster) ok")
 		}
 	}()
 
 	server.RegisterEnvFileReload("quartermaster", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "quartermaster",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP: []server.HTTPListener{{
+			Name:        "http",
+			Port:        cfg.HTTPListen.Port,
+			Handler:     router,
+			TLSCertFile: cfg.HTTPTLSCertFile,
+			TLSKeyFile:  cfg.HTTPTLSKeyFile,
+		}},
+		GRPC:       []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+		OnReload:   []server.ReloadCallback{liveConfig.Reload},
+		OnDrain:    []func(context.Context){func(context.Context) { stopPeerWatches() }},
+		OnShutdown: onShutdown,
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
-}
-
-func requirePrivateInternalRequest(c *gin.Context) bool {
-	host := c.Request.RemoteAddr
-	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
-		host = splitHost
-	}
-	if isPrivateClientIP(host) {
-		return true
-	}
-	c.JSON(http.StatusForbidden, map[string]string{"error": "private network access required"})
-	return false
-}
-
-func isPrivateClientIP(raw string) bool {
-	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }

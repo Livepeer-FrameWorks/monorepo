@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +29,6 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -44,6 +42,7 @@ import (
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
@@ -56,6 +55,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
@@ -68,6 +68,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
@@ -76,7 +77,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -190,12 +190,16 @@ type CommodoreServer struct {
 	mediaAuthorityRecipients sharedauthority.SealRecipientSet
 	listmonkClient           *listmonk.Client
 	decklogClient            *decklogclient.BatchedClient
-	defaultMailingListID     int
-	metrics                  *ServerMetrics
-	turnstileValidator       turnstileVerifier
-	turnstileFailOpen        bool
-	passwordResetSecret      []byte
-	fieldEncryptor           fieldcrypt.FieldCipher
+	// tokenHasher attributes domain events to the calling API token with the
+	// hash Bridge's usage batches record.
+	tokenHasher          *events.TokenHasher
+	defaultMailingListID int
+	metrics              *ServerMetrics
+	turnstileValidator   turnstileVerifier
+	turnstileFailOpen    bool
+	passwordResetSecret  []byte
+	systemTenantID       uuid.UUID
+	fieldEncryptor       fieldcrypt.FieldCipher
 	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
 	// isolation prevents cross-feature key reuse.
 	playbackWebhookEncryptor fieldcrypt.FieldCipher
@@ -206,9 +210,13 @@ type CommodoreServer struct {
 	// destinationPolicy is parsed once during process startup. Tenant requests
 	// never re-read operator configuration or receive its parsing details.
 	destinationPolicy restream.DestinationPolicy
-	routeCache        map[string]*clusterRoute
-	routeCacheMu      sync.RWMutex
-	routeCacheTTL     time.Duration
+	// webhookDestinationPolicy checks playback-auth webhook URLs. Operator
+	// restream exceptions never apply to it.
+	webhookDestinationPolicy restream.DestinationPolicy
+	runtimeSettings          func() RuntimeSettings
+	routeCache               map[string]*clusterRoute
+	routeCacheMu             sync.RWMutex
+	routeCacheTTL            time.Duration
 	// admissionRefresh collapses concurrent admission-state refreshes for the
 	// same tenant into one Quartermaster/Purser round trip.
 	admissionRefresh singleflight.Group
@@ -752,12 +760,14 @@ type CommodoreServerConfig struct {
 	PurserClient         *purserclient.GRPCClient
 	ListmonkClient       *listmonk.Client
 	DecklogClient        *decklogclient.BatchedClient
+	TokenHasher          *events.TokenHasher
 	ClusterURLs          *clusterurls.Resolver
 	DefaultMailingListID int
 	Metrics              *ServerMetrics
 	// Auth config for gRPC interceptor
-	ServiceToken string
-	JWTSecret    []byte
+	ServiceToken   string
+	JWTSecret      []byte
+	MetadataPolicy middleware.ServiceTokenMetadataPolicy
 	// FieldEncryptionKey is independent from JWT signing and is the only key
 	// used for new encrypted application fields. Previous keys and JWTSecret are
 	// read-only migration inputs.
@@ -770,13 +780,60 @@ type CommodoreServerConfig struct {
 	TurnstileSecretKey string
 	TurnstileFailOpen  bool
 	// Password reset token signing
-	PasswordResetSecret             []byte
+	PasswordResetSecret []byte
+	// SystemTenantID is the deployment's Quartermaster-owned system tenant.
+	// The zero value means the reserved tenants.SystemTenantID.
+	SystemTenantID                  uuid.UUID
 	MediaAuthoritySigningKeyID      string
 	MediaAuthoritySigningPrivateKey ed25519.PrivateKey
 	MediaAuthoritySealRecipients    sharedauthority.SealRecipientSet
 	CertFile                        string
 	KeyFile                         string
 	AllowInsecure                   bool
+	// Settings returns the current request-time settings. Handlers call it
+	// per request, so values follow an env-file reload.
+	Settings func() RuntimeSettings
+}
+
+// RuntimeSettings are the operator settings handlers read while serving a
+// request rather than once at startup.
+type RuntimeSettings struct {
+	// JWTSecret signs session and Mist admin session tokens.
+	JWTSecret []byte
+	// Branding is the account email presentation. Its WebAppURL is also the
+	// base of account email links, the device approval page, and the wallet
+	// sign-in challenge URI.
+	Branding              config.EmailBranding
+	DeviceVerificationURL string
+	PlatformRootDomain    string
+	BrandDomain           string
+	// Development permits an HTTP loopback wallet sign-in origin.
+	Development  bool
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUser     string
+	SMTPPassword string
+	FromEmail    string
+	FromName     string
+	// SMTPAllowInsecure permits an SMTP server without STARTTLS.
+	SMTPAllowInsecure bool
+}
+
+// rootDomain returns PLATFORM_ROOT_DOMAIN, falling back to BRAND_DOMAIN.
+func (r RuntimeSettings) rootDomain() string {
+	if domain := strings.TrimSpace(r.PlatformRootDomain); domain != "" {
+		return domain
+	}
+	return strings.TrimSpace(r.BrandDomain)
+}
+
+// settings returns the current request-time settings, or the zero value for a
+// server built without a settings source.
+func (s *CommodoreServer) settings() RuntimeSettings {
+	if s.runtimeSettings == nil {
+		return RuntimeSettings{}
+	}
+	return s.runtimeSettings()
 }
 
 // NewCommodoreServer creates a new Commodore gRPC server
@@ -817,16 +874,20 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		mediaAuthorityRecipients: cfg.MediaAuthoritySealRecipients,
 		listmonkClient:           cfg.ListmonkClient,
 		decklogClient:            cfg.DecklogClient,
+		tokenHasher:              cfg.TokenHasher,
 		clusterURLs:              cfg.ClusterURLs,
 		defaultMailingListID:     cfg.DefaultMailingListID,
 		metrics:                  cfg.Metrics,
 		turnstileValidator:       tv,
 		turnstileFailOpen:        cfg.TurnstileFailOpen,
 		passwordResetSecret:      cfg.PasswordResetSecret,
+		systemTenantID:           cfg.SystemTenantID,
 		fieldEncryptor:           fe,
 		playbackWebhookEncryptor: pwe,
 		pullSourceEncryptor:      pse,
 		destinationPolicy:        cfg.DestinationPolicy,
+		webhookDestinationPolicy: restream.PublicDestinationPolicy(),
+		runtimeSettings:          cfg.Settings,
 		routeCache:               make(map[string]*clusterRoute),
 		routeCacheTTL:            5 * time.Minute,
 		foghornCandidateNext:     make(map[string]int),
@@ -3197,7 +3258,8 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 	}
 	isPlatformOfficial := clusterResp.GetCluster().GetIsPlatformOfficial()
 
-	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	settings := s.settings()
+	secret := settings.JWTSecret
 	token, exp, err := auth.GenerateMistAdminSessionJWT(
 		trustedUserID,
 		trustedTenantID,
@@ -3219,7 +3281,7 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 	edgeDomain := pkgdns.EdgeNodeFQDN(
 		nodeID,
 		pkgdns.SanitizeLabel(clusterID),
-		mistAdminRootDomain(),
+		mistAdminRootDomain(settings),
 	)
 
 	s.logger.WithFields(logging.Fields{
@@ -3232,7 +3294,12 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 		"edge_domain":          edgeDomain,
 		"expires_at":           exp.Unix(),
 	}).Info("Minted mist admin session token")
-	s.emitMistAdminSessionMintedEvent(ctx, trustedUserID, trustedTenantID, nodeID, clusterID)
+	// The audit event is the mint's only durable record, so the token is
+	// returned only once the event has committed.
+	if err := s.enqueueEventOwnTx(ctx, s.buildMistAdminSessionMintedEvent(trustedUserID, trustedTenantID, nodeID, clusterID), nil); err != nil {
+		s.logger.WithError(err).WithField("node_id", nodeID).Error("MintMistAdminSession: audit event not recorded")
+		return nil, status.Error(codes.Internal, "failed to record admin session")
+	}
 	return &commodorepb.MintMistAdminSessionResponse{
 		Token:      token,
 		ExpiresAt:  exp.Unix(),
@@ -3240,13 +3307,10 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodo
 	}, nil
 }
 
-// mistAdminRootDomain resolves the platform root domain via the same
-// env precedence the rest of Commodore uses (populateTieredDomains).
-func mistAdminRootDomain() string {
-	rootDomain := strings.TrimSpace(os.Getenv("PLATFORM_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
-	}
+// mistAdminRootDomain resolves the platform root domain with the same
+// precedence populateTieredDomains uses, defaulting to frameworks.network.
+func mistAdminRootDomain(settings RuntimeSettings) string {
+	rootDomain := settings.rootDomain()
 	if rootDomain == "" {
 		rootDomain = "frameworks.network"
 	}
@@ -3261,7 +3325,7 @@ func (s *CommodoreServer) ValidateMistAdminSession(ctx context.Context, req *com
 	if req.GetToken() == "" || req.GetExpectedNodeId() == "" {
 		return &commodorepb.ValidateMistAdminSessionResponse{Valid: false}, nil
 	}
-	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	secret := s.settings().JWTSecret
 	claims, err := auth.ValidateMistAdminSessionJWT(req.GetToken(), secret, req.GetExpectedNodeId())
 	if err != nil {
 		s.logger.WithError(err).WithField("expected_node_id", req.GetExpectedNodeId()).
@@ -3504,6 +3568,11 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 	// clean absence, instead of the old "retention_until=now" that left a dangling,
 	// artifact-less DVR. request_id ties the intent to this registration.
 	intentRequestID := uuid.New().String()
+	var expiresAt *int64
+	if req.GetRetentionUntil() != nil {
+		ts := req.GetRetentionUntil().AsTime().Unix()
+		expiresAt = &ts
+	}
 	dvrErr := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		// FENCE the parent against a concurrent deletion IN this tx — a DVR must not register behind a stream that
 		// is being torn down.
@@ -3532,7 +3601,8 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 			return upErr
 		}
 		intentRequestID = persisted
-		return nil
+		return s.enqueueEventTx(ctx, tx, s.buildArtifactEvent(eventArtifactRegistered, tenantID, userID,
+			ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt), nil)
 	})
 	if dvrErr != nil {
 		if errors.Is(dvrErr, errParentStreamDeleted) {
@@ -3552,13 +3622,6 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 		"dvr_id":        dvrID,
 		"internal_name": internalName,
 	}).Info("Registered DVR in business registry")
-
-	var expiresAt *int64
-	if req.GetRetentionUntil() != nil {
-		ts := req.GetRetentionUntil().AsTime().Unix()
-		expiresAt = &ts
-	}
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
 
 	return &commodorepb.RegisterDVRResponse{
 		DvrHash:      dvrHash,
@@ -4330,7 +4393,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 	if s.purserClient == nil {
 		return nil, status.Error(codes.Internal, "purser client not available")
 	}
-	_, err = s.purserClient.InitializePrepaidAccount(ctx, tenantID, billing.DefaultCurrency())
+	_, err = s.purserClient.InitializePrepaidAccount(ctx, tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to initialize prepaid account via Purser")
 		return nil, status.Error(codes.Internal, "failed to initialize prepaid account")
@@ -4483,18 +4546,24 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 
 	// Verify password
 	if !auth.CheckPassword(password, user.PasswordHash) {
-		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
+		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "invalid_credentials"); recordErr != nil {
+			return nil, recordErr
+		}
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
 	// Check account status only after proving the password, so login does not
 	// leak account state for incorrect credentials.
 	if !user.IsActive {
-		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "account_inactive")
+		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "account_inactive"); recordErr != nil {
+			return nil, recordErr
+		}
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
 	if !user.IsVerified {
-		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "email_not_verified")
+		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "email_not_verified"); recordErr != nil {
+			return nil, recordErr
+		}
 		return nil, status.Error(codes.Unauthenticated, "email not verified")
 	}
 
@@ -4504,7 +4573,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	}
 
 	// Generate JWT access token
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	jwtSecret := s.settings().JWTSecret
 	token, err := auth.GenerateSessionJWT(user.ID, user.TenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to generate JWT")
@@ -4519,11 +4588,16 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour) // 30 days
 
-	err = queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
-		TenantID:  user.TenantID,
-		UserID:    user.ID,
-		TokenHash: refreshHash,
-		ExpiresAt: refreshExpiry,
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
+			TenantID:  user.TenantID,
+			UserID:    user.ID,
+			TokenHash: refreshHash,
+			ExpiresAt: refreshExpiry,
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "")
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to store refresh token")
@@ -4531,7 +4605,6 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
-	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "", "", "")
 
 	return &commodorepb.AuthResponse{
 		Token:        token,
@@ -4653,17 +4726,22 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 
 	// Create user
 	userID := uuid.New().String()
-	err = queries.InsertRegisteredUser(ctx, commodoredb.InsertRegisteredUserParams{
-		ID:                userID,
-		TenantID:          tenantID,
-		Email:             sql.NullString{String: email, Valid: true},
-		PasswordHash:      sql.NullString{String: hashedPassword, Valid: true},
-		FirstName:         sql.NullString{String: req.GetFirstName(), Valid: true},
-		LastName:          sql.NullString{String: req.GetLastName(), Valid: true},
-		Role:              role,
-		Permissions:       getDefaultPermissions(role),
-		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
-		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertRegisteredUser(ctx, commodoredb.InsertRegisteredUserParams{
+			ID:                userID,
+			TenantID:          tenantID,
+			Email:             sql.NullString{String: email, Valid: true},
+			PasswordHash:      sql.NullString{String: hashedPassword, Valid: true},
+			FirstName:         sql.NullString{String: req.GetFirstName(), Valid: true},
+			LastName:          sql.NullString{String: req.GetLastName(), Valid: true},
+			Role:              role,
+			Permissions:       getDefaultPermissions(role),
+			VerificationToken: sql.NullString{String: tokenHash, Valid: true},
+			TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueAuthEventTx(ctx, tx, eventAuthRegistered, userID, tenantID, "password", "")
 	})
 
 	if err != nil {
@@ -4709,8 +4787,6 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 		"email":     email,
 		"role":      role,
 	}).Info("User registered successfully via gRPC")
-
-	s.emitAuthEvent(ctx, eventAuthRegistered, userID, tenantID, "password", "", "", "")
 
 	return &commodorepb.RegisterResponse{
 		Success: true,
@@ -4902,7 +4978,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 	}
 
 	// Generate new access token
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	jwtSecret := s.settings().JWTSecret
 	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
@@ -4948,12 +5024,14 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		}
 	}
 
+	if err := s.enqueueAuthEventTx(ctx, tx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", ""); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to record token refresh: %v", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
-	s.emitAuthEvent(ctx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", "", "", "")
 
 	return &commodorepb.AuthResponse{
 		Token:        token,
@@ -5147,7 +5225,7 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
 
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	jwtSecret := s.settings().JWTSecret
 	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
@@ -5165,9 +5243,11 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
 	}
+	if err := s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, authType, ""); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to record sign-in: %v", err)
+	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
-	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, authType, "", "", "")
 
 	return &commodorepb.AuthResponse{
 		Token:        token,
@@ -5286,10 +5366,11 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *com
 // deviceVerificationBaseURL returns the URL the user visits to approve a
 // device code.
 func (s *CommodoreServer) deviceVerificationBaseURL() (string, error) {
-	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("DEVICE_VERIFICATION_URL")), "/"); v != "" {
+	settings := s.settings()
+	if v := strings.TrimRight(strings.TrimSpace(settings.DeviceVerificationURL), "/"); v != "" {
 		return v, nil
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	baseURL := strings.TrimRight(strings.TrimSpace(settings.Branding.WebAppURL), "/")
 	if baseURL == "" {
 		return "", status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL required")
 	}
@@ -5930,9 +6011,10 @@ func (s *CommodoreServer) IssueWalletChallenge(ctx context.Context, req *commodo
 		return nil, status.Error(codes.InvalidArgument, "unsupported wallet login chain")
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	settings := s.settings()
+	baseURL := strings.TrimRight(strings.TrimSpace(settings.Branding.WebAppURL), "/")
 	parsedURL, err := url.Parse(baseURL)
-	if err != nil || parsedURL.Host == "" || !walletChallengeOriginAllowed(parsedURL) {
+	if err != nil || parsedURL.Host == "" || !walletChallengeOriginAllowed(parsedURL, settings.Development) {
 		return nil, status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL must be an absolute HTTPS URL (HTTP loopback is allowed in development)")
 	}
 	nonce, err := generateRandomString(24)
@@ -5955,14 +6037,14 @@ func (s *CommodoreServer) IssueWalletChallenge(ctx context.Context, req *commodo
 	}, nil
 }
 
-func walletChallengeOriginAllowed(origin *url.URL) bool {
+func walletChallengeOriginAllowed(origin *url.URL, development bool) bool {
 	if origin == nil || origin.Host == "" {
 		return false
 	}
 	if origin.Scheme == "https" {
 		return true
 	}
-	if origin.Scheme != "http" || !config.IsDevelopment() {
+	if origin.Scheme != "http" || !development {
 		return false
 	}
 	host := strings.ToLower(origin.Hostname())
@@ -6056,13 +6138,15 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	}
 
 	// Generate JWT
-	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	jwtSecret := s.settings().JWTSecret
 	token, err := auth.GenerateSessionJWT(userID, tenantID, profile.Email, profile.Role, platformRoles(profile.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
 	if !profile.IsActive {
-		s.emitAuthEvent(ctx, eventAuthLoginFailed, userID, tenantID, "wallet", "", "", "account_inactive")
+		if recordErr := s.recordLoginFailed(ctx, userID, tenantID, "wallet", "account_inactive"); recordErr != nil {
+			return nil, recordErr
+		}
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
 
@@ -6072,8 +6156,13 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	}
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
-	if err := queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
-		TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
+	if err := s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
+			TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "")
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create wallet session: %v", err)
 	}
@@ -6081,8 +6170,6 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 
 	// Build user response
 	user := profile.toProtoUser(userID, tenantID)
-
-	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
 
 	return &commodorepb.AuthResponse{
 		Token:        token,
@@ -6138,17 +6225,23 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkW
 	}
 
 	// Create wallet identity
-	linkedWallet, err := queries.InsertLinkedWallet(ctx, commodoredb.InsertLinkedWalletParams{
-		TenantID: tenantID, UserID: userID, WalletAddress: normalizedAddr,
+	var linkedWallet commodoredb.InsertLinkedWalletRow
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		var insertErr error
+		linkedWallet, insertErr = commodoredb.New(tx).InsertLinkedWallet(ctx, commodoredb.InsertLinkedWalletParams{
+			TenantID: tenantID, UserID: userID, WalletAddress: normalizedAddr,
+		})
+		if insertErr != nil {
+			return insertErr
+		}
+		if !linkedWallet.CreatedAt.Valid {
+			return errors.New("linked wallet is missing created_at")
+		}
+		return s.enqueueAuthEventTx(ctx, tx, eventWalletLinked, userID, tenantID, "wallet", linkedWallet.ID)
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to link wallet: %v", err)
 	}
-	if !linkedWallet.CreatedAt.Valid {
-		return nil, status.Error(codes.Internal, "linked wallet is missing created_at")
-	}
-
-	s.emitAuthEvent(ctx, eventWalletLinked, userID, tenantID, "wallet", linkedWallet.ID, "", "")
 
 	return &commodorepb.WalletIdentity{
 		Id:            linkedWallet.ID,
@@ -6219,11 +6312,12 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		}
 		return nil, status.Error(codes.Internal, "failed to unlink wallet")
 	}
+	if err := s.enqueueAuthEventTx(ctx, tx, eventWalletUnlinked, userID, tenantID, "wallet", walletID); err != nil {
+		return nil, status.Error(codes.Internal, "failed to record wallet unlink")
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, status.Error(codes.Internal, "failed to commit wallet unlink")
 	}
-
-	s.emitAuthEvent(ctx, eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
 
 	return &commodorepb.UnlinkWalletResponse{
 		Success: true,
@@ -6455,10 +6549,6 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit stream creation: %v", err)
-	}
-
 	changedFields := []string{"title"}
 	if req.GetDescription() != "" {
 		changedFields = append(changedFields, "description")
@@ -6472,7 +6562,14 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	if placementResult.Changed {
 		changedFields = append(changedFields, "source_location")
 	}
-	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, created.StreamID, changedFields)
+	if err := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamCreated, tenantID, userID, created.StreamID, changedFields),
+		&domainEvent{msg: &publicv1.StreamCreated{StreamId: created.StreamID, Name: title, PlaybackId: created.PlaybackID}, aggregateID: created.StreamID}); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to record stream creation: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit stream creation: %v", err)
+	}
 
 	resp := &commodorepb.CreateStreamResponse{
 		Id:             created.StreamID,
@@ -6530,10 +6627,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 // with active alias). Cluster-concrete fields are populated upstream;
 // this function leaves them alone.
 func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID string, resp *commodorepb.CreateStreamResponse) {
-	rootDomain := strings.TrimSpace(os.Getenv("PLATFORM_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
-	}
+	rootDomain := s.settings().rootDomain()
 	if rootDomain == "" {
 		return
 	}
@@ -7003,12 +7097,13 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		}
 	}
 
+	if len(changedFields) > 0 {
+		if eventErr := s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, streamID, changedFields); eventErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to record stream update: %v", eventErr)
+		}
+	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit stream update: %v", commitErr)
-	}
-
-	if len(changedFields) > 0 {
-		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, changedFields)
 	}
 
 	if req.Record != nil && req.GetRecord() && (!currentState.IsRecordingEnabled.Valid || !currentState.IsRecordingEnabled.Bool) {
@@ -7169,7 +7264,7 @@ func fenceParentStreamLive(ctx context.Context, tx *sql.Tx, tenantID, streamID s
 // thumbnail-cleanup obligation. It runs the hard-delete, the outbox completion, and the TERMINAL stream_deleted
 // event ENQUEUE in ONE transaction, so a crash cannot leave a deleted stream without its event (or an event without
 // the delete). Idempotent — a re-run after the row is gone deletes zero rows, marks nothing, and (guarded on
-// RowsAffected) does not re-emit. The event is enqueued via EnqueueServiceEventTx so it commits atomically.
+// RowsAffected) does not re-emit. stream_deleted and stream.deleted are enqueued in that transaction.
 // finalizeStreamDeletion runs the hard-delete + outbox completion + terminal event in one transaction. leaseToken
 // FENCES the outbox-completion when set (the outbox-worker convergence path): a stale worker whose lease was
 // re-claimed cannot complete a row a peer owns. An empty token is the synchronous DeleteStream fast-path (not a
@@ -7235,7 +7330,8 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 	// it — so a converged re-run never double-emits and a crash never suppresses it. Emitting at soft-delete time
 	// would tell consumers "deleted" while the saga still reports pending.
 	if n > 0 && tenantID != "" {
-		if _, err := s.EnqueueServiceEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil)); err != nil {
+		if err := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil),
+			&domainEvent{msg: &publicv1.StreamDeleted{StreamId: streamID}, aggregateID: streamID}); err != nil {
 			return fmt.Errorf("enqueue terminal stream_deleted event: %w", err)
 		}
 	}
@@ -7265,14 +7361,28 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	}
 
 	// Update the stream (a deletion-pending stream is not actionable — do not rotate its key).
-	rows, err := queries.RefreshPrimaryStreamKey(ctx, commodoredb.RefreshPrimaryStreamKeyParams{
-		StreamKey: newStreamKey, ID: streamID, UserID: userID, TenantID: tenantID,
+	// stream_updated (stream_key) and stream.key_rotated commit with the new key.
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		rows, refreshErr := commodoredb.New(tx).RefreshPrimaryStreamKey(ctx, commodoredb.RefreshPrimaryStreamKeyParams{
+			StreamKey: newStreamKey, ID: streamID, UserID: userID, TenantID: tenantID,
+		})
+		if refreshErr != nil {
+			return status.Errorf(codes.Internal, "failed to refresh stream key: %v", refreshErr)
+		}
+		if rows == 0 {
+			return status.Error(codes.NotFound, "stream not found")
+		}
+		if enqueueErr := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"}),
+			&domainEvent{msg: &publicv1.StreamKeyRotated{StreamId: streamID}, aggregateID: streamID}); enqueueErr != nil {
+			return status.Errorf(codes.Internal, "failed to record stream key rotation: %v", enqueueErr)
+		}
+		return nil
 	})
 	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Internal, "failed to refresh stream key: %v", err)
-	}
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	// Get playback ID
@@ -7282,8 +7392,6 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to get playback ID for refreshed stream key")
 	}
-
-	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
 
 	return &commodorepb.RefreshStreamKeyResponse{
 		Message:           "Stream key refreshed successfully",
@@ -7341,16 +7449,19 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 		keyName = "Key " + time.Now().Format("2006-01-02 15:04")
 	}
 
-	err = queries.InsertStreamKey(ctx, commodoredb.InsertStreamKeyParams{
-		ID: keyID, TenantID: tenantID,
-		UserID: sql.NullString{String: userID, Valid: true}, StreamID: streamID,
-		KeyValue: keyValue, KeyName: sql.NullString{String: keyName, Valid: true},
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertStreamKey(ctx, commodoredb.InsertStreamKeyParams{
+			ID: keyID, TenantID: tenantID,
+			UserID: sql.NullString{String: userID, Valid: true}, StreamID: streamID,
+			KeyValue: keyValue, KeyName: sql.NullString{String: keyName, Valid: true},
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueStreamKeyEventTx(ctx, tx, eventStreamKeyCreated, tenantID, userID, streamID, keyID)
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create stream key: %v", err)
 	}
-
-	s.emitStreamKeyEvent(ctx, eventStreamKeyCreated, tenantID, userID, streamID, keyID)
 
 	return &commodorepb.StreamKeyResponse{
 		StreamKey: &commodorepb.StreamKey{
@@ -7502,19 +7613,28 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 		return nil, validationErr
 	}
 
-	rows, err := queries.DeactivateStreamKey(ctx, commodoredb.DeactivateStreamKeyParams{
-		ID: req.GetKeyId(), StreamID: req.GetStreamId(),
-		UserID: sql.NullString{String: userID, Valid: true}, TenantID: tenantID,
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		rows, deactivateErr := commodoredb.New(tx).DeactivateStreamKey(ctx, commodoredb.DeactivateStreamKeyParams{
+			ID: req.GetKeyId(), StreamID: req.GetStreamId(),
+			UserID: sql.NullString{String: userID, Valid: true}, TenantID: tenantID,
+		})
+		if deactivateErr != nil {
+			return status.Errorf(codes.Internal, "failed to deactivate key: %v", deactivateErr)
+		}
+		if rows == 0 {
+			return status.Error(codes.NotFound, "stream key not found")
+		}
+		if enqueueErr := s.enqueueStreamKeyEventTx(ctx, tx, eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId()); enqueueErr != nil {
+			return status.Errorf(codes.Internal, "failed to record stream key deactivation: %v", enqueueErr)
+		}
+		return nil
 	})
 	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Internal, "failed to deactivate key: %v", err)
 	}
-
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "stream key not found")
-	}
-
-	s.emitStreamKeyEvent(ctx, eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId())
 
 	return &emptypb.Empty{}, nil
 }
@@ -7699,15 +7819,19 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.Internal, "failed to encrypt target_uri: %v", err)
 	}
 
-	err = queries.InsertPushTarget(ctx, commodoredb.InsertPushTargetParams{
-		ID: id, TenantID: tenantID, StreamID: streamID,
-		Platform: sql.NullString{String: platform, Valid: true}, Name: name,
-		TargetUri: encryptedURI, CreatedAt: sql.NullTime{Time: now, Valid: true},
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertPushTarget(ctx, commodoredb.InsertPushTargetParams{
+			ID: id, TenantID: tenantID, StreamID: streamID,
+			Platform: sql.NullString{String: platform, Valid: true}, Name: name,
+			TargetUri: encryptedURI, CreatedAt: sql.NullTime{Time: now, Valid: true},
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, streamID, []string{"push_targets"})
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create push target: %v", err)
 	}
-	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
 	return &commodorepb.PushTarget{
 		Id:         id,
@@ -7829,7 +7953,15 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		params.IsEnabled = req.GetIsEnabled()
 	}
 
-	row, err := commodoredb.New(s.db).UpdatePushTargetFields(ctx, params)
+	var row commodoredb.UpdatePushTargetFieldsRow
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		var updateErr error
+		row, updateErr = commodoredb.New(tx).UpdatePushTargetFields(ctx, params)
+		if updateErr != nil {
+			return updateErr
+		}
+		return s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, row.StreamID, []string{"push_targets"})
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "push target not found")
 	}
@@ -7844,8 +7976,6 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, target.GetStreamId(), []string{"push_targets"})
 
 	return target, nil
 }
@@ -7864,8 +7994,14 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Error(codes.InvalidArgument, "id required")
 	}
 
-	streamID, err := commodoredb.New(s.db).DeletePushTarget(ctx, commodoredb.DeletePushTargetParams{
-		ID: id, TenantID: tenantID, UserID: userID, TenantManager: canManageTenantStreams(ctx, tenantID, "streams:write"),
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		streamID, deleteErr := commodoredb.New(tx).DeletePushTarget(ctx, commodoredb.DeletePushTargetParams{
+			ID: id, TenantID: tenantID, UserID: userID, TenantManager: canManageTenantStreams(ctx, tenantID, "streams:write"),
+		})
+		if deleteErr != nil {
+			return deleteErr
+		}
+		return s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, streamID, []string{"push_targets"})
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -7873,7 +8009,6 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *commodorepb
 		}
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
 	return &commodorepb.DeletePushTargetResponse{
 		Message:   "Push target deleted",
@@ -7956,7 +8091,7 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commo
 		params.ApplyLastError = true
 	}
 
-	row, err := commodoredb.New(s.db).UpdatePushTargetStatus(ctx, params)
+	row, err := s.updatePushTargetStatusTx(ctx, params)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "push target not found")
 	}
@@ -7971,12 +8106,69 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if ownerID, ownerErr := commodoredb.New(s.db).GetPushTargetStreamOwner(ctx, commodoredb.GetPushTargetStreamOwnerParams{
-		StreamID: row.StreamID, TenantID: tenantID,
-	}); ownerErr == nil {
-		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, ownerID, row.StreamID, []string{"push_target_status"})
-	}
 	return target, nil
+}
+
+// updatePushTargetStatusTx writes a status report and, only when the status
+// differs from the stored one, records stream_updated (push_target_status)
+// and multistream.status_changed in the same transaction. Foghorn repeats
+// reports for an unchanged status, and those commit without an event. A
+// target whose stream is pending deletion changes status without an event.
+func (s *CommodoreServer) updatePushTargetStatusTx(ctx context.Context, params commodoredb.UpdatePushTargetStatusParams) (commodoredb.UpdatePushTargetStatusRow, error) {
+	var row commodoredb.UpdatePushTargetStatusRow
+	err := s.withEventTx(ctx, func(tx *sql.Tx) error {
+		queries := commodoredb.New(tx)
+		previous, lockErr := queries.LockPushTargetStatus(ctx, commodoredb.LockPushTargetStatusParams{ID: params.ID, TenantID: params.TenantID})
+		if lockErr != nil {
+			return lockErr
+		}
+		var updateErr error
+		row, updateErr = queries.UpdatePushTargetStatus(ctx, params)
+		if updateErr != nil {
+			return updateErr
+		}
+		if previous.String == row.Status.String {
+			return nil
+		}
+		ownerID, ownerErr := queries.GetPushTargetStreamOwner(ctx, commodoredb.GetPushTargetStreamOwnerParams{
+			StreamID: row.StreamID, TenantID: params.TenantID,
+		})
+		if errors.Is(ownerErr, sql.ErrNoRows) {
+			return nil
+		}
+		if ownerErr != nil {
+			return ownerErr
+		}
+		return s.enqueueEventTx(ctx, tx,
+			s.buildStreamChangeEvent(eventStreamUpdated, params.TenantID, ownerID, row.StreamID, []string{"push_target_status"}),
+			&domainEvent{msg: &publicv1.MultistreamStatusChanged{
+				StreamId:       row.StreamID,
+				TargetId:       row.ID,
+				TargetName:     row.Name,
+				Status:         multistreamStatus(row.Status.String),
+				PreviousStatus: multistreamStatus(previous.String),
+			}, aggregateID: row.ID})
+	})
+	return row, err
+}
+
+func multistreamStatus(value string) publicv1.MultistreamStatus {
+	switch value {
+	case "idle":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_IDLE
+	case "pending":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_PENDING
+	case "pushing":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_PUSHING
+	case "retrying":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_RETRYING
+	case "stopping":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_STOPPING
+	case "failed":
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_FAILED
+	default:
+		return publicv1.MultistreamStatus_MULTISTREAM_STATUS_UNSPECIFIED
+	}
 }
 
 func pushTargetStatusReasonMessage(reason commodorepb.PushTargetStatusReason) string {
@@ -8076,15 +8268,23 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.C
 		expiresAt = sql.NullTime{Time: req.GetExpiresAt().AsTime(), Valid: true}
 	}
 
-	err = commodoredb.New(s.db).InsertAPIToken(ctx, commodoredb.InsertAPITokenParams{
-		TokenID: tokenID, TenantID: tenantID, UserID: userID, TokenHash: tokenHash,
-		TokenName: tokenName, Permissions: permissions, ExpiresAt: expiresAt,
+	created := &publicv1.ApiTokenCreated{TokenId: tokenID, Name: tokenName, Permissions: permissions}
+	if expiresAt.Valid {
+		created.ExpiresAt = timestamppb.New(expiresAt.Time)
+	}
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if insertErr := commodoredb.New(tx).InsertAPIToken(ctx, commodoredb.InsertAPITokenParams{
+			TokenID: tokenID, TenantID: tenantID, UserID: userID, TokenHash: tokenHash,
+			TokenName: tokenName, Permissions: permissions, ExpiresAt: expiresAt,
+		}); insertErr != nil {
+			return insertErr
+		}
+		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(eventTokenCreated, userID, tenantID, "api_token", "", tokenID, ""),
+			&domainEvent{msg: created, aggregateID: tokenID})
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create API token: %v", err)
 	}
-
-	s.emitAuthEvent(ctx, eventTokenCreated, userID, tenantID, "api_token", "", tokenID, "")
 
 	resp := &commodorepb.CreateAPITokenResponse{
 		Id:          tokenID,
@@ -8243,8 +8443,21 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 	}
 
 	tenantManager := canManageDeveloperTokens(ctx, userID, tenantID)
-	tokenName, err := commodoredb.New(s.db).RevokeAPIToken(ctx, commodoredb.RevokeAPITokenParams{
-		TokenID: req.GetTokenId(), UserID: userID, TenantID: tenantID, TenantManager: tenantManager,
+	var revoked commodoredb.RevokeAPITokenRow
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		var revokeErr error
+		revoked, revokeErr = commodoredb.New(tx).RevokeAPIToken(ctx, commodoredb.RevokeAPITokenParams{
+			TokenID: req.GetTokenId(), UserID: userID, TenantID: tenantID, TenantManager: tenantManager,
+		})
+		if revokeErr != nil {
+			return revokeErr
+		}
+		// Revoking an already inactive token changes nothing and records nothing.
+		if !revoked.WasActive.Bool {
+			return nil
+		}
+		return s.enqueueEventTx(ctx, tx, s.buildAuthEvent(eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), ""),
+			&domainEvent{msg: &publicv1.ApiTokenRevoked{TokenId: req.GetTokenId()}, aggregateID: req.GetTokenId()})
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "token not found")
@@ -8253,12 +8466,10 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	s.emitAuthEvent(ctx, eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
-
 	return &commodorepb.RevokeAPITokenResponse{
 		Message:   "Token revoked successfully",
 		TokenId:   req.GetTokenId(),
-		TokenName: tokenName,
+		TokenName: revoked.TokenName,
 		RevokedAt: timestamppb.Now(),
 	}, nil
 }
@@ -8288,28 +8499,10 @@ const (
 	eventStreamKeyCreated       = "stream_key_created"
 	eventStreamKeyDeleted       = "stream_key_deleted"
 	eventArtifactRegistered     = "artifact_registered"
-	eventArtifactDeleted        = "artifact_deleted"
 	eventPlaybackPolicyChanged  = "playback_policy_changed"
 )
 
-// emitServiceEvent enqueues a service event into
-// commodore.service_event_outbox. The drain worker (started in
-// NewGRPCServer via runServiceEventOutboxWorker) dispatches pending rows
-// to Decklog with exponential backoff, so a Decklog outage degrades to
-// outbox-backlog growth rather than dropped stream/policy mutation events.
-// For strict atomicity with a caller-held state-mutation tx, use
-// EnqueueServiceEventTx(ctx, tx, event).
-func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
-	if event == nil {
-		return
-	}
-	if ctxkeys.IsDemoMode(ctx) {
-		return
-	}
-	s.enqueueServiceEvent(ctx, event)
-}
-
-func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
+func (s *CommodoreServer) buildAuthEvent(eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) *ipcpb.ServiceEvent {
 	payload := &ipcpb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
@@ -8318,29 +8511,45 @@ func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, 
 		TokenId:  tokenID,
 		Error:    errMsg,
 	}
-	event := &ipcpb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "user",
 		ResourceId:   userID,
 		Payload:      &ipcpb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, userID, tenantID, nodeID, clusterID string) {
+// enqueueAuthEventTx records an authentication event in the transaction that
+// commits the session, credential, or identity change it describes.
+func (s *CommodoreServer) enqueueAuthEventTx(ctx context.Context, exec commodoredb.DBTX, eventType, userID, tenantID, authType, walletID string) error {
+	return s.enqueueEventTx(ctx, exec, s.buildAuthEvent(eventType, userID, tenantID, authType, walletID, "", ""), nil)
+}
+
+// recordLoginFailed records a rejected sign-in. The event is the rejection's
+// only durable effect, so it commits in its own transaction and a failure to
+// record it fails the sign-in.
+func (s *CommodoreServer) recordLoginFailed(ctx context.Context, userID, tenantID, authType, reason string) error {
+	if err := s.enqueueEventOwnTx(ctx, s.buildAuthEvent(eventAuthLoginFailed, userID, tenantID, authType, "", "", reason), nil); err != nil {
+		s.logger.WithError(err).WithField("user_id", userID).Error("Failed to record rejected sign-in")
+		return status.Error(codes.Internal, "failed to record sign-in attempt")
+	}
+	return nil
+}
+
+func (s *CommodoreServer) buildMistAdminSessionMintedEvent(userID, tenantID, nodeID, clusterID string) *ipcpb.ServiceEvent {
 	payload := &ipcpb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
 		AuthType: "mist_admin_session",
 	}
-	event := &ipcpb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:       eventMistAdminSessionMinted,
 		Timestamp:       timestamppb.Now(),
-		Source:          "commodore",
+		Source:          commodoreEventSource,
 		TenantId:        tenantID,
 		UserId:          userID,
 		ResourceType:    "infrastructure_node",
@@ -8348,16 +8557,14 @@ func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, u
 		SourceClusterId: clusterID,
 		Payload:         &ipcpb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
 }
 
-// buildStreamChangeEvent constructs the stream service event; shared by the best-effort emitter and the
-// transactional finalize enqueue so both produce an identical event.
+// buildStreamChangeEvent constructs the legacy stream service event.
 func (s *CommodoreServer) buildStreamChangeEvent(eventType, tenantID, userID, streamID string, changedFields []string) *ipcpb.ServiceEvent {
 	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "stream",
@@ -8366,15 +8573,14 @@ func (s *CommodoreServer) buildStreamChangeEvent(eventType, tenantID, userID, st
 	}
 }
 
-func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, tenantID, userID, streamID string, changedFields []string) {
-	s.emitServiceEvent(ctx, s.buildStreamChangeEvent(eventType, tenantID, userID, streamID, changedFields))
+// enqueueStreamUpdatedTx records stream_updated and stream.updated for a
+// change to the stream or one of its sub-resources, named by changedFields.
+func (s *CommodoreServer) enqueueStreamUpdatedTx(ctx context.Context, exec commodoredb.DBTX, tenantID, userID, streamID string, changedFields []string) error {
+	return s.enqueueEventTx(ctx, exec, s.buildStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, changedFields),
+		&domainEvent{msg: &publicv1.StreamUpdated{StreamId: streamID, ChangedFields: changedFields}, aggregateID: streamID})
 }
 
-func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tenantID, userID string, artifactType ipcpb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
-	if artifactID == "" || tenantID == "" {
-		return
-	}
-
+func (s *CommodoreServer) buildArtifactEvent(eventType, tenantID, userID string, artifactType ipcpb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) *ipcpb.ServiceEvent {
 	payload := &ipcpb.ArtifactEvent{
 		ArtifactType: artifactType,
 		ArtifactId:   artifactID,
@@ -8384,36 +8590,40 @@ func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tena
 	if expiresAt != nil {
 		payload.ExpiresAt = expiresAt
 	}
-
-	event := &ipcpb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "artifact",
 		ResourceId:   artifactID,
 		Payload:      &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitStreamKeyEvent(ctx context.Context, eventType, tenantID, userID, streamID, keyID string) {
+func (s *CommodoreServer) buildStreamKeyEvent(eventType, tenantID, userID, streamID, keyID string) *ipcpb.ServiceEvent {
 	payload := &ipcpb.StreamKeyEvent{
 		StreamId: streamID,
 		KeyId:    keyID,
 	}
-	event := &ipcpb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "stream_key",
 		ResourceId:   keyID,
 		Payload:      &ipcpb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
 	}
-	s.emitServiceEvent(ctx, event)
+}
+
+// enqueueStreamKeyEventTx records a change to the stream's additional ingest
+// keys: the legacy stream_key event and stream.updated naming stream_keys.
+func (s *CommodoreServer) enqueueStreamKeyEventTx(ctx context.Context, exec commodoredb.DBTX, eventType, tenantID, userID, streamID, keyID string) error {
+	return s.enqueueEventTx(ctx, exec, s.buildStreamKeyEvent(eventType, tenantID, userID, streamID, keyID),
+		&domainEvent{msg: &publicv1.StreamUpdated{StreamId: streamID, ChangedFields: []string{"stream_keys"}}, aggregateID: streamID})
 }
 
 // GetStreamsBatch retrieves multiple streams by IDs in a single query
@@ -9045,6 +9255,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	// Carry the intent request_id so Foghorn keys its command ledger on it — the
 	// sweep resolves this attempt's outcome by request_id, not by artifact presence.
 	foghornReq.RequestId = &intentRequestID
+	foghornReq.Actor = s.requestActor(ctx)
 
 	// Call Foghorn for artifact lifecycle management.
 	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
@@ -9185,7 +9396,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 		return nil, err
 	}
 
-	// Look up clip info for deletion event and cluster-aware routing
+	// Look up the clip's origin cluster for cluster-aware routing
 	route, routeErr := commodoredb.New(s.db).GetClipDeletionRoute(ctx, commodoredb.GetClipDeletionRouteParams{
 		ClipHash: req.ClipHash, TenantID: tenantID,
 	})
@@ -9198,18 +9409,15 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 		return nil, err
 	}
 
-	resp, trailers, err := foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
+	// The catalog deletion is projected by the Foghorn artifact reconciler, the sole revision authority:
+	// Foghorn soft-deletes its media-plane row (bumping catalog_revision) and commits artifact_deleted,
+	// attributed to userID, in that transaction; the reconciler writes the durable tombstone marker at
+	// that authoritative revision. Commodore performs no local catalog mutation, so no non-authoritative
+	// revision can beat a stalled snapshot and resurrect the asset.
+	resp, trailers, err := foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID, userID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
-	}
-
-	// The catalog deletion is projected by the Foghorn artifact reconciler, the sole revision authority:
-	// Foghorn soft-deletes its media-plane row here (bumping catalog_revision), and the reconciler writes
-	// the durable tombstone marker at that authoritative revision. Commodore performs no local catalog
-	// mutation, so no non-authoritative revision can beat a stalled snapshot and resurrect the asset.
-	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, route.StreamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -9255,7 +9463,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 		return nil, err
 	}
 
-	// Look up DVR info for deletion event and cluster-aware routing
+	// Look up the DVR's origin cluster for cluster-aware routing
 	route, routeErr := commodoredb.New(s.db).GetDVRDeletionRoute(ctx, commodoredb.GetDVRDeletionRouteParams{
 		DvrHash: req.DvrHash, TenantID: tenantID,
 	})
@@ -9268,20 +9476,17 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 		return nil, err
 	}
 
-	resp, trailers, err := foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
+	// The catalog deletion of the parent DVR AND its chapters is projected by the Foghorn artifact
+	// reconciler, the sole revision authority: Foghorn soft-deletes the parent and cascades its child
+	// chapter artifacts (bumping each row's catalog_revision), committing artifact_deleted, attributed
+	// to userID, in that transaction; the reconciler writes a durable tombstone marker for each at its
+	// authoritative revision — removing the business row and the dvr_chapter_playback mapping in the
+	// same projection. Commodore performs no local catalog mutation, so no non-authoritative revision
+	// can resurrect a deleted asset.
+	resp, trailers, err := foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID, userID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
-	}
-
-	// The catalog deletion of the parent DVR AND its chapters is projected by the Foghorn artifact
-	// reconciler, the sole revision authority: Foghorn soft-deletes the parent and cascades its child
-	// chapter artifacts here (bumping each row's catalog_revision), and the reconciler writes a durable
-	// tombstone marker for each at its authoritative revision — removing the business row and the
-	// dvr_chapter_playback mapping in the same projection. Commodore performs no local catalog mutation,
-	// so no non-authoritative revision can resurrect a deleted asset.
-	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, route.StreamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -9622,12 +9827,13 @@ func commodoreServiceOnlyMethods() []string {
 }
 
 // NewGRPCServer creates a new gRPC server for Commodore with all services registered
-func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
+func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server, error) {
 	// Chain auth interceptor with logging interceptor
 	grpcAuthCfg := middleware.GRPCAuthConfig{
 		ServiceToken:         cfg.ServiceToken,
 		JWTSecret:            cfg.JWTSecret,
 		DelegatedJWTAudience: "commodore",
+		MetadataPolicy:       cfg.MetadataPolicy,
 		Logger:               cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
@@ -9657,14 +9863,14 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
-		cfg.Logger.WithError(err).Fatal("Timed out waiting for Commodore gRPC TLS files")
+		return nil, fmt.Errorf("wait for Commodore gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
-		cfg.Logger.WithError(err).Fatal("Failed to configure Commodore gRPC TLS")
+		return nil, fmt.Errorf("configure Commodore gRPC TLS: %w", err)
 	}
 	if tlsOpt != nil {
 		opts = append(opts, tlsOpt)
@@ -9716,10 +9922,10 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(server, hs)
+	fwserver.RegisterHealthServer(server, hs)
 	reflection.Register(server)
 
-	return server
+	return server, nil
 }
 
 // unaryInterceptor logs gRPC requests
@@ -9760,96 +9966,61 @@ func (s *CommodoreServer) hashTokenWithSecret(token string) string {
 
 // sendVerificationEmail sends an email verification link
 func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASSWORD")
-
-	if smtpHost == "" {
+	settings := s.settings()
+	if settings.SMTPHost == "" {
 		s.logger.Warn("SMTP not configured, skipping verification email")
 		return nil
 	}
 
-	if smtpPort == "" {
-		smtpPort = "587"
-	}
-
-	fromEmail := os.Getenv("FROM_EMAIL")
-	if fromEmail == "" {
-		fromEmail = "noreply@frameworks.network"
-	}
-
-	baseURL, err := validatedAccountEmailBaseURL(os.Getenv("WEBAPP_PUBLIC_URL"))
+	baseURL, err := validatedAccountEmailBaseURL(settings.Branding.WebAppURL, settings.Development)
 	if err != nil {
 		return err
 	}
-	message, err := renderVerificationEmail(baseURL, token)
+	message, err := settings.renderVerificationEmail(baseURL, token)
 	if err != nil {
 		return err
 	}
+	message.To = email
+	return settings.sendMail(message)
+}
 
-	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
+// sendMail delivers one message through the configured SMTP server. Load
+// applies the SMTP_PORT and FROM_EMAIL defaults.
+func (r RuntimeSettings) sendMail(message emailpkg.Message) error {
+	fromName := strings.TrimSpace(r.FromName)
 	if fromName == "" {
 		fromName = "FrameWorks"
 	}
 	sender := emailpkg.NewSender(emailpkg.Config{
-		Host:          smtpHost,
-		Port:          smtpPort,
-		User:          smtpUser,
-		Password:      smtpPass,
-		From:          fromEmail,
+		Host:          r.SMTPHost,
+		Port:          r.SMTPPort,
+		User:          r.SMTPUser,
+		Password:      r.SMTPPassword,
+		From:          r.FromEmail,
 		FromName:      fromName,
-		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
+		AllowInsecure: r.SMTPAllowInsecure,
 	})
-	message.To = email
 	return sender.Send(context.Background(), message)
 }
 
 // sendPasswordResetEmail sends a password reset link
 func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASSWORD")
-
-	if smtpHost == "" {
+	settings := s.settings()
+	if settings.SMTPHost == "" {
 		s.logger.Warn("SMTP not configured, skipping password reset email")
 		return nil
 	}
 
-	if smtpPort == "" {
-		smtpPort = "587"
-	}
-
-	fromEmail := os.Getenv("FROM_EMAIL")
-	if fromEmail == "" {
-		fromEmail = "noreply@frameworks.network"
-	}
-
-	baseURL, err := validatedAccountEmailBaseURL(os.Getenv("WEBAPP_PUBLIC_URL"))
+	baseURL, err := validatedAccountEmailBaseURL(settings.Branding.WebAppURL, settings.Development)
 	if err != nil {
 		return err
 	}
-	message, err := renderPasswordResetEmail(baseURL, token)
+	message, err := settings.renderPasswordResetEmail(baseURL, token)
 	if err != nil {
 		return err
 	}
-
-	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
-	if fromName == "" {
-		fromName = "FrameWorks"
-	}
-	sender := emailpkg.NewSender(emailpkg.Config{
-		Host:          smtpHost,
-		Port:          smtpPort,
-		User:          smtpUser,
-		Password:      smtpPass,
-		From:          fromEmail,
-		FromName:      fromName,
-		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
-	})
 	message.To = email
-	return sender.Send(context.Background(), message)
+	return settings.sendMail(message)
 }
 
 // ============================================================================
@@ -9975,6 +10146,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 		ClusterId:     vodRoute.clusterID,
 		RetentionDays: &resolvedDays,
 		RequestId:     &intentRequestID,
+		Actor:         s.requestActor(ctx),
 	}
 
 	// Call Foghorn for S3 multipart upload setup
@@ -10040,6 +10212,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 		UploadId:      vodRoute.storageUploadID,
 		Parts:         req.Parts,
 		ProcessesJson: processesJSON,
+		Actor:         s.requestActor(ctx),
 	}
 
 	resp, trailers, err := vodRoute.client.CompleteVodUpload(ctx, foghornReq)
@@ -10127,7 +10300,7 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.Abor
 	}
 
 	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
-	resp, trailers, err := vodRoute.client.AbortVodUpload(ctx, tenantID, vodRoute.storageUploadID)
+	resp, trailers, err := vodRoute.client.AbortVodUpload(ctx, tenantID, vodRoute.storageUploadID, s.requestActor(ctx))
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -10367,19 +10540,15 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 		return nil, err
 	}
 
-	// Forward to Foghorn (it handles S3 deletion and lifecycle state)
-	resp, trailers, err := foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
+	// Foghorn handles S3 deletion and lifecycle state. The catalog deletion is projected by the Foghorn
+	// artifact reconciler, the sole revision authority: Foghorn soft-deletes its media-plane row (bumping
+	// catalog_revision) and commits artifact_deleted, attributed to userID, in that transaction; the
+	// reconciler writes the durable tombstone marker at that authoritative revision — removing the
+	// business row and any dvr_chapter_playback mapping. Commodore performs no local catalog mutation.
+	resp, trailers, err := foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash, userID)
 	if err != nil {
 		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to delete VOD asset via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
-	}
-
-	// The catalog deletion is projected by the Foghorn artifact reconciler, the sole revision authority:
-	// Foghorn soft-deletes its media-plane row here (bumping catalog_revision), and the reconciler writes
-	// the durable tombstone marker at that authoritative revision — removing the business row and any
-	// dvr_chapter_playback mapping. Commodore performs no local catalog mutation.
-	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
 	}
 
 	s.logger.WithFields(logging.Fields{

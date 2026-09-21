@@ -30,8 +30,9 @@ func seedHalfPaidInvoice(t *testing.T, db *sql.DB) (invoiceID string, txIDs [2]s
 	for i := range txIDs {
 		txIDs[i] = uuid.NewString()
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.billing_payments (invoice_id, method, amount, currency, tx_id, status)
-			VALUES ($1::uuid, 'card', 50.00, 'EUR', $2, 'pending')`, invoiceID, txIDs[i]); err != nil {
+			INSERT INTO purser.billing_payments (invoice_id, method, amount, currency, tx_id, status,
+			    original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date)
+			VALUES ($1::uuid, 'card', 50.00, 'EUR', $2, 'pending', 5000, 'EUR', 5000, 1, 'identity', CURRENT_DATE)`, invoiceID, txIDs[i]); err != nil {
 			t.Fatalf("seed payment %d: %v", i, err)
 		}
 	}

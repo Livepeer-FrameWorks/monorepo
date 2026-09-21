@@ -11,14 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -115,12 +114,13 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 		}
 		response.Checks = append(response.Checks, check)
 	}
-	if config.CryptoDepositsEnabled() {
+	rt := appconfig.Runtime()
+	if rt.CryptoDepositsEnabled {
 		add("direct_deposits.circuit_breaker", nil, "enabled")
 	} else {
 		add("direct_deposits.circuit_breaker", fmt.Errorf("CRYPTO_DEPOSITS_ENABLED=false"), "")
 	}
-	if config.X402PaymentsEnabled() {
+	if rt.X402PaymentsEnabled {
 		add("x402.circuit_breaker", nil, "enabled")
 	} else {
 		add("x402.circuit_breaker", fmt.Errorf("X402_PAYMENTS_ENABLED=false"), "")
@@ -154,18 +154,18 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 		add("accounting.crypto_anomaly_queue", nil, "no unresolved anomalies")
 	}
 
-	for _, network := range handlers.DepositNetworks(config.X402IncludeTestnetsEnabled()) {
+	for _, network := range handlers.DepositNetworks(rt.X402IncludeTestnets) {
 		prefix := "network." + network.Name + "."
 		_, finalityErr := handlers.GetFinalityHead(ctx, s.rpcClient, network)
 		add(prefix+"finality", finalityErr, "consensus finalized head available")
 		treasuryErr := handlers.ValidateCryptoCustodyNetwork(ctx, s.rpcClient, network, "ETH")
 		add(prefix+"treasury", treasuryErr, "non-zero treasury address configured")
 		relayerKey := "CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_" + strings.ToUpper(strings.ReplaceAll(network.Name, "-", "_"))
-		_, relayerErr := ethcrypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv(relayerKey)), "0x"))
+		_, relayerErr := ethcrypto.HexToECDSA(strings.TrimPrefix(rt.NetworkSetting(relayerKey), "0x"))
 		if relayerErr != nil {
 			relayerErr = fmt.Errorf("%s is missing or invalid", relayerKey)
 		} else {
-			privateKey, _ := ethcrypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv(relayerKey)), "0x"))
+			privateKey, _ := ethcrypto.HexToECDSA(strings.TrimPrefix(rt.NetworkSetting(relayerKey), "0x"))
 			relayerAddress := ethcrypto.PubkeyToAddress(privateKey.PublicKey).Hex()
 			relayerErr = handlers.ValidateGasRunway(ctx, s.rpcClient, network, relayerAddress, 150_000)
 		}
@@ -195,7 +195,7 @@ func sweepNetwork(name string) (handlers.NetworkConfig, error) {
 	if !ok {
 		return handlers.NetworkConfig{}, fmt.Errorf("unsupported network %q", name)
 	}
-	if network.IsTestnet && !config.X402IncludeTestnetsEnabled() {
+	if network.IsTestnet && !appconfig.Runtime().X402IncludeTestnets {
 		return handlers.NetworkConfig{}, fmt.Errorf("testnet sweep requires explicit testnet enablement")
 	}
 	return network, nil
@@ -214,7 +214,7 @@ func parseSweepHex(value string) (*big.Int, error) {
 
 func sweepTreasury(network string) (string, error) {
 	key := "CRYPTO_TREASURY_" + strings.ToUpper(strings.ReplaceAll(network, "-", "_"))
-	address := strings.TrimSpace(os.Getenv(key))
+	address := appconfig.Runtime().NetworkSetting(key)
 	if !common.IsHexAddress(address) || common.HexToAddress(address) == (common.Address{}) {
 		return "", fmt.Errorf("%s must contain a valid non-zero EVM address", key)
 	}
@@ -506,7 +506,7 @@ func (s *PurserServer) PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCr
 			item.GasLimit = 21_000
 			fee := new(big.Int).Mul(maxFee, new(big.Int).SetUint64(item.GasLimit))
 			dust := big.NewInt(100_000_000_000_000)
-			if configured := strings.TrimSpace(os.Getenv("CRYPTO_SWEEP_ETH_DUST_WEI")); configured != "" {
+			if configured := appconfig.Runtime().CryptoSweepETHDustWei; configured != "" {
 				if parsed, ok := new(big.Int).SetString(configured, 10); ok && parsed.Sign() >= 0 {
 					dust = parsed
 				}
@@ -691,7 +691,7 @@ func (s *PurserServer) validatePersistedSweepBundle(ctx context.Context, bundle 
 
 func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network handlers.NetworkConfig, item cryptosweep.ManifestItem, signatureHex string) (rawHex, txHash string, err error) {
 	keyName := "CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_" + strings.ToUpper(strings.ReplaceAll(network.Name, "-", "_"))
-	privateKey, err := ethcrypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv(keyName)), "0x"))
+	privateKey, err := ethcrypto.HexToECDSA(strings.TrimPrefix(appconfig.Runtime().NetworkSetting(keyName), "0x"))
 	if err != nil {
 		return "", "", fmt.Errorf("%s must contain the dedicated gas-relayer key", keyName)
 	}

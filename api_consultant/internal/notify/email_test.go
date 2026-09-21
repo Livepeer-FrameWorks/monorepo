@@ -3,11 +3,14 @@ package notify
 import (
 	"bufio"
 	"context"
+	"io"
+	"mime/quotedprintable"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -105,6 +108,10 @@ func TestEmailNotifierSendsToBillingEmail(t *testing.T) {
 	}
 
 	notifier := NewEmailNotifier(Config{
+		WebAppURL: "https://old.example/app",
+		BrandingSource: func() config.EmailBranding {
+			return config.EmailBranding{WebAppURL: "https://new.example/app"}
+		},
 		SMTP: email.Config{
 			Host:          host,
 			Port:          port,
@@ -114,10 +121,11 @@ func TestEmailNotifierSendsToBillingEmail(t *testing.T) {
 	}, logging.NewLoggerWithService("skipper-test"))
 
 	report := Report{
-		TenantID:       "tenant-a",
-		RecipientEmail: "billing@example.com",
-		Summary:        "Summary",
-		GeneratedAt:    time.Now().UTC(),
+		InvestigationID: "inv-1",
+		TenantID:        "tenant-a",
+		RecipientEmail:  "billing@example.com",
+		Summary:         "Summary",
+		GeneratedAt:     time.Now().UTC(),
 	}
 
 	if err := notifier.Notify(context.Background(), report); err != nil {
@@ -136,10 +144,20 @@ func TestEmailNotifierSendsToBillingEmail(t *testing.T) {
 	if !strings.Contains(capture.data, "Skipper Investigation Report") {
 		t.Fatalf("expected email body to include report header")
 	}
+	body, decodeErr := io.ReadAll(quotedprintable.NewReader(strings.NewReader(capture.data)))
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if !strings.Contains(string(body), "https://new.example/app/skipper?report=inv-1") || strings.Contains(string(body), "https://old.example") {
+		t.Fatal("report URL did not use the current branding snapshot")
+	}
 }
 
 func TestRenderTemplateUsesBrandLayoutAndEscapesContent(t *testing.T) {
-	notifier := &EmailNotifier{webAppURL: "https://app.example.test/app"}
+	notifier := &EmailNotifier{
+		webAppURL: "https://app.example.test/app",
+		branding:  config.EmailBranding{WebAppURL: "https://app.example.test/app"},
+	}
 	body, err := notifier.renderTemplate(emailReportData{
 		TenantName:  `<script>alert("x")</script>`,
 		Summary:     "Streams are healthy",
@@ -156,5 +174,19 @@ func TestRenderTemplateUsesBrandLayoutAndEscapesContent(t *testing.T) {
 	}
 	if strings.Contains(body, `<script>`) {
 		t.Fatalf("tenant name was not escaped: %s", body)
+	}
+}
+
+func TestEmailBrandingReadsTheCurrentSnapshot(t *testing.T) {
+	branding := config.EmailBranding{LogoURL: "https://old.example/logo.png"}
+	notifier := NewEmailNotifier(Config{BrandingSource: func() config.EmailBranding { return branding }}, logging.NewLogger())
+	before, err := notifier.renderTemplate(emailReportData{})
+	if err != nil || !strings.Contains(before, branding.LogoURL) {
+		t.Fatalf("initial branding: %v", err)
+	}
+	branding.LogoURL = "https://new.example/logo.png"
+	after, err := notifier.renderTemplate(emailReportData{})
+	if err != nil || !strings.Contains(after, branding.LogoURL) || strings.Contains(after, "https://old.example/logo.png") {
+		t.Fatalf("reloaded branding: %v", err)
 	}
 }

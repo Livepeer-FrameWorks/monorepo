@@ -2,26 +2,22 @@ package main
 
 import (
 	"context"
-	"net"
-	"net/http"
-	"os"
-	"os/signal"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	"frameworks/api_firehose/internal/appconfig"
 	"frameworks/api_firehose/internal/grpc"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+
+	googlegrpc "google.golang.org/grpc"
 )
 
 func main() {
@@ -37,34 +33,38 @@ func main() {
 
 	logger.Info("Starting Decklog (Firehose API)")
 
+	configOptions := config.Options{Service: "decklog", Logger: logger}
+	cfg, err := config.Load[appconfig.Decklog](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("decklog", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("decklog", version.Version, version.GitCommit)
 
 	// Setup Kafka producer
-	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
-	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", topology.TopicAnalyticsEvents)
-	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", topology.TopicServiceEvents)
-
-	producer, err := kafka.NewKafkaProducer(brokers, analyticsTopic, clusterID, logger)
+	producer, err := kafka.NewKafkaProducer(cfg.KafkaBrokers, cfg.AnalyticsTopic, cfg.KafkaClusterID, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka producer")
 	}
-	defer func() {
-		if closeErr := producer.Close(); closeErr != nil {
-			logger.WithError(closeErr).Error("Failed to close Kafka producer")
-		}
-	}()
 
 	// Add health checks
 	healthChecker.AddCheck("kafka_producer", monitoring.KafkaProducerHealthCheck(producer.GetClient()))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"KAFKA_BROKERS":    strings.Join(brokers, ","),
-		"KAFKA_CLUSTER_ID": clusterID,
+		"KAFKA_BROKERS":    strings.Join(cfg.KafkaBrokers, ","),
+		"KAFKA_CLUSTER_ID": cfg.KafkaClusterID,
 	}))
+
+	// Every ingress RPC produces synchronously to Kafka, so an instance whose
+	// producer cannot reach the brokers cannot accept events.
+	readiness := monitoring.NewReadinessChecker("decklog", version.Version)
+	readiness.AddCheck("kafka_producer", monitoring.KafkaProducerHealthCheck(producer.GetClient()))
 
 	// Create custom event streaming metrics
 	metrics := &grpc.DecklogMetrics{
@@ -77,145 +77,97 @@ func main() {
 	metrics.KafkaMessages = metricsCollector.NewCounter("kafka_messages_total", "Total Kafka messages", []string{"topic", "operation", "status"})
 	metrics.KafkaDuration = metricsCollector.NewHistogram("kafka_operation_duration_seconds", "Kafka operation duration", []string{"operation"}, nil)
 
-	// Get TLS configuration
-	certFile := config.GetEnv("GRPC_TLS_CERT_PATH", "")
-	keyFile := config.GetEnv("GRPC_TLS_KEY_PATH", "")
-	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
-
-	// Create gRPC server
-	grpcServer, err := grpc.NewGRPCServer(grpc.GRPCServerConfig{
+	// gRPC server settings; Run builds the server after the port is bound, so
+	// HTTP health serves while the TLS files are still being synced.
+	grpcConfig := grpc.GRPCServerConfig{
 		Producer:           producer,
 		Logger:             logger,
 		Metrics:            metrics,
-		CertFile:           certFile,
-		KeyFile:            keyFile,
-		AllowInsecure:      allowInsecure,
-		ServiceToken:       serviceToken,
-		ServiceEventsTopic: serviceEventsTopic,
-		// Raw MistTrigger audit topic. Set DECKLOG_RAW_TRIGGERS_TOPIC=- to
-		// disable; default is analytics.raw_mist_triggers.
-		RawTriggersTopic: config.GetEnv("DECKLOG_RAW_TRIGGERS_TOPIC", ""),
+		CertFile:           cfg.CertPath,
+		KeyFile:            cfg.KeyPath,
+		AllowInsecure:      cfg.AllowInsecure,
+		ServiceToken:       cfg.ServiceToken,
+		MetadataPolicy:     metadataPolicy,
+		ServiceEventsTopic: cfg.ServiceEventsTopic,
+		RawTriggersTopic:   cfg.RawTriggersTopic,
 		// Envelope identity for this Decklog instance — backfills onto
 		// events that arrive without source_region / source_cluster_id
 		// already set. Empty when running outside a regional deployment.
-		SourceRegion:    config.GetEnv("REGION", config.GetEnv("REGION_ID", config.GetEnv("DECKLOG_SOURCE_REGION", ""))),
-		SourceClusterID: config.GetEnv("CLUSTER_ID", ""),
+		SourceRegion:    cfg.BackfillRegion(),
+		SourceClusterID: cfg.ClusterID,
+	}
+
+	// Health, readiness, and metrics are served over HTTP on the metrics port;
+	// events arrive over gRPC.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "decklog",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
 	})
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to create gRPC server")
-	}
 
-	// gRPC listener
-	port := config.GetEnv("PORT", "18006")
-	lis, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to listen")
-	}
-
-	// Setup router with unified monitoring
-	router := server.SetupServiceRouter(logger, "decklog", healthChecker, metricsCollector)
-
-	metricsPort := config.GetEnv("DECKLOG_METRICS_PORT", "18026")
-	httpSrv := &http.Server{Addr: ":" + metricsPort, Handler: router}
-
-	logger.WithFields(logging.Fields{"grpc_port": port, "http_port": metricsPort}).Info("Starting Decklog servers")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Best-effort service registration in Quartermaster (using gRPC)
-	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
-			Timeout:       10 * time.Second,
-			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
-			return
-		}
-		defer func() { _ = qc.Close() }()
-		pi, _ := strconv.Atoi(port)
-		if pi <= 0 || pi > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
-			return
-		}
-		advertiseHost := config.GetEnv("DECKLOG_HOST", "decklog")
-		healthEndpoint := "/health"
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "decklog",
-			Version:        version.Version,
-			Protocol:       "grpc",
-			Port:           int32(pi),
-			AdvertiseHost:  &advertiseHost,
-			HealthEndpoint: &healthEndpoint,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("decklog")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
-		} else {
-			logger.Info("Quartermaster bootstrap (decklog) ok")
-		}
-	}()
+	go registerWithQuartermaster(ctx, cfg, logger)
 
-	// Handle SIGHUP env-file reload. decklog runs its own gRPC + HTTP
-	// listeners (no pkg/server.Start) so we install the listener here.
-	// Installing it also neuters Go's default-terminate disposition for
-	// SIGHUP even before any callback is registered — matches the
-	// guarantee pkg/server.Start gives every other Go service.
-	go func() {
-		hupCh := make(chan os.Signal, 1)
-		signal.Notify(hupCh, syscall.SIGHUP)
-		envPath := server.EnvFilePathFor("decklog")
-		for range hupCh {
-			res, err := config.ReloadFromFile(envPath)
-			if err != nil {
-				logger.WithError(err).WithField("env_file", envPath).Warn("env-file reload failed")
-				continue
+	server.RegisterEnvFileReload("decklog", logger)
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "decklog",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "metrics", Port: cfg.MetricsPort, Handler: router}},
+		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(ctx context.Context) (*googlegrpc.Server, error) {
+			return grpc.NewGRPCServer(ctx, grpcConfig)
+		}}},
+		OnShutdown: []func(context.Context){func(context.Context) {
+			if closeErr := producer.Close(); closeErr != nil {
+				logger.WithError(closeErr).Error("Failed to close Kafka producer")
 			}
-			if res.Empty() {
-				logger.Debug("env-file reload: no changes")
-				continue
-			}
-			logger.WithFields(logging.Fields{
-				"added":   res.Added,
-				"changed": res.Changed,
-				"removed": res.Removed,
-			}).Info("env-file reload applied")
-		}
-	}()
+		}},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
+	}
+}
 
-	// Handle graceful shutdown
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		logger.Info("Shutting down gRPC and HTTP listeners...")
-		grpcServer.GracefulStop()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
-		_ = lis.Close()
-	}()
-
-	// Start servers
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.WithError(err).Error("HTTP server error")
-		}
-	}()
-
-	if err := grpcServer.Serve(lis); err != nil {
-		logger.WithError(err).Fatal("gRPC server error")
+// registerWithQuartermaster registers the gRPC ingress port with protocol grpc
+// and the /health endpoint from servicedefs.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.Decklog, logger logging.Logger) {
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		return
+	}
+	defer func() { _ = qc.Close() }()
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:   "decklog",
+		Protocol:      "grpc",
+		Port:          cfg.GRPCPort,
+		AdvertiseHost: cfg.AdvertiseHost,
+		ClusterID:     cfg.ClusterID,
+		NodeID:        cfg.NodeID,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("decklog")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
+	} else {
+		logger.Info("Quartermaster bootstrap (decklog) ok")
 	}
 }

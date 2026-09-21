@@ -6,15 +6,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/big"
 	"reflect"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/google/uuid"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
 )
@@ -25,17 +25,19 @@ const (
 )
 
 type X402PaymentQuote struct {
-	ID                  string
-	TenantID            string
-	Resource            string
-	ResourceClass       string
-	Network             NetworkConfig
-	CAIP2Network        string
-	Asset               string
-	PayTo               string
-	AmountAtomic        string
-	CreditAmountCents   int64
-	EurPerUSDRate       float64
+	ID                string
+	TenantID          string
+	Resource          string
+	ResourceClass     string
+	Network           NetworkConfig
+	CAIP2Network      string
+	Asset             string
+	PayTo             string
+	AmountAtomic      string
+	CreditAmountCents int64
+	// FX is the USD amount the payer authorizes and the EUR it credits at the
+	// ECB reference rate locked when the quote was created.
+	FX                  fx.Record
 	ExpiresAt           time.Time
 	AcceptedRequirement []byte
 	ExtraJSON           []byte
@@ -62,9 +64,11 @@ func (h *X402Handler) loadPaymentQuote(ctx context.Context, tenantID, quoteID st
 		TaxDocumentKind: stored.TaxDocumentKind, TaxProfileSnapshot: stored.TaxProfileSnapshot,
 		ExpiresAt: stored.ExpiresAt,
 	}
-	if _, err := fmt.Sscan(stored.EurPerUsdRate, &quote.EurPerUSDRate); err != nil || quote.EurPerUSDRate <= 0 {
-		return nil, "", fmt.Errorf("x402 quote has invalid FX rate")
+	record, err := storedFXRecord(stored.OriginalAmountCents, stored.OriginalCurrency, stored.EurAmountCents, stored.FxUnitsPerEur, stored.FxSource, stored.FxReferenceDate)
+	if err != nil || record == nil || record.EURMinor != stored.CreditAmountCents {
+		return nil, "", fmt.Errorf("x402 quote has invalid FX fields")
 	}
+	quote.FX = *record
 	return &quote, stored.Status, nil
 }
 
@@ -149,9 +153,9 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 	if tenantID == "" || payTo == "" {
 		return nil, fmt.Errorf("tenant and payTo are required")
 	}
-	rate, err := h.getEurUsdRate()
-	if err != nil || rate <= 0 {
-		return nil, fmt.Errorf("load EUR/USD rate: %w", err)
+	usdRate, err := fx.Lookup(ctx, h.db, fx.USD, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("load ECB USD reference rate: %w", err)
 	}
 
 	balanceCents, err := purserdb.New(h.db).GetX402PrepaidBalanceCents(ctx, tenantID)
@@ -159,7 +163,7 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		return nil, fmt.Errorf("load prepaid balance for quote: %w", err)
 	}
 
-	bufferCents := int64(config.GetEnvInt("X402_PREPAID_BUFFER_EUR_CENTS", int(defaultX402PrepaidBufferEurCents)))
+	bufferCents := int64(appconfig.Runtime().X402PrepaidBufferEurCents)
 	if bufferCents <= 0 {
 		bufferCents = defaultX402PrepaidBufferEurCents
 	}
@@ -168,17 +172,31 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		deficitCents = -balanceCents
 	}
 	targetCreditCents := deficitCents + bufferCents
-	minimumCreditCents := int64(math.Round(float64(h.RequiredTopupUSDCents()) * rate))
+	minimumCreditCents, err := fx.ToEUR(h.RequiredTopupUSDCents(), usdRate)
+	if err != nil {
+		return nil, err
+	}
 	if targetCreditCents < minimumCreditCents {
 		targetCreditCents = minimumCreditCents
 	}
 
-	usdCents := int64(math.Ceil(float64(targetCreditCents) / rate))
-	creditCents := int64(math.Round(float64(usdCents) * rate))
-	for creditCents < targetCreditCents {
-		usdCents++
-		creditCents = int64(math.Round(float64(usdCents) * rate))
+	// USDC settles in USD; the smallest USD amount whose ECB conversion reaches
+	// the EUR target is quoted, and the credit is that amount's conversion.
+	usdCents, err := fx.FromEUR(targetCreditCents, usdRate)
+	if err != nil {
+		return nil, err
 	}
+	record, err := fx.RecordToEUR(usdCents, usdRate)
+	if err != nil {
+		return nil, err
+	}
+	for record.EURMinor < targetCreditCents {
+		usdCents++
+		if record, err = fx.RecordToEUR(usdCents, usdRate); err != nil {
+			return nil, err
+		}
+	}
+	creditCents := record.EURMinor
 	atomic := new(big.Int).Mul(big.NewInt(usdCents), big.NewInt(10_000)).String()
 	documentRequirement, err := h.GetCryptoDocumentRequirement(ctx, tenantID, creditCents)
 	if err != nil {
@@ -226,9 +244,11 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		ID: quoteID, TenantID: tenantID, Resource: resource,
 		ResourceClass: classifyX402Resource(resource), Network: caip2,
 		Asset: network.USDCContract, PayTo: strings.ToLower(payTo), AmountAtomic: atomic,
-		CreditAmountCents: creditCents, EurPerUsdRate: fmt.Sprintf("%.10f", rate),
-		RequirementsJson: acceptedJSON, TaxDocumentKind: documentRequirement.DocumentKind,
+		CreditAmountCents: creditCents,
+		RequirementsJson:  acceptedJSON, TaxDocumentKind: documentRequirement.DocumentKind,
 		TaxProfileSnapshot: taxProfileSnapshot, ExpiresAt: expiresAt,
+		OriginalAmountCents: record.OriginalMinor, OriginalCurrency: record.OriginalCurrency,
+		FxUnitsPerEur: record.UnitsText(), FxSource: record.Source, FxReferenceDate: record.ReferenceDate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("persist x402 quote: %w", err)
@@ -245,7 +265,7 @@ func (h *X402Handler) CreatePaymentQuote(ctx context.Context, tenantID, resource
 		PayTo:               strings.ToLower(payTo),
 		AmountAtomic:        atomic,
 		CreditAmountCents:   creditCents,
-		EurPerUSDRate:       rate,
+		FX:                  record,
 		ExpiresAt:           expiresAt,
 		AcceptedRequirement: acceptedJSON,
 		ExtraJSON:           extraJSON,

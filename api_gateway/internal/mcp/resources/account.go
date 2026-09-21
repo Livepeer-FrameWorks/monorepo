@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -27,19 +27,63 @@ func RegisterAccountResources(server *mcp.Server, clients *clients.ServiceClient
 		Description: "Current account status, blockers, and capabilities. Always read this first.",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		return handleAccountStatus(ctx, clients, checker, logger)
+		return handleAccountStatus(ctx, clients, resolver, checker, logger)
 	})
 }
 
 // AccountStatus represents the response for the account://status resource.
+// ToolAccess says which MCP tools this account may call right now; Capabilities
+// says which platform gates are open for the tenant.
 type AccountStatus struct {
 	AccountReady   bool                 `json:"account_ready"`
 	RatedWorkReady bool                 `json:"rated_work_ready"`
 	Blockers       []preflight.Blocker  `json:"blockers"`
 	NextActions    []string             `json:"next_actions"`
-	Capabilities   map[string]bool      `json:"capabilities"`
+	ToolAccess     map[string]bool      `json:"tool_access"`
+	ServerInfo     AccountServerInfo    `json:"server_info"`
+	Capabilities   *AccountCapabilities `json:"capabilities,omitempty"`
 	Billing        AccountBillingInfo   `json:"billing"`
 	RateLimits     AccountRateLimitInfo `json:"rate_limits"`
+}
+
+// AccountServerInfo is the platform release and the product features this
+// server ships, so an agent can tell what the server supports before it tries.
+type AccountServerInfo struct {
+	Version  string   `json:"version"`
+	Features []string `json:"features"`
+}
+
+// AccountCapabilities are the gates the platform enforces for the tenant.
+// Unavailable names the sections whose source could not be read, which are
+// omitted rather than guessed.
+type AccountCapabilities struct {
+	Tenant      *AccountTenantCapabilities `json:"tenant,omitempty"`
+	Clusters    []AccountClusterCapability `json:"clusters,omitempty"`
+	ObservedAt  time.Time                  `json:"observed_at"`
+	Unavailable []string                   `json:"unavailable,omitempty"`
+}
+
+// AccountTenantCapabilities are the tenant-wide gates.
+type AccountTenantCapabilities struct {
+	PlatformOperator          bool `json:"platform_operator"`
+	RecordingRetentionCapped  bool `json:"recording_retention_capped"`
+	RecordingRetentionMaxDays *int `json:"recording_retention_max_days,omitempty"`
+	ProcessingCustomizable    bool `json:"processing_customizable"`
+	CustomSubdomain           bool `json:"custom_subdomain"`
+	CustomDomain              bool `json:"custom_domain"`
+}
+
+// AccountClusterCapability is one entitled cluster and the media verbs it
+// accepts for the tenant now.
+type AccountClusterCapability struct {
+	ClusterID   string `json:"cluster_id"`
+	ClusterName string `json:"cluster_name"`
+	Role        string `json:"role"`
+	AccessLevel string `json:"access_level"`
+	Ingest      bool   `json:"ingest"`
+	Playback    bool   `json:"playback"`
+	Storage     bool   `json:"storage"`
+	Processing  bool   `json:"processing"`
 }
 
 // AccountBillingInfo contains billing-related account info.
@@ -60,14 +104,16 @@ type AccountRateLimitInfo struct {
 	RequestsPerMinute int `json:"requests_per_minute"`
 }
 
-func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.ReadResourceResult, error) {
+func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		// Not authenticated - return unauthenticated status
+		// Not authenticated - return unauthenticated status. server_info is
+		// public, so an agent can still see what this server supports.
 		status := AccountStatus{
 			AccountReady:   false,
 			RatedWorkReady: false,
 			NextActions:    []string{"authenticate_with_wallet_or_bearer_token"},
+			ServerInfo:     accountServerInfo(resolver),
 			Blockers: []preflight.Blocker{
 				{
 					Code:       "AUTHENTICATION_REQUIRED",
@@ -75,7 +121,7 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 					Resolution: "Authenticate using X-Wallet-* headers or Bearer token",
 				},
 			},
-			Capabilities: map[string]bool{
+			ToolAccess: map[string]bool{
 				"read_streams":           false,
 				"read_analytics":         false,
 				"create_stream":          false,
@@ -95,8 +141,8 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 		blockers = []preflight.Blocker{}
 	}
 
-	// Get capabilities
-	capabilities := checker.GetCapabilities(ctx)
+	// Which MCP tools this account may call right now
+	toolAccess := checker.ToolAccess(ctx)
 
 	// Get billing info from API - fail if API fails
 	tenantBillingStatus, err := clients.Purser.GetTenantBillingStatus(ctx, tenantID)
@@ -122,7 +168,7 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 
 	// Fetch prepaid balance details if applicable
 	if billingInfo.Model == "prepaid" {
-		balance, err := clients.Purser.GetPrepaidBalance(ctx, tenantID, billing.DefaultCurrency())
+		balance, err := clients.Purser.GetPrepaidBalance(ctx, tenantID)
 		if err != nil {
 			logger.WithError(err).Debug("Failed to get prepaid balance")
 		} else {
@@ -150,12 +196,67 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 		RatedWorkReady: len(blockers) == 0,
 		Blockers:       blockers,
 		NextActions:    accountNextActions(blockers),
-		Capabilities:   capabilities,
+		ToolAccess:     toolAccess,
+		ServerInfo:     accountServerInfo(resolver),
+		Capabilities:   accountCapabilities(ctx, resolver, logger),
 		Billing:        billingInfo,
 		RateLimits:     rateLimits,
 	}
 
 	return marshalResourceResult("account://status", status)
+}
+
+func accountServerInfo(resolver *resolvers.Resolver) AccountServerInfo {
+	if resolver == nil {
+		return AccountServerInfo{}
+	}
+	info := resolver.ServerInfo()
+	return AccountServerInfo{Version: info.Version, Features: info.Features}
+}
+
+// accountCapabilities reports the platform-enforced gates for the caller. A
+// section whose source is unavailable is omitted and named in Unavailable, so
+// an agent never reads an invented gate as fact.
+func accountCapabilities(ctx context.Context, resolver *resolvers.Resolver, logger logging.Logger) *AccountCapabilities {
+	if resolver == nil {
+		return nil
+	}
+	reading, err := resolver.ReadCapabilities(ctx)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to read capabilities for account status")
+		return nil
+	}
+
+	out := &AccountCapabilities{ObservedAt: reading.ObservedAt}
+	if reading.Tenant == nil {
+		out.Unavailable = append(out.Unavailable, "tenant")
+	} else {
+		out.Tenant = &AccountTenantCapabilities{
+			PlatformOperator:          reading.Tenant.PlatformOperator,
+			RecordingRetentionCapped:  reading.Tenant.RecordingRetention.Capped,
+			RecordingRetentionMaxDays: reading.Tenant.RecordingRetention.MaxDays,
+			ProcessingCustomizable:    reading.Tenant.ProcessingCustomizable,
+			CustomSubdomain:           reading.Tenant.CustomSubdomain,
+			CustomDomain:              reading.Tenant.CustomDomain,
+		}
+	}
+	if reading.ClustersErr != nil {
+		out.Unavailable = append(out.Unavailable, "clusters")
+	} else {
+		for _, cluster := range reading.Clusters {
+			out.Clusters = append(out.Clusters, AccountClusterCapability{
+				ClusterID:   cluster.GetClusterId(),
+				ClusterName: cluster.GetClusterName(),
+				Role:        cluster.GetRole(),
+				AccessLevel: cluster.GetAccessLevel(),
+				Ingest:      cluster.GetMedia().GetIngest(),
+				Playback:    cluster.GetMedia().GetPlayback(),
+				Storage:     cluster.GetMedia().GetStorage(),
+				Processing:  cluster.GetMedia().GetProcessing(),
+			})
+		}
+	}
+	return out
 }
 
 func accountNextActions(blockers []preflight.Blocker) []string {

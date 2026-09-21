@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -195,14 +197,16 @@ type DepositAddressParams struct {
 // address is created. The monitor compares the on-chain receipt against this
 // quote, so invoice payments and prepaid top-ups use the same conversion path.
 type DepositQuote struct {
-	ExpectedAmountBaseUnits *big.Int         // Token base units the user must send (NOT NULL)
-	QuotedPriceUSD          decimal.Decimal  // USD per 1 whole token
-	QuotedUSDToEURRate      *decimal.Decimal // Locked EUR-per-USD tax rate for every prepaid quote
-	QuotedAt                time.Time
-	QuoteSource             string // "chainlink" | "one_to_one"
-	CreditedAmountCurrency  string // "USD" | "EUR" — invoice/prepaid balance currency
-	TaxDocumentKind         string
-	TaxProfile              CryptoBillingProfile
+	ExpectedAmountBaseUnits *big.Int        // Token base units the user must send (NOT NULL)
+	QuotedPriceUSD          decimal.Decimal // USD per 1 whole token
+	// FX is the presentment amount the quote prices and the EUR it credits,
+	// converted on one ECB reference date.
+	FX                     fx.Record
+	QuotedAt               time.Time
+	QuoteSource            string // "chainlink" | "one_to_one"
+	CreditedAmountCurrency string // always the EUR ledger currency
+	TaxDocumentKind        string
+	TaxProfile             CryptoBillingProfile
 }
 
 // GenerateDepositAddress allocates an HD-derived deposit address and inserts
@@ -253,8 +257,11 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 	if p.Quote.CreditedAmountCurrency == "" {
 		return "", "", fmt.Errorf("quote.CreditedAmountCurrency required")
 	}
-	if p.Quote.CreditedAmountCurrency == "EUR" && p.Quote.QuotedUSDToEURRate == nil {
-		return "", "", fmt.Errorf("quote.QuotedUSDToEURRate required when CreditedAmountCurrency is EUR")
+	if p.Quote.CreditedAmountCurrency != billing.LedgerCurrency {
+		return "", "", fmt.Errorf("quote.CreditedAmountCurrency must be %s", billing.LedgerCurrency)
+	}
+	if p.Quote.FX.Source == "" || p.Quote.FX.EURMinor <= 0 || p.Quote.FX.OriginalMinor <= 0 {
+		return "", "", fmt.Errorf("quote.FX with positive amounts required")
 	}
 	if p.Purpose == "prepaid" {
 		if p.ExpectedAmountCents == nil || *p.ExpectedAmountCents <= 0 {
@@ -286,10 +293,6 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 	if strings.TrimSpace(p.ClientIP) != "" {
 		clientIP = sql.NullString{String: strings.TrimSpace(p.ClientIP), Valid: true}
 	}
-	quotedUSDToEURRate := sql.NullString{}
-	if p.Quote.QuotedUSDToEURRate != nil {
-		quotedUSDToEURRate = sql.NullString{String: p.Quote.QuotedUSDToEURRate.String(), Valid: true}
-	}
 	profileJSON, marshalErr := json.Marshal(p.Quote.TaxProfile)
 	if marshalErr != nil {
 		return "", "", fmt.Errorf("marshal crypto tax profile: %w", marshalErr)
@@ -302,11 +305,13 @@ func (hw *HDWallet) GenerateDepositAddressTx(ctx context.Context, tx *sql.Tx, p 
 		DerivationIndex: int32(derivationIndex), DerivationXpub: xpub, ExpiresAt: p.ExpiresAt,
 		ExpectedAmountBaseUnits: sql.NullString{String: p.Quote.ExpectedAmountBaseUnits.String(), Valid: true},
 		QuotedPriceUsd:          sql.NullString{String: p.Quote.QuotedPriceUSD.String(), Valid: true},
-		QuotedUsdToEurRate:      quotedUSDToEURRate,
 		QuotedAt:                sql.NullTime{Time: p.Quote.QuotedAt, Valid: true},
 		QuoteSource:             sql.NullString{String: p.Quote.QuoteSource, Valid: true},
 		CreditedAmountCurrency:  sql.NullString{String: p.Quote.CreditedAmountCurrency, Valid: true},
 		ClientIp:                clientIP, TaxDocumentKind: p.Quote.TaxDocumentKind, TaxProfileSnapshot: profileJSON,
+		OriginalAmountCents: p.Quote.FX.OriginalMinor, OriginalCurrency: p.Quote.FX.OriginalCurrency,
+		EurAmountCents: p.Quote.FX.EURMinor, FxUnitsPerEur: p.Quote.FX.UnitsText(),
+		FxSource: p.Quote.FX.Source, FxReferenceDate: p.Quote.FX.ReferenceDate,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)

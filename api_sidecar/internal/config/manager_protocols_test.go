@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -66,7 +68,7 @@ func (m *recordingMistAPI) DeleteStreams([]string) error {
 func TestEnsureProtocolsAddsRTMP(t *testing.T) {
 	mist := &recordingMistAPI{}
 	manager := &Manager{mistClient: mist, logger: logging.NewLogger()}
-	t.Setenv("EDGE_PUBLIC_URL", "https://edge.example/view")
+	appconfigtest.Setenv(t, "EDGE_PUBLIC_URL", "https://edge.example/view")
 	current := map[string]any{
 		"config": map[string]any{
 			"protocols": []any{},
@@ -202,7 +204,7 @@ func findProtocolUpdate(t *testing.T, updates []protocolUpdate, connector string
 }
 
 func TestEnsureProtocolsRepairsArrayPublicAddressWithoutLosingListenerOptions(t *testing.T) {
-	t.Setenv("EDGE_PUBLIC_URL", "https://edge.example/view")
+	appconfigtest.Setenv(t, "EDGE_PUBLIC_URL", "https://edge.example/view")
 	mist := &recordingMistAPI{}
 	manager := &Manager{mistClient: mist, logger: logging.NewLogger()}
 	existing := map[string]any{"connector": "HTTP", "port": float64(18080), "pubaddr": []any{"https://edge.example/view/"}, "interface": "0.0.0.0"}

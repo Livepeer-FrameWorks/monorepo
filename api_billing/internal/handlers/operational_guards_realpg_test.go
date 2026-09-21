@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -36,7 +38,7 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 				</soap:Envelope>`))
 		}))
 		defer server.Close()
-		t.Setenv("VIES_ENDPOINT", server.URL)
+		appconfigtest.Set(t, "VIES_ENDPOINT", server.URL)
 		handler := &X402Handler{db: db}
 		tenantID := uuid.NewString()
 		for attempt := 0; attempt < 2; attempt++ {
@@ -67,7 +69,8 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 				ID: id, TenantID: tenantID, Resource: "graphql://contract", ResourceClass: "graphql",
 				Network: "eip155:8453", Asset: "0x0000000000000000000000000000000000000001",
 				PayTo: "0x0000000000000000000000000000000000000002", AmountAtomic: "5000000",
-				CreditAmountCents: 500, EurPerUsdRate: "0.9000000000",
+				CreditAmountCents: 500, OriginalAmountCents: 556, OriginalCurrency: "USD",
+				FxUnitsPerEur: "1.1111111111", FxSource: "ecb", FxReferenceDate: time.Now().UTC(),
 				RequirementsJson: json.RawMessage(`{"scheme":"exact"}`), TaxDocumentKind: "simplified",
 				TaxProfileSnapshot: json.RawMessage(`{}`), ExpiresAt: time.Now().UTC().Add(time.Minute),
 			}); err != nil {
@@ -102,14 +105,17 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 			t.Fatal(err)
 		}
 		expectedCents := int64(500)
-		rate := decimal.RequireFromString("0.92")
+		quoteFX := fx.Record{
+			OriginalMinor: 500, OriginalCurrency: "USD", EURMinor: 460,
+			UnitsPerEUR: decimal.RequireFromString("1.0869565217"), Source: fx.SourceECB, ReferenceDate: fx.Date(time.Now()),
+		}
 		walletID, address, err := wallet.GenerateDepositAddress(DepositAddressParams{
 			TenantID: uuid.NewString(), Purpose: "prepaid", Asset: "USDC", Network: "ethereum",
 			ExpiresAt: time.Now().UTC().Add(time.Hour), ClientIP: "203.0.113.5",
 			ExpectedAmountCents: &expectedCents,
 			Quote: &DepositQuote{
 				ExpectedAmountBaseUnits: big.NewInt(5_000_000), QuotedPriceUSD: decimal.NewFromInt(1),
-				QuotedUSDToEURRate: &rate, QuotedAt: time.Now().UTC(), QuoteSource: "one_to_one",
+				FX: quoteFX, QuotedAt: time.Now().UTC(), QuoteSource: "one_to_one",
 				CreditedAmountCurrency: "EUR", TaxDocumentKind: "simplified", TaxProfile: CryptoBillingProfile{},
 			},
 		})
@@ -140,8 +146,9 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		tenantID := uuid.NewString()
 		topupID := uuid.NewString()
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.pending_topups (id, tenant_id, provider, amount_cents, currency, expires_at)
-			VALUES ($1, $2, 'stripe', 1500, 'EUR', NOW() + INTERVAL '1 hour')
+			INSERT INTO purser.pending_topups (id, tenant_id, provider, amount_cents, currency, expires_at,
+			    original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date)
+			VALUES ($1, $2, 'stripe', 1500, 'EUR', NOW() + INTERVAL '1 hour', 1500, 'EUR', 1500, 1, 'identity', CURRENT_DATE)
 		`, topupID, tenantID); err != nil {
 			t.Fatal(err)
 		}
@@ -185,8 +192,9 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 			t.Fatal(err)
 		}
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.pending_topups (id, tenant_id, provider, amount_cents, currency, expires_at)
-			VALUES ($1, $2, 'stripe', 1500, 'EUR', NOW() + INTERVAL '1 hour')
+			INSERT INTO purser.pending_topups (id, tenant_id, provider, amount_cents, currency, expires_at,
+			    original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date)
+			VALUES ($1, $2, 'stripe', 1500, 'EUR', NOW() + INTERVAL '1 hour', 1500, 'EUR', 1500, 1, 'identity', CURRENT_DATE)
 		`, topupID, tenantID); err != nil {
 			t.Fatal(err)
 		}
@@ -195,13 +203,13 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 			t.Fatalf("checkout with Stripe currency casing: %v", err)
 		}
 		admission, err := purserdb.New(db).GetTenantAdmissionStatus(ctx, purserdb.GetTenantAdmissionStatusParams{
-			TenantID: tenantID, Currency: billing.DefaultCurrency(),
+			TenantID: tenantID, Currency: billing.LedgerCurrency,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !admission.BalanceCents.Valid || admission.BalanceCents.Int64 != 1500 {
-			t.Fatalf("admission balance = %+v, want 1500 cents in %s", admission.BalanceCents, billing.DefaultCurrency())
+			t.Fatalf("admission balance = %+v, want 1500 cents in %s", admission.BalanceCents, billing.LedgerCurrency)
 		}
 		var currencies string
 		if err := db.QueryRowContext(ctx, `SELECT string_agg(currency, ',' ORDER BY currency) FROM purser.prepaid_balances WHERE tenant_id = $1`, tenantID).Scan(&currencies); err != nil {
@@ -231,8 +239,9 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 				expectedSession := "cs_" + uuid.NewString()
 				if _, err := db.ExecContext(ctx, `
 					INSERT INTO purser.pending_topups
-					    (id, tenant_id, provider, checkout_id, amount_cents, currency, expires_at)
-					VALUES ($1, $2, 'stripe', $3, 1500, 'EUR', NOW() + INTERVAL '1 hour')
+					    (id, tenant_id, provider, checkout_id, amount_cents, currency, expires_at,
+					     original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date)
+					VALUES ($1, $2, 'stripe', $3, 1500, 'EUR', NOW() + INTERVAL '1 hour', 1500, 'EUR', 1500, 1, 'identity', CURRENT_DATE)
 				`, topupID, tenantID, expectedSession); err != nil {
 					t.Fatal(err)
 				}
@@ -276,8 +285,9 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 			t.Fatal(err)
 		}
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status)
-			VALUES ($2, $1, 'card', 12.50, 'EUR', 'pi_expected', 'pending')
+			INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status,
+			    original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date)
+			VALUES ($2, $1, 'card', 12.50, 'EUR', 'pi_expected', 'pending', 1250, 'EUR', 1250, 1, 'identity', CURRENT_DATE)
 		`, invoiceID, paymentID); err != nil {
 			t.Fatal(err)
 		}

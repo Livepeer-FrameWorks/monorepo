@@ -661,14 +661,18 @@ func TestDoListMollieMandates(t *testing.T) {
 // CARD TOP-UP
 // ============================================================================
 
-// DoCreateCardTopup validates the amount bounds, maps the provider enum, defaults
-// the currency, and passes optional billing-detail pointers straight through.
+// DoCreateCardTopup validates the amount bounds, maps the provider enum, and
+// passes optional billing-detail pointers straight through.
 func TestDoCreateCardTopup(t *testing.T) {
 	var gotReq *purserpb.CreateCardTopupRequest
 	r := purserResolver(&clientstest.FakePurser{
 		CreateCardTopupFn: func(_ context.Context, req *purserpb.CreateCardTopupRequest) (*purserpb.CreateCardTopupResponse, error) {
 			gotReq = req
-			return &purserpb.CreateCardTopupResponse{TopupId: "tp_1", CheckoutUrl: "https://co/tp_1", ExpiresAt: timestamppb.Now()}, nil
+			return &purserpb.CreateCardTopupResponse{
+				TopupId: "tp_1", CheckoutUrl: "https://co/tp_1", ExpiresAt: timestamppb.Now(),
+				AmountCents: 2500, Currency: "USD",
+				Fx: &purserpb.FxConversion{OriginalAmountCents: 2500, OriginalCurrency: "USD", EurAmountCents: 2137, UnitsPerEur: "1.1698", Source: "ecb", ReferenceDate: "2026-09-16"},
+			}, nil
 		},
 	})
 	email := "pay@ex.com"
@@ -682,11 +686,12 @@ func TestDoCreateCardTopup(t *testing.T) {
 	if err != nil || got == nil || got.TopupID != "tp_1" || got.CheckoutURL != "https://co/tp_1" {
 		t.Fatalf("DoCreateCardTopup = (%+v, %v)", got, err)
 	}
+	if got.AmountCents != 2500 || got.Currency != "USD" || got.Conversion.GetEurAmountCents() != 2137 ||
+		got.Conversion.GetUnitsPerEur() != "1.1698" || got.Conversion.GetReferenceDate() != "2026-09-16" {
+		t.Errorf("presentment amount and conversion not mapped: %+v", got)
+	}
 	if gotReq.TenantId != "t1" || gotReq.AmountCents != 2500 || gotReq.Provider != "stripe" {
 		t.Errorf("request not mapped: %+v", gotReq)
-	}
-	if gotReq.Currency == "" {
-		t.Error("currency should default, not be empty")
 	}
 	if gotReq.BillingEmail == nil || *gotReq.BillingEmail != "pay@ex.com" {
 		t.Errorf("billing email pointer not passed through: %v", gotReq.BillingEmail)
@@ -734,8 +739,8 @@ func TestDoCreateCardTopup(t *testing.T) {
 // CRYPTO TOP-UP
 // ============================================================================
 
-// DoCreateCryptoTopup validates amount + asset, defaults currency, forwards the
-// proto enum, and maps the deposit/quote fields onto the result.
+// DoCreateCryptoTopup validates amount + asset, forwards the proto enum, and
+// maps the deposit/quote fields onto the result.
 func TestDoCreateCryptoTopup(t *testing.T) {
 	var gotReq *purserpb.CreateCryptoTopupRequest
 	r := purserResolver(&clientstest.FakePurser{
@@ -750,6 +755,7 @@ func TestDoCreateCryptoTopup(t *testing.T) {
 				ExpiresAt:           timestamppb.Now(),
 				QuotedAt:            timestamppb.Now(),
 				Network:             "arbitrum",
+				Fx:                  &purserpb.FxConversion{OriginalAmountCents: 5000, OriginalCurrency: "GBP", EurAmountCents: 5790, UnitsPerEur: "0.8636", Source: "ecb", ReferenceDate: "2026-09-16"},
 			}, nil
 		},
 	})
@@ -759,14 +765,14 @@ func TestDoCreateCryptoTopup(t *testing.T) {
 	if err != nil || got == nil || got.TopupID != "ct_1" || got.DepositAddress != "0xabc" {
 		t.Fatalf("DoCreateCryptoTopup = (%+v, %v)", got, err)
 	}
+	if got.Conversion.GetOriginalCurrency() != "GBP" || got.Conversion.GetEurAmountCents() != 5790 {
+		t.Errorf("conversion not mapped: %+v", got.Conversion)
+	}
 	if got.Asset != purserpb.CryptoAsset_CRYPTO_ASSET_ETH || got.AssetSymbol != "ETH" || got.ExpectedAmountCents != 5000 {
 		t.Errorf("result not mapped: %+v", got)
 	}
 	if gotReq.TenantId != "t1" || gotReq.Asset != purserpb.CryptoAsset_CRYPTO_ASSET_ETH || gotReq.ExpectedAmountCents != 5000 {
 		t.Errorf("request not mapped: %+v", gotReq)
-	}
-	if gotReq.Currency == "" {
-		t.Error("currency should default")
 	}
 
 	// Unspecified asset → error before backend.
@@ -818,12 +824,16 @@ func TestDoGetCryptoTopupStatus(t *testing.T) {
 				TxHash:              "0xdeadbeef",
 				CreditedAmountCents: 4999,
 				DetectedAt:          detected,
+				Fx:                  &purserpb.FxConversion{OriginalAmountCents: 5850, OriginalCurrency: "USD", EurAmountCents: 4999, UnitsPerEur: "1.1702", Source: "ecb", ReferenceDate: "2026-03-31"},
 			}, nil
 		},
 	})
 	got, err := r.DoGetCryptoTopupStatus(clientstest.AuthedCtx("t1"), "ct_1")
 	if err != nil || got == nil || got.ID != "ct_1" || got.Status != "confirming" || got.Confirmations != 3 {
 		t.Fatalf("DoGetCryptoTopupStatus = (%+v, %v)", got, err)
+	}
+	if got.Conversion.GetOriginalAmountCents() != 5850 || got.Conversion.GetReferenceDate() != "2026-03-31" {
+		t.Errorf("conversion not mapped: %+v", got.Conversion)
 	}
 	if got.TxHash == nil || *got.TxHash != "0xdeadbeef" {
 		t.Errorf("tx hash pointer not populated: %v", got.TxHash)
@@ -1010,11 +1020,11 @@ func TestDoUpdateSubscriptionCustomTerms(t *testing.T) {
 			return &purserpb.TenantSubscription{Id: "sub_1", Status: "active"}, nil
 		},
 	})
-	rec := true
+	sla := true
 	support := "priority"
 	cfg := `{"k":"v"}`
 	got, err := r.DoUpdateSubscriptionCustomTerms(operatorCtx(), "tenant-9", model.UpdateSubscriptionCustomTermsInput{
-		CustomFeatures: &model.BillingFeaturesInput{Recording: &rec, SupportLevel: &support},
+		CustomFeatures: &model.BillingFeaturesInput{SLA: &sla, SupportLevel: &support},
 		PricingOverrides: []*model.PricingRuleInput{
 			{Meter: "egress_gb", Model: "per_unit", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.01", ConfigJSON: &cfg},
 		},
@@ -1026,7 +1036,7 @@ func TestDoUpdateSubscriptionCustomTerms(t *testing.T) {
 	if gotReq.TenantId != "tenant-9" {
 		t.Errorf("tenant not forwarded: %q", gotReq.TenantId)
 	}
-	if gotReq.CustomFeatures == nil || !gotReq.CustomFeatures.Recording || gotReq.CustomFeatures.SupportLevel != "priority" {
+	if gotReq.CustomFeatures == nil || !gotReq.CustomFeatures.Sla || gotReq.CustomFeatures.SupportLevel != "priority" {
 		t.Errorf("custom features not mapped: %+v", gotReq.CustomFeatures)
 	}
 	if len(gotReq.PricingOverrides) != 1 || gotReq.PricingOverrides[0].Meter != "egress_gb" || gotReq.PricingOverrides[0].ConfigJson != `{"k":"v"}` {

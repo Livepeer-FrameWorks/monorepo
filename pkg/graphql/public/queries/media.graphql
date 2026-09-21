@@ -1,0 +1,99 @@
+query GetClip($id: ID!) {
+  clip(id: $id) {
+    ...ClipFields
+  }
+}
+
+query GetDVRChapter(
+  $dvrId: ID!
+  $startMs: Float!
+  $endMs: Float!
+  $mode: DVRChapterMode
+  $intervalSeconds: Int
+) {
+  dvrChapter(
+    dvrId: $dvrId
+    startMs: $startMs
+    endMs: $endMs
+    mode: $mode
+    intervalSeconds: $intervalSeconds
+  ) {
+    chapterId
+    state
+    playbackId
+    isCurrent
+    hasGaps
+    segmentCount
+    wallClockStartUnixMs
+    wallClockEndUnixMs
+    playableNow
+    lastFailureReason
+  }
+}
+
+query ListDVRChapters(
+  $dvrId: ID!
+  $mode: DVRChapterMode
+  $intervalSeconds: Int
+  $rangeStartMs: Float
+  $rangeEndMs: Float
+  $pageSize: Int
+  $pageToken: String
+) {
+  dvrChapters(
+    dvrId: $dvrId
+    mode: $mode
+    intervalSeconds: $intervalSeconds
+    rangeStartMs: $rangeStartMs
+    rangeEndMs: $rangeEndMs
+    pageSize: $pageSize
+    pageToken: $pageToken
+  ) {
+    chapters {
+      ...DVRChapterRefFields
+    }
+    nextPageToken
+  }
+}
+
+query GetVodAsset($id: ID!) {
+  vodAsset(id: $id) {
+    ...VodAssetFields
+  }
+}
+
+query GetVodUploadStatus($uploadId: ID!) {
+  vodUploadStatus(uploadId: $uploadId) {
+    __typename
+    ... on VodUploadStatus {
+      uploadId
+      state
+      expiresAt
+      retentionUntil
+      uploadedParts {
+        partNumber
+        etag
+        sizeBytes
+      }
+      missingParts
+      lastErrorCode
+      artifactHash
+      playbackId
+    }
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+query ListArtifacts($input: StorageArtifactsInput) {
+  storageArtifactsConnection(input: $input) {
+    nodes {
+      ...StorageArtifactFields
+    }
+    totalCount
+    hasNextPage
+    limit
+    offset
+  }
+}

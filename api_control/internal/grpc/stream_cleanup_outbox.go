@@ -396,10 +396,10 @@ func (s *CommodoreServer) deleteOneChildArtifact(ctx context.Context, kind, hash
 	}
 	switch kind {
 	case "clip":
-		resp, _, dErr := fc.DeleteClip(ctx, hash, &tenantID)
+		resp, _, dErr := fc.DeleteClip(ctx, hash, &tenantID, "")
 		return childDeleteAcked("clip", hash, resp, dErr)
 	case "dvr":
-		resp, _, dErr := fc.DeleteDVR(ctx, hash, &tenantID)
+		resp, _, dErr := fc.DeleteDVR(ctx, hash, &tenantID, "")
 		return childDeleteAcked("dvr", hash, resp, dErr)
 	default:
 		return fmt.Errorf("unknown child artifact kind %q", kind)

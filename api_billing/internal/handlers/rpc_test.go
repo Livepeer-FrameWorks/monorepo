@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 )
 
 func TestRPCBatchCallMatchesOutOfOrderResponsesByID(t *testing.T) {
@@ -23,8 +25,8 @@ func TestRPCBatchCallMatchesOutOfOrderResponsesByID(t *testing.T) {
 		]`))
 	}))
 	defer server.Close()
-	t.Setenv("TEST_BATCH_RPC_ENDPOINT", server.URL)
-	network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_BATCH_RPC_ENDPOINT"}
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
+	network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT"}
 	var first, second string
 	err := NewRPCClient().BatchCall(t.Context(), network, []RPCBatchCall{
 		{Method: "one", Params: []any{}, Result: &first},
@@ -44,8 +46,8 @@ func TestRPCBatchCallRejectsMissingResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`[{"jsonrpc":"2.0","id":1,"result":"first"}]`))
 	}))
 	defer server.Close()
-	t.Setenv("TEST_BATCH_RPC_ENDPOINT", server.URL)
-	network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_BATCH_RPC_ENDPOINT"}
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
+	network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT"}
 	var first, second string
 	err := NewRPCClient().BatchCall(t.Context(), network, []RPCBatchCall{
 		{Method: "one", Params: []any{}, Result: &first},

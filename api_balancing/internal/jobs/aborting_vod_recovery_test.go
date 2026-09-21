@@ -55,7 +55,7 @@ func newAbortRecoveryJob(t *testing.T, s3 AbortingVodRecoveryS3) (*AbortingVodRe
 func abortRecoveryScanRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"artifact_hash", "tenant_id", "user_id", "s3_key", "s3_upload_id", "backend_id",
-	}).AddRow("hash-1", "t1", "user-1", "vod/t1/hash-1/video.mp4", "up-1", "backend-x")
+	}).AddRow("hash-1", mockTenantUUID, "user-1", "vod/t1/hash-1/video.mp4", "up-1", "backend-x")
 }
 
 // A stranded 'aborting' row whose multipart upload aborts cleanly converges to 'deleted' (metadata
@@ -69,13 +69,12 @@ func TestAbortingVodRecovery_ConvergesAbortedToDeleted(t *testing.T) {
 		WillReturnRows(abortRecoveryScanRows())
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*status = 'aborting'`).
-		WithArgs("hash-1", "t1").
+		WithArgs("hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn\.vod_metadata`).
 		WithArgs("hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.aborted", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()
@@ -99,13 +98,12 @@ func TestAbortingVodRecovery_NoSuchUploadConverges(t *testing.T) {
 		WillReturnRows(abortRecoveryScanRows())
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*status = 'aborting'`).
-		WithArgs("hash-1", "t1").
+		WithArgs("hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn\.vod_metadata`).
 		WithArgs("hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.aborted", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	j.reconcile()

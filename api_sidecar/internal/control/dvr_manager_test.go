@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -140,7 +141,7 @@ func TestStopRecordingWithSender_RecoversOnDiskRecording(t *testing.T) {
 	clearConn()
 
 	storagePath := t.TempDir()
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
 
 	dvrHash := "hash-recovered"
 	streamID := "stream-1"
@@ -422,7 +423,7 @@ func seedOnDiskDVR(t *testing.T, storagePath, streamID, dvrHash string) string {
 func TestStopRecoveredRecording_StopsLivePushBeforeCompletion(t *testing.T) {
 	clearConn()
 	storagePath := t.TempDir()
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
 	dvrHash := "hash-recovered-live"
 	seedOnDiskDVR(t, storagePath, "stream-1", dvrHash)
 
@@ -448,7 +449,7 @@ func TestStopRecoveredRecording_StopsLivePushBeforeCompletion(t *testing.T) {
 func TestStopRecoveredRecording_ListFailureEmitsNoCompletion(t *testing.T) {
 	clearConn()
 	storagePath := t.TempDir()
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
 	dvrHash := "hash-recovered-listfail"
 	seedOnDiskDVR(t, storagePath, "stream-1", dvrHash)
 

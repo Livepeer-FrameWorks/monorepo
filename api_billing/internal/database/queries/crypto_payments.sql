@@ -5,7 +5,12 @@ SELECT wallet.id::text AS id, wallet.tenant_id::text AS tenant_id, wallet.purpos
        wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
        COALESCE(wallet.quoted_price_usd::text, '')::text AS quoted_price_usd,
-       COALESCE(wallet.quoted_usd_to_eur_rate::text, '')::text AS quoted_usd_to_eur_rate,
+       COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(wallet.original_currency, '')::text AS original_currency,
+       COALESCE(wallet.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(wallet.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(wallet.fx_source, '')::text AS fx_source,
+       COALESCE(wallet.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
        COALESCE(wallet.quote_source, '')::text AS quote_source,
        COALESCE(wallet.credited_amount_currency, '')::text AS credited_amount_currency,
        COALESCE(wallet.client_ip, '')::text AS client_ip, wallet.expires_at,
@@ -61,7 +66,12 @@ WHERE id = sqlc.arg(event_id)::text::uuid AND canonical AND status = 'confirmed'
 -- name: ListCompletedCryptoTopupsMissingInvoice :many
 SELECT wallet.tenant_id::text AS tenant_id, wallet.credited_amount_cents,
        wallet.credited_amount_currency,
-       COALESCE(wallet.quoted_usd_to_eur_rate::text, '')::text AS quoted_usd_to_eur_rate,
+       COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(wallet.original_currency, '')::text AS original_currency,
+       COALESCE(wallet.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(wallet.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(wallet.fx_source, '')::text AS fx_source,
+       COALESCE(wallet.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
        wallet.tx_hash, COALESCE(wallet.client_ip, '')::text AS client_ip, wallet.network
 FROM purser.crypto_wallets wallet
 WHERE wallet.purpose = 'prepaid' AND wallet.status IN ('completed', 'swept')

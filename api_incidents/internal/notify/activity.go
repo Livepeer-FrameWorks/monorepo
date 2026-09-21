@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	lookoutconfig "frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/database/lookoutdb"
 	"frameworks/api_incidents/internal/incidents"
 
@@ -466,7 +465,7 @@ func (d *ActivityDispatcher) Dispatch(ctx context.Context, delivery ActivityDeli
 		err = fmt.Errorf("unsupported operator activity channel %q", delivery.Channel)
 	}
 	if err == nil {
-		err = d.Webhook.postJSON(ctx, delivery.Channel, activityWebhookURL(delivery.Channel), body)
+		err = d.Webhook.postJSON(ctx, delivery.Channel, d.Webhook.Settings.current().webhookURL(delivery.Channel), body)
 	}
 	if err != nil {
 		d.Webhook.Metrics.ObserveDelivery(delivery.Channel, "error")
@@ -494,16 +493,5 @@ func buildActivityMessage(payload ActivityPayload) message {
 	return message{
 		Headline: payload.Headline, Summary: payload.Summary, Fields: fields,
 		Color: color, Timestamp: payload.Timestamp,
-	}
-}
-
-func activityWebhookURL(channel string) string {
-	switch channel {
-	case incidents.ChannelSlack:
-		return lookoutconfig.SlackWebhookURL()
-	case incidents.ChannelDiscord:
-		return lookoutconfig.DiscordWebhookURL()
-	default:
-		return ""
 	}
 }

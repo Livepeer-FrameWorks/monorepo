@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
 )
@@ -18,13 +19,13 @@ func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	t.Setenv("X402_PREPAID_BUFFER_EUR_CENTS", "500")
+	appconfigtest.Set(t, "X402_PREPAID_BUFFER_EUR_CENTS", "500")
 
-	ecbRateCache.Lock()
-	ecbRateCache.rate = 1
-	ecbRateCache.fetchedAt = time.Now()
-	ecbRateCache.Unlock()
-
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.fx_rates")).
+		WithArgs("USD", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"currency", "reference_date", "units_per_eur", "source", "fetched_at"}).
+			AddRow("USD", today, "1.0000000000", "ecb", time.Now()))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT balance_cents")).
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(-250)))
@@ -35,7 +36,8 @@ func TestCreatePaymentQuoteCoversDeficitAndBuffer(t *testing.T) {
 		WithArgs(
 			sqlmock.AnyArg(), "tenant-1", "graphql://createStream", "graphql",
 			"eip155:8453", "0xAsset", "0xpayto", "7500000", int64(750),
-			"1.0000000000", sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), "simplified", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			int64(750), "USD", "1", "ecb", sqlmock.AnyArg(),
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -137,11 +139,14 @@ func TestValidateV2QuoteRejectsAlteredResourceExtension(t *testing.T) {
 		WithArgs("quote-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
-			"amount_atomic", "credit_amount_cents", "eur_per_usd_rate", "requirements_json",
+			"amount_atomic", "credit_amount_cents", "requirements_json",
 			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
+			"original_amount_cents", "original_currency", "eur_amount_cents",
+			"fx_units_per_eur", "fx_source", "fx_reference_date",
 		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
-			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
-			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered"))
+			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500),
+			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered",
+			int64(556), "USD", int64(500), "1.1111111111", "ecb", time.Now()))
 
 	h := &X402Handler{db: db}
 	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{
@@ -181,11 +186,14 @@ func TestValidateV2QuoteRejectsAlteredTransferMethod(t *testing.T) {
 		WithArgs("quote-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "resource", "resource_class", "network", "asset", "pay_to",
-			"amount_atomic", "credit_amount_cents", "eur_per_usd_rate", "requirements_json",
+			"amount_atomic", "credit_amount_cents", "requirements_json",
 			"tax_document_kind", "tax_profile_snapshot", "expires_at", "status",
+			"original_amount_cents", "original_currency", "eur_amount_cents",
+			"fx_units_per_eur", "fx_source", "fx_reference_date",
 		}).AddRow("quote-1", "tenant-1", "graphql://createStream", "graphql", "eip155:8453",
-			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500), "0.9",
-			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered"))
+			Networks["base"].USDCContract, expected.PayTo, "5000000", int64(500),
+			requirements, "simplified", []byte(`{}`), time.Now().Add(time.Minute), "offered",
+			int64(556), "USD", int64(500), "1.1111111111", "ecb", time.Now()))
 
 	h := &X402Handler{db: db}
 	_, _, err = h.validateV2Quote(context.Background(), "tenant-1", &X402PaymentPayload{
@@ -222,7 +230,7 @@ func (f *fakeX402Facilitator) GetSupported(context.Context) (x402sdk.SupportedRe
 }
 
 func TestAdvertisableNetworksAreFacilitatorIntersection(t *testing.T) {
-	t.Setenv("X402_INCLUDE_TESTNETS", "false")
+	appconfigtest.Set(t, "X402_INCLUDE_TESTNETS", "false")
 	h := &X402Handler{
 		facilitatorProvider: "hosted",
 		facilitator: &fakeX402Facilitator{supported: x402sdk.SupportedResponse{Kinds: []x402sdk.SupportedKind{{

@@ -34,6 +34,9 @@ const (
 	// ActionManageDeveloperTokens gates revocation of credentials created by
 	// another user in the same tenant.
 	ActionManageDeveloperTokens Action = "developer.tokens.manage"
+	// ActionManageWebhooks gates outbound webhook endpoint changes, signing
+	// secret issuance, test sends, and replays.
+	ActionManageWebhooks Action = "developer.webhooks.manage"
 	// ActionReadPrivateInfrastructure gates full node and cluster inventory.
 	ActionReadPrivateInfrastructure Action = "infrastructure.private.read"
 	// Placement changes can widen paid fallback independently of stream editing.
@@ -102,7 +105,7 @@ func (DefaultAuthorizer) Can(_ context.Context, id Identity, action Action, reso
 			return allow()
 		}
 		return deny("authenticated tenant membership required")
-	case ActionAdminMistNode, ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionReadPrivateInfrastructure, ActionManageMediaPlacement:
+	case ActionAdminMistNode, ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionManageWebhooks, ActionReadPrivateInfrastructure, ActionManageMediaPlacement:
 		// A platform operator may perform privileged cross-tenant work. Otherwise
 		// the caller must be an owner/admin of the tenant that owns the resource.
 		if id.PlatformOperator {

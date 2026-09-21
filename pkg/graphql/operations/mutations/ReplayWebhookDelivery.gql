@@ -1,0 +1,18 @@
+# Send a finished webhook delivery again under the same ID
+mutation ReplayWebhookDelivery($id: ID!) {
+  replayWebhookDelivery(id: $id) {
+    __typename
+    ... on WebhookDelivery {
+      ...WebhookDeliveryFields @mask_disable
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

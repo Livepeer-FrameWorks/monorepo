@@ -27,23 +27,23 @@ func TestFinalizeStreamDeletion(t *testing.T) {
 	// The token-fenced settlement RETURNs the obligation's tenant_id — the authoritative attribution that fences
 	// the attribution read and the hard-delete below.
 	mock.ExpectQuery("SET status = 'completed'").
-		WithArgs("stream-1", "", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		WithArgs("stream-1", "", testTenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(testTenantID))
 	mock.ExpectQuery("SELECT COALESCE.user_id.*FROM commodore.streams WHERE id = .* AND tenant_id =").
-		WithArgs("stream-1", "tenant-1").
+		WithArgs("stream-1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow("user-1"))
 	mock.ExpectExec("INSERT INTO commodore.media_placement_policies").
-		WithArgs("tenant-1", "stream-1").WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs(testTenantID, "stream-1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM commodore.streams WHERE id = .* AND tenant_id = .* AND deleted_at IS NOT NULL").
-		WithArgs("stream-1", "tenant-1").
+		WithArgs("stream-1", testTenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// The hard-delete affected a row (1) + tenant present → the TERMINAL stream_deleted event is enqueued in-tx.
-	mock.ExpectQuery("INSERT INTO commodore.service_event_outbox").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-1"))
+	// The hard-delete affected a row (1) + tenant present → stream.deleted and the
+	// legacy stream_deleted row are enqueued in-tx.
+	expectDualEventInsert(mock, "stream.deleted", eventStreamDeleted)
 	mock.ExpectCommit()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
-	if fErr := server.finalizeStreamDeletion(context.Background(), "stream-1", "tenant-1", ""); fErr != nil {
+	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
+	if fErr := server.finalizeStreamDeletion(context.Background(), "stream-1", testTenantID, ""); fErr != nil {
 		t.Fatalf("finalize: %v", fErr)
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {

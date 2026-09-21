@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
@@ -113,7 +114,7 @@ func TestSweepBroadcastRecheckRejectsChangedChainState(t *testing.T) {
 		}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
 	network := handlers.Networks["base"]
 
@@ -144,7 +145,7 @@ func TestReserveRelayerTransactionReplaysPersistedIntentAfterRestart(t *testing.
 		t.Fatal(err)
 	}
 	defer db.Close()
-	t.Setenv("CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE", "4f3edf983ac63ad7c43a0d8a05d3d4a6c67e594e0d56e4b1d72c05b90f3e6f7a")
+	appconfigtest.Set(t, "CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE", "4f3edf983ac63ad7c43a0d8a05d3d4a6c67e594e0d56e4b1d72c05b90f3e6f7a")
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT relay_transaction, tx_hash, status`).WithArgs("item-1").
 		WillReturnRows(sqlmock.NewRows([]string{"relay_transaction", "tx_hash", "status"}).
@@ -186,7 +187,7 @@ func TestReconcileCryptoSweepDoesNotConfirmReorgedReceipt(t *testing.T) {
 		return map[string]any{"number": "0x10", "hash": canonicalReceiptHeightHash, "baseFeePerGas": "0x1"}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +220,7 @@ func TestReconcileCryptoSweepAcceptsUnbroadcastNullHash(t *testing.T) {
 		return nil
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +262,7 @@ func TestEvaluateSweepReleaseSignedUSDCRequiresExpiredUnusedAuthorization(t *tes
 		}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
 	network := handlers.Networks["base"]
 	item := sweepReleaseItem{
@@ -298,7 +299,7 @@ func TestEvaluateSweepReleaseSignedETHRequiresAdvancedNonce(t *testing.T) {
 		return nil
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
 	item := sweepReleaseItem{
 		asset: "ETH", sourceAddress: "0x2222222222222222222222222222222222222222", amount: big.NewInt(1),
@@ -339,7 +340,7 @@ func TestEvaluateSweepReleaseBroadcastOutcomeMustBeCanonical(t *testing.T) {
 		}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	server := &PurserServer{rpcClient: handlers.NewRPCClient()}
 	item := sweepReleaseItem{
 		asset: "ETH", sourceAddress: "0x2222222222222222222222222222222222222222", amount: big.NewInt(1),
@@ -381,7 +382,7 @@ func TestReleaseCryptoSweepExpiredUnsignedClaimIsAuditedAndReplannable(t *testin
 		}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -486,7 +487,7 @@ func TestReleaseCryptoSweepConcurrentItemChangePreservesAborted(t *testing.T) {
 		}
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -576,8 +577,8 @@ func TestBroadcastCryptoSweepDuplicateReplaysSameETHIntent(t *testing.T) {
 		return nil
 	})
 	defer rpcServer.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", rpcServer.URL)
-	t.Setenv("CRYPTO_TREASURY_BASE", treasury)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", rpcServer.URL)
+	appconfigtest.Set(t, "CRYPTO_TREASURY_BASE", treasury)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)

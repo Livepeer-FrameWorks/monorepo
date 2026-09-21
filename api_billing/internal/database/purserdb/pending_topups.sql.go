@@ -52,7 +52,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE provider = $1 AND checkout_id = $2
 `
@@ -75,6 +77,12 @@ type GetPendingTopupByCheckoutRow struct {
 	BalanceTransactionID uuid.NullUUID `db:"balance_transaction_id" json:"balance_transaction_id"`
 	CreatedAt            sql.NullTime  `db:"created_at" json:"created_at"`
 	UpdatedAt            sql.NullTime  `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents  int64         `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency     string        `db:"original_currency" json:"original_currency"`
+	EurAmountCents       int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur        string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource             string        `db:"fx_source" json:"fx_source"`
+	FxReferenceDate      time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetPendingTopupByCheckout(ctx context.Context, arg GetPendingTopupByCheckoutParams) (GetPendingTopupByCheckoutRow, error) {
@@ -93,6 +101,12 @@ func (q *Queries) GetPendingTopupByCheckout(ctx context.Context, arg GetPendingT
 		&i.BalanceTransactionID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -102,7 +116,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE id = $1::text::uuid
 `
@@ -120,6 +136,12 @@ type GetPendingTopupByIDRow struct {
 	BalanceTransactionID uuid.NullUUID `db:"balance_transaction_id" json:"balance_transaction_id"`
 	CreatedAt            sql.NullTime  `db:"created_at" json:"created_at"`
 	UpdatedAt            sql.NullTime  `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents  int64         `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency     string        `db:"original_currency" json:"original_currency"`
+	EurAmountCents       int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur        string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource             string        `db:"fx_source" json:"fx_source"`
+	FxReferenceDate      time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetPendingTopupByID(ctx context.Context, topupID string) (GetPendingTopupByIDRow, error) {
@@ -138,6 +160,12 @@ func (q *Queries) GetPendingTopupByID(ctx context.Context, topupID string) (GetP
 		&i.BalanceTransactionID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -148,7 +176,10 @@ SELECT id::text AS id, tenant_id::text AS tenant_id, wallet_address, asset,
        COALESCE(received_amount_base_units::text, '')::text AS received_amount_base_units,
        credited_amount_cents, expires_at, detected_at, completed_at,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       credited_amount_currency, quote_source, COALESCE(network, '')::text AS network
+       credited_amount_currency, quote_source, COALESCE(network, '')::text AS network,
+       original_amount_cents, COALESCE(original_currency, '')::text AS original_currency, eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source, fx_reference_date
 FROM purser.crypto_wallets
 WHERE id = $1::text::uuid
   AND purpose = 'prepaid'
@@ -179,6 +210,12 @@ type GetPrepaidCryptoTopupRow struct {
 	CreditedAmountCurrency  sql.NullString `db:"credited_amount_currency" json:"credited_amount_currency"`
 	QuoteSource             sql.NullString `db:"quote_source" json:"quote_source"`
 	Network                 string         `db:"network" json:"network"`
+	OriginalAmountCents     sql.NullInt64  `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents          sql.NullInt64  `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         sql.NullTime   `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetPrepaidCryptoTopup(ctx context.Context, arg GetPrepaidCryptoTopupParams) (GetPrepaidCryptoTopupRow, error) {
@@ -202,6 +239,12 @@ func (q *Queries) GetPrepaidCryptoTopup(ctx context.Context, arg GetPrepaidCrypt
 		&i.CreditedAmountCurrency,
 		&i.QuoteSource,
 		&i.Network,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -210,13 +253,18 @@ const insertPendingCardTopup = `-- name: InsertPendingCardTopup :exec
 INSERT INTO purser.pending_topups (
     id, tenant_id, provider, checkout_id, amount_cents, currency,
     status, expires_at, billing_email, billing_name, billing_company,
-    billing_vat_number, intent_id
+    billing_vat_number, intent_id,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, $2::text::uuid,
-    $3, NULL, $4, $5,
+    $3, NULL, $4::bigint, $5::text,
     'pending', $6, $7,
     $8, $9,
-    $10, $11::text::uuid
+    $10, $11::text::uuid,
+    $4::bigint, $5::text, $12::bigint,
+    $13::text::numeric, $14::text,
+    $15::date
 )
 `
 
@@ -232,6 +280,10 @@ type InsertPendingCardTopupParams struct {
 	BillingCompany   sql.NullString `db:"billing_company" json:"billing_company"`
 	BillingVatNumber sql.NullString `db:"billing_vat_number" json:"billing_vat_number"`
 	IntentID         string         `db:"intent_id" json:"intent_id"`
+	EurAmountCents   int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur    string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource         string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate  time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) InsertPendingCardTopup(ctx context.Context, arg InsertPendingCardTopupParams) error {
@@ -247,6 +299,10 @@ func (q *Queries) InsertPendingCardTopup(ctx context.Context, arg InsertPendingC
 		arg.BillingCompany,
 		arg.BillingVatNumber,
 		arg.IntentID,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	return err
 }
@@ -256,7 +312,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE tenant_id = $1::text::uuid
   AND (NOT $2::boolean OR status = $3)
@@ -283,6 +341,12 @@ type ListPendingTopupsRow struct {
 	BalanceTransactionID uuid.NullUUID `db:"balance_transaction_id" json:"balance_transaction_id"`
 	CreatedAt            sql.NullTime  `db:"created_at" json:"created_at"`
 	UpdatedAt            sql.NullTime  `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents  int64         `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency     string        `db:"original_currency" json:"original_currency"`
+	EurAmountCents       int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur        string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource             string        `db:"fx_source" json:"fx_source"`
+	FxReferenceDate      time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) ListPendingTopups(ctx context.Context, arg ListPendingTopupsParams) ([]ListPendingTopupsRow, error) {
@@ -307,6 +371,12 @@ func (q *Queries) ListPendingTopups(ctx context.Context, arg ListPendingTopupsPa
 			&i.BalanceTransactionID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 		); err != nil {
 			return nil, err
 		}

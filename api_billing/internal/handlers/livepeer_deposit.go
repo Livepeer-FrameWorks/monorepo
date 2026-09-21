@@ -10,12 +10,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	livepeerchain "github.com/Livepeer-FrameWorks/monorepo/pkg/livepeer/chain"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -88,13 +88,15 @@ type livepeerServiceDiscoveryClient interface {
 
 var fundDepositAndReserveForSelector = common.Hex2Bytes("989f789c")
 
-// NewLivepeerDepositMonitor creates a deposit monitor from environment configuration.
-// When the monitor is enabled, invalid signing or RPC configuration is fatal at
-// startup rather than silently degrading into read-only monitoring.
-func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPCClient) (*LivepeerDepositMonitor, error) {
-	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
-	address := os.Getenv("X402_GAS_WALLET_ADDRESS")
-	privKeyHex := strings.TrimPrefix(strings.TrimSpace(privKey), "0x")
+// NewLivepeerDepositMonitor creates a deposit monitor for clusterID from the
+// runtime configuration. When the monitor is enabled, invalid signing or RPC
+// configuration is fatal at startup rather than silently degrading into
+// read-only monitoring.
+func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPCClient, clusterID string) (*LivepeerDepositMonitor, error) {
+	rt := appconfig.Runtime()
+	privKey := rt.X402GasWalletPrivkey
+	address := rt.X402GasWalletAddress
+	privKeyHex := strings.TrimPrefix(privKey, "0x")
 	key, err := crypto.HexToECDSA(privKeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("X402_GAS_WALLET_PRIVKEY is required and must be a valid secp256k1 private key: %w", err)
@@ -107,7 +109,7 @@ func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPC
 	}
 
 	depositThreshold := 0.1
-	if v := os.Getenv("LIVEPEER_DEPOSIT_LOW_THRESHOLD"); v != "" {
+	if v := rt.LivepeerDepositLowThreshold; v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			depositThreshold = f
 		} else {
@@ -116,7 +118,7 @@ func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPC
 	}
 
 	topupETH := 0.2
-	if v := os.Getenv("LIVEPEER_TOPUP_AMOUNT"); v != "" {
+	if v := rt.LivepeerTopupAmount; v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			topupETH = f
 		} else {
@@ -125,7 +127,7 @@ func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPC
 	}
 	topupWei := ethToWei(topupETH)
 	dailyCapETH := 1.0
-	if v := os.Getenv("LIVEPEER_FUNDING_DAILY_CAP"); v != "" {
+	if v := rt.LivepeerFundingDailyCap; v != "" {
 		if f, parseErr := strconv.ParseFloat(v, 64); parseErr == nil && f > 0 {
 			dailyCapETH = f
 		} else {
@@ -133,12 +135,11 @@ func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPC
 		}
 	}
 
-	rpcEndpoint := os.Getenv("ARBITRUM_RPC_ENDPOINT")
-	parsedRPC, err := url.Parse(strings.TrimSpace(rpcEndpoint))
+	rpcEndpoint := rt.ArbitrumRPCEndpoint
+	parsedRPC, err := url.Parse(rpcEndpoint)
 	if err != nil || parsedRPC.Host == "" || (parsedRPC.Scheme != "http" && parsedRPC.Scheme != "https") {
 		return nil, fmt.Errorf("ARBITRUM_RPC_ENDPOINT must be an absolute http(s) URL")
 	}
-	clusterID := os.Getenv("CLUSTER_ID")
 
 	depositGauge := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

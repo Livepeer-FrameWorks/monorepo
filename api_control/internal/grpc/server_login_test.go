@@ -60,6 +60,10 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 			mock.ExpectQuery("FROM commodore.users WHERE email = \\$1").
 				WithArgs("user@example.com").
 				WillReturnRows(rows)
+			// The rejected sign-in is recorded in its own transaction.
+			mock.ExpectBegin()
+			expectLegacyEventInsert(mock, eventAuthLoginFailed)
+			mock.ExpectCommit()
 
 			server := &CommodoreServer{db: db, logger: logrus.New()}
 			_, err = server.Login(context.Background(), &commodorepb.LoginRequest{

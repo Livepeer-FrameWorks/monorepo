@@ -3,6 +3,7 @@ package artifactoutbox
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -67,17 +69,133 @@ func TestMarshalPayload(t *testing.T) {
 // federation events keep the no-op nil behavior (system-level, not state-coupled).
 func TestEnqueueNilLifecycleIsError(t *testing.T) {
 	resetPackageState(t)
-	if err := EnqueueClipLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
+	ctx := context.Background()
+	if err := EnqueueClipLifecycleTx(ctx, nil, nil); !errors.Is(err, ErrNilLifecyclePayload) {
 		t.Errorf("clip: want ErrNilLifecyclePayload, got %v", err)
 	}
 	if err := EnqueueDVRLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
 		t.Errorf("dvr: want ErrNilLifecyclePayload, got %v", err)
 	}
-	if err := EnqueueVodLifecycle(nil); !errors.Is(err, ErrNilLifecyclePayload) {
+	if err := EnqueueVodLifecycleTx(ctx, nil, nil); !errors.Is(err, ErrNilLifecyclePayload) {
 		t.Errorf("vod: want ErrNilLifecyclePayload, got %v", err)
 	}
 	if err := EnqueueFederationEvent(nil); err != nil {
 		t.Errorf("federation nil stays a no-op: %v", err)
+	}
+}
+
+// A transition with a domain event must be written through the transaction of
+// its state change; without one it is refused before any row is written.
+func TestTransitionWithoutTransactionIsRefused(t *testing.T) {
+	resetPackageState(t)
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger(), nil)
+
+	err = EnqueueClipTransitionTx(context.Background(), nil, &ipcpb.ClipLifecycleData{
+		TenantId: sp("11111111-1111-1111-1111-111111111111"), ClipHash: "cliphash",
+	}, &publicv1.ClipReady{Artifact: ClipArtifact("cliphash", "")})
+	if !errors.Is(err, ErrDomainEventNeedsTx) {
+		t.Fatalf("want ErrDomainEventNeedsTx, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("no statement may run: %v", err)
+	}
+}
+
+// idCapture records the first argument of an INSERT so two statements can be
+// compared.
+type idCapture struct{ id *string }
+
+func (c idCapture) Match(v driver.Value) bool {
+	s, ok := v.(string)
+	if ok {
+		*c.id = s
+	}
+	return ok
+}
+
+// A transition advances the artifact's revision, writes the domain event with
+// that revision as its aggregate version, and writes the legacy row in the
+// caller's transaction under the domain event's ID.
+func TestTransitionSharesEventIDWithLegacyRow(t *testing.T) {
+	resetPackageState(t)
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger(), nil)
+
+	tenant := "11111111-1111-1111-1111-111111111111"
+	var domainID, legacyID string
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE foghorn\.artifacts\s+SET revision = revision \+ 1`).
+		WithArgs("vodhash", tenant).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(7)))
+	mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
+		WithArgs(idCapture{&domainID}, "upload.ready", "foghorn", "artifacts", "vodhash", int64(7),
+			"tenant", sqlmock.AnyArg(), "", "", "", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WithArgs(idCapture{&legacyID}, kindVodLifecycle, tenant, "", "vodhash", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	tx, err := mockDB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := EnqueueVodTransitionTx(context.Background(), tx, &ipcpb.VodLifecycleData{
+		Status: ipcpb.VodLifecycleData_STATUS_COMPLETED, TenantId: &tenant, VodHash: "vodhash",
+	}, &publicv1.UploadReady{Artifact: UploadArtifact("vodhash"), SizeBytes: 10}); err != nil {
+		t.Fatalf("enqueue transition: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+	if domainID == "" || domainID != legacyID {
+		t.Fatalf("legacy row id %q must equal the domain event id %q", legacyID, domainID)
+	}
+}
+
+// A lifecycle event naming an artifact its tenant has no row for has no
+// revision to carry, so the transition is refused before any outbox row.
+func TestTransitionWithoutArtifactRowIsRefused(t *testing.T) {
+	resetPackageState(t)
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger(), nil)
+
+	tenant := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE foghorn\.artifacts\s+SET revision = revision \+ 1`).
+		WithArgs("cliphash", tenant).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	tx, err := mockDB.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	err = EnqueueClipTransitionTx(context.Background(), tx, &ipcpb.ClipLifecycleData{
+		TenantId: &tenant, ClipHash: "cliphash",
+	}, &publicv1.ClipReady{Artifact: ClipArtifact("cliphash", "")})
+	if !errors.Is(err, ErrArtifactNotVersioned) {
+		t.Fatalf("want ErrArtifactNotVersioned, got %v", err)
+	}
+	_ = tx.Rollback()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("no outbox row may be written: %v", err)
 	}
 }
 
@@ -90,26 +208,15 @@ func TestEnqueueWritesOutboxRow(t *testing.T) {
 	defer mockDB.Close()
 	Init(mockDB, logging.NewLogger(), nil)
 
-	t.Run("clip carries kind, ids and payload", func(t *testing.T) {
+	t.Run("dvr carries kind, ids and payload", func(t *testing.T) {
 		mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-			WithArgs(kindClipLifecycle, "tenant-1", "stream-1", "cliphash", sqlmock.AnyArg()).
+			WithArgs(kindDVRLifecycle, "tenant-1", "stream-1", "dvrhash", sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		err := EnqueueClipLifecycle(&ipcpb.ClipLifecycleData{
-			TenantId: sp("tenant-1"), StreamId: sp("stream-1"), ClipHash: "cliphash",
+		err := EnqueueDVRLifecycle(&ipcpb.DVRLifecycleData{
+			TenantId: sp("tenant-1"), StreamId: sp("stream-1"), DvrHash: "dvrhash",
 		})
 		if err != nil {
-			t.Fatalf("enqueue clip: %v", err)
-		}
-	})
-
-	t.Run("vod leaves stream_id blank", func(t *testing.T) {
-		// VOD uploads aren't always tied to a live stream — stream_id is "".
-		mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-			WithArgs(kindVodLifecycle, "tenant-1", "", "vodhash", sqlmock.AnyArg()).
-			WillReturnResult(sqlmock.NewResult(0, 1))
-		err := EnqueueVodLifecycle(&ipcpb.VodLifecycleData{TenantId: sp("tenant-1"), VodHash: "vodhash"})
-		if err != nil {
-			t.Fatalf("enqueue vod: %v", err)
+			t.Fatalf("enqueue dvr: %v", err)
 		}
 	})
 
@@ -377,45 +484,6 @@ func TestEnqueuePropagatesInsertError(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("expected wrapped insert error, got %v", err)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet expectations: %v", err)
-	}
-}
-
-// The fire-and-forget Logged variants are used from background goroutines:
-// they MUST still issue the INSERT, and a DB error MUST be swallowed (logged,
-// not returned) so a transient outage can't crash a producer goroutine.
-func TestEnqueueLoggedSwallowsErrorButStillInserts(t *testing.T) {
-	resetPackageState(t)
-	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer mockDB.Close()
-	Init(mockDB, logging.NewLogger(), nil)
-
-	// Each Logged helper issues exactly one INSERT; we make it fail to prove
-	// the error is absorbed (the call returns nothing and does not panic).
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WithArgs(kindClipLifecycle, "tenant-1", "stream-1", "cliphash", sqlmock.AnyArg()).
-		WillReturnError(errors.New("clip insert fail"))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WithArgs(kindDVRLifecycle, "tenant-1", "stream-1", "dvrhash", sqlmock.AnyArg()).
-		WillReturnError(errors.New("dvr insert fail"))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WithArgs(kindVodLifecycle, "tenant-1", "", "vodhash", sqlmock.AnyArg()).
-		WillReturnError(errors.New("vod insert fail"))
-
-	EnqueueClipLifecycleLogged(&ipcpb.ClipLifecycleData{
-		TenantId: sp("tenant-1"), StreamId: sp("stream-1"), ClipHash: "cliphash",
-	})
-	EnqueueDVRLifecycleLogged(&ipcpb.DVRLifecycleData{
-		TenantId: sp("tenant-1"), StreamId: sp("stream-1"), DvrHash: "dvrhash",
-	})
-	EnqueueVodLifecycleLogged(&ipcpb.VodLifecycleData{
-		TenantId: sp("tenant-1"), VodHash: "vodhash",
-	})
-
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
 	}

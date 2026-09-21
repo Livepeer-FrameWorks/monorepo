@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
@@ -882,6 +882,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 			Method:    purserMethod,
 			CreatedAt: timestamppb.Now(),
 			ExpiresAt: timestamppb.New(time.Now().Add(30 * time.Minute)),
+			Fx:        demo.DemoConversion(int64(math.Round(amount*100)), time.Now()),
 		}
 		switch purserMethod {
 		case "crypto_usdc":
@@ -939,29 +940,6 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		return nil, fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	userID := userIDFromContext(ctx)
-	provider := resp.Method
-	if provider == "" {
-		provider = purserMethod
-	}
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventPaymentCreated,
-		ResourceType: "payment",
-		ResourceId:   resp.Id,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId:  tenantID,
-				PaymentId: resp.Id,
-				InvoiceId: input.InvoiceID,
-				Amount:    resp.Amount,
-				Currency:  resp.Currency,
-				Provider:  provider,
-				Status:    resp.Status,
-			},
-		},
-		UserId: userID,
-	})
-
 	return resp, nil
 }
 
@@ -1010,7 +988,7 @@ func demoInvoicePaymentAmount(invoiceID string) (float64, string, bool) {
 		if inv.GetId() == invoiceID {
 			currency := inv.GetCurrency()
 			if currency == "" {
-				currency = billing.DefaultCurrency()
+				currency = billing.LedgerCurrency
 			}
 			return inv.GetAmount(), currency, true
 		}
@@ -1124,18 +1102,6 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	// Convert custom features input to proto
 	if input.CustomFeatures != nil {
 		features := &purserpb.BillingFeatures{}
-		if input.CustomFeatures.Recording != nil {
-			features.Recording = *input.CustomFeatures.Recording
-		}
-		if input.CustomFeatures.Analytics != nil {
-			features.Analytics = *input.CustomFeatures.Analytics
-		}
-		if input.CustomFeatures.CustomBranding != nil {
-			features.CustomBranding = *input.CustomFeatures.CustomBranding
-		}
-		if input.CustomFeatures.APIAccess != nil {
-			features.ApiAccess = *input.CustomFeatures.APIAccess
-		}
 		if input.CustomFeatures.SupportLevel != nil {
 			features.SupportLevel = *input.CustomFeatures.SupportLevel
 		}
@@ -1190,22 +1156,6 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		return nil, fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventSubscriptionUpdated,
-		ResourceType: "subscription",
-		ResourceId:   subscription.Id,
-		TenantId:     tenantID,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId:       tenantID,
-				SubscriptionId: subscription.Id,
-				Status:         subscription.Status,
-			},
-		},
-		UserId: userID,
-	})
-
 	return subscription, nil
 }
 
@@ -1214,7 +1164,7 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 // ============================================================================
 
 // DoGetPrepaidBalance returns the current prepaid balance for the tenant
-func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*model.PrepaidBalance, error) {
+func (r *Resolver) DoGetPrepaidBalance(ctx context.Context) (*model.PrepaidBalance, error) {
 	if err := requireBillingScope(ctx, "billing:read"); err != nil {
 		return nil, err
 	}
@@ -1226,7 +1176,7 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 			BalanceCents:             4523,
 			ReservedBalanceCents:     173,
 			AvailableBalanceCents:    4350,
-			Currency:                 billing.DefaultCurrency(),
+			Currency:                 billing.LedgerCurrency,
 			LowBalanceThresholdCents: 500,
 			IsLowBalance:             false,
 			DrainRateCentsPerHour:    12,
@@ -1240,12 +1190,7 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 		return nil, fmt.Errorf("tenant_id required")
 	}
 
-	curr := billing.DefaultCurrency()
-	if currency != nil && *currency != "" {
-		curr = *currency
-	}
-
-	resp, err := r.Clients.Purser.GetPrepaidBalance(ctx, tenantID, curr)
+	resp, err := r.Clients.Purser.GetPrepaidBalance(ctx, tenantID)
 	if err != nil {
 		// NotFound is expected for tenants without prepaid balance - return nil, not an error
 		if status.Code(err) == codes.NotFound {
@@ -1483,21 +1428,6 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
 	}
 
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventPaymentCreated,
-		ResourceType: "payment",
-		ResourceId:   resp.PaymentId,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId:  tenantID,
-				PaymentId: resp.PaymentId,
-				Provider:  "mollie",
-			},
-		},
-		UserId: userID,
-	})
-
 	return &model.MollieFirstPayment{
 		PaymentID:  resp.PaymentId,
 		CustomerID: resp.MollieCustomerId,
@@ -1537,22 +1467,6 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
 		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
 	}
-
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventSubscriptionCreated,
-		ResourceType: "subscription",
-		ResourceId:   resp.SubscriptionId,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId:       tenantID,
-				SubscriptionId: resp.SubscriptionId,
-				Provider:       "mollie",
-				Status:         resp.Status,
-			},
-		},
-		UserId: userID,
-	})
 
 	var nextPaymentDate *string
 	if resp.NextPaymentDate != "" {
@@ -1633,25 +1547,23 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 		return nil, fmt.Errorf("unsupported payment provider: %s", input.Provider)
 	}
 
-	currency := billing.DefaultCurrency()
-	if input.Currency != nil && *input.Currency != "" {
-		currency = *input.Currency
-	}
-	currency = strings.ToUpper(strings.TrimSpace(currency))
-	minimumCents, minimumErr := billing.FiatTopupMinimumCents(provider, currency)
-	if minimumErr != nil {
-		return nil, minimumErr
-	}
-	if int64(input.AmountCents) < minimumCents || int64(input.AmountCents) > billing.MaximumTopupCents {
-		return nil, fmt.Errorf("amount_cents must be between %d and %d for %s/%s", minimumCents, billing.MaximumTopupCents, provider, strings.ToUpper(currency))
+	// Purser charges the top-up in the tenant's presentment currency and
+	// applies that currency's provider minimum; only the currency-independent
+	// economic floor is checked here.
+	if int64(input.AmountCents) < billing.ExternalCollectionFloorCents || int64(input.AmountCents) > billing.MaximumTopupCents {
+		return nil, fmt.Errorf("amount_cents must be between %d and %d", billing.ExternalCollectionFloorCents, billing.MaximumTopupCents)
 	}
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic card top-up")
+		now := time.Now()
 		return &model.CardTopupResult{
-			TopupID:     "topup_demo_" + time.Now().Format("20060102150405"),
+			TopupID:     "topup_demo_" + now.Format("20060102150405"),
 			CheckoutURL: "https://checkout.stripe.com/demo-topup",
-			ExpiresAt:   time.Now().Add(30 * time.Minute),
+			ExpiresAt:   now.Add(30 * time.Minute),
+			AmountCents: input.AmountCents,
+			Currency:    demo.DemoPresentmentCurrency,
+			Conversion:  demo.DemoConversion(int64(input.AmountCents), now),
 		}, nil
 	}
 
@@ -1664,7 +1576,6 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 	req := &purserpb.CreateCardTopupRequest{
 		TenantId:    tenantID,
 		AmountCents: int64(input.AmountCents),
-		Currency:    currency,
 		Provider:    provider,
 		SuccessUrl:  input.SuccessURL,
 		CancelUrl:   input.CancelURL,
@@ -1682,29 +1593,13 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 		return nil, fmt.Errorf("failed to create top-up: %w", err)
 	}
 
-	userID := userIDFromContext(ctx)
-	amount := float64(input.AmountCents) / 100.0
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTopupCreated,
-		ResourceType: "topup",
-		ResourceId:   resp.TopupId,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId: tenantID,
-				TopupId:  resp.TopupId,
-				Amount:   amount,
-				Currency: currency,
-				Provider: provider,
-				Status:   "pending",
-			},
-		},
-		UserId: userID,
-	})
-
 	return &model.CardTopupResult{
 		TopupID:     resp.TopupId,
 		CheckoutURL: resp.CheckoutUrl,
 		ExpiresAt:   resp.ExpiresAt.AsTime(),
+		AmountCents: int(resp.GetAmountCents()),
+		Currency:    resp.GetCurrency(),
+		Conversion:  resp.GetFx(),
 	}, nil
 }
 
@@ -1748,6 +1643,7 @@ func demoCryptoTopup(input model.CreateCryptoTopupInput) *model.CryptoTopupResul
 		QuoteSource:             "chainlink",
 		QuotedAt:                now,
 		Network:                 "arbitrum",
+		Conversion:              demo.DemoConversion(int64(input.AmountCents), now),
 	}
 }
 
@@ -1770,12 +1666,6 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		return nil, fmt.Errorf("unsupported crypto asset: %s", input.Asset)
 	}
 
-	currency := billing.DefaultCurrency()
-	if input.Currency != nil && *input.Currency != "" {
-		currency = *input.Currency
-	}
-	currency = strings.ToUpper(strings.TrimSpace(currency))
-
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic crypto top-up")
 		return demoCryptoTopup(input), nil
@@ -1790,7 +1680,6 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		TenantId:            tenantID,
 		ExpectedAmountCents: int64(input.AmountCents),
 		Asset:               protoAsset,
-		Currency:            currency,
 		ClientIp:            ctxkeys.GetClientIP(ctx),
 	}
 
@@ -1799,31 +1688,6 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create crypto top-up")
 		return nil, fmt.Errorf("failed to create crypto top-up: %w", err)
 	}
-
-	userID := userIDFromContext(ctx)
-	amount := float64(input.AmountCents) / 100.0
-	provider := "crypto"
-	if resp.AssetSymbol != "" {
-		provider = "crypto_" + strings.ToLower(resp.AssetSymbol)
-	}
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTopupCreated,
-		ResourceType: "topup",
-		ResourceId:   resp.TopupId,
-		Payload: &ipcpb.ServiceEvent_BillingEvent{
-			BillingEvent: &ipcpb.BillingEvent{
-				TenantId: tenantID,
-				TopupId:  resp.TopupId,
-				Amount:   amount,
-				Currency: currency,
-				Provider: provider,
-				Status:   "pending",
-				Asset:    resp.AssetSymbol,
-				Network:  resp.Network,
-			},
-		},
-		UserId: userID,
-	})
 
 	result := &model.CryptoTopupResult{
 		TopupID:                 resp.TopupId,
@@ -1837,6 +1701,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		QuotedPriceUsd:          resp.QuotedPriceUsd,
 		QuoteSource:             resp.QuoteSource,
 		Network:                 resp.Network,
+		Conversion:              resp.GetFx(),
 	}
 	if resp.QuotedAt != nil {
 		result.QuotedAt = resp.QuotedAt.AsTime()
@@ -1851,14 +1716,15 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic crypto top-up status")
-		expiresAt := time.Now().Add(23 * time.Hour)
+		now := time.Now()
 		return &model.CryptoTopupStatus{
 			ID:             topupID,
 			DepositAddress: "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
 			Asset:          purserpb.CryptoAsset_CRYPTO_ASSET_ETH,
 			Status:         "pending",
 			Confirmations:  0,
-			ExpiresAt:      expiresAt,
+			ExpiresAt:      now.Add(23 * time.Hour),
+			Conversion:     demo.DemoConversion(5000, now.Add(-time.Hour)),
 		}, nil
 	}
 
@@ -1875,6 +1741,7 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 		Status:         resp.Status,
 		Confirmations:  int(resp.Confirmations),
 		ExpiresAt:      resp.ExpiresAt.AsTime(),
+		Conversion:     resp.GetFx(),
 	}
 
 	if resp.TxHash != "" {
@@ -2076,8 +1943,9 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDe
 				PostalCode: "10115",
 				Country:    "DE",
 			},
-			IsComplete: true,
-			UpdatedAt:  timestamppb.New(now),
+			IsComplete:          true,
+			UpdatedAt:           timestamppb.New(now),
+			PresentmentCurrency: demo.DemoPresentmentCurrency,
 		}, nil
 	}
 
@@ -2104,9 +1972,10 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		r.Logger.Debug("Demo mode: returning synthetic billing details after update")
 		now := time.Now()
 		details := &purserpb.BillingDetails{
-			TenantId:   "demo-tenant",
-			IsComplete: false,
-			UpdatedAt:  timestamppb.New(now),
+			TenantId:            "demo-tenant",
+			IsComplete:          false,
+			UpdatedAt:           timestamppb.New(now),
+			PresentmentCurrency: demo.DemoPresentmentCurrency,
 		}
 		if input.Email != nil {
 			details.Email = *input.Email
@@ -2127,6 +1996,7 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 				PostalCode: input.Address.PostalCode,
 				Country:    input.Address.Country,
 			}
+			details.PresentmentCurrency = billing.PresentmentCurrencyForCountry(input.Address.Country)
 			if input.Address.State != nil {
 				details.Address.State = *input.Address.State
 			}
@@ -2176,18 +2046,6 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		r.Logger.WithError(err).Error("Failed to update billing details")
 		return nil, err
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventBillingDetailsUpdated,
-		ResourceType: "billing_details",
-		ResourceId:   tenantID,
-		Payload: &ipcpb.ServiceEvent_TenantEvent{
-			TenantEvent: &ipcpb.TenantEvent{
-				TenantId:      tenantID,
-				ChangedFields: []string{"billing_details"},
-			},
-		},
-	})
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Billing details updated")
 	return resp, nil

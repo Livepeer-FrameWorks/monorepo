@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	eventspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/grpc"
@@ -53,6 +54,10 @@ func (f *fakeDecklogServiceClient) SendServiceEvent(_ context.Context, _ *ipcpb.
 
 func (f *fakeDecklogServiceClient) SendGatewayTelemetry(_ context.Context, _ *ipcpb.GatewayTelemetryEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
+}
+
+func (f *fakeDecklogServiceClient) PublishDomainEvents(_ context.Context, in *eventspb.DomainEventBatch, _ ...grpc.CallOption) (*eventspb.PublishDomainEventsResponse, error) {
+	return &eventspb.PublishDomainEventsResponse{Published: uint32(len(in.GetEvents()))}, nil
 }
 
 func TestSendVodLifecycleCopiesTenantToEnvelope(t *testing.T) {

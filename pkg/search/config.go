@@ -1,10 +1,6 @@
 package search
 
-import (
-	"fmt"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
-)
+import "fmt"
 
 const (
 	providerTavily  = "tavily"
@@ -12,20 +8,12 @@ const (
 	providerSearxng = "searxng"
 )
 
-// Config holds environment configuration for search providers.
+// Config selects and authenticates a search provider. Callers build it from
+// their typed service configuration.
 type Config struct {
 	Provider string
 	APIKey   string
 	APIURL   string
-}
-
-// LoadConfig loads search configuration from the environment.
-func LoadConfig() Config {
-	return Config{
-		Provider: config.GetEnv("SEARCH_PROVIDER", providerTavily),
-		APIKey:   config.GetEnv("SEARCH_API_KEY", ""),
-		APIURL:   config.GetEnv("SEARCH_API_URL", ""),
-	}
 }
 
 // NewProvider creates a search provider from configuration.

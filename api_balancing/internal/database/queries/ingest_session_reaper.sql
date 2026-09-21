@@ -10,7 +10,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
     ended_reason = sqlc.arg(ended_reason)::text
 WHERE id = sqlc.arg(session_id)::text::uuid AND tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name) AND ended_at IS NULL
-RETURNING node_id, start_trigger_uuid;
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 
 -- name: RetireIngestSessionByClaim :one
 UPDATE foghorn.ingest_sessions
@@ -19,7 +19,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND start_trigger_uuid = sqlc.arg(claim_token) AND ended_at IS NULL
-RETURNING id::text AS session_id, node_id;
+RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id;
 
 -- name: ListNeverProjectedIngestSessions :many
 SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
@@ -37,7 +37,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE id = sqlc.arg(session_id)::text::uuid AND tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND ended_at IS NULL AND projection_state = 'pending'
   AND started_at < NOW() - (sqlc.arg(older_than_ms)::bigint * INTERVAL '1 millisecond')
-RETURNING node_id;
+RETURNING node_id, COALESCE(stream_id::text, '')::text AS stream_id;
 
 -- name: PurgeExpiredCloseTombstones :execrows
 DELETE FROM foghorn.ingest_close_tombstones

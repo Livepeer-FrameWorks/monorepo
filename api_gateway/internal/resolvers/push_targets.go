@@ -11,7 +11,6 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -71,18 +70,6 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		return nil, fmt.Errorf("failed to create push target: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventPushTargetCreated,
-		ResourceType: "push_target",
-		ResourceId:   target.GetId(),
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId:      streamID,
-				ChangedFields: []string{"push_targets"},
-			},
-		},
-	})
-
 	return target, nil
 }
 
@@ -128,18 +115,14 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		Id: rawID,
 	}
 
-	var changedFields []string
 	if input.Name != nil {
 		req.Name = input.Name
-		changedFields = append(changedFields, "name")
 	}
 	if input.TargetURI != nil {
 		req.TargetUri = input.TargetURI
-		changedFields = append(changedFields, "target_uri")
 	}
 	if input.IsEnabled != nil {
 		req.IsEnabled = input.IsEnabled
-		changedFields = append(changedFields, "is_enabled")
 	}
 
 	target, err := r.Clients.Commodore.UpdatePushTarget(ctx, req)
@@ -147,18 +130,6 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		r.Logger.WithError(err).WithField("push_target_id", id).Error("Failed to update push target")
 		return nil, fmt.Errorf("failed to update push target: %w", err)
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventPushTargetUpdated,
-		ResourceType: "push_target",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId:      target.GetStreamId(),
-				ChangedFields: changedFields,
-			},
-		},
-	})
 
 	return target, nil
 }
@@ -186,12 +157,6 @@ func (r *Resolver) DoDeletePushTarget(ctx context.Context, id string) (*model.De
 		}
 		return nil, fmt.Errorf("failed to delete push target: %w", err)
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventPushTargetDeleted,
-		ResourceType: "push_target",
-		ResourceId:   id,
-	})
 
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }

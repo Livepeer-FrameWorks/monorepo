@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -121,7 +120,7 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 		qmClient:                 qm,
 		logger:                   logger,
 		domain:                   rootDomain,
-		proxy:                    loadProxyServices(),
+		proxy:                    loadProxyServices(""),
 		recordTTL:                recordTTL,
 		lbTTL:                    lbTTL,
 		staleAge:                 staleAge,
@@ -213,7 +212,10 @@ func defaultServicePorts() map[string]int {
 	return ports
 }
 
-// defaultServiceHealthPaths returns the health check path for each service type.
+// defaultServiceHealthPaths returns the load-balancer monitor path for each service type. Edge types probe the edge
+// ingress's /health. Platform services use the fleet-wide readiness path: a pool can mix releases during a rolling
+// upgrade and one monitor covers every origin, so the path is /ready only once every supported release serves it
+// (servicedefs.ReadySince unset) and liveness before that.
 func defaultServiceHealthPaths() map[string]string {
 	paths := make(map[string]string)
 	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
@@ -223,15 +225,21 @@ func defaultServiceHealthPaths() map[string]string {
 		if _, exists := paths[name]; exists {
 			continue
 		}
-		if svc, ok := servicedefs.Lookup(name); ok && svc.HealthPath != "" {
-			paths[name] = svc.HealthPath
+		if svc, ok := servicedefs.Lookup(name); ok && svc.ReadinessPath() != "" {
+			paths[name] = svc.ReadinessPath()
 		}
 	}
 	return paths
 }
 
-func loadProxyServices() map[string]bool {
-	env := strings.TrimSpace(os.Getenv("NAVIGATOR_PROXY_SERVICES"))
+// SetProxyServices replaces the set of Cloudflare-proxied service types with a
+// comma-separated list. An empty list restores the built-in set.
+func (m *DNSManager) SetProxyServices(list string) {
+	m.proxy = loadProxyServices(list)
+}
+
+func loadProxyServices(list string) map[string]bool {
+	env := strings.TrimSpace(list)
 	if env == "" {
 		return map[string]bool{
 			"bridge":    true,

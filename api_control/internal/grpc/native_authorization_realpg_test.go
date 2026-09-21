@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
@@ -16,10 +17,13 @@ import (
 )
 
 func TestNativeAuthorizationRepository_RealPG(t *testing.T) {
-	t.Setenv("JWT_SECRET", "native-authorization-realpg-secret")
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://console.example.com")
 	db := startCommodoreRealPG(t)
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: func() RuntimeSettings {
+		return RuntimeSettings{
+			JWTSecret: []byte("native-authorization-realpg-secret"),
+			Branding:  config.EmailBranding{WebAppURL: "https://console.example.com"},
+		}
+	}}
 	ctx := context.Background()
 	const (
 		tenantID = "10000000-0000-4000-8000-000000000051"

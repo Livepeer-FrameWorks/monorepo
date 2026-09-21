@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
@@ -78,14 +78,9 @@ type mistNodeRuntime struct {
 
 func newMistNodeRuntime(generation uint64, nodeID, baseURL, username, password string) *mistNodeRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
-	client := mist.NewClient(monitorLogger)
-	client.BaseURL = baseURL
-	client.Username = username
-	client.Password = password
-	acceleratorClient := mist.NewClient(monitorLogger)
-	acceleratorClient.BaseURL = baseURL
-	acceleratorClient.Username = username
-	acceleratorClient.Password = password
+	clientConfig := mist.ClientConfig{BaseURL: baseURL, Username: username, Password: password}
+	client := mist.NewClient(monitorLogger, clientConfig)
+	acceleratorClient := mist.NewClient(monitorLogger, clientConfig)
 	return &mistNodeRuntime{
 		generation:        generation,
 		nodeID:            nodeID,
@@ -411,11 +406,12 @@ var (
 
 func currentComponentVersions() []*ipcpb.EdgeComponentVersion {
 	recorded := updater.ReadComponentVersions()
+	rt := appconfig.Runtime()
 	versions := []*ipcpb.EdgeComponentVersion{{
 		Component: "helmsman",
 		Version: firstNonEmptyString(
 			recorded["HELMSMAN_VERSION"],
-			os.Getenv("HELMSMAN_VERSION"),
+			rt.HelmsmanVersion,
 			version.ComponentVersion,
 			version.Version,
 		),
@@ -430,7 +426,7 @@ func currentComponentVersions() []*ipcpb.EdgeComponentVersion {
 	} {
 		values := make([]string, 0, len(component.keys)*2)
 		for _, key := range component.keys {
-			values = append(values, recorded[key], os.Getenv(key))
+			values = append(values, recorded[key], rt.ComponentVersionEnv(key))
 		}
 		if value := firstNonEmptyString(values...); value != "" {
 			versions = append(versions, &ipcpb.EdgeComponentVersion{Component: component.name, Version: value})
@@ -458,15 +454,9 @@ func InitPrometheusMonitor(logger logging.Logger) {
 		return
 	}
 
-	mistAPIPassword := os.Getenv("MIST_API_PASSWORD")
-	mistUsername := os.Getenv("MIST_API_USERNAME")
-
-	if mistAPIPassword == "" {
-		mistAPIPassword = "test"
-	}
-	if mistUsername == "" {
-		mistUsername = "test"
-	}
+	rt := appconfig.Runtime()
+	mistAPIPassword := rt.MistAPIPassword
+	mistUsername := rt.MistAPIUsername
 
 	prometheusMonitor = &PrometheusMonitor{
 		mistUsername:            mistUsername,
@@ -929,7 +919,7 @@ func (pm *PrometheusMonitor) monitorNodes() {
 
 		case <-artifactTicker.C:
 			// Periodic artifact rescan to detect late-appearing .dtsh files
-			if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
+			if storagePath := appconfig.Runtime().StorageLocalPath; storagePath != "" {
 				go scanLocalArtifacts(storagePath)
 			}
 
@@ -1923,10 +1913,11 @@ func (pm *PrometheusMonitor) forwardNodeMetricsContext(ctx context.Context, runt
 	version := pm.nodeMetricsVersion.Load()
 	pm.mutex.RUnlock()
 	// Capabilities from environment (fallback defaults: all true in dev)
-	capIngest := os.Getenv("HELMSMAN_CAP_INGEST")
-	capEdge := os.Getenv("HELMSMAN_CAP_EDGE")
-	capStorage := os.Getenv("HELMSMAN_CAP_STORAGE")
-	capProcessing := os.Getenv("HELMSMAN_CAP_PROCESSING")
+	rt := appconfig.Runtime()
+	capIngest := rt.CapIngest
+	capEdge := rt.CapEdge
+	capStorage := rt.CapStorage
+	capProcessing := rt.CapProcessing
 	roles := rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing)
 
 	// Convert API response to MistTrigger using converter
@@ -3110,10 +3101,10 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		EventType:         "node_lifecycle_update",
 		Timestamp:         time.Now().Unix(),
 		ComponentVersions: currentComponentVersions(),
-		DeployMode:        firstNonEmptyString(os.Getenv("DEPLOY_MODE"), "native"),
+		DeployMode:        appconfig.Runtime().DeployMode,
 		Os:                runtime.GOOS,
 		Arch:              runtime.GOARCH,
-		OnnxProfile:       firstNonEmptyString(os.Getenv("MIST_ONNX_PROFILE"), "cpu"),
+		OnnxProfile:       appconfig.Runtime().MistONNXProfile,
 		// artifacts_report_revision is assigned atomically WITH the artifact snapshot in
 		// enrichNodeLifecycleTrigger (captureArtifactSnapshot), not here — pairing them here would
 		// let a concurrent report attach a newer snapshot to this older revision.
@@ -3258,10 +3249,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	// Get Disk Usage from OS.
-	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
-	if storagePath == "" {
-		storagePath = sidecarcfg.GetStoragePath()
-	}
+	storagePath := sidecarcfg.GetStoragePath()
 
 	info, err := os.Stat(storagePath)
 	if err != nil {
@@ -3457,10 +3445,11 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 		}
 
 		// Add storage info
+		rt := appconfig.Runtime()
 		nodeUpdate.Storage = &ipcpb.StorageInfo{
-			LocalPath: os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"),
-			S3Bucket:  os.Getenv("HELMSMAN_STORAGE_S3_BUCKET"),
-			S3Prefix:  os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
+			LocalPath: rt.StorageLocalPath,
+			S3Bucket:  rt.StorageS3Bucket,
+			S3Prefix:  rt.StorageS3Prefix,
 		}
 
 		// Add limits from environment + live processing capacity.
@@ -3473,7 +3462,7 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 		capProc := capProcessing == "" || capProcessing == "1" || strings.ToLower(capProcessing) == "true"
 		if capProc {
 			total := 0
-			if maxT, err := strconv.Atoi(os.Getenv("HELMSMAN_MAX_TRANSCODES")); err == nil && maxT > 0 {
+			if maxT := rt.MaxTranscodeSlots(); maxT > 0 {
 				total = maxT
 			}
 			limits.ProcessingClasses = []*ipcpb.ProcessingClassCapacity{{
@@ -3483,7 +3472,7 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 			}}
 			hasLimits = true
 		}
-		if capBytes, err := strconv.ParseUint(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"), 10, 64); err == nil && capBytes > 0 {
+		if capBytes := rt.StorageCapacity(); capBytes > 0 {
 			limits.StorageCapacityBytes = capBytes
 			hasLimits = true
 		}

@@ -1,35 +1,42 @@
 -- name: EnsureTenantCustomDomain :one
+-- A tearing_down or verification_failed row is reactivated: verification
+-- restarts with a fresh period and the stale certificate, error, retry, and
+-- failure-report state is cleared. Any other row keeps its worker-driven state.
 INSERT INTO navigator.tenant_custom_domains
-    (tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at)
-VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(domain), 'pending_verification', sqlc.arg(acme_dns_subdomain), NOW(), NOW())
+    (tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at, verification_started_at)
+VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(domain), 'pending_verification', sqlc.arg(acme_dns_subdomain), NOW(), NOW(), NOW())
 ON CONFLICT (tenant_id, domain) DO UPDATE SET
-    status = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    status = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                   THEN 'pending_verification' ELSE navigator.tenant_custom_domains.status END,
-    issuer_id = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    issuer_id = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                      THEN NULL ELSE navigator.tenant_custom_domains.issuer_id END,
-    cert_issued_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    cert_issued_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                           THEN NULL ELSE navigator.tenant_custom_domains.cert_issued_at END,
-    cert_expires_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    cert_expires_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                            THEN NULL ELSE navigator.tenant_custom_domains.cert_expires_at END,
-    last_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_error = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                       THEN NULL ELSE navigator.tenant_custom_domains.last_error END,
-    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                               THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error END,
-    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                                  THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error_at END,
-    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                            THEN NULL ELSE navigator.tenant_custom_domains.next_attempt_at END,
+    verification_started_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
+                                   THEN NOW() ELSE navigator.tenant_custom_domains.verification_started_at END,
+    failure_reported_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
+                               THEN NULL ELSE navigator.tenant_custom_domains.failure_reported_at END,
     updated_at = NOW()
 RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
           last_verified_at, cert_issued_at, cert_expires_at, last_error,
           created_at, updated_at, last_renewal_error, last_renewal_error_at,
-          next_attempt_at;
+          next_attempt_at, verification_started_at, failure_reported_at;
 
 -- name: GetTenantCustomDomain :one
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND domain = sqlc.arg(domain);
 
@@ -37,7 +44,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND domain = sqlc.arg(domain);
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE status = ANY(sqlc.arg(statuses)::text[])
 ORDER BY updated_at ASC;
@@ -46,7 +53,7 @@ ORDER BY updated_at ASC;
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
 ORDER BY domain ASC;
@@ -73,20 +80,45 @@ SET status = 'cert_issued',
     next_attempt_at = NULL,
     last_renewal_error = NULL,
     last_renewal_error_at = NULL,
+    failure_reported_at = NULL,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND domain = sqlc.arg(domain)
   AND status = 'cert_issuing';
 
--- name: FailTenantCustomDomainIssuance :execrows
-UPDATE navigator.tenant_custom_domains
+-- name: FailTenantCustomDomainIssuance :one
+-- Moves a cert_issuing domain to cert_failed. first_failure is true only when
+-- no failure of this domain was reported since its last successful issuance
+-- or reactivation, so retry cycles through cert_failed report nothing new.
+WITH prior AS MATERIALIZED (
+    SELECT custom_domain.tenant_id, custom_domain.domain, custom_domain.failure_reported_at
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = sqlc.arg(tenant_id)::uuid
+      AND custom_domain.domain = sqlc.arg(domain)
+      AND custom_domain.status = 'cert_issuing'
+    FOR UPDATE
+)
+UPDATE navigator.tenant_custom_domains AS custom_domain
 SET status = 'cert_failed',
     last_error = NULLIF(sqlc.arg(err_msg)::text, ''),
     next_attempt_at = NOW() + sqlc.arg(retry_after_seconds)::bigint * INTERVAL '1 second',
+    failure_reported_at = COALESCE(prior.failure_reported_at, NOW()),
     updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::uuid
-  AND domain = sqlc.arg(domain)
-  AND status = 'cert_issuing';
+FROM prior
+WHERE custom_domain.tenant_id = prior.tenant_id
+  AND custom_domain.domain = prior.domain
+RETURNING (prior.failure_reported_at IS NULL)::boolean AS first_failure;
+
+-- name: ExpireTenantCustomDomainVerifications :many
+-- Fails every pending domain whose verification period has passed and returns
+-- them for their custom_domain.failed events.
+UPDATE navigator.tenant_custom_domains
+SET status = 'verification_failed',
+    failure_reported_at = NOW(),
+    updated_at = NOW()
+WHERE status = 'pending_verification'
+  AND verification_started_at < NOW() - sqlc.arg(period_seconds)::bigint * INTERVAL '1 second'
+RETURNING tenant_id, domain;
 
 -- name: RefreshTenantCustomDomainServedCertificate :execrows
 UPDATE navigator.tenant_custom_domains

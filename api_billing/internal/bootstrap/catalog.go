@@ -77,10 +77,36 @@ func EmbeddedTiers() ([]CatalogTier, error) {
 			return nil, fmt.Errorf("embedded catalog tier[%d] missing tier_name", i)
 		}
 	}
-	if err := validateCatalogDNSEntitlements(c.Tiers); err != nil {
+	if err := validateCatalogTiers(c.Tiers); err != nil {
 		return nil, fmt.Errorf("embedded catalog: %w", err)
 	}
 	return c.Tiers, nil
+}
+
+func validateCatalogTiers(tiers []CatalogTier) error {
+	if err := validateCatalogDNSEntitlements(tiers); err != nil {
+		return err
+	}
+	return validateCatalogFeatures(tiers)
+}
+
+// catalogFeatureKeys are the JSON keys of models.BillingFeatures. Purser drops
+// any other key when it reads features, so the catalog refuses to store one.
+var catalogFeatureKeys = map[string]bool{
+	"support_level":           true,
+	"sla":                     true,
+	"processing_customizable": true,
+}
+
+func validateCatalogFeatures(tiers []CatalogTier) error {
+	for _, tier := range tiers {
+		for key := range tier.Features {
+			if !catalogFeatureKeys[key] {
+				return fmt.Errorf("tier %q feature %q is not a billing feature (allowed: support_level, sla, processing_customizable)", tier.TierName, key)
+			}
+		}
+	}
+	return nil
 }
 
 func validateCatalogDNSEntitlements(tiers []CatalogTier) error {

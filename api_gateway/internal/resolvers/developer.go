@@ -13,7 +13,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -72,22 +71,6 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 		return nil, fmt.Errorf("failed to create developer token: %w", err)
 	}
 
-	tenantID := tenantIDFromContext(ctx)
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTokenCreated,
-		ResourceType: "api_token",
-		ResourceId:   tokenResp.Id,
-		Payload: &ipcpb.ServiceEvent_AuthEvent{
-			AuthEvent: &ipcpb.AuthEvent{
-				UserId:   userID,
-				TenantId: tenantID,
-				AuthType: "api_token",
-				TokenId:  tokenResp.Id,
-			},
-		},
-	})
-
 	// Convert response to APITokenInfo (matching gqlgen binding)
 	// Include TokenValue for creation response - it's only available on creation
 	return &commodorepb.APITokenInfo{
@@ -125,22 +108,6 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 		}
 		return nil, fmt.Errorf("failed to revoke developer token: %w", err)
 	}
-
-	tenantID := tenantIDFromContext(ctx)
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTokenRevoked,
-		ResourceType: "api_token",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_AuthEvent{
-			AuthEvent: &ipcpb.AuthEvent{
-				UserId:   userID,
-				TenantId: tenantID,
-				AuthType: "api_token",
-				TokenId:  id,
-			},
-		},
-	})
 
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }

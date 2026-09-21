@@ -27,7 +27,8 @@
 #     model: dimensioned      -- most-specific config.rates selector wins for codec, model, backend, or provider
 #     unit_price stored as string for decimal precision.
 #
-#   features: opaque feature flags consumed by the application layer.
+#   features: models.BillingFeatures keys only: support_level, sla, and
+#     processing_customizable (Commodore allows tenant process overrides).
 #
 #   processes_*: raw MistServer process JSON arrays per lifecycle. Livepeer
 #     entries carry no hardcoded_broadcasters — Foghorn fills the broadcaster
@@ -46,9 +47,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
       support_level: community
     support_level: community
     sla_level: none
@@ -87,9 +85,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
       support_level: community
     support_level: community
     sla_level: none
@@ -143,9 +138,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
       support_level: basic
     support_level: basic
     sla_level: none
@@ -184,9 +176,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
       support_level: priority
     support_level: priority
     sla_level: standard
@@ -225,10 +214,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
-      custom_branding: true
       sla: true
       support_level: enterprise
     support_level: enterprise
@@ -268,10 +253,6 @@ tiers:
     currency: EUR
     billing_period: monthly
     features:
-      recording: true
-      analytics: true
-      api_access: true
-      custom_branding: true
       sla: true
       support_level: dedicated
       processing_customizable: true

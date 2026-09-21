@@ -6,11 +6,29 @@ import (
 	"fmt"
 	"testing"
 
+	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestErrorPresenterMapsLocalAuthorizationErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{auth.ErrUnauthenticated, "UNAUTHORIZED"},
+		{middleware.ErrForbidden, "FORBIDDEN"},
+	} {
+		presented := ErrorPresenter(logging.NewLogger())(context.Background(), fmt.Errorf("tenant events: %w", tc.err))
+		if presented.Extensions["code"] != tc.code {
+			t.Errorf("%v: got code %v, want %s", tc.err, presented.Extensions["code"], tc.code)
+		}
+	}
+}
 
 func TestErrorPresenterPreservesStructuredBillingBlocker(t *testing.T) {
 	st := status.New(codes.FailedPrecondition, "add a billing email and postal address before paying")
@@ -36,6 +54,64 @@ func TestErrorPresenterPreservesStructuredBillingBlocker(t *testing.T) {
 	fields, ok := presented.Extensions["required_fields"].([]string)
 	if !ok || len(fields) != 5 || fields[0] != "email" || fields[4] != "country" {
 		t.Fatalf("required_fields = %#v", presented.Extensions["required_fields"])
+	}
+}
+
+func TestErrorPresenterMapsGRPCStatusToExtensionCode(t *testing.T) {
+	cases := []struct {
+		code    codes.Code
+		want    string
+		message string
+	}{
+		{codes.Unauthenticated, "UNAUTHORIZED", "authentication required"},
+		{codes.PermissionDenied, "FORBIDDEN", "permission denied"},
+		{codes.NotFound, "NOT_FOUND", "resource not found"},
+		{codes.InvalidArgument, "VALIDATION_ERROR", "invalid request"},
+		{codes.AlreadyExists, "CONFLICT", "resource already exists"},
+		{codes.FailedPrecondition, "FAILED_PRECONDITION", "request not allowed in the current state"},
+		{codes.ResourceExhausted, "RATE_LIMITED", "rate limit exceeded"},
+		{codes.Unavailable, "UNAVAILABLE", "service temporarily unavailable"},
+		{codes.DeadlineExceeded, "UNAVAILABLE", "request timed out"},
+		{codes.Internal, "INTERNAL_ERROR", "internal error"},
+		{codes.Unknown, "INTERNAL_ERROR", "internal error"},
+	}
+	presenter := ErrorPresenter(logging.NewLogger())
+	for _, tc := range cases {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			err := fmt.Errorf("resolver: %w", status.Error(tc.code, "backend detail that must not leak"))
+			presented := presenter(context.Background(), err)
+			if presented.Extensions["code"] != tc.want {
+				t.Fatalf("extensions.code = %#v, want %q", presented.Extensions["code"], tc.want)
+			}
+			if presented.Message != tc.message {
+				t.Fatalf("message = %q, want %q", presented.Message, tc.message)
+			}
+			if presented.Message == "backend detail that must not leak" {
+				t.Fatal("presenter leaked the backend status message")
+			}
+		})
+	}
+}
+
+func TestErrorPresenterLeavesPlainErrorsWithoutCode(t *testing.T) {
+	presented := ErrorPresenter(logging.NewLogger())(context.Background(), errors.New("stream name is required"))
+	if _, ok := presented.Extensions["code"]; ok {
+		t.Fatalf("plain resolver error gained a code: %#v", presented.Extensions)
+	}
+}
+
+func TestErrorPresenterKeepsExplicitCode(t *testing.T) {
+	st := status.New(codes.FailedPrecondition, "billing")
+	st, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: "BILLING_PROFILE_REQUIRED",
+		Domain: "billing.frameworks.network",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	presented := ErrorPresenter(logging.NewLogger())(context.Background(), st.Err())
+	if presented.Extensions["code"] != "BILLING_PROFILE_REQUIRED" {
+		t.Fatalf("code = %#v, want BILLING_PROFILE_REQUIRED", presented.Extensions["code"])
 	}
 }
 
@@ -235,7 +311,7 @@ func TestMessageForCode(t *testing.T) {
 	}
 
 	t.Run("unknown code uses internal", func(t *testing.T) {
-		got := messageForCode(codes.ResourceExhausted)
+		got := messageForCode(codes.DataLoss)
 		want := grpcCodeMessages[codes.Internal]
 		if got != want {
 			t.Fatalf("messageForCode() = %q, want %q", got, want)

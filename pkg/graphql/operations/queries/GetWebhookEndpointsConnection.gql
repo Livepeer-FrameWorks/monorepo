@@ -1,0 +1,18 @@
+# List the tenant's outbound webhook endpoints
+query GetWebhookEndpointsConnection($first: Int = 50, $after: String) {
+  webhookEndpointsConnection(page: { first: $first, after: $after }) {
+    edges {
+      cursor
+      node {
+        ...WebhookEndpointFields @mask_disable
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

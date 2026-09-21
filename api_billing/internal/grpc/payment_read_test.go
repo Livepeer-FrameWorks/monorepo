@@ -18,7 +18,9 @@ func paymentRows(now time.Time) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id", "invoice_id", "method", "amount", "currency", "tx_id", "status",
 		"confirmed_at", "created_at", "updated_at",
-	}).AddRow("pay-1", "inv-1", "card", 12.5, "EUR", "pi_safe", "failed", nil, now, now)
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
+	}).AddRow("pay-1", "inv-1", "card", 12.5, "EUR", "pi_safe", "failed", nil, now, now,
+		int64(1250), "EUR", int64(1250), "1.0000000000", "identity", now)
 }
 
 func TestGetPaymentBindsAuthenticatedTenant(t *testing.T) {
@@ -35,6 +37,9 @@ func TestGetPaymentBindsAuthenticatedTenant(t *testing.T) {
 	}
 	if payment.GetId() != "pay-1" || payment.GetInvoiceId() != "inv-1" || payment.GetStatus() != "failed" {
 		t.Fatalf("payment = %+v", payment)
+	}
+	if fx := payment.GetFx(); fx.GetEurAmountCents() != 1250 || fx.GetUnitsPerEur() != "1" || fx.GetSource() != "identity" {
+		t.Fatalf("payment FX = %+v", fx)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

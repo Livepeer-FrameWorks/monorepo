@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
 )
@@ -177,8 +179,8 @@ func TestAtomicWriteFile(t *testing.T) {
 
 func TestConfigSeedPersistsAndReloadsForOfflineRestart(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HELMSMAN_STATE_DIR", root)
-	t.Setenv("NODE_ID", "edge-1")
+	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", root)
+	appconfigtest.Setenv(t, "NODE_ID", "edge-1")
 	seed := &ipcpb.ConfigSeed{
 		NodeId: "edge-1", SeedVersion: 42, TenantId: "tenant-a",
 		FoghornBalancerBase: "https://foghorn.internal/source?cap=secret",
@@ -202,7 +204,7 @@ func TestConfigSeedPersistsAndReloadsForOfflineRestart(t *testing.T) {
 		t.Fatalf("persisted ConfigSeed mode = %o, want 600", info.Mode().Perm())
 	}
 
-	t.Setenv("NODE_ID", "edge-2")
+	appconfigtest.Setenv(t, "NODE_ID", "edge-2")
 	if _, err := loadPersistedConfigSeed(); err == nil {
 		t.Fatal("cross-node persisted ConfigSeed was accepted")
 	}

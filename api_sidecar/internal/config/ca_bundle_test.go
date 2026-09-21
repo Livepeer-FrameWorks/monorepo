@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -13,7 +15,7 @@ import (
 // change, and re-applying an identical bundle reports no change (no churn).
 func TestApplyCABundle(t *testing.T) {
 	caPath := filepath.Join(t.TempDir(), "pki", "ca.crt")
-	t.Setenv("GRPC_TLS_CA_PATH", caPath)
+	appconfigtest.Setenv(t, "GRPC_TLS_CA_PATH", caPath)
 	m := &Manager{logger: logging.NewLogger()}
 
 	t.Run("empty bundle is a no-op", func(t *testing.T) {

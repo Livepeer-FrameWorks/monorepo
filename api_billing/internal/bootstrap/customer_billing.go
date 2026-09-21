@@ -245,7 +245,7 @@ func resolveTier(ctx context.Context, exec DBTX, slug string) (tierID string, ti
 	}
 	tierID, tierLevel, currency = tier.ID.String(), tier.TierLevel, tier.Currency
 	if currency == "" {
-		currency = billing.DefaultCurrency()
+		currency = billing.LedgerCurrency
 	}
 	return tierID, tierLevel, currency, nil
 }
@@ -259,8 +259,12 @@ func upsertTenantSubscription(ctx context.Context, exec DBTX, tenantID, tierID s
 	current, err := queries.GetBootstrapTenantSubscription(ctx, tenantID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		// Desired state carries no billing country, so a bootstrapped tenant
+		// starts in the presentment currency of an unknown country until its
+		// billing details set one.
 		if insertErr := queries.InsertBootstrapTenantSubscription(ctx, purserdb.InsertBootstrapTenantSubscriptionParams{
 			ID: uuid.New(), TenantID: tenantID, TierID: tierUUID, BillingModel: e.Model,
+			PresentmentCurrency: billing.PresentmentCurrencyForCountry(""),
 		}); insertErr != nil {
 			return "", fmt.Errorf("insert tenant_subscriptions: %w", insertErr)
 		}

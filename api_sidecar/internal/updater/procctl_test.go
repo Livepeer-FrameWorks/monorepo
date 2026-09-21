@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 )
 
 func TestDetectServiceControllerHonorsEnvOverride(t *testing.T) {
@@ -17,7 +19,7 @@ func TestDetectServiceControllerHonorsEnvOverride(t *testing.T) {
 		"S6":      s6Controller{},
 	}
 	for value, want := range cases {
-		t.Setenv("HELMSMAN_SUPERVISOR", value)
+		appconfigtest.Setenv(t, "HELMSMAN_SUPERVISOR", value)
 		got := detectServiceController()
 		if got != want {
 			t.Fatalf("HELMSMAN_SUPERVISOR=%s: got %T, want %T", value, got, want)
@@ -57,8 +59,8 @@ func TestS6RestartCaddyStopsAndWaitsForAdmin(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("CADDY_ADMIN_SOCKET", "")
-	t.Setenv("CADDY_ADMIN_URL", server.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_SOCKET", "")
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", server.URL)
 	restoreTimings := setCaddyRestartTimingsForTest(t, 10*time.Millisecond, time.Second, 10*time.Millisecond)
 	defer restoreTimings()
 
@@ -78,8 +80,8 @@ func TestS6RestartCaddyFailsWhenAdminNeverReturns(t *testing.T) {
 	url := server.URL
 	server.Close()
 
-	t.Setenv("CADDY_ADMIN_SOCKET", "")
-	t.Setenv("CADDY_ADMIN_URL", url)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_SOCKET", "")
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", url)
 	restoreTimings := setCaddyRestartTimingsForTest(t, time.Millisecond, 100*time.Millisecond, 10*time.Millisecond)
 	defer restoreTimings()
 

@@ -1,7 +1,8 @@
 -- name: GetTenantBillingDetails :one
 SELECT billing_email, billing_name, billing_company, tax_id,
        COALESCE(billing_address, '{}'::jsonb) AS billing_address,
-       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
+       presentment_currency::text AS presentment_currency
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -16,3 +17,18 @@ SET billing_email = CASE WHEN sqlc.arg(set_email)::boolean THEN sqlc.arg(email):
     billing_address = CASE WHEN sqlc.arg(set_address)::boolean THEN sqlc.arg(address)::jsonb ELSE billing_address END,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled';
+
+-- name: LockTenantPresentmentCurrency :one
+SELECT presentment_currency::text AS presentment_currency,
+       purser.tenant_presentment_currency_locked(tenant_id)::boolean AS presentment_locked
+FROM purser.tenant_subscriptions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
+FOR UPDATE;
+
+-- name: SetTenantPresentmentCurrency :execrows
+UPDATE purser.tenant_subscriptions
+SET presentment_currency = sqlc.arg(presentment_currency)::text,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND status != 'cancelled'
+  AND presentment_currency <> sqlc.arg(presentment_currency)::text;

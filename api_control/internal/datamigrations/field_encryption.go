@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -30,11 +29,27 @@ const (
 	fieldEncryptionQuarantineTable = "commodore.field_encryption_quarantine"
 	fieldEncryptionDecryptError    = "decrypt_failed"
 	fieldEncryptionAllowQuarantine = "FIELD_ENCRYPTION_ALLOW_QUARANTINE"
-	fieldEncryptionRetryQuarantine = "FIELD_ENCRYPTION_REQUEUE_QUARANTINE"
-	fieldEncryptionAckLegacyProbe  = "FIELD_ENCRYPTION_ACK_UNVERIFIED_LEGACY_KEY"
-	fieldEncryptionLegacySecrets   = "FIELD_ENCRYPTION_LEGACY_SECRETS"
 	fieldEncryptionLegacyProbeRows = 32
 )
+
+// FieldEncryptionSettings is the key material and operator acknowledgements
+// the field-encryption migration reads. Values arrive already trimmed.
+type FieldEncryptionSettings struct {
+	ActiveKeyID string
+	ActiveKey   string
+	// PreviousKeys and LegacySecrets are the raw FIELD_ENCRYPTION_PREVIOUS_KEYS
+	// and FIELD_ENCRYPTION_LEGACY_SECRETS values, parsed on each use.
+	PreviousKeys  string
+	LegacySecrets string
+	JWTSecret     string
+	// AllowQuarantine accepts true (any case) or 1.
+	AllowQuarantine string
+	// RequeueQuarantine is an operator token; empty, 0, or false disables it.
+	RequeueQuarantine string
+	// AckUnverifiedLegacyKey must equal I_ACCEPT_UNVERIFIED_LEGACY_KEY to
+	// skip the legacy-key probe failure.
+	AckUnverifiedLegacyKey string
+}
 
 type fieldEncryptionCheckpoint struct {
 	Column               int    `json:"column"`
@@ -54,48 +69,46 @@ var encryptedColumns = []encryptedColumn{
 	{table: "commodore.dvr_recordings", id: "dvr_hash", column: "playback_webhook_secret_enc", purpose: "playback-webhook-secret"},
 }
 
-func registerFieldEncryption() {
+func registerFieldEncryption(settings FieldEncryptionSettings) {
 	datamigrate.Register(datamigrate.Migration{
 		ID: FieldEncryptionID, Service: "commodore", IntroducedIn: "v0.3.0",
 		RequiredBeforePhase: "postdeploy",
 		Description:         "re-encrypt application fields with the dedicated versioned field keyring",
-		Run:                 runFieldEncryption,
-		Verify:              verifyFieldEncryption,
+		Irreversible:        true,
+		Run: func(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {
+			return runFieldEncryption(ctx, db, opts, settings)
+		},
+		Verify: func(ctx context.Context, db datamigrate.DB) error {
+			return verifyFieldEncryption(ctx, db, settings)
+		},
 	})
 }
 
-func fieldKeyring(purpose string) (*fieldcrypt.FieldKeyring, error) {
-	active := []byte(strings.TrimSpace(os.Getenv("FIELD_ENCRYPTION_KEY")))
+func fieldKeyring(settings FieldEncryptionSettings, purpose string) (*fieldcrypt.FieldKeyring, error) {
+	active := []byte(strings.TrimSpace(settings.ActiveKey))
 	if len(active) == 0 {
 		return nil, fmt.Errorf("FIELD_ENCRYPTION_KEY is required")
 	}
-	previous, err := fieldcrypt.ParseFieldKeySet(os.Getenv("FIELD_ENCRYPTION_PREVIOUS_KEYS"))
+	previous, err := fieldcrypt.ParseFieldKeySet(settings.PreviousKeys)
 	if err != nil {
 		return nil, err
 	}
-	explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(os.Getenv(fieldEncryptionLegacySecrets))
+	explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(settings.LegacySecrets)
 	if err != nil {
 		return nil, err
 	}
-	legacy := []byte(strings.TrimSpace(os.Getenv("JWT_SECRET")))
+	legacy := []byte(strings.TrimSpace(settings.JWTSecret))
 	legacyKeys := make([][]byte, 0, len(previous)+len(explicitLegacy)+1)
 	legacyKeys = append(legacyKeys, legacy)
 	legacyKeys = append(legacyKeys, explicitLegacy...)
 	legacyKeys = append(legacyKeys, sortedFieldKeySecrets(previous)...)
 	return fieldcrypt.NewFieldKeyring(
-		strings.TrimSpace(envDefault("FIELD_ENCRYPTION_KEY_ID", "primary")),
+		strings.TrimSpace(settings.ActiveKeyID),
 		active, previous, legacyKeys, purpose,
 	)
 }
 
-func envDefault(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {
+func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions, settings FieldEncryptionSettings) (datamigrate.Progress, error) {
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
 		batchSize = 500
@@ -106,17 +119,17 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 			return datamigrate.Progress{}, fmt.Errorf("decode field-encryption checkpoint: %w", err)
 		}
 	}
-	legacySecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	legacySecret := strings.TrimSpace(settings.JWTSecret)
 	if legacySecret == "" {
 		return datamigrate.Progress{}, errors.New("JWT_SECRET is required to fence legacy field decryption")
 	}
-	if _, err := fieldKeyring(encryptedColumns[0].purpose); err != nil {
+	if _, err := fieldKeyring(settings, encryptedColumns[0].purpose); err != nil {
 		return datamigrate.Progress{}, fmt.Errorf("configure field-encryption keyring: %w", err)
 	}
-	legacyFingerprint := fieldEncryptionLegacyKeyFingerprint(legacySecret)
-	retryToken := quarantineRetryToken()
+	legacyFingerprint := fieldEncryptionLegacyKeyFingerprint(settings, legacySecret)
+	retryToken := quarantineRetryToken(settings)
 	if checkpoint.LegacyKeyFingerprint == "" {
-		if err := validateInitialLegacyFieldKey(ctx, db); err != nil {
+		if err := validateInitialLegacyFieldKey(ctx, db, settings); err != nil {
 			return datamigrate.Progress{}, err
 		}
 		checkpoint.LegacyKeyFingerprint = legacyFingerprint
@@ -144,16 +157,16 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 		checkpoint.LegacyKeyFingerprint = legacyFingerprint
 	}
 	if checkpoint.LegacyKeyFingerprint != "" && checkpoint.LegacyKeyFingerprint != legacyFingerprint {
-		previous, err := fieldcrypt.ParseFieldKeySet(os.Getenv("FIELD_ENCRYPTION_PREVIOUS_KEYS"))
+		previous, err := fieldcrypt.ParseFieldKeySet(settings.PreviousKeys)
 		if err != nil {
 			return datamigrate.Progress{}, err
 		}
-		explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(os.Getenv(fieldEncryptionLegacySecrets))
+		explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(settings.LegacySecrets)
 		if err != nil {
 			return datamigrate.Progress{}, err
 		}
 		legacyCandidates := append([][]byte{[]byte(legacySecret)}, explicitLegacy...)
-		fingerprintKeys := [][]byte{[]byte(strings.TrimSpace(os.Getenv("FIELD_ENCRYPTION_KEY")))}
+		fingerprintKeys := [][]byte{[]byte(strings.TrimSpace(settings.ActiveKey))}
 		for _, secret := range sortedFieldKeySecrets(previous) {
 			legacyCandidates = append(legacyCandidates, secret)
 			fingerprintKeys = append(fingerprintKeys, secret)
@@ -199,7 +212,7 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 		}
 		spec := encryptedColumns[checkpoint.Column]
 		limit := remaining
-		cipher, err := fieldKeyring(spec.purpose)
+		cipher, err := fieldKeyring(settings, spec.purpose)
 		if err != nil {
 			return progress, fmt.Errorf("configure %s keyring: %w", spec.purpose, err)
 		}
@@ -319,7 +332,7 @@ func sortedFieldKeySecrets(keys map[string][]byte) [][]byte {
 // validateInitialLegacyFieldKey prevents a wrong starting JWT_SECRET from
 // becoming the persisted migration authority. Plaintext and v3 rows do not
 // prove the legacy key; only an authenticated v1/v2 decrypt does.
-func validateInitialLegacyFieldKey(ctx context.Context, db datamigrate.DB) error {
+func validateInitialLegacyFieldKey(ctx context.Context, db datamigrate.DB, settings FieldEncryptionSettings) error {
 	foundLegacy := false
 	for _, spec := range encryptedColumns {
 		matched, observed, err := func() (bool, bool, error) {
@@ -329,7 +342,7 @@ func validateInitialLegacyFieldKey(ctx context.Context, db datamigrate.DB) error
 				return false, false, fmt.Errorf("probe legacy %s.%s: %w", spec.table, spec.column, err)
 			}
 			defer func() { _ = rows.Close() }()
-			cipher, err := fieldKeyring(spec.purpose)
+			cipher, err := fieldKeyring(settings, spec.purpose)
 			if err != nil {
 				return false, false, fmt.Errorf("configure %s legacy-key probe: %w", spec.purpose, err)
 			}
@@ -358,7 +371,7 @@ func validateInitialLegacyFieldKey(ctx context.Context, db datamigrate.DB) error
 		}
 	}
 	if foundLegacy {
-		if strings.TrimSpace(os.Getenv(fieldEncryptionAckLegacyProbe)) == "I_ACCEPT_UNVERIFIED_LEGACY_KEY" {
+		if strings.TrimSpace(settings.AckUnverifiedLegacyKey) == "I_ACCEPT_UNVERIFIED_LEGACY_KEY" {
 			return nil
 		}
 		return errors.New("JWT_SECRET and configured previous keys cannot decrypt any sampled legacy field; refusing to arm migration fence")
@@ -374,8 +387,8 @@ func fieldEncryptionCandidateQuery(spec encryptedColumn) string {
 	return fmt.Sprintf(`SELECT source.%s::text, source.%s FROM %s AS source WHERE source.%s IS NOT NULL AND %s AND LEFT(source.%s, char_length($2)) <> $2 AND NOT EXISTS (SELECT 1 FROM %s AS quarantine WHERE quarantine.table_name = $3 AND quarantine.column_name = $4 AND quarantine.row_id = source.%s::text AND quarantine.ciphertext_fingerprint = encode(digest(source.%s, 'sha256'), 'hex') AND ($6::bigint = 0 OR quarantine.last_observed_at >= to_timestamp($6::double precision / 1000.0))) ORDER BY source.%s LIMIT $1`, spec.id, spec.column, spec.table, spec.column, keysetPredicate, spec.column, fieldEncryptionQuarantineTable, spec.id, spec.column, spec.id)
 }
 
-func quarantineRetryToken() string {
-	value := strings.TrimSpace(os.Getenv(fieldEncryptionRetryQuarantine))
+func quarantineRetryToken(settings FieldEncryptionSettings) string {
+	value := strings.TrimSpace(settings.RequeueQuarantine)
 	if value == "" || value == "0" || strings.EqualFold(value, "false") {
 		return ""
 	}
@@ -390,8 +403,8 @@ func fieldEncryptionDatabaseEpochMillis(ctx context.Context, db datamigrate.DB) 
 	return epochMillis, nil
 }
 
-func fieldEncryptionLegacyKeyFingerprint(secret string) string {
-	return fieldEncryptionLegacyKeyFingerprintWithKey(secret, []byte(strings.TrimSpace(os.Getenv("FIELD_ENCRYPTION_KEY"))))
+func fieldEncryptionLegacyKeyFingerprint(settings FieldEncryptionSettings, secret string) string {
+	return fieldEncryptionLegacyKeyFingerprintWithKey(secret, []byte(strings.TrimSpace(settings.ActiveKey)))
 }
 
 func fieldEncryptionLegacyKeyFingerprintWithKey(secret string, key []byte) string {
@@ -427,10 +440,10 @@ func pruneOrphanFieldEncryptionQuarantine(ctx context.Context, db datamigrate.DB
 	return nil
 }
 
-func verifyFieldEncryption(ctx context.Context, db datamigrate.DB) error {
+func verifyFieldEncryption(ctx context.Context, db datamigrate.DB, settings FieldEncryptionSettings) error {
 	var quarantined int64
 	for _, spec := range encryptedColumns {
-		cipher, err := fieldKeyring(spec.purpose)
+		cipher, err := fieldKeyring(settings, spec.purpose)
 		if err != nil {
 			return fmt.Errorf("configure %s keyring: %w", spec.purpose, err)
 		}
@@ -449,7 +462,8 @@ func verifyFieldEncryption(ctx context.Context, db datamigrate.DB) error {
 		}
 		quarantined += activeForColumn
 	}
-	allowQuarantine := strings.EqualFold(strings.TrimSpace(os.Getenv(fieldEncryptionAllowQuarantine)), "true") || strings.TrimSpace(os.Getenv(fieldEncryptionAllowQuarantine)) == "1"
+	allowValue := strings.TrimSpace(settings.AllowQuarantine)
+	allowQuarantine := strings.EqualFold(allowValue, "true") || allowValue == "1"
 	if quarantined > 0 && !allowQuarantine {
 		return fmt.Errorf("field encryption has %d quarantined rows; repair them or explicitly acknowledge with %s=true", quarantined, fieldEncryptionAllowQuarantine)
 	}

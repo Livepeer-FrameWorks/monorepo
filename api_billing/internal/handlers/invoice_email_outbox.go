@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -33,8 +34,8 @@ type invoiceEmailOutboxStore struct {
 
 type invoiceEmailDispatcher struct {
 	jobs         *JobManager
-	send         func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error
-	sendReminder func(recipient, invoiceID string, amount float64, currency string, daysPastDue int) error
+	send         func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error
+	sendReminder func(recipient, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error
 }
 
 func enqueueInvoiceEmailTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, recipient, status string) error {
@@ -212,8 +213,8 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 		if d.jobs.emailService == nil || !d.jobs.emailService.IsConfigured() {
 			return []string{"smtp"}, errors.New("invoice email SMTP is not configured")
 		}
-		send = func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error {
-			return d.jobs.emailService.SendInvoiceCreatedEmail(recipient, "", invoiceID, amount, meteredAmount, grossMeteredAmount, currency, dueDate, lineItems)
+		send = func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error {
+			return d.jobs.emailService.SendInvoiceCreatedEmail(recipient, "", invoiceID, amount, meteredAmount, grossMeteredAmount, currency, dueDate, lineItems, fx)
 		}
 	}
 
@@ -234,8 +235,16 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	if len(lineItems) == 0 {
 		return []string{"smtp"}, fmt.Errorf("invoice %s has no permanent line-item snapshot", payload.InvoiceID)
 	}
-	if err := send(payload.Recipient, payload.InvoiceID, header.Amount, header.MeteredAmount,
-		header.GrossMeteredAmount, header.Currency, header.DueDate, lineItems); err != nil {
+	// A finalized invoice is charged in its presentment currency; the EUR
+	// total it converts is stated next to it.
+	amount, currency, invoiceFX := header.Amount, header.Currency, EmailFX{}
+	if header.PresentmentAmountCents.Valid && header.PresentmentCurrency != "" {
+		amount = float64(header.PresentmentAmountCents.Int64) / 100
+		currency = header.PresentmentCurrency
+		invoiceFX = NewEmailFX(currency, int64(math.Round(header.Amount*100)), header.PresentmentUnitsPerEur, header.PresentmentReferenceDate)
+	}
+	if err := send(payload.Recipient, payload.InvoiceID, amount, header.MeteredAmount,
+		header.GrossMeteredAmount, currency, header.DueDate, lineItems, invoiceFX); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil
@@ -249,7 +258,7 @@ func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, pa
 	if err != nil {
 		return []string{"smtp"}, fmt.Errorf("load overdue invoice for reminder: %w", err)
 	}
-	if reminder.AmountDue <= 0 || (reminder.Status != "pending" && reminder.Status != "overdue") || !reminder.DueDate.Before(time.Now()) {
+	if reminder.AmountDueCents <= 0 || (reminder.Status != "pending" && reminder.Status != "overdue") || !reminder.DueDate.Before(time.Now()) {
 		return nil, nil
 	}
 	daysPastDue := int(time.Since(reminder.DueDate).Hours() / 24)
@@ -261,11 +270,12 @@ func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, pa
 		if d.jobs.emailService == nil || !d.jobs.emailService.IsConfigured() {
 			return []string{"smtp"}, errors.New("invoice email SMTP is not configured")
 		}
-		send = func(recipient, invoiceID string, amount float64, currency string, daysPastDue int) error {
-			return d.jobs.emailService.SendOverdueReminderEmail(recipient, "", invoiceID, amount, currency, daysPastDue)
+		send = func(recipient, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error {
+			return d.jobs.emailService.SendOverdueReminderEmail(recipient, "", invoiceID, amount, currency, daysPastDue, fx)
 		}
 	}
-	if err := send(payload.Recipient, payload.InvoiceID, reminder.AmountDue, reminder.Currency, daysPastDue); err != nil {
+	reminderFX := NewEmailFX(reminder.Currency, reminder.EurAmountCents, reminder.PresentmentUnitsPerEur, reminder.PresentmentReferenceDate)
+	if err := send(payload.Recipient, payload.InvoiceID, float64(reminder.AmountDueCents)/100, reminder.Currency, daysPastDue, reminderFX); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil

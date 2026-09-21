@@ -1,9 +1,9 @@
 package control
 
 import (
-	"os"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -22,7 +22,7 @@ const EventNodeRestarting = "node_restarting"
 func AnnounceRestart(logger logging.Logger) error {
 	nodeID := GetCurrentNodeID()
 	if nodeID == "" {
-		nodeID = os.Getenv("NODE_ID")
+		nodeID = appconfig.NodeID()
 		if nodeID == "" {
 			nodeID = "unknown-node"
 		}

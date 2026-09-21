@@ -13,32 +13,29 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func newTestRouter(t *testing.T, name string) *gin.Engine {
+func newReleaseTestRouter(t *testing.T, name string, allowedOrigins []string) *gin.Engine {
 	t.Helper()
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker(name, "v1")
 	mc := monitoring.NewMetricsCollectorWithRegistry(name, "v1", "abc", prometheus.NewRegistry())
-	return SetupServiceRouter(logger, "svc", hc, mc)
+	return baseServiceRouter(logger, hc, mc, true, allowedOrigins)
 }
 
-func TestSetupServiceRouter_ReleaseModeSetFromEnv(t *testing.T) {
+func TestBaseServiceRouter_ReleaseModeSetsGinReleaseMode(t *testing.T) {
 	prev := gin.Mode()
 	t.Cleanup(func() { gin.SetMode(prev) })
 
-	t.Setenv("GIN_MODE", "release")
-	_ = newTestRouter(t, "svc-release")
+	_ = newReleaseTestRouter(t, "svc-release", nil)
 	if gin.Mode() != gin.ReleaseMode {
-		t.Fatalf("GIN_MODE=release must put gin in release mode, got %q", gin.Mode())
+		t.Fatalf("release router must put gin in release mode, got %q", gin.Mode())
 	}
 }
 
-func TestSetupServiceRouter_AllowedOriginsHonoredInReleaseMode(t *testing.T) {
+func TestBaseServiceRouter_AllowedOriginsHonoredInReleaseMode(t *testing.T) {
 	prev := gin.Mode()
 	t.Cleanup(func() { gin.SetMode(prev) })
 
-	t.Setenv("GIN_MODE", "release")
-	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
-	r := newTestRouter(t, "svc-origins")
+	r := newReleaseTestRouter(t, "svc-origins", []string{"https://app.example.com"})
 	r.GET("/ping", func(c *gin.Context) { c.String(http.StatusOK, "pong") })
 
 	cases := []struct {

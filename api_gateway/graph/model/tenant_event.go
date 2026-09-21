@@ -16,9 +16,6 @@ type TenantEvent struct {
 	ViewerMetrics        *ipcpb.ClientLifecycleUpdate       `json:"viewerMetrics"`
 	ConnectionEvent      *periscopepb.ConnectionEvent       `json:"connectionEvent"`
 	TrackListUpdate      *ipcpb.StreamTrackListTrigger      `json:"trackListUpdate"`
-	ClipLifecycle        *ipcpb.ClipLifecycleData           `json:"clipLifecycle"`
-	DvrEvent             *ipcpb.DVRLifecycleData            `json:"dvrEvent"`
-	VodLifecycle         *ipcpb.VodLifecycleData            `json:"vodLifecycle"`
 	StorageEvent         *periscopepb.StorageEvent          `json:"storageEvent"`
 	StorageSnapshot      *ipcpb.StorageSnapshot             `json:"storageSnapshot"`
 	ProcessingEvent      *periscopepb.ProcessingUsageRecord `json:"processingEvent"`

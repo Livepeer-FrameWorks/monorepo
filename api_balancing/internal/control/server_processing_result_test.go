@@ -43,10 +43,16 @@ func TestProcessProcessingJobProgress_ChapterFinalizeUsesChapterLedger(t *testin
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
+	// The heartbeat and its progress sample commit in one transaction.
+	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.dvr_chapters c").
 		WithArgs("chapter-1", "node-1", int32(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
 			AddRow("chapter-artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WithArgs("vod_lifecycle", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", "chapter-artifact-hash", jsonContains(`"progressPct":42`)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
 		JobId:       "chapter-finalize-v2-7-chapter-1",
@@ -62,6 +68,7 @@ func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *test
 	mockDB, mock, _, _ := setupArtifactTestDepsWithDB(t)
 	artifactoutbox.Init(mockDB, logging.NewLogger(), nil)
 	t.Cleanup(func() { artifactoutbox.Init(nil, nil, nil) })
+	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.processing_jobs SET progress = GREATEST").
 		WithArgs("11111111-1111-1111-1111-111111111111", sql.NullInt32{Int32: 15, Valid: true}, sql.NullString{String: "node-1", Valid: true}).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "progress"}).
@@ -72,6 +79,7 @@ func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *test
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
 		WithArgs("vod_lifecycle", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", "artifact-hash", jsonContains(`"progressPct":80`)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
 		JobId: "11111111-1111-1111-1111-111111111111", ProgressPct: 15,
@@ -319,11 +327,9 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1)) // node-copy event
-	// Clip lifecycle enqueue (same tx).
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "artifact.node_copy_changed", "art-clip", "artifact_node_copy", tenant, "", "art-clip")
+	// clip.ready and its clip lifecycle row (same tx, same event ID).
+	expectTransitionInsert(mock, "clip.ready", "art-clip", "clip_lifecycle", tenant, streamID, "art-clip")
 	// Job marked completed LAST, then commit.
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'completed'`).
 		WithArgs("job-clip-ok", sqlmock.AnyArg()).
@@ -387,8 +393,8 @@ func TestProcessProcessingJobResult_Failed_MarksClipArtifactFailed(t *testing.T)
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
 		WithArgs("art-clip", "output duration short", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "clip.failed", "art-clip", "clip_lifecycle",
+		"5eed517e-ba5e-da7a-517e-ba5eda7a0001", "5eed517e-ba5e-da7a-517e-ba5eda7a0002", "art-clip")
 	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
@@ -450,8 +456,7 @@ func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) 
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET status = 'failed'").
 		WithArgs("art-vod", "transcode exploded", "5eed517e-ba5e-da7a-517e-ba5eda7a0001").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "art-vod", "vod_lifecycle", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", "art-vod")
 	mock.ExpectCommit()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{

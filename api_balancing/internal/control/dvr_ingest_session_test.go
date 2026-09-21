@@ -30,7 +30,7 @@ func TestCreateIngestSession_MintsNew(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	// 3. Mint.
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions`).
-		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-1", int64(1000), nil, "demo-media").
+		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-1", int64(1000), nil, "demo-media", "").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sess-1"))
 	mock.ExpectCommit()
 
@@ -60,7 +60,7 @@ func TestCreateIngestSession_MintsSignedAuthoritySnapshotAtomically(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions[\s\S]*media_authority_id`).
 		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-1", int64(1000), nil, "demo-media",
-			"live_stream:stream-1", int64(4), int64(8), `[{"process":"durable"}]`, int32(3)).
+			"live_stream:stream-1", int64(4), int64(8), `[{"process":"durable"}]`, int32(3), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sess-1"))
 	mock.ExpectCommit()
 
@@ -153,7 +153,7 @@ func TestCreateIngestSession_PidReuseEndsStaleAndMintsFresh(t *testing.T) {
 		WithArgs("tenant-a", "node-1", int64(1234), "live+s1", int64(5000)).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions`).
-		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-new", int64(5000), nil, "demo-media").
+		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-new", int64(5000), nil, "demo-media", "").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sess-new"))
 	mock.ExpectCommit()
 

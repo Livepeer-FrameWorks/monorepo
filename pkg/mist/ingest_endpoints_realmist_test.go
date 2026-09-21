@@ -40,8 +40,7 @@ func TestIngestProtocolReport_RealMist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewClient(logging.NewLogger())
-	client.BaseURL, client.Username, client.Password = "http://127.0.0.1:"+port, "test", "test"
+	client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: "http://127.0.0.1:" + port, Username: "test", Password: "test"})
 	waitReport := func(predicate func(map[string]any, IngestURLs) bool) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

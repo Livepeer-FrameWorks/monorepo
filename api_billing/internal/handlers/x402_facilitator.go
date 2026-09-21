@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
+
+	"frameworks/api_billing/internal/appconfig"
 
 	cdpauth "github.com/coinbase/cdp-sdk/go/auth"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
@@ -59,8 +60,8 @@ func (a *cdpFacilitatorAuth) GetAuthHeaders(_ context.Context) (x402http.AuthHea
 	return x402http.AuthHeaders{Verify: verify, Settle: settle, Supported: supported}, nil
 }
 
-func newX402FacilitatorFromEnv() (string, x402FacilitatorClient, error) {
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("X402_FACILITATOR_PROVIDER")))
+func newX402FacilitatorFromConfig(rt *appconfig.PurserRuntime) (string, x402FacilitatorClient, error) {
+	provider := strings.ToLower(rt.X402FacilitatorProvider)
 	if provider == "" {
 		provider = "self"
 	}
@@ -71,7 +72,7 @@ func newX402FacilitatorFromEnv() (string, x402FacilitatorClient, error) {
 		return provider, nil, fmt.Errorf("unsupported facilitator provider %q", provider)
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("X402_FACILITATOR_URL")), "/")
+	baseURL := strings.TrimRight(rt.X402FacilitatorURL, "/")
 	if baseURL == "" && provider == "cdp" {
 		baseURL = defaultCDPFacilitatorURL
 	}
@@ -81,8 +82,8 @@ func newX402FacilitatorFromEnv() (string, x402FacilitatorClient, error) {
 	}
 	var authProvider x402http.AuthProvider
 	if provider == "cdp" {
-		keyID := strings.TrimSpace(os.Getenv("CDP_API_KEY_ID"))
-		keySecret := strings.ReplaceAll(strings.TrimSpace(os.Getenv("CDP_API_KEY_SECRET")), `\n`, "\n")
+		keyID := rt.CDPAPIKeyID
+		keySecret := strings.ReplaceAll(rt.CDPAPIKeySecret, `\n`, "\n")
 		if keyID == "" || keySecret == "" {
 			return provider, nil, fmt.Errorf("CDP_API_KEY_ID and CDP_API_KEY_SECRET are required")
 		}

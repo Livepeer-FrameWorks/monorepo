@@ -24,12 +24,15 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -408,6 +411,11 @@ func (r *analyticsUsageResolver) Processing(ctx context.Context, obj *markers.An
 // API is the resolver for the api field.
 func (r *analyticsUsageResolver) API(ctx context.Context, obj *markers.AnalyticsUsage) (*markers.APIUsage, error) {
 	return &markers.APIUsage{}, nil
+}
+
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *apiTokenCreatedResolver) ExpiresAt(ctx context.Context, obj *publicv1.ApiTokenCreated) (*time.Time, error) {
+	return resolvers.EventTimestamp(obj.GetExpiresAt()), nil
 }
 
 // ID is the resolver for the id field.
@@ -970,66 +978,6 @@ func (r *clipResolver) StorageCost(ctx context.Context, obj *sharedpb.ClipInfo) 
 	return r.ProjectStorageCostForCaller(ctx, *obj.SizeBytes)
 }
 
-// Stage is the resolver for the stage field.
-func (r *clipLifecycleResolver) Stage(ctx context.Context, obj *ipcpb.ClipLifecycleData) (int, error) {
-	return int(obj.Stage), nil
-}
-
-// PlaybackID is the resolver for the playbackId field.
-func (r *clipLifecycleResolver) PlaybackID(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*string, error) {
-	return r.resolveArtifactPlaybackID(ctx, "clip", obj.GetClipHash()), nil
-}
-
-// ProgressPercent is the resolver for the progressPercent field.
-func (r *clipLifecycleResolver) ProgressPercent(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*int, error) {
-	if obj.ProgressPercent == nil {
-		return nil, nil
-	}
-	v := int(*obj.ProgressPercent)
-	return &v, nil
-}
-
-// FilePath is the resolver for the filePath field.
-func (r *clipLifecycleResolver) FilePath(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*string, error) {
-	if !r.CanViewSensitiveTenantData(ctx) {
-		return nil, nil
-	}
-	if obj.FilePath == nil || *obj.FilePath == "" {
-		return nil, nil
-	}
-	return obj.FilePath, nil
-}
-
-// S3Url is the resolver for the s3Url field.
-func (r *clipLifecycleResolver) S3Url(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*string, error) {
-	if !r.CanViewSensitiveTenantData(ctx) {
-		return nil, nil
-	}
-	if obj.S3Url == nil || *obj.S3Url == "" {
-		return nil, nil
-	}
-	return obj.S3Url, nil
-}
-
-// SizeBytes is the resolver for the sizeBytes field.
-func (r *clipLifecycleResolver) SizeBytes(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*float64, error) {
-	if obj.SizeBytes == nil {
-		return nil, nil
-	}
-	v := float64(*obj.SizeBytes)
-	return &v, nil
-}
-
-// StreamID is the resolver for the streamId field.
-func (r *clipLifecycleResolver) StreamID(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*string, error) {
-	return encodeStreamIDOptional(obj.GetStreamId())
-}
-
-// Stream is the resolver for the stream field.
-func (r *clipLifecycleResolver) Stream(ctx context.Context, obj *ipcpb.ClipLifecycleData) (*commodorepb.Stream, error) {
-	return r.resolveStreamByID(ctx, obj.GetStreamId())
-}
-
 // ID is the resolver for the id field.
 func (r *clusterResolver) ID(ctx context.Context, obj *quartermasterpb.InfrastructureCluster) (string, error) {
 	return globalid.Encode(globalid.TypeCluster, obj.Id), nil
@@ -1229,35 +1177,6 @@ func (r *connectionEventResolver) BytesTransferred(ctx context.Context, obj *per
 // Percentage is the resolver for the percentage field.
 func (r *countryMetricResolver) Percentage(ctx context.Context, obj *periscopepb.CountryMetric) (float64, error) {
 	return float64(obj.GetPercentage()), nil
-}
-
-// Status is the resolver for the status field.
-func (r *dVREventResolver) Status(ctx context.Context, obj *ipcpb.DVRLifecycleData) (string, error) {
-	return obj.Status.String(), nil
-}
-
-// PlaybackID is the resolver for the playbackId field.
-func (r *dVREventResolver) PlaybackID(ctx context.Context, obj *ipcpb.DVRLifecycleData) (*string, error) {
-	return r.resolveArtifactPlaybackID(ctx, "dvr", obj.GetDvrHash()), nil
-}
-
-// SizeBytes is the resolver for the sizeBytes field.
-func (r *dVREventResolver) SizeBytes(ctx context.Context, obj *ipcpb.DVRLifecycleData) (*float64, error) {
-	if obj.SizeBytes == nil {
-		return nil, nil
-	}
-	v := float64(*obj.SizeBytes)
-	return &v, nil
-}
-
-// StreamID is the resolver for the streamId field.
-func (r *dVREventResolver) StreamID(ctx context.Context, obj *ipcpb.DVRLifecycleData) (*string, error) {
-	return encodeStreamIDOptional(obj.GetStreamId())
-}
-
-// Stream is the resolver for the stream field.
-func (r *dVREventResolver) Stream(ctx context.Context, obj *ipcpb.DVRLifecycleData) (*commodorepb.Stream, error) {
-	return r.resolveStreamByID(ctx, obj.GetStreamId())
 }
 
 // StreamID is the resolver for the streamId field.
@@ -1778,6 +1697,15 @@ func (r *ingestMetadataResolver) Stream(ctx context.Context, obj *sharedpb.Inges
 	return r.resolveStreamByID(ctx, obj.GetStreamId())
 }
 
+// FinalizedAt is the resolver for the finalizedAt field.
+func (r *invoiceResolver) FinalizedAt(ctx context.Context, obj *purserpb.Invoice) (*time.Time, error) {
+	if obj.FinalizedAt == nil {
+		return nil, nil
+	}
+	t := obj.FinalizedAt.AsTime()
+	return &t, nil
+}
+
 // Status is the resolver for the status field.
 func (r *invoiceResolver) Status(ctx context.Context, obj *purserpb.Invoice) (model.InvoiceStatus, error) {
 	s := strings.ToLower(obj.Status)
@@ -1861,6 +1789,21 @@ func (r *invoiceResolver) UsageDetails(ctx context.Context, obj *purserpb.Invoic
 		return nil, nil
 	}
 	return obj.UsageDetails.AsMap(), nil
+}
+
+// PeriodStart is the resolver for the periodStart field.
+func (r *invoiceCreatedResolver) PeriodStart(ctx context.Context, obj *publicv1.InvoiceCreated) (*time.Time, error) {
+	return resolvers.EventTimestamp(obj.GetPeriodStart()), nil
+}
+
+// PeriodEnd is the resolver for the periodEnd field.
+func (r *invoiceCreatedResolver) PeriodEnd(ctx context.Context, obj *publicv1.InvoiceCreated) (*time.Time, error) {
+	return resolvers.EventTimestamp(obj.GetPeriodEnd()), nil
+}
+
+// DueAt is the resolver for the dueAt field.
+func (r *invoiceCreatedResolver) DueAt(ctx context.Context, obj *publicv1.InvoiceCreated) (*time.Time, error) {
+	return resolvers.EventTimestamp(obj.GetDueAt()), nil
 }
 
 // ConfirmedAt is the resolver for the confirmedAt field.
@@ -2357,6 +2300,51 @@ func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model
 // RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
 func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (model.RevokeDeveloperTokenResult, error) {
 	return r.DoRevokeDeveloperToken(ctx, id)
+}
+
+// CreateWebhookEndpoint is the resolver for the createWebhookEndpoint field.
+func (r *mutationResolver) CreateWebhookEndpoint(ctx context.Context, input model.CreateWebhookEndpointInput) (model.CreateWebhookEndpointResult, error) {
+	return r.DoCreateWebhookEndpoint(ctx, input)
+}
+
+// UpdateWebhookEndpoint is the resolver for the updateWebhookEndpoint field.
+func (r *mutationResolver) UpdateWebhookEndpoint(ctx context.Context, id string, input model.UpdateWebhookEndpointInput) (model.UpdateWebhookEndpointResult, error) {
+	return r.DoUpdateWebhookEndpoint(ctx, id, input)
+}
+
+// DeleteWebhookEndpoint is the resolver for the deleteWebhookEndpoint field.
+func (r *mutationResolver) DeleteWebhookEndpoint(ctx context.Context, id string) (model.DeleteWebhookEndpointResult, error) {
+	return r.DoDeleteWebhookEndpoint(ctx, id)
+}
+
+// EnableWebhookEndpoint is the resolver for the enableWebhookEndpoint field.
+func (r *mutationResolver) EnableWebhookEndpoint(ctx context.Context, id string) (model.WebhookEndpointResult, error) {
+	return r.DoEnableWebhookEndpoint(ctx, id)
+}
+
+// DisableWebhookEndpoint is the resolver for the disableWebhookEndpoint field.
+func (r *mutationResolver) DisableWebhookEndpoint(ctx context.Context, id string) (model.WebhookEndpointResult, error) {
+	return r.DoDisableWebhookEndpoint(ctx, id)
+}
+
+// RotateWebhookEndpointSecret is the resolver for the rotateWebhookEndpointSecret field.
+func (r *mutationResolver) RotateWebhookEndpointSecret(ctx context.Context, id string, revokePrevious *bool) (model.RotateWebhookEndpointSecretResult, error) {
+	return r.DoRotateWebhookEndpointSecret(ctx, id, revokePrevious)
+}
+
+// TestWebhookEndpoint is the resolver for the testWebhookEndpoint field.
+func (r *mutationResolver) TestWebhookEndpoint(ctx context.Context, id string) (model.TestWebhookEndpointResult, error) {
+	return r.DoTestWebhookEndpoint(ctx, id)
+}
+
+// ReplayWebhookDelivery is the resolver for the replayWebhookDelivery field.
+func (r *mutationResolver) ReplayWebhookDelivery(ctx context.Context, id string) (model.ReplayWebhookDeliveryResult, error) {
+	return r.DoReplayWebhookDelivery(ctx, id)
+}
+
+// ReplayWebhookDeliveries is the resolver for the replayWebhookDeliveries field.
+func (r *mutationResolver) ReplayWebhookDeliveries(ctx context.Context, endpointID string, createdAfter time.Time, createdBefore time.Time) (model.ReplayWebhookDeliveriesResult, error) {
+	return r.DoReplayWebhookDeliveries(ctx, endpointID, createdAfter, createdBefore)
 }
 
 // CreateSigningKey is the resolver for the createSigningKey field.
@@ -3212,6 +3200,20 @@ func (r *processingUsageSummaryResolver) NativeAvUniqueStreams(ctx context.Conte
 	return int(obj.NativeAvUniqueStreams), nil
 }
 
+// Time is the resolver for the time field.
+func (r *publicEventResolver) Time(ctx context.Context, obj *signalmanpb.TenantEvent) (*time.Time, error) {
+	t := resolvers.EventTimestamp(obj.GetTime())
+	if t == nil {
+		return nil, fmt.Errorf("event %s has no time", obj.GetId())
+	}
+	return t, nil
+}
+
+// Data is the resolver for the data field.
+func (r *publicEventResolver) Data(ctx context.Context, obj *signalmanpb.TenantEvent) (protoreflect.ProtoMessage, error) {
+	return resolvers.PublicEventPayload(obj)
+}
+
 // CreatedAt is the resolver for the createdAt field.
 func (r *pullSourceEventResolver) CreatedAt(ctx context.Context, obj *commodorepb.PullSourceEvent) (*time.Time, error) {
 	if obj == nil || obj.GetCreatedAt() == nil {
@@ -3405,6 +3407,16 @@ func (r *queryResolver) Incident(ctx context.Context, id string) (*model.Inciden
 	return r.DoIncident(ctx, id)
 }
 
+// ServerInfo is the resolver for the serverInfo field.
+func (r *queryResolver) ServerInfo(ctx context.Context) (*model.ServerInfo, error) {
+	return r.Resolver.ServerInfo(), nil
+}
+
+// Capabilities is the resolver for the capabilities field.
+func (r *queryResolver) Capabilities(ctx context.Context) (*model.Capabilities, error) {
+	return r.DoGetCapabilities(ctx)
+}
+
 // StreamsConnection is the resolver for the streamsConnection field.
 func (r *queryResolver) StreamsConnection(ctx context.Context, page *model.ConnectionInput, search *string) (*model.StreamsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -3478,8 +3490,8 @@ func (r *queryResolver) MollieMandates(ctx context.Context) ([]*purserpb.MollieM
 }
 
 // PrepaidBalance is the resolver for the prepaidBalance field.
-func (r *queryResolver) PrepaidBalance(ctx context.Context, currency *string) (*model.PrepaidBalance, error) {
-	return r.DoGetPrepaidBalance(ctx, currency)
+func (r *queryResolver) PrepaidBalance(ctx context.Context) (*model.PrepaidBalance, error) {
+	return r.DoGetPrepaidBalance(ctx)
 }
 
 // BillingDetails is the resolver for the billingDetails field.
@@ -4249,6 +4261,38 @@ func (r *queryResolver) MyClusterInvitesConnection(ctx context.Context, page *mo
 func (r *queryResolver) DeveloperTokensConnection(ctx context.Context, page *model.ConnectionInput) (*model.DeveloperTokensConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
 	return r.DoGetDeveloperTokensConnection(ctx, first, after, last, before)
+}
+
+// WebhookEndpoint is the resolver for the webhookEndpoint field.
+func (r *queryResolver) WebhookEndpoint(ctx context.Context, id string) (*model.WebhookEndpoint, error) {
+	return r.DoWebhookEndpoint(ctx, id)
+}
+
+// WebhookEndpointsConnection is the resolver for the webhookEndpointsConnection field.
+func (r *queryResolver) WebhookEndpointsConnection(ctx context.Context, page *model.ConnectionInput) (*model.WebhookEndpointsConnection, error) {
+	return r.DoWebhookEndpointsConnection(ctx, page)
+}
+
+// WebhookDeliveriesConnection is the resolver for the webhookDeliveriesConnection field.
+func (r *queryResolver) WebhookDeliveriesConnection(ctx context.Context, endpointID *string, statuses []model.WebhookDeliveryStatus, eventType *string, eventID *string, createdAfter *time.Time, createdBefore *time.Time, page *model.ConnectionInput) (*model.WebhookDeliveriesConnection, error) {
+	return r.DoWebhookDeliveriesConnection(ctx, resolvers.WebhookDeliveryFilter{
+		EndpointID:    endpointID,
+		Statuses:      statuses,
+		EventType:     eventType,
+		EventID:       eventID,
+		CreatedAfter:  createdAfter,
+		CreatedBefore: createdBefore,
+	}, page)
+}
+
+// WebhookDelivery is the resolver for the webhookDelivery field.
+func (r *queryResolver) WebhookDelivery(ctx context.Context, id string) (*model.WebhookDelivery, error) {
+	return r.DoWebhookDelivery(ctx, id)
+}
+
+// WebhookEventTypes is the resolver for the webhookEventTypes field.
+func (r *queryResolver) WebhookEventTypes(ctx context.Context) ([]string, error) {
+	return r.DoWebhookEventTypes(ctx)
 }
 
 // SigningKey is the resolver for the signingKey field.
@@ -5570,45 +5614,9 @@ func (r *subscriptionResolver) LiveTrackListUpdates(ctx context.Context, streamI
 	return r.DoTrackListUpdates(ctx, streamID)
 }
 
-// LiveClipLifecycle is the resolver for the liveClipLifecycle field.
-func (r *subscriptionResolver) LiveClipLifecycle(ctx context.Context, streamID string) (<-chan *ipcpb.ClipLifecycleData, error) {
-	user, err := middleware.RequireAuth(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
-	}
-	rawID, err := resolvers.NormalizeStreamID(streamID)
-	if err != nil {
-		return nil, err
-	}
-	jwtToken := ctxkeys.GetJWTToken(ctx)
-	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.SubManager.SubscribeToLifecycle(ctx, cfg, rawID)
-}
-
-// LiveDvrLifecycle is the resolver for the liveDvrLifecycle field.
-func (r *subscriptionResolver) LiveDvrLifecycle(ctx context.Context, streamID string) (<-chan *ipcpb.DVRLifecycleData, error) {
-	user, err := middleware.RequireAuth(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
-	}
-	rawID, err := resolvers.NormalizeStreamID(streamID)
-	if err != nil {
-		return nil, err
-	}
-	jwtToken := ctxkeys.GetJWTToken(ctx)
-	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.SubManager.SubscribeToDVRLifecycle(ctx, cfg, rawID)
-}
-
-// LiveVodLifecycle is the resolver for the liveVodLifecycle field.
-func (r *subscriptionResolver) LiveVodLifecycle(ctx context.Context) (<-chan *ipcpb.VodLifecycleData, error) {
-	user, err := middleware.RequireAuth(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
-	}
-	jwtToken := ctxkeys.GetJWTToken(ctx)
-	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.SubManager.SubscribeToVodLifecycle(ctx, cfg)
+// TenantEvents is the resolver for the tenantEvents field.
+func (r *subscriptionResolver) TenantEvents(ctx context.Context, types []string, streamID *string) (<-chan *signalmanpb.TenantEvent, error) {
+	return r.DoTenantEvents(ctx, types, streamID)
 }
 
 // LiveStorageEvents is the resolver for the liveStorageEvents field.
@@ -5862,8 +5870,8 @@ func (r *tenantAdminBillingResolver) Invoices(ctx context.Context, obj *markers.
 }
 
 // PrepaidBalance is the resolver for the prepaidBalance field.
-func (r *tenantAdminBillingResolver) PrepaidBalance(ctx context.Context, obj *markers.TenantAdminBilling, currency *string) (*model.PrepaidBalance, error) {
-	return r.DoPlatformTenantPrepaidBalance(ctx, obj.TenantID, currency)
+func (r *tenantAdminBillingResolver) PrepaidBalance(ctx context.Context, obj *markers.TenantAdminBilling) (*model.PrepaidBalance, error) {
+	return r.DoPlatformTenantPrepaidBalance(ctx, obj.TenantID)
 }
 
 // BalanceTransactions is the resolver for the balanceTransactions field.
@@ -6574,47 +6582,6 @@ func (r *vodAssetResolver) StorageCost(ctx context.Context, obj *model.VodAsset)
 	return r.ProjectStorageCostForCaller(ctx, int64(*obj.SizeBytes))
 }
 
-// Status is the resolver for the status field.
-func (r *vodLifecycleResolver) Status(ctx context.Context, obj *ipcpb.VodLifecycleData) (int, error) {
-	return int(obj.Status), nil
-}
-
-// PlaybackID is the resolver for the playbackId field.
-func (r *vodLifecycleResolver) PlaybackID(ctx context.Context, obj *ipcpb.VodLifecycleData) (*string, error) {
-	return r.resolveArtifactPlaybackID(ctx, "vod", obj.GetVodHash()), nil
-}
-
-// SizeBytes is the resolver for the sizeBytes field.
-func (r *vodLifecycleResolver) SizeBytes(ctx context.Context, obj *ipcpb.VodLifecycleData) (*float64, error) {
-	if obj.SizeBytes == nil {
-		return nil, nil
-	}
-	v := float64(*obj.SizeBytes)
-	return &v, nil
-}
-
-// S3Url is the resolver for the s3Url field.
-func (r *vodLifecycleResolver) S3Url(ctx context.Context, obj *ipcpb.VodLifecycleData) (*string, error) {
-	if !r.CanViewSensitiveTenantData(ctx) {
-		return nil, nil
-	}
-	if obj.S3Url == nil || *obj.S3Url == "" {
-		return nil, nil
-	}
-	return obj.S3Url, nil
-}
-
-// FilePath is the resolver for the filePath field.
-func (r *vodLifecycleResolver) FilePath(ctx context.Context, obj *ipcpb.VodLifecycleData) (*string, error) {
-	if !r.CanViewSensitiveTenantData(ctx) {
-		return nil, nil
-	}
-	if obj.FilePath == nil || *obj.FilePath == "" {
-		return nil, nil
-	}
-	return obj.FilePath, nil
-}
-
 // SizeBytes is the resolver for the sizeBytes field.
 func (r *vodUploadedPartResolver) SizeBytes(ctx context.Context, obj *sharedpb.VodUploadedPart) (float64, error) {
 	if obj == nil {
@@ -6664,6 +6631,11 @@ func (r *Resolver) AnalyticsUsage() generated.AnalyticsUsageResolver {
 	return &analyticsUsageResolver{r}
 }
 
+// ApiTokenCreated returns generated.ApiTokenCreatedResolver implementation.
+func (r *Resolver) ApiTokenCreated() generated.ApiTokenCreatedResolver {
+	return &apiTokenCreatedResolver{r}
+}
+
 // ArtifactEvent returns generated.ArtifactEventResolver implementation.
 func (r *Resolver) ArtifactEvent() generated.ArtifactEventResolver { return &artifactEventResolver{r} }
 
@@ -6700,9 +6672,6 @@ func (r *Resolver) ClientMetrics5m() generated.ClientMetrics5mResolver {
 // Clip returns generated.ClipResolver implementation.
 func (r *Resolver) Clip() generated.ClipResolver { return &clipResolver{r} }
 
-// ClipLifecycle returns generated.ClipLifecycleResolver implementation.
-func (r *Resolver) ClipLifecycle() generated.ClipLifecycleResolver { return &clipLifecycleResolver{r} }
-
 // Cluster returns generated.ClusterResolver implementation.
 func (r *Resolver) Cluster() generated.ClusterResolver { return &clusterResolver{r} }
 
@@ -6731,9 +6700,6 @@ func (r *Resolver) ConnectionEvent() generated.ConnectionEventResolver {
 
 // CountryMetric returns generated.CountryMetricResolver implementation.
 func (r *Resolver) CountryMetric() generated.CountryMetricResolver { return &countryMetricResolver{r} }
-
-// DVREvent returns generated.DVREventResolver implementation.
-func (r *Resolver) DVREvent() generated.DVREventResolver { return &dVREventResolver{r} }
 
 // DVRRequest returns generated.DVRRequestResolver implementation.
 func (r *Resolver) DVRRequest() generated.DVRRequestResolver { return &dVRRequestResolver{r} }
@@ -6778,6 +6744,11 @@ func (r *Resolver) IngestMetadata() generated.IngestMetadataResolver {
 
 // Invoice returns generated.InvoiceResolver implementation.
 func (r *Resolver) Invoice() generated.InvoiceResolver { return &invoiceResolver{r} }
+
+// InvoiceCreated returns generated.InvoiceCreatedResolver implementation.
+func (r *Resolver) InvoiceCreated() generated.InvoiceCreatedResolver {
+	return &invoiceCreatedResolver{r}
+}
 
 // InvoicePayment returns generated.InvoicePaymentResolver implementation.
 func (r *Resolver) InvoicePayment() generated.InvoicePaymentResolver {
@@ -6892,6 +6863,9 @@ func (r *Resolver) ProcessingUsageRecord() generated.ProcessingUsageRecordResolv
 func (r *Resolver) ProcessingUsageSummary() generated.ProcessingUsageSummaryResolver {
 	return &processingUsageSummaryResolver{r}
 }
+
+// PublicEvent returns generated.PublicEventResolver implementation.
+func (r *Resolver) PublicEvent() generated.PublicEventResolver { return &publicEventResolver{r} }
 
 // PullSourceEvent returns generated.PullSourceEventResolver implementation.
 func (r *Resolver) PullSourceEvent() generated.PullSourceEventResolver {
@@ -7108,9 +7082,6 @@ func (r *Resolver) ViewerSession() generated.ViewerSessionResolver { return &vie
 // VodAsset returns generated.VodAssetResolver implementation.
 func (r *Resolver) VodAsset() generated.VodAssetResolver { return &vodAssetResolver{r} }
 
-// VodLifecycle returns generated.VodLifecycleResolver implementation.
-func (r *Resolver) VodLifecycle() generated.VodLifecycleResolver { return &vodLifecycleResolver{r} }
-
 // VodUploadedPart returns generated.VodUploadedPartResolver implementation.
 func (r *Resolver) VodUploadedPart() generated.VodUploadedPartResolver {
 	return &vodUploadedPartResolver{r}
@@ -7125,6 +7096,7 @@ type analyticsHealthResolver struct{ *Resolver }
 type analyticsInfraResolver struct{ *Resolver }
 type analyticsLifecycleResolver struct{ *Resolver }
 type analyticsUsageResolver struct{ *Resolver }
+type apiTokenCreatedResolver struct{ *Resolver }
 type artifactEventResolver struct{ *Resolver }
 type artifactStateResolver struct{ *Resolver }
 type billingDetailsResolver struct{ *Resolver }
@@ -7135,7 +7107,6 @@ type bufferEventResolver struct{ *Resolver }
 type cityMetricResolver struct{ *Resolver }
 type clientMetrics5mResolver struct{ *Resolver }
 type clipResolver struct{ *Resolver }
-type clipLifecycleResolver struct{ *Resolver }
 type clusterResolver struct{ *Resolver }
 type clusterInviteResolver struct{ *Resolver }
 type clusterPairTrafficResolver struct{ *Resolver }
@@ -7143,7 +7114,6 @@ type clusterSubscriptionResolver struct{ *Resolver }
 type clusterWorkloadResolver struct{ *Resolver }
 type connectionEventResolver struct{ *Resolver }
 type countryMetricResolver struct{ *Resolver }
-type dVREventResolver struct{ *Resolver }
 type dVRRequestResolver struct{ *Resolver }
 type developerTokenResolver struct{ *Resolver }
 type federationEventResolver struct{ *Resolver }
@@ -7154,6 +7124,7 @@ type geographicDistributionResolver struct{ *Resolver }
 type infrastructureNodeResolver struct{ *Resolver }
 type ingestMetadataResolver struct{ *Resolver }
 type invoiceResolver struct{ *Resolver }
+type invoiceCreatedResolver struct{ *Resolver }
 type invoicePaymentResolver struct{ *Resolver }
 type lineItemResolver struct{ *Resolver }
 type liveNodeResolver struct{ *Resolver }
@@ -7180,6 +7151,7 @@ type playerBootTimeSeriesBucketResolver struct{ *Resolver }
 type processingUsageResolver struct{ *Resolver }
 type processingUsageRecordResolver struct{ *Resolver }
 type processingUsageSummaryResolver struct{ *Resolver }
+type publicEventResolver struct{ *Resolver }
 type pullSourceEventResolver struct{ *Resolver }
 type pushTargetResolver struct{ *Resolver }
 type qualityTierDailyResolver struct{ *Resolver }
@@ -7231,5 +7203,4 @@ type viewerHoursHourlyResolver struct{ *Resolver }
 type viewerMetricsResolver struct{ *Resolver }
 type viewerSessionResolver struct{ *Resolver }
 type vodAssetResolver struct{ *Resolver }
-type vodLifecycleResolver struct{ *Resolver }
 type vodUploadedPartResolver struct{ *Resolver }

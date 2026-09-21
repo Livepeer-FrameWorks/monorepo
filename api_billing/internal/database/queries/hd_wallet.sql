@@ -38,9 +38,11 @@ SET xpub = EXCLUDED.xpub, network = EXCLUDED.network, updated_at = NOW();
 INSERT INTO purser.crypto_wallets (
     id, tenant_id, purpose, invoice_id, expected_amount_cents,
     asset, network, wallet_address, derivation_index, derivation_xpub, expires_at,
-    expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
+    expected_amount_base_units, quoted_price_usd,
     quoted_at, quote_source, credited_amount_currency, client_ip,
-    tax_document_kind, tax_profile_snapshot
+    tax_document_kind, tax_profile_snapshot,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(id)::text::uuid, sqlc.arg(tenant_id)::text::uuid, sqlc.arg(purpose),
     sqlc.narg(invoice_id)::text::uuid, sqlc.narg(expected_amount_cents)::bigint,
@@ -48,10 +50,12 @@ INSERT INTO purser.crypto_wallets (
     sqlc.arg(derivation_index), sqlc.arg(derivation_xpub), sqlc.arg(expires_at),
     sqlc.narg(expected_amount_base_units)::text::numeric,
     sqlc.narg(quoted_price_usd)::text::numeric,
-    sqlc.narg(quoted_usd_to_eur_rate)::text::numeric,
     sqlc.narg(quoted_at)::timestamptz, sqlc.narg(quote_source)::text,
     sqlc.narg(credited_amount_currency)::text, sqlc.narg(client_ip)::text,
-    sqlc.arg(tax_document_kind), sqlc.arg(tax_profile_snapshot)
+    sqlc.arg(tax_document_kind), sqlc.arg(tax_profile_snapshot),
+    sqlc.arg(original_amount_cents)::bigint, sqlc.arg(original_currency)::text,
+    sqlc.arg(eur_amount_cents)::bigint, sqlc.arg(fx_units_per_eur)::text::numeric,
+    sqlc.arg(fx_source)::text, sqlc.arg(fx_reference_date)::date
 );
 
 -- name: RegisterDirectDepositCustodyAddress :exec

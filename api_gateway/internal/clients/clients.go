@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	bosunclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/bosun"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/deckhand"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -15,7 +16,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	skipperclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/skipper"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -23,6 +23,7 @@ import (
 // (satisfied by the concrete *GRPCClient/*Client) so tests can inject fakes and
 // exercise resolver real paths without a live backend.
 type ServiceClients struct {
+	Bosun         bosunclient.Interface
 	Commodore     commodore.Interface
 	Deckhand      deckhand.Interface
 	Decklog       decklog.Interface
@@ -35,12 +36,41 @@ type ServiceClients struct {
 	Skipper       skipperclient.Interface
 }
 
+// Endpoint is one downstream gRPC service.
+type Endpoint struct {
+	Addr string
+	// TLSServerName overrides the canonical internal TLS name when non-empty.
+	TLSServerName string
+}
+
 // Config represents the configuration for all service clients
 type Config struct {
-	ServiceToken string
-	JWTSecret    []byte
-	Timeout      time.Duration
-	Logger       logging.Logger
+	ServiceToken  string
+	JWTSecret     []byte
+	Timeout       time.Duration
+	Logger        logging.Logger
+	AllowInsecure bool
+	CACertFile    string
+
+	Commodore     Endpoint
+	Periscope     Endpoint
+	Purser        Endpoint
+	Quartermaster Endpoint
+	Signalman     Endpoint
+	Decklog       Endpoint
+	// Navigator, Deckhand, Skipper, Lookout, and Bosun are optional: an empty
+	// Addr leaves the client unset.
+	Navigator Endpoint
+	Deckhand  Endpoint
+	Skipper   Endpoint
+	Lookout   Endpoint
+	Bosun     Endpoint
+
+	// QuartermasterCache backs the Commodore client's Quartermaster lookups.
+	QuartermasterCache cache.Options
+	// ClusterID and Region label API usage events sent to Decklog.
+	ClusterID string
+	Region    string
 }
 
 // NewServiceClients creates and initializes all downstream service gRPC clients
@@ -48,19 +78,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
-	grpcAllowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
-	grpcCACertFile := config.GetEnv("GRPC_TLS_CA_PATH", "")
+	grpcAllowInsecure := cfg.AllowInsecure
+	grpcCACertFile := cfg.CACertFile
 
-	// Quartermaster cache
-	qmTTL := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)) * time.Second
-	qmSWR := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_SWR_SECONDS", 30)) * time.Second
-	qmNeg := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_NEG_TTL_SECONDS", 10)) * time.Second
-	qmMax := config.GetEnvInt("QUARTERMASTER_CACHE_MAX", 10000)
-	qmCache := cache.New(cache.Options{TTL: qmTTL, StaleWhileRevalidate: qmSWR, NegativeTTL: qmNeg, MaxEntries: qmMax}, cache.MetricsHooks{})
+	qmCache := cache.New(cfg.QuartermasterCache, cache.MetricsHooks{})
 
 	// Initialize Commodore gRPC client
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:           config.RequireEnv("COMMODORE_GRPC_ADDR"),
+		GRPCAddr:           cfg.Commodore.Addr,
 		Timeout:            cfg.Timeout,
 		Logger:             cfg.Logger,
 		Cache:              qmCache,
@@ -68,7 +93,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		DelegatedJWTSecret: cfg.JWTSecret,
 		AllowInsecure:      grpcAllowInsecure,
 		CACertFile:         grpcCACertFile,
-		ServerName:         config.GetServiceGRPCTLSServerName("commodore"),
+		ServerName:         cfg.Commodore.TLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Commodore gRPC client: %w", err)
@@ -76,14 +101,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Periscope gRPC client
 	periscopeClient, err := periscope.NewGRPCClient(periscope.GRPCConfig{
-		GRPCAddr:           config.RequireEnv("PERISCOPE_GRPC_ADDR"),
+		GRPCAddr:           cfg.Periscope.Addr,
 		Timeout:            cfg.Timeout,
 		Logger:             cfg.Logger,
 		ServiceToken:       cfg.ServiceToken,
 		DelegatedJWTSecret: cfg.JWTSecret,
 		AllowInsecure:      grpcAllowInsecure,
 		CACertFile:         grpcCACertFile,
-		ServerName:         config.GetServiceGRPCTLSServerName("periscope"),
+		ServerName:         cfg.Periscope.TLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)
@@ -91,14 +116,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Purser gRPC client
 	purserClient, err := purser.NewGRPCClient(purser.GRPCConfig{
-		GRPCAddr:           config.RequireEnv("PURSER_GRPC_ADDR"),
+		GRPCAddr:           cfg.Purser.Addr,
 		Timeout:            cfg.Timeout,
 		Logger:             cfg.Logger,
 		ServiceToken:       cfg.ServiceToken,
 		DelegatedJWTSecret: cfg.JWTSecret,
 		AllowInsecure:      grpcAllowInsecure,
 		CACertFile:         grpcCACertFile,
-		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+		ServerName:         cfg.Purser.TLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Purser gRPC client: %w", err)
@@ -106,21 +131,21 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Quartermaster gRPC client
 	quartermasterClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:           config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
+		GRPCAddr:           cfg.Quartermaster.Addr,
 		Timeout:            cfg.Timeout,
 		Logger:             cfg.Logger,
 		ServiceToken:       cfg.ServiceToken,
 		DelegatedJWTSecret: cfg.JWTSecret,
 		AllowInsecure:      grpcAllowInsecure,
 		CACertFile:         grpcCACertFile,
-		ServerName:         config.GetServiceGRPCTLSServerName("quartermaster"),
+		ServerName:         cfg.Quartermaster.TLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)
 	}
 
 	var navigatorClient *navclient.Client
-	if navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", ""); navigatorAddr != "" {
+	if navigatorAddr := cfg.Navigator.Addr; navigatorAddr != "" {
 		navigatorClient, err = navclient.NewClient(navclient.Config{
 			Addr:          navigatorAddr,
 			Timeout:       cfg.Timeout,
@@ -128,7 +153,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
+			ServerName:    cfg.Navigator.TLSServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Navigator gRPC client: %w", err)
@@ -137,13 +162,13 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Signalman gRPC client
 	signalmanClient, err := signalman.NewGRPCClient(signalman.GRPCConfig{
-		GRPCAddr:      config.RequireEnv("SIGNALMAN_GRPC_ADDR"),
+		GRPCAddr:      cfg.Signalman.Addr,
 		Timeout:       cfg.Timeout,
 		Logger:        cfg.Logger,
 		ServiceToken:  cfg.ServiceToken,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("signalman"),
+		ServerName:    cfg.Signalman.TLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
@@ -151,15 +176,15 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Decklog gRPC client (for API usage tracking)
 	decklogClient, err := decklog.NewBatchedClient(decklog.BatchedClientConfig{
-		Target:        config.RequireEnv("DECKLOG_GRPC_ADDR"),
+		Target:        cfg.Decklog.Addr,
 		AllowInsecure: grpcAllowInsecure,
 		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		ServerName:    cfg.Decklog.TLSServerName,
 		Timeout:       cfg.Timeout,
 		Source:        "bridge",
 		ServiceToken:  cfg.ServiceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Decklog gRPC client: %w", err)
@@ -168,7 +193,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	// Initialize Deckhand gRPC client (for support messaging)
 	// Optional: only initialize if DECKHAND_GRPC_ADDR is configured
 	var deckhandClient *deckhand.GRPCClient
-	if deckhandAddr := config.GetEnv("DECKHAND_GRPC_ADDR", ""); deckhandAddr != "" {
+	if deckhandAddr := cfg.Deckhand.Addr; deckhandAddr != "" {
 		deckhandClient, err = deckhand.NewGRPCClient(deckhand.GRPCConfig{
 			GRPCAddr:      deckhandAddr,
 			Timeout:       cfg.Timeout,
@@ -176,7 +201,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    config.GetServiceGRPCTLSServerName("deckhand"),
+			ServerName:    cfg.Deckhand.TLSServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Deckhand gRPC client: %w", err)
@@ -186,7 +211,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	// Initialize Skipper gRPC client (for AI consultant)
 	// Optional: only initialize if SKIPPER_GRPC_ADDR is configured
 	var skipperClient *skipperclient.GRPCClient
-	if skipperAddr := config.GetEnv("SKIPPER_GRPC_ADDR", ""); skipperAddr != "" {
+	if skipperAddr := cfg.Skipper.Addr; skipperAddr != "" {
 		skipperClient, err = skipperclient.NewGRPCClient(skipperclient.GRPCConfig{
 			GRPCAddr:      skipperAddr,
 			Timeout:       cfg.Timeout,
@@ -194,7 +219,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    config.GetServiceGRPCTLSServerName("skipper"),
+			ServerName:    cfg.Skipper.TLSServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Skipper gRPC client: %w", err)
@@ -203,7 +228,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Lookout gRPC client (incidents). Optional: only when LOOKOUT_GRPC_ADDR is set.
 	var lookoutClient *lookoutclient.GRPCClient
-	if lookoutAddr := config.GetEnv("LOOKOUT_GRPC_ADDR", ""); lookoutAddr != "" {
+	if lookoutAddr := cfg.Lookout.Addr; lookoutAddr != "" {
 		lookoutClient, err = lookoutclient.NewGRPCClient(lookoutclient.GRPCConfig{
 			GRPCAddr:      lookoutAddr,
 			Timeout:       cfg.Timeout,
@@ -211,10 +236,27 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 			ServiceToken:  cfg.ServiceToken,
 			AllowInsecure: grpcAllowInsecure,
 			CACertFile:    grpcCACertFile,
-			ServerName:    config.GetServiceGRPCTLSServerName("lookout"),
+			ServerName:    cfg.Lookout.TLSServerName,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Lookout gRPC client: %w", err)
+		}
+	}
+
+	// Bosun gRPC client (outbound webhooks). Optional: only when BOSUN_GRPC_ADDR is set.
+	var bosunClient *bosunclient.GRPCClient
+	if bosunAddr := cfg.Bosun.Addr; bosunAddr != "" {
+		bosunClient, err = bosunclient.NewGRPCClient(bosunclient.GRPCConfig{
+			GRPCAddr:      bosunAddr,
+			Timeout:       cfg.Timeout,
+			Logger:        cfg.Logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: grpcAllowInsecure,
+			CACertFile:    grpcCACertFile,
+			ServerName:    cfg.Bosun.TLSServerName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Bosun gRPC client: %w", err)
 		}
 	}
 
@@ -241,12 +283,21 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if lookoutClient != nil {
 		sc.Lookout = lookoutClient
 	}
+	if bosunClient != nil {
+		sc.Bosun = bosunClient
+	}
 	return sc, nil
 }
 
 // Close closes all gRPC connections
 func (c *ServiceClients) Close() error {
 	var errs []error
+
+	if c.Bosun != nil {
+		if err := c.Bosun.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("bosun: %w", err))
+		}
+	}
 
 	if c.Commodore != nil {
 		if err := c.Commodore.Close(); err != nil {

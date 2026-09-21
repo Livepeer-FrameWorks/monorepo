@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"frameworks/api_tenants/internal/appconfig"
 	"frameworks/api_tenants/internal/bootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -69,14 +70,23 @@ func runBootstrapCommand(args []string) int {
 	}
 
 	config.LoadEnv(logger)
-	geoIPReader := geoip.GetSharedReader()
+	bootstrapCfg, cfgErr := config.Load[appconfig.QuartermasterBootstrap](config.Options{Service: "quartermaster", Logger: logger})
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: %v\n", cfgErr)
+		return 1
+	}
+	geoIPReader, geoErr := geoip.Open(bootstrapCfg.MMDBPath)
+	if geoErr != nil {
+		fmt.Fprintf(os.Stderr, "quartermaster bootstrap: %v\n", geoErr)
+		return 1
+	}
 	if geoIPReader != nil {
+		defer func() { _ = geoIPReader.Close() }()
 		logger.WithField("provider", geoIPReader.GetProvider()).Info("GeoIP reader loaded for bootstrap")
 	}
-	dbURL := config.RequireEnv("DATABASE_URL")
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "quartermaster"
-	dbConfig.URL = dbURL
+	dbConfig.URL = bootstrapCfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 

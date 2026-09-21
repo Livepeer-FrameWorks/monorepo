@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
-	"os"
 	"strings"
 
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
@@ -23,7 +22,7 @@ const accountEmailContentTemplate = `
 {{template "notice" .Notice}}
 {{template "fallbackURL" .FallbackURL}}`
 
-func renderVerificationEmail(baseURL, token string) (emailpkg.Message, error) {
+func (r RuntimeSettings) renderVerificationEmail(baseURL, token string) (emailpkg.Message, error) {
 	verifyURL := strings.TrimRight(baseURL, "/") + "/verify-email#token=" + url.QueryEscape(token)
 	content := accountEmailContent{
 		Intro:  "Welcome to FrameWorks. Confirm that this email belongs to you to finish creating your account.",
@@ -34,7 +33,7 @@ func renderVerificationEmail(baseURL, token string) (emailpkg.Message, error) {
 		},
 		FallbackURL: verifyURL,
 	}
-	htmlBody, err := emailpkg.RenderLayout(accountEmailLayout(
+	htmlBody, err := emailpkg.RenderLayout(r.accountEmailLayout(
 		"Confirm your email address to finish setting up FrameWorks.",
 		"Account setup",
 		"Verify your email address",
@@ -47,11 +46,11 @@ func renderVerificationEmail(baseURL, token string) (emailpkg.Message, error) {
 		Subject:  "Verify your email to finish setting up FrameWorks",
 		HTMLBody: htmlBody,
 		TextBody: emailpkg.PlainTextAction(content.Intro, content.Action, content.Notice, content.FallbackURL),
-		ReplyTo:  accountSupportEmail(),
+		ReplyTo:  r.Branding.Support(),
 	}, nil
 }
 
-func renderPasswordResetEmail(baseURL, token string) (emailpkg.Message, error) {
+func (r RuntimeSettings) renderPasswordResetEmail(baseURL, token string) (emailpkg.Message, error) {
 	resetURL := strings.TrimRight(baseURL, "/") + "/reset-password#token=" + url.QueryEscape(token)
 	content := accountEmailContent{
 		Intro:  "We received a request to choose a new password for your FrameWorks account.",
@@ -62,7 +61,7 @@ func renderPasswordResetEmail(baseURL, token string) (emailpkg.Message, error) {
 		},
 		FallbackURL: resetURL,
 	}
-	htmlBody, err := emailpkg.RenderLayout(accountEmailLayout(
+	htmlBody, err := emailpkg.RenderLayout(r.accountEmailLayout(
 		"Use this secure link to reset your FrameWorks password.",
 		"Account security",
 		"Reset your password",
@@ -75,33 +74,26 @@ func renderPasswordResetEmail(baseURL, token string) (emailpkg.Message, error) {
 		Subject:  "Reset your FrameWorks password",
 		HTMLBody: htmlBody,
 		TextBody: emailpkg.PlainTextAction(content.Intro, content.Action, content.Notice, content.FallbackURL),
-		ReplyTo:  accountSupportEmail(),
+		ReplyTo:  r.Branding.Support(),
 	}, nil
 }
 
-func validatedAccountEmailBaseURL(rawURL string) (string, error) {
+func validatedAccountEmailBaseURL(rawURL string, development bool) (string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(rawURL), "/")
 	parsedURL, err := url.Parse(baseURL)
-	if err != nil || parsedURL.Host == "" || parsedURL.User != nil || parsedURL.RawQuery != "" || parsedURL.Fragment != "" || !walletChallengeOriginAllowed(parsedURL) {
+	if err != nil || parsedURL.Host == "" || parsedURL.User != nil || parsedURL.RawQuery != "" || parsedURL.Fragment != "" || !walletChallengeOriginAllowed(parsedURL, development) {
 		return "", fmt.Errorf("WEBAPP_PUBLIC_URL must be an absolute HTTPS URL (HTTP loopback is allowed in development)")
 	}
 	return baseURL, nil
 }
 
-func accountEmailLayout(preheader, eyebrow, title string, content accountEmailContent) emailpkg.LayoutData {
+func (r RuntimeSettings) accountEmailLayout(preheader, eyebrow, title string, content accountEmailContent) emailpkg.LayoutData {
 	return emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      r.Branding.Logo(),
 		Preheader:    preheader,
 		Eyebrow:      eyebrow,
 		Title:        title,
-		SupportEmail: accountSupportEmail(),
+		SupportEmail: r.Branding.Support(),
 		Content:      content,
 	}
-}
-
-func accountSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }

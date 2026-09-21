@@ -23,6 +23,10 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
               id
               amount
               currency
+              presentmentAmountCents
+              presentmentCurrency
+              presentmentUnitsPerEur
+              presentmentReferenceDate
               status
               dueDate
               createdAt

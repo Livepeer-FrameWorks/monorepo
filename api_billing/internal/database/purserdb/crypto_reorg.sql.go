@@ -36,38 +36,45 @@ const insertCryptoReorgPaymentReversal = `-- name: InsertCryptoReorgPaymentRever
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, invoice_id, provider, reversal_type,
     provider_reversal_id, amount_cents, currency, status, reason,
-    operator_review_required, actor_kind, evidence_ref
-) VALUES (
-    $1::text::uuid, $2::text::uuid,
-    $3::text::uuid, 'manual', 'manual',
-    $4, $5, $6,
-    'succeeded', $7, TRUE, 'job', $8
+    operator_review_required, actor_kind, evidence_ref,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 )
+SELECT $1::text::uuid, payment.id,
+       $2::text::uuid, 'manual', 'manual',
+       $3, $4, $5,
+       'succeeded', $6, TRUE, 'job', $7,
+       payment.original_amount_cents, payment.original_currency, payment.eur_amount_cents,
+       payment.fx_units_per_eur, payment.fx_source, payment.fx_reference_date
+FROM purser.billing_payments payment
+WHERE payment.id = $8::text::uuid
 ON CONFLICT (provider, provider_reversal_id) DO NOTHING
 RETURNING id::text AS id
 `
 
 type InsertCryptoReorgPaymentReversalParams struct {
 	TenantID           string         `db:"tenant_id" json:"tenant_id"`
-	PaymentID          string         `db:"payment_id" json:"payment_id"`
 	InvoiceID          string         `db:"invoice_id" json:"invoice_id"`
 	ProviderReversalID string         `db:"provider_reversal_id" json:"provider_reversal_id"`
 	AmountCents        int64          `db:"amount_cents" json:"amount_cents"`
 	Currency           string         `db:"currency" json:"currency"`
 	Reason             sql.NullString `db:"reason" json:"reason"`
 	EvidenceRef        sql.NullString `db:"evidence_ref" json:"evidence_ref"`
+	PaymentID          string         `db:"payment_id" json:"payment_id"`
 }
 
+// A reorg reverses the whole payment, so the reversal carries the payment's FX
+// fields unchanged.
 func (q *Queries) InsertCryptoReorgPaymentReversal(ctx context.Context, arg InsertCryptoReorgPaymentReversalParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, insertCryptoReorgPaymentReversal,
 		arg.TenantID,
-		arg.PaymentID,
 		arg.InvoiceID,
 		arg.ProviderReversalID,
 		arg.AmountCents,
 		arg.Currency,
 		arg.Reason,
 		arg.EvidenceRef,
+		arg.PaymentID,
 	)
 	var id string
 	err := row.Scan(&id)
@@ -279,7 +286,8 @@ func (q *Queries) LockAllocatedDepositReversal(ctx context.Context, eventID stri
 }
 
 const lockConfirmedCryptoInvoicePayment = `-- name: LockConfirmedCryptoInvoicePayment :one
-SELECT id::text AS id, (amount * 100)::bigint AS amount_cents, currency
+SELECT id::text AS id, (amount * 100)::bigint AS amount_cents, currency,
+       COALESCE(eur_amount_cents, (amount * 100)::bigint)::bigint AS eur_amount_cents
 FROM purser.billing_payments
 WHERE invoice_id = $1::text::uuid
   AND tx_id = $2
@@ -293,15 +301,21 @@ type LockConfirmedCryptoInvoicePaymentParams struct {
 }
 
 type LockConfirmedCryptoInvoicePaymentRow struct {
-	ID          string `db:"id" json:"id"`
-	AmountCents int64  `db:"amount_cents" json:"amount_cents"`
-	Currency    string `db:"currency" json:"currency"`
+	ID             string `db:"id" json:"id"`
+	AmountCents    int64  `db:"amount_cents" json:"amount_cents"`
+	Currency       string `db:"currency" json:"currency"`
+	EurAmountCents int64  `db:"eur_amount_cents" json:"eur_amount_cents"`
 }
 
 func (q *Queries) LockConfirmedCryptoInvoicePayment(ctx context.Context, arg LockConfirmedCryptoInvoicePaymentParams) (LockConfirmedCryptoInvoicePaymentRow, error) {
 	row := q.db.QueryRowContext(ctx, lockConfirmedCryptoInvoicePayment, arg.InvoiceID, arg.TxHash)
 	var i LockConfirmedCryptoInvoicePaymentRow
-	err := row.Scan(&i.ID, &i.AmountCents, &i.Currency)
+	err := row.Scan(
+		&i.ID,
+		&i.AmountCents,
+		&i.Currency,
+		&i.EurAmountCents,
+	)
 	return i, err
 }
 

@@ -101,9 +101,12 @@ func TestInvoiceEmailOutboxLifecycleAndReads_RealPG(t *testing.T) { //nolint:fun
 	var sentItems []EmailInvoiceLineItem
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: jobs,
-		send: func(recipient, gotInvoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, gotDueDate time.Time, lineItems []EmailInvoiceLineItem) error {
+		send: func(recipient, gotInvoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, gotDueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error {
 			if recipient != "billing@example.com" || gotInvoiceID != invoiceID || amount != 19.75 || meteredAmount != 9.75 || grossMeteredAmount != 10.25 || currency != "EUR" || !gotDueDate.Equal(dueDate) {
 				t.Fatalf("email header = %s/%s/%v/%v/%v/%s/%s", recipient, gotInvoiceID, amount, meteredAmount, grossMeteredAmount, currency, gotDueDate)
+			}
+			if fx != (EmailFX{}) {
+				t.Fatalf("an invoice without presentment fields states a conversion: %+v", fx)
 			}
 			sentItems = lineItems
 			return nil
@@ -130,27 +133,35 @@ func TestInvoiceEmailOverdueBalanceRead_RealPG(t *testing.T) {
 	tenantID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	dueDate := time.Now().UTC().Add(-8 * 24 * time.Hour)
+	// The invoice is presented in USD, so the amount due is the USD total net
+	// of confirmed USD payments; an EUR payment does not count against it.
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO purser.billing_invoices (id, tenant_id, status, currency, amount, due_date)
-		VALUES ($1, $2, 'overdue', 'EUR', 19.75, $3)
+		INSERT INTO purser.billing_invoices (id, tenant_id, status, currency, amount, due_date,
+			presentment_amount_cents, presentment_currency, presentment_units_per_eur, presentment_reference_date)
+		VALUES ($1, $2, 'overdue', 'EUR', 19.75, $3, 2311, 'USD', 1.1700000000, DATE '2026-09-01')
 	`, invoiceID, tenantID, dueDate); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO purser.billing_payments (
-			id, invoice_id, method, amount, currency, tx_id, status
-		) VALUES ($1, $2, 'card', 15.50, 'EUR', $3, 'confirmed')
-	`, uuid.NewString(), invoiceID, "payment-"+uuid.NewString()); err != nil {
+			id, invoice_id, method, amount, currency, tx_id, status,
+			original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date
+		) VALUES ($1, $2, 'card', 15.50, 'USD', $3, 'confirmed', 1550, 'USD', 1325, 1.17, 'ecb', DATE '2026-09-01'),
+		         ($4, $2, 'card', 3.00, 'EUR', $5, 'confirmed', 300, 'EUR', 300, 1, 'identity', CURRENT_DATE)
+	`, uuid.NewString(), invoiceID, "payment-"+uuid.NewString(), uuid.NewString(), "payment-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
 
 	called := false
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: &JobManager{db: db},
-		sendReminder: func(recipient, gotInvoiceID string, amount float64, currency string, daysPastDue int) error {
+		sendReminder: func(recipient, gotInvoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error {
 			called = true
-			if recipient != "billing@example.com" || gotInvoiceID != invoiceID || amount != 4.25 || currency != "EUR" || daysPastDue < 7 {
+			if recipient != "billing@example.com" || gotInvoiceID != invoiceID || amount != 7.61 || currency != "USD" || daysPastDue < 7 {
 				t.Fatalf("reminder = %s/%s/%v/%s/%d", recipient, gotInvoiceID, amount, currency, daysPastDue)
+			}
+			if fx != (EmailFX{EURAmount: "19.75", UnitsPerEUR: "1.17", ReferenceDate: "2026-09-01"}) {
+				t.Fatalf("reminder EUR total, rate and date = %+v", fx)
 			}
 			return nil
 		},

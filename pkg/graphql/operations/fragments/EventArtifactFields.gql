@@ -1,0 +1,7 @@
+# Public identifiers of the clip, recording, or upload a media event names
+fragment EventArtifactFields on EventArtifact {
+  artifactId
+  kind
+  streamId
+  playbackId
+}

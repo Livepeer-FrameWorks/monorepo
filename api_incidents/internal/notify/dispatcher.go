@@ -11,10 +11,8 @@ import (
 	"net/url"
 	"time"
 
-	"frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/incidents"
 
-	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -35,6 +33,9 @@ type Producer interface {
 // Dispatcher delivers claimed outbox rows.
 type Dispatcher struct {
 	Channels ChannelChecker
+	// Settings supplies the webhook destinations, email recipients, link base
+	// URL, and email branding of each delivery.
+	Settings SettingsSource
 	HTTP     *http.Client
 	// Mailer builds a sender per delivery so SMTP settings follow env reloads.
 	Mailer   func() (MailSender, error)
@@ -79,26 +80,27 @@ func (d *Dispatcher) notify(ctx context.Context, delivery Delivery) error {
 	if err := json.Unmarshal(delivery.Payload, &payload); err != nil {
 		return fmt.Errorf("decode notification payload: %w", err)
 	}
-	m := buildMessage(payload, config.WebappPublicURL())
+	settings := d.Settings.current()
+	m := buildMessage(payload, settings.WebappURL)
 	switch delivery.Channel {
 	case incidents.ChannelSlack:
 		body, err := slackBody(m)
 		if err != nil {
 			return err
 		}
-		return d.postJSON(ctx, "slack", config.SlackWebhookURL(), body)
+		return d.postJSON(ctx, "slack", settings.SlackWebhookURL, body)
 	case incidents.ChannelDiscord:
 		body, err := discordBody(m)
 		if err != nil {
 			return err
 		}
-		return d.postJSON(ctx, "discord", config.DiscordWebhookURL(), body)
+		return d.postJSON(ctx, "discord", settings.DiscordWebhookURL, body)
 	default:
-		return d.sendEmail(ctx, m)
+		return d.sendEmail(ctx, m, settings)
 	}
 }
 
-func (d *Dispatcher) sendEmail(ctx context.Context, m message) error {
+func (d *Dispatcher) sendEmail(ctx context.Context, m message, settings Settings) error {
 	if d.Mailer == nil {
 		return errors.New("email sender is not configured")
 	}
@@ -106,12 +108,12 @@ func (d *Dispatcher) sendEmail(ctx context.Context, m message) error {
 	if err != nil {
 		return err
 	}
-	subject, body, err := emailContent(m)
+	subject, body, err := emailContent(m, settings.Branding)
 	if err != nil {
 		return fmt.Errorf("render incident email: %w", err)
 	}
 	var errs []error
-	for _, recipient := range config.NotifyEmailRecipients() {
+	for _, recipient := range settings.EmailRecipients {
 		if sendErr := sender.SendMail(ctx, recipient, subject, body); sendErr != nil {
 			errs = append(errs, fmt.Errorf("send email to %s: %w", recipient, sendErr))
 		}
@@ -173,19 +175,14 @@ func (d *Dispatcher) publishIncident(delivery Delivery) error {
 	return nil
 }
 
-// SMTPMailer builds a pkg/email sender from the shared SMTP environment.
-func SMTPMailer() (MailSender, error) {
-	host := pkgconfig.GetEnv("SMTP_HOST", "")
-	if host == "" {
-		return nil, errors.New("SMTP_HOST is not configured")
+// SMTPMailer returns a Dispatcher.Mailer that builds a pkg/email sender from
+// the SMTP settings current at each delivery.
+func SMTPMailer(source SettingsSource) func() (MailSender, error) {
+	return func() (MailSender, error) {
+		smtp := source.current().SMTP
+		if smtp.Host == "" {
+			return nil, errors.New("SMTP_HOST is not configured")
+		}
+		return email.NewSender(smtp), nil
 	}
-	return email.NewSender(email.Config{
-		Host:          host,
-		Port:          pkgconfig.GetEnv("SMTP_PORT", "587"),
-		User:          pkgconfig.GetEnv("SMTP_USER", ""),
-		Password:      pkgconfig.GetEnv("SMTP_PASSWORD", ""),
-		From:          pkgconfig.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
-		FromName:      pkgconfig.GetEnv("FROM_NAME", "FrameWorks"),
-		AllowInsecure: pkgconfig.GetEnvBool("SMTP_ALLOW_INSECURE", false),
-	}), nil
 }

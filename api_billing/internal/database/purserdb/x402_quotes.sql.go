@@ -46,33 +46,42 @@ const createX402PaymentQuote = `-- name: CreateX402PaymentQuote :exec
 INSERT INTO purser.x402_payment_quotes (
     id, tenant_id, resource, resource_class, network, asset, pay_to,
     amount_atomic, credit_amount_cents, credit_currency,
-    eur_per_usd_rate, requirements_json, tax_document_kind,
-    tax_profile_snapshot, expires_at
+    requirements_json, tax_document_kind,
+    tax_profile_snapshot, expires_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, $2::text::uuid,
     $3, $4, $5,
     $6, $7, $8::text::numeric,
-    $9, 'EUR', $10::text::numeric,
-    $11, $12,
-    $13, $14
+    $9, 'EUR',
+    $10, $11,
+    $12, $13,
+    $14::bigint, $15::text,
+    $9, $16::text::numeric,
+    $17::text, $18::date
 )
 `
 
 type CreateX402PaymentQuoteParams struct {
-	ID                 string          `db:"id" json:"id"`
-	TenantID           string          `db:"tenant_id" json:"tenant_id"`
-	Resource           string          `db:"resource" json:"resource"`
-	ResourceClass      string          `db:"resource_class" json:"resource_class"`
-	Network            string          `db:"network" json:"network"`
-	Asset              string          `db:"asset" json:"asset"`
-	PayTo              string          `db:"pay_to" json:"pay_to"`
-	AmountAtomic       string          `db:"amount_atomic" json:"amount_atomic"`
-	CreditAmountCents  int64           `db:"credit_amount_cents" json:"credit_amount_cents"`
-	EurPerUsdRate      string          `db:"eur_per_usd_rate" json:"eur_per_usd_rate"`
-	RequirementsJson   json.RawMessage `db:"requirements_json" json:"requirements_json"`
-	TaxDocumentKind    string          `db:"tax_document_kind" json:"tax_document_kind"`
-	TaxProfileSnapshot json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
-	ExpiresAt          time.Time       `db:"expires_at" json:"expires_at"`
+	ID                  string          `db:"id" json:"id"`
+	TenantID            string          `db:"tenant_id" json:"tenant_id"`
+	Resource            string          `db:"resource" json:"resource"`
+	ResourceClass       string          `db:"resource_class" json:"resource_class"`
+	Network             string          `db:"network" json:"network"`
+	Asset               string          `db:"asset" json:"asset"`
+	PayTo               string          `db:"pay_to" json:"pay_to"`
+	AmountAtomic        string          `db:"amount_atomic" json:"amount_atomic"`
+	CreditAmountCents   int64           `db:"credit_amount_cents" json:"credit_amount_cents"`
+	RequirementsJson    json.RawMessage `db:"requirements_json" json:"requirements_json"`
+	TaxDocumentKind     string          `db:"tax_document_kind" json:"tax_document_kind"`
+	TaxProfileSnapshot  json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	ExpiresAt           time.Time       `db:"expires_at" json:"expires_at"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) CreateX402PaymentQuote(ctx context.Context, arg CreateX402PaymentQuoteParams) error {
@@ -86,11 +95,15 @@ func (q *Queries) CreateX402PaymentQuote(ctx context.Context, arg CreateX402Paym
 		arg.PayTo,
 		arg.AmountAtomic,
 		arg.CreditAmountCents,
-		arg.EurPerUsdRate,
 		arg.RequirementsJson,
 		arg.TaxDocumentKind,
 		arg.TaxProfileSnapshot,
 		arg.ExpiresAt,
+		arg.OriginalAmountCents,
+		arg.OriginalCurrency,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	return err
 }
@@ -109,8 +122,13 @@ func (q *Queries) ExpireOfferedX402PaymentQuote(ctx context.Context, quoteID str
 const getX402PaymentQuote = `-- name: GetX402PaymentQuote :one
 SELECT id::text AS id, tenant_id::text AS tenant_id, resource, resource_class, network,
        asset, pay_to, amount_atomic::text AS amount_atomic, credit_amount_cents,
-       eur_per_usd_rate::text AS eur_per_usd_rate, requirements_json,
-       tax_document_kind, tax_profile_snapshot, expires_at, status
+       requirements_json, tax_document_kind, tax_profile_snapshot, expires_at, status,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.x402_payment_quotes
 WHERE id = $1::text::uuid
   AND tenant_id = $2::text::uuid
@@ -122,21 +140,26 @@ type GetX402PaymentQuoteParams struct {
 }
 
 type GetX402PaymentQuoteRow struct {
-	ID                 string          `db:"id" json:"id"`
-	TenantID           string          `db:"tenant_id" json:"tenant_id"`
-	Resource           string          `db:"resource" json:"resource"`
-	ResourceClass      string          `db:"resource_class" json:"resource_class"`
-	Network            string          `db:"network" json:"network"`
-	Asset              string          `db:"asset" json:"asset"`
-	PayTo              string          `db:"pay_to" json:"pay_to"`
-	AmountAtomic       string          `db:"amount_atomic" json:"amount_atomic"`
-	CreditAmountCents  int64           `db:"credit_amount_cents" json:"credit_amount_cents"`
-	EurPerUsdRate      string          `db:"eur_per_usd_rate" json:"eur_per_usd_rate"`
-	RequirementsJson   json.RawMessage `db:"requirements_json" json:"requirements_json"`
-	TaxDocumentKind    string          `db:"tax_document_kind" json:"tax_document_kind"`
-	TaxProfileSnapshot json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
-	ExpiresAt          time.Time       `db:"expires_at" json:"expires_at"`
-	Status             string          `db:"status" json:"status"`
+	ID                  string          `db:"id" json:"id"`
+	TenantID            string          `db:"tenant_id" json:"tenant_id"`
+	Resource            string          `db:"resource" json:"resource"`
+	ResourceClass       string          `db:"resource_class" json:"resource_class"`
+	Network             string          `db:"network" json:"network"`
+	Asset               string          `db:"asset" json:"asset"`
+	PayTo               string          `db:"pay_to" json:"pay_to"`
+	AmountAtomic        string          `db:"amount_atomic" json:"amount_atomic"`
+	CreditAmountCents   int64           `db:"credit_amount_cents" json:"credit_amount_cents"`
+	RequirementsJson    json.RawMessage `db:"requirements_json" json:"requirements_json"`
+	TaxDocumentKind     string          `db:"tax_document_kind" json:"tax_document_kind"`
+	TaxProfileSnapshot  json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	ExpiresAt           time.Time       `db:"expires_at" json:"expires_at"`
+	Status              string          `db:"status" json:"status"`
+	OriginalAmountCents int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetX402PaymentQuote(ctx context.Context, arg GetX402PaymentQuoteParams) (GetX402PaymentQuoteRow, error) {
@@ -152,12 +175,17 @@ func (q *Queries) GetX402PaymentQuote(ctx context.Context, arg GetX402PaymentQuo
 		&i.PayTo,
 		&i.AmountAtomic,
 		&i.CreditAmountCents,
-		&i.EurPerUsdRate,
 		&i.RequirementsJson,
 		&i.TaxDocumentKind,
 		&i.TaxProfileSnapshot,
 		&i.ExpiresAt,
 		&i.Status,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }

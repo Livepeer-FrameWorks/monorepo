@@ -7,10 +7,11 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"frameworks/api_balancing/internal/appconfig"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
@@ -126,7 +127,7 @@ func signBalancerCapability(secret, nodeID, clusterID string, expires int64) str
 }
 
 func balancerCapabilitySecret() string {
-	return strings.TrimSpace(os.Getenv("FOGHORN_BALANCER_CAPABILITY_SECRET"))
+	return appconfig.Current().BalancerCapabilitySecret
 }
 
 // RefreshLocalBalancerCapabilities rotates only the Mist source-lookup

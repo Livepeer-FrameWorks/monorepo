@@ -221,6 +221,8 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
     --   cert_issuing           tenant bundle order including this SAN in flight
     --   cert_issued            SAN served by the tenant bundle
     --   cert_failed            bundle order failed; retried after next_attempt_at
+    --   verification_failed    CNAMEs did not verify within 7 days of verification_started_at;
+    --                          terminal until the tenant requests the domain again
     --   tearing_down           remove requested; worker clearing state
     -- Only cert_issuing and cert_issued join the tenant bundle SAN set.
     status TEXT NOT NULL DEFAULT 'pending_verification',
@@ -245,12 +247,62 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_custom_domains (
     last_renewal_error_at TIMESTAMPTZ,
     -- Earliest retry of a cert_failed domain.
     next_attempt_at TIMESTAMPTZ,
+    -- Start of the current verification attempt; set on insert and on
+    -- reactivation. Verification that has not succeeded 7 days later fails.
+    verification_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- When custom_domain.failed was committed for the current failure. Retry
+    -- cycles through cert_failed emit no further event; a successful
+    -- issuance or a reactivation clears it.
+    failure_reported_at TIMESTAMPTZ,
     PRIMARY KEY (tenant_id, domain),
     CONSTRAINT uq_tenant_custom_domains_domain UNIQUE (domain)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_custom_domains_status
     ON navigator.tenant_custom_domains(status);
+
+-- ============================================================================
+-- DOMAIN EVENT OUTBOX
+-- pkg/events/outbox.TableDDL("navigator"), verbatim. custom_domain.verified
+-- and custom_domain.failed commit here in the transaction of the status change
+-- they report; the relay delivers them to Decklog PublishDomainEvents.
+
+CREATE TABLE IF NOT EXISTS navigator.domain_event_outbox (
+    event_id          UUID PRIMARY KEY,
+    event_type        TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    aggregate_type    TEXT NOT NULL,
+    aggregate_id      TEXT NOT NULL,
+    aggregate_version BIGINT NOT NULL DEFAULT 0,
+    scope             TEXT NOT NULL,
+    tenant_id         UUID,
+    actor_auth_type   TEXT NOT NULL DEFAULT '',
+    actor_user_id     TEXT NOT NULL DEFAULT '',
+    actor_token_hash  TEXT NOT NULL DEFAULT '',
+    occurred_at       TIMESTAMPTZ NOT NULL,
+    payload           BYTEA NOT NULL,
+    enqueued_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    claimed_at        TIMESTAMPTZ,
+    lease_token       UUID,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT,
+    completed_at      TIMESTAMPTZ,
+    CONSTRAINT chk_navigator_domain_event_outbox_scope CHECK (scope IN ('tenant', 'platform')),
+    CONSTRAINT chk_navigator_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_pending
+    ON navigator.domain_event_outbox (enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_aggregate
+    ON navigator.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_completed
+    ON navigator.domain_event_outbox (completed_at)
+    WHERE completed_at IS NOT NULL;
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

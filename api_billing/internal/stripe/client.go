@@ -230,22 +230,25 @@ type OffSessionChargeResult struct {
 	AmountReceived  int64
 }
 
-// ResolveDefaultPaymentMethod returns the subscription-level default when
-// present, otherwise the customer's invoice default. Collection callers use
-// the returned id explicitly so provider behavior cannot select a card
-// implicitly.
+// ResolveDefaultPaymentMethod returns the subscription-level default when a
+// subscription is given and has one, otherwise the customer's invoice default.
+// A customer without a subscription is collected through the default a
+// setup-mode checkout saved. Collection callers use the returned id explicitly
+// so provider behavior cannot select a card implicitly.
 func (c *Client) ResolveDefaultPaymentMethod(ctx context.Context, customerID, subscriptionID string) (string, error) {
-	if customerID == "" || subscriptionID == "" {
-		return "", fmt.Errorf("stripe customer and subscription ids are required")
+	if customerID == "" {
+		return "", fmt.Errorf("stripe customer id is required")
 	}
-	subParams := &stripe.SubscriptionParams{}
-	subParams.Context = ctx
-	sub, err := subscription.Get(subscriptionID, subParams)
-	if err != nil {
-		return "", fmt.Errorf("get Stripe subscription: %w", err)
-	}
-	if sub.DefaultPaymentMethod != nil && sub.DefaultPaymentMethod.ID != "" {
-		return sub.DefaultPaymentMethod.ID, nil
+	if subscriptionID != "" {
+		subParams := &stripe.SubscriptionParams{}
+		subParams.Context = ctx
+		sub, err := subscription.Get(subscriptionID, subParams)
+		if err != nil {
+			return "", fmt.Errorf("get Stripe subscription: %w", err)
+		}
+		if sub.DefaultPaymentMethod != nil && sub.DefaultPaymentMethod.ID != "" {
+			return sub.DefaultPaymentMethod.ID, nil
+		}
 	}
 
 	customerParams := &stripe.CustomerParams{}

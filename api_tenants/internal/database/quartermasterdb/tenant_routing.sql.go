@@ -267,6 +267,57 @@ func (q *Queries) GetTenantRoutingSelection(ctx context.Context, tenantID string
 	return i, err
 }
 
+const listFreshEdgeCapabilityServices = `-- name: ListFreshEdgeCapabilityServices :many
+SELECT DISTINCT n.cluster_id, s.type::text AS service_type
+FROM quartermaster.infrastructure_nodes n
+JOIN quartermaster.service_instances si
+  ON si.node_id = n.node_id AND si.cluster_id = n.cluster_id
+JOIN quartermaster.services s ON s.service_id = si.service_id
+WHERE n.cluster_id = ANY($1::text[])
+  AND n.node_type = 'edge'
+  AND n.status = 'active'
+  AND s.type IN ('edge-ingest', 'edge-egress', 'edge-storage', 'edge-processing')
+  AND si.health_status = 'healthy'
+  AND si.last_health_check > NOW() - ($2::int * INTERVAL '1 second')
+ORDER BY n.cluster_id, service_type
+`
+
+type ListFreshEdgeCapabilityServicesParams struct {
+	ClusterIds            []string `db:"cluster_ids" json:"cluster_ids"`
+	StaleThresholdSeconds int32    `db:"stale_threshold_seconds" json:"stale_threshold_seconds"`
+}
+
+type ListFreshEdgeCapabilityServicesRow struct {
+	ClusterID   string `db:"cluster_id" json:"cluster_id"`
+	ServiceType string `db:"service_type" json:"service_type"`
+}
+
+// Edge capability service types (edge-ingest, edge-egress, edge-storage,
+// edge-processing) that at least one active edge node in each cluster reported
+// healthy within the freshness window. ReportAliveNodes maintains these rows.
+func (q *Queries) ListFreshEdgeCapabilityServices(ctx context.Context, arg ListFreshEdgeCapabilityServicesParams) ([]ListFreshEdgeCapabilityServicesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFreshEdgeCapabilityServices, pq.Array(arg.ClusterIds), arg.StaleThresholdSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFreshEdgeCapabilityServicesRow{}
+	for rows.Next() {
+		var i ListFreshEdgeCapabilityServicesRow
+		if err := rows.Scan(&i.ClusterID, &i.ServiceType); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTenantClusterRoutingPeers = `-- name: ListTenantClusterRoutingPeers :many
 SELECT ic.cluster_id,
        ic.cluster_name,
@@ -291,7 +342,9 @@ SELECT ic.cluster_id,
        tca.resource_limits::text AS resource_limits,
        ic.allow_private_pull_sources,
        foghorn.advertise_host AS foghorn_advertise_host,
-       foghorn.port AS foghorn_port
+       foghorn.port AS foghorn_port,
+       ic.media_allow_ingest,
+       ic.media_allow_serve
 FROM quartermaster.tenant_cluster_access tca
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 LEFT JOIN LATERAL (
@@ -352,6 +405,8 @@ type ListTenantClusterRoutingPeersRow struct {
 	AllowPrivatePullSources bool           `db:"allow_private_pull_sources" json:"allow_private_pull_sources"`
 	FoghornAdvertiseHost    sql.NullString `db:"foghorn_advertise_host" json:"foghorn_advertise_host"`
 	FoghornPort             sql.NullInt32  `db:"foghorn_port" json:"foghorn_port"`
+	MediaAllowIngest        bool           `db:"media_allow_ingest" json:"media_allow_ingest"`
+	MediaAllowServe         bool           `db:"media_allow_serve" json:"media_allow_serve"`
 }
 
 func (q *Queries) ListTenantClusterRoutingPeers(ctx context.Context, tenantID string) ([]ListTenantClusterRoutingPeersRow, error) {
@@ -388,6 +443,8 @@ func (q *Queries) ListTenantClusterRoutingPeers(ctx context.Context, tenantID st
 			&i.AllowPrivatePullSources,
 			&i.FoghornAdvertiseHost,
 			&i.FoghornPort,
+			&i.MediaAllowIngest,
+			&i.MediaAllowServe,
 		); err != nil {
 			return nil, err
 		}

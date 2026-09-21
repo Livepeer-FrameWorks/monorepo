@@ -4,17 +4,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 func TestRenderSocialEmailUsesBrandLayoutAndEscapesContent(t *testing.T) {
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.test/app")
 	body, err := renderSocialEmail(PostRecord{
 		TweetText:      `<script>alert("x")</script> Ship it`,
 		ContentType:    ContentPlatformStats,
 		ContextSummary: "A useful update",
 		TriggerData:    map[string]any{"active_streams": float64(12)},
 		CreatedAt:      time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC),
-	})
+	}, config.EmailBranding{WebAppURL: "https://app.example.test/app"})
 	if err != nil {
 		t.Fatal(err)
 	}

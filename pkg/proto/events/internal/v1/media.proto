@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package frameworks.events.internal.v1;
+
+// Go reserves "internal" path elements, so the generated package lives in
+// events/internalv1 where every service can import it.
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
+
+import "events/options.proto";
+import "events/public/v1/common.proto";
+
+// RecordingChapterReady reports that one chapter of a recording became
+// playable.
+message RecordingChapterReady {
+  option (frameworks.events.event) = {type: "recording.chapter_ready", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  frameworks.events.public.v1.Artifact artifact = 1;
+  string chapter_id = 2;
+  int64 start_ms = 3;
+  int64 end_ms = 4;
+  int64 size_bytes = 5;
+}
+
+enum NodeCopyTransition {
+  NODE_COPY_TRANSITION_UNSPECIFIED = 0;
+  // The node now holds a local copy.
+  NODE_COPY_TRANSITION_GAINED = 1;
+  // The node no longer holds a local copy.
+  NODE_COPY_TRANSITION_LOST = 2;
+  // The copy is still present; its role or completeness changed.
+  NODE_COPY_TRANSITION_UPDATED = 3;
+}
+
+// ArtifactNodeCopyChanged reports a transition of a node's transient local
+// copy of an artifact. The durable object-storage copy is tracked separately.
+message ArtifactNodeCopyChanged {
+  option (frameworks.events.event) = {type: "artifact.node_copy_changed", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  string artifact_hash = 1;
+  string node_id = 2;
+  // role is "origin" for the producing or relay source and "cache" for a
+  // synced pull.
+  string role = 3;
+  NodeCopyTransition transition = 4;
+  bool is_complete = 5;
+  int64 size_bytes = 6;
+}

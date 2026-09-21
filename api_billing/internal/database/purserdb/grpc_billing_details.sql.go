@@ -14,7 +14,8 @@ import (
 const getTenantBillingDetails = `-- name: GetTenantBillingDetails :one
 SELECT billing_email, billing_name, billing_company, tax_id,
        COALESCE(billing_address, '{}'::jsonb) AS billing_address,
-       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
+       presentment_currency::text AS presentment_currency
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -22,12 +23,13 @@ LIMIT 1
 `
 
 type GetTenantBillingDetailsRow struct {
-	BillingEmail   sql.NullString  `db:"billing_email" json:"billing_email"`
-	BillingName    sql.NullString  `db:"billing_name" json:"billing_name"`
-	BillingCompany sql.NullString  `db:"billing_company" json:"billing_company"`
-	TaxID          sql.NullString  `db:"tax_id" json:"tax_id"`
-	BillingAddress json.RawMessage `db:"billing_address" json:"billing_address"`
-	UpdatedAt      sql.NullTime    `db:"updated_at" json:"updated_at"`
+	BillingEmail        sql.NullString  `db:"billing_email" json:"billing_email"`
+	BillingName         sql.NullString  `db:"billing_name" json:"billing_name"`
+	BillingCompany      sql.NullString  `db:"billing_company" json:"billing_company"`
+	TaxID               sql.NullString  `db:"tax_id" json:"tax_id"`
+	BillingAddress      json.RawMessage `db:"billing_address" json:"billing_address"`
+	UpdatedAt           sql.NullTime    `db:"updated_at" json:"updated_at"`
+	PresentmentCurrency string          `db:"presentment_currency" json:"presentment_currency"`
 }
 
 func (q *Queries) GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error) {
@@ -40,8 +42,51 @@ func (q *Queries) GetTenantBillingDetails(ctx context.Context, tenantID string) 
 		&i.TaxID,
 		&i.BillingAddress,
 		&i.UpdatedAt,
+		&i.PresentmentCurrency,
 	)
 	return i, err
+}
+
+const lockTenantPresentmentCurrency = `-- name: LockTenantPresentmentCurrency :one
+SELECT presentment_currency::text AS presentment_currency,
+       purser.tenant_presentment_currency_locked(tenant_id)::boolean AS presentment_locked
+FROM purser.tenant_subscriptions
+WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
+FOR UPDATE
+`
+
+type LockTenantPresentmentCurrencyRow struct {
+	PresentmentCurrency string `db:"presentment_currency" json:"presentment_currency"`
+	PresentmentLocked   bool   `db:"presentment_locked" json:"presentment_locked"`
+}
+
+func (q *Queries) LockTenantPresentmentCurrency(ctx context.Context, tenantID string) (LockTenantPresentmentCurrencyRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantPresentmentCurrency, tenantID)
+	var i LockTenantPresentmentCurrencyRow
+	err := row.Scan(&i.PresentmentCurrency, &i.PresentmentLocked)
+	return i, err
+}
+
+const setTenantPresentmentCurrency = `-- name: SetTenantPresentmentCurrency :execrows
+UPDATE purser.tenant_subscriptions
+SET presentment_currency = $1::text,
+    updated_at = NOW()
+WHERE tenant_id = $2::text::uuid
+  AND status != 'cancelled'
+  AND presentment_currency <> $1::text
+`
+
+type SetTenantPresentmentCurrencyParams struct {
+	PresentmentCurrency string `db:"presentment_currency" json:"presentment_currency"`
+	TenantID            string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) SetTenantPresentmentCurrency(ctx context.Context, arg SetTenantPresentmentCurrencyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setTenantPresentmentCurrency, arg.PresentmentCurrency, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateTenantBillingDetails = `-- name: UpdateTenantBillingDetails :execrows

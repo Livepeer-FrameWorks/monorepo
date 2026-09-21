@@ -17,6 +17,14 @@ query GetBillingStatus {
       confirmedAt
       createdAt
       updatedAt
+      conversion {
+        originalAmountCents
+        originalCurrency
+        eurAmountCents
+        unitsPerEur
+        source
+        referenceDate
+      }
     }
     nextBillingDate
     trialEndsAt
@@ -36,12 +44,9 @@ query GetBillingStatus {
       nextBillingDate
       cancelledAt
       customFeatures {
-        recording
-        analytics
-        customBranding
-        apiAccess
         supportLevel
         sla
+        processingCustomizable
       }
       pricingOverrides {
         meter
@@ -64,6 +69,7 @@ query GetBillingStatus {
       }
       pendingEffectiveAt
       pendingReason
+      presentmentCurrency
       createdAt
       updatedAt
     }

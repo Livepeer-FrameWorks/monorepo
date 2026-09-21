@@ -9,6 +9,7 @@ import (
 
 func TestCapabilityCatalogServices(t *testing.T) {
 	want := []string{
+		"bosun",
 		"commodore",
 		"foghorn",
 		"lookout",
@@ -46,8 +47,8 @@ func TestPeriscopeIngestDeclaresBothRuntimeStores(t *testing.T) {
 	if got := len(CapabilitiesFor("periscope-ingest", EnginePostgres)); got != 1 {
 		t.Fatalf("periscope-ingest PostgreSQL capabilities = %d, want 1", got)
 	}
-	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 2 {
-		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 2", got)
+	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 3 {
+		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 3", got)
 	}
 }
 

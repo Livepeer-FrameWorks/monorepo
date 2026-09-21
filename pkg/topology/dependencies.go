@@ -59,6 +59,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_SPOKE_URL", Transport: "mcp-http", Optional: true, Purpose: "ask_consultant spoke proxy"},
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "AI consultant APIs"},
 		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "incident APIs"},
+		{TargetServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "outbound webhook APIs"},
 	},
 	"chandler": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap and storage cluster lookup"},
@@ -89,12 +90,18 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "decklog", EnvKey: "FRAMEWORKS_DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "gateway telemetry events"},
 		{TargetServiceID: "foghorn", EnvKey: "auth_webhook_url", Transport: "http", Purpose: "playback auth webhook"},
 	},
+	"bosun": {
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "service bootstrap"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing contact for endpoint auto-disable emails"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "webhook audit domain events"},
+	},
 	"lookout": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "cluster owner lookup for incident scope and service bootstrap"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant incident realtime service events"},
 	},
 	"navigator": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "edge address and tenant/cluster authorization lookups"},
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "custom domain domain events"},
 	},
 	"periscope-ingest": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
@@ -150,6 +157,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 }
 
 var infraDependencies = map[string][]InfraDependency{
+	"bosun":     {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "webhook endpoints, secrets, and the delivery ledger"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "public domain events from domain.events and its mirrored copies"}},
 	"commodore": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
 	"decklog":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
 	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},

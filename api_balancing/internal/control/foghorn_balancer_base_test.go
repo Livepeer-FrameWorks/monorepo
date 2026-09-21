@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/DATA-DOG/go-sqlmock"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestFoghornBalancerBaseUsesClusterScopedDNS(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "frameworks.network"})
 
 	got := foghornBalancerBase("core-central-primary")
 	want := "https://foghorn.core-central-primary.frameworks.network"
@@ -23,7 +24,7 @@ func TestFoghornBalancerBaseUsesClusterScopedDNS(t *testing.T) {
 }
 
 func TestFoghornBalancerBaseNormalizesBrandDomain(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "https://frameworks.network/")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "https://frameworks.network/"})
 
 	got := foghornBalancerBase("media-eu-1")
 	want := "https://foghorn.media-eu-1.frameworks.network"
@@ -33,7 +34,9 @@ func TestFoghornBalancerBaseNormalizesBrandDomain(t *testing.T) {
 }
 
 func TestFoghornBalancerBaseUsesExplicitPublicBase(t *testing.T) {
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
+	settings := &appconfig.Foghorn{}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
 
 	got := foghornBalancerBase("core-central-primary")
 	want := "https://foghorn.example"
@@ -43,8 +46,10 @@ func TestFoghornBalancerBaseUsesExplicitPublicBase(t *testing.T) {
 }
 
 func TestFoghornBalancerBaseUsesLocalComposeURL(t *testing.T) {
-	t.Setenv("BUILD_ENV", "development")
-	t.Setenv("FOGHORN_URL", "http://foghorn:18008")
+	settings := &appconfig.Foghorn{}
+	settings.BuildEnv = "development"
+	settings.FoghornURL = "http://foghorn:18008"
+	useFoghornConfig(t, settings)
 
 	got := foghornBalancerBase("central-primary")
 	want := "http://foghorn:18008"

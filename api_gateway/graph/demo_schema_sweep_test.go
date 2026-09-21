@@ -50,6 +50,11 @@ var mustSucceedQueries = []string{
 	"networkStatus",
 	"mollieMandates",
 	"serviceInstancesHealth",
+	"serverInfo",
+	"capabilities",
+	"webhookEndpointsConnection",
+	"webhookDeliveriesConnection",
+	"webhookEventTypes",
 }
 
 // mustSucceedMutations are mutation fields whose demo path returns synthesized

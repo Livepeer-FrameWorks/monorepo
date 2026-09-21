@@ -121,9 +121,11 @@ func refreshTokenUserRows() *sqlmock.Rows {
 	)
 }
 
-func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
+func refreshTokenTestSettings() RuntimeSettings {
+	return RuntimeSettings{JWTSecret: []byte("test-secret-for-refresh-token")}
+}
 
+func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -150,9 +152,10 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 		WithArgs("rt-1", "rt-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
+	expectLegacyEventInsert(mock, eventAuthTokenRefreshed)
 	mock.ExpectCommit()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
 	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -186,8 +189,6 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 }
 
 func TestRefreshToken_ReplayWithinGraceIssuesFreshSession(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -210,9 +211,10 @@ func TestRefreshToken_ReplayWithinGraceIssuesFreshSession(t *testing.T) {
 		WithArgs("tenant-2", "user-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rt-3"))
 
+	expectLegacyEventInsert(mock, eventAuthTokenRefreshed)
 	mock.ExpectCommit()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
 	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err != nil {
 		t.Fatalf("expected within-grace replay to issue a fresh session, got: %v", err)
@@ -227,8 +229,6 @@ func TestRefreshToken_ReplayWithinGraceIssuesFreshSession(t *testing.T) {
 }
 
 func TestRefreshToken_LostRotationResponseRecoversSession(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -264,9 +264,10 @@ func TestRefreshToken_LostRotationResponseRecoversSession(t *testing.T) {
 		WithArgs("rt-1", "rt-3").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
+	expectLegacyEventInsert(mock, eventAuthTokenRefreshed)
 	mock.ExpectCommit()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
 	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err != nil {
 		t.Fatalf("expected lost-rotation replay to recover the session, got: %v", err)
@@ -306,7 +307,7 @@ func TestRefreshToken_ReuseWithUsedSuccessorRevokesSessionFamily(t *testing.T) {
 
 	mock.ExpectCommit()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
 	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err == nil {
 		t.Fatal("expected refresh token reuse with a used successor to be rejected")
@@ -318,8 +319,6 @@ func TestRefreshToken_ReuseWithUsedSuccessorRevokesSessionFamily(t *testing.T) {
 }
 
 func TestRefreshToken_StoreFailureRollsBack(t *testing.T) {
-	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
-
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -344,7 +343,7 @@ func TestRefreshToken_StoreFailureRollsBack(t *testing.T) {
 
 	mock.ExpectRollback()
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
 	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err == nil {
 		t.Fatal("expected refresh to fail when the new token cannot be stored")

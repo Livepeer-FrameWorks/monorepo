@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -167,8 +168,8 @@ func TestHandleActivatePushTargets(t *testing.T) {
 	})
 
 	t.Run("inventory failure cannot settle healthy sibling of rejected target", func(t *testing.T) {
-		t.Setenv("RESTREAM_ALLOW_PRIVATE_DESTINATIONS", "false")
-		t.Setenv("RESTREAM_ALLOWED_PRIVATE_CIDRS", "")
+		appconfigtest.Setenv(t, "RESTREAM_ALLOW_PRIVATE_DESTINATIONS", "false")
+		appconfigtest.Setenv(t, "RESTREAM_ALLOWED_PRIVATE_CIDRS", "")
 		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: errMistServer(t)})
 		RecordAdmittedIngestGeneration("live+inventory-mixed", "gen-inventory-mixed", 201)
 
@@ -197,7 +198,7 @@ func TestHandleActivatePushTargets(t *testing.T) {
 	})
 
 	t.Run("invalid node policy stays retryable", func(t *testing.T) {
-		t.Setenv("RESTREAM_DENIED_CIDRS", "not-a-cidr")
+		appconfigtest.Setenv(t, "RESTREAM_DENIED_CIDRS", "not-a-cidr")
 		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: errMistServer(t)})
 		RecordAdmittedIngestGeneration("live+bad-policy", "gen-bad-policy", 201)
 		var result *ipcpb.ActivatePushTargetsResult
@@ -211,8 +212,8 @@ func TestHandleActivatePushTargets(t *testing.T) {
 	})
 
 	t.Run("private destination returns a bounded terminal outcome", func(t *testing.T) {
-		t.Setenv("RESTREAM_ALLOW_PRIVATE_DESTINATIONS", "false")
-		t.Setenv("RESTREAM_ALLOWED_PRIVATE_CIDRS", "")
+		appconfigtest.Setenv(t, "RESTREAM_ALLOW_PRIVATE_DESTINATIONS", "false")
+		appconfigtest.Setenv(t, "RESTREAM_ALLOWED_PRIVATE_CIDRS", "")
 		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: "http://127.0.0.1:65535"})
 		RecordAdmittedIngestGeneration("live+private-target", "gen-private", 202)
 

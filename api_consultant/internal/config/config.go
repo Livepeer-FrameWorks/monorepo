@@ -8,14 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
-// Config stores environment configuration for Skipper.
+// Config is Skipper's resolved runtime configuration. The typed startup
+// configuration in internal/appconfig builds it after applying the provider
+// fallbacks and parsing the structured values.
 type Config struct {
-	Port                string
-	GRPCPort            string
 	DatabaseURL         string
 	LLMProvider         string
 	LLMModel            string
@@ -35,9 +33,6 @@ type Config struct {
 	RequiredTierLevel   int
 	ChatRateLimitHour   int
 	RateLimitOverrides  map[string]int
-	BillingKafkaTopic   string
-	KafkaBrokers        []string
-	KafkaClusterID      string
 	GatewayPublicURL    string
 	GatewayMCPURL       string
 	GatewayMCPURLs      []string
@@ -93,99 +88,31 @@ func (c Config) GatewayMCPEndpoints() []string {
 	return []string{strings.TrimRight(c.GatewayPublicURL, "/") + "/mcp"}
 }
 
-// LoadConfig loads the Skipper configuration from environment variables.
-func LoadConfig() Config {
-	brokersEnv := strings.TrimSpace(config.GetEnv("KAFKA_BROKERS", ""))
-	var brokers []string
-	if brokersEnv != "" {
-		for _, broker := range strings.Split(brokersEnv, ",") {
-			broker = strings.TrimSpace(broker)
-			if broker != "" {
-				brokers = append(brokers, broker)
-			}
-		}
-	}
-	rateLimitOverrides := parseRateLimitOverrides(config.GetEnv("SKIPPER_CHAT_RATE_LIMIT_OVERRIDES", ""))
-	return Config{
-		Port:                config.GetEnv("PORT", "18018"),
-		GRPCPort:            config.GetEnv("GRPC_PORT", "19007"),
-		DatabaseURL:         config.RequireEnv("DATABASE_URL"),
-		LLMProvider:         config.GetEnv("LLM_PROVIDER", ""),
-		LLMModel:            config.GetEnv("LLM_MODEL", ""),
-		LLMAPIKey:           config.GetEnv("LLM_API_KEY", ""),
-		LLMAPIURL:           config.GetEnv("LLM_API_URL", ""),
-		LLMMaxTokens:        config.GetEnvInt("LLM_MAX_TOKENS", 4096),
-		LLMContextWindow:    config.GetEnvInt("LLM_CONTEXT_WINDOW", 0),
-		PromptTokenBudget:   config.GetEnvInt("SKIPPER_PROMPT_TOKEN_BUDGET", 0),
-		EmbeddingProvider:   config.GetEnv("EMBEDDING_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
-		EmbeddingModel:      config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
-		EmbeddingAPIKey:     config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),
-		EmbeddingAPIURL:     config.GetEnv("EMBEDDING_API_URL", config.GetEnv("LLM_API_URL", "")),
-		EmbeddingDimensions: config.GetEnvInt("EMBEDDING_DIMENSIONS", 0),
-		SearchProvider:      config.GetEnv("SEARCH_PROVIDER", ""),
-		SearchAPIKey:        config.GetEnv("SEARCH_API_KEY", ""),
-		SearchAPIURL:        config.GetEnv("SEARCH_API_URL", ""),
-		RequiredTierLevel:   config.GetEnvInt("SKIPPER_REQUIRED_TIER_LEVEL", 3),
-		ChatRateLimitHour:   config.GetEnvInt("SKIPPER_CHAT_RATE_LIMIT_PER_HOUR", 0),
-		RateLimitOverrides:  rateLimitOverrides,
-		BillingKafkaTopic:   config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports"),
-		KafkaBrokers:        brokers,
-		KafkaClusterID:      config.GetEnv("KAFKA_CLUSTER_ID", "local"),
-		GatewayPublicURL:    config.GetEnv("GATEWAY_PUBLIC_URL", ""),
-		GatewayMCPURL:       config.GetEnv("GATEWAY_MCP_URL", ""),
-		GatewayMCPURLs:      parseSitemapList(config.GetEnv("GATEWAY_MCP_URLS", "")),
-		AdminTenantID:       config.GetEnv("SKIPPER_ADMIN_TENANT_ID", ""),
-		Sitemaps:            parseSitemapList(config.GetEnv("SITEMAPS", "")),
-		SitemapsDir:         config.GetEnv("SKIPPER_SITEMAPS_DIR", ""),
-		CrawlInterval:       parseDuration(config.GetEnv("CRAWL_INTERVAL", "24h"), 24*time.Hour),
-		SearchLimit:         config.GetEnvInt("SKIPPER_SEARCH_LIMIT", 8),
-		MaxHistoryMessages:  config.GetEnvInt("SKIPPER_MAX_HISTORY_MESSAGES", 20),
-		ChunkTokenLimit:     config.GetEnvInt("CHUNK_TOKEN_LIMIT", 500),
-		ChunkTokenOverlap:   config.GetEnvInt("CHUNK_TOKEN_OVERLAP", 50),
-		EnableRendering:     config.GetEnv("SKIPPER_ENABLE_RENDERING", "") == "true",
-		UtilityLLMProvider:  config.GetEnv("UTILITY_LLM_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
-		UtilityLLMModel:     config.GetEnv("UTILITY_LLM_MODEL", config.GetEnv("LLM_MODEL", "")),
-		UtilityLLMAPIKey:    config.GetEnv("UTILITY_LLM_API_KEY", config.GetEnv("LLM_API_KEY", "")),
-		UtilityLLMAPIURL:    config.GetEnv("UTILITY_LLM_API_URL", config.GetEnv("LLM_API_URL", "")),
-		ContextualRetrieval: config.GetEnv("SKIPPER_CONTEXTUAL_RETRIEVAL", "") == "true",
-		LinkDiscovery:       config.GetEnv("SKIPPER_LINK_DISCOVERY", "") == "true",
-		AdminAPIKey:         config.GetEnv("SKIPPER_API_KEY", ""),
-		RerankProvider:      config.GetEnv("RERANKER_PROVIDER", ""),
-		RerankModel:         config.GetEnv("RERANKER_MODEL", ""),
-		RerankAPIKey:        config.GetEnv("RERANKER_API_KEY", config.GetEnv("LLM_API_KEY", "")),
-		RerankAPIURL:        config.GetEnv("RERANKER_API_URL", ""),
-		EnableHyDE:          config.GetEnv("SKIPPER_ENABLE_HYDE", "") == "true",
-		SSRFAllowedHosts:    parseSitemapList(config.GetEnv("SKIPPER_SSRF_ALLOWED_HOSTS", "")),
-		CrawlOriginRewrites: mustParseOriginRewrites(config.GetEnv("SKIPPER_CRAWL_ORIGIN_REWRITES", "")),
-		SocialEnabled:       config.GetEnv("SKIPPER_SOCIAL_ENABLED", "") == "true",
-		SocialInterval:      parseDuration(config.GetEnv("SKIPPER_SOCIAL_INTERVAL", "2h"), 2*time.Hour),
-		SocialMaxPerDay:     config.GetEnvInt("SKIPPER_SOCIAL_MAX_PER_DAY", 2),
-		SocialNotifyEmail:   config.GetEnv("SKIPPER_SOCIAL_NOTIFY_EMAIL", ""),
-	}
-}
-
-func mustParseOriginRewrites(raw string) map[string]string {
+// ParseOriginRewrites parses a JSON object of public origins to fetch origins
+// and normalizes both sides to lower-case scheme://host. Empty input yields a
+// nil map.
+func ParseOriginRewrites(raw string) (map[string]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	var configured map[string]string
 	if err := json.Unmarshal([]byte(raw), &configured); err != nil {
-		panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES: %v", err))
+		return nil, fmt.Errorf("must be a JSON object of origin to origin: %w", err)
 	}
 	rewrites := make(map[string]string, len(configured))
 	for source, target := range configured {
 		sourceOrigin, err := normalizeOrigin(source)
 		if err != nil {
-			panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES source %q: %v", source, err))
+			return nil, fmt.Errorf("source %q: %w", source, err)
 		}
 		targetOrigin, err := normalizeOrigin(target)
 		if err != nil {
-			panic(fmt.Sprintf("invalid SKIPPER_CRAWL_ORIGIN_REWRITES target %q: %v", target, err))
+			return nil, fmt.Errorf("target %q: %w", target, err)
 		}
 		rewrites[sourceOrigin] = targetOrigin
 	}
-	return rewrites
+	return rewrites, nil
 }
 
 func normalizeOrigin(raw string) (string, error) {
@@ -219,30 +146,10 @@ func normalizeURLList(urls []string) []string {
 	return result
 }
 
-func parseSitemapList(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	var result []string
-	for _, item := range strings.Split(s, ",") {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			result = append(result, item)
-		}
-	}
-	return result
-}
-
-func parseDuration(s string, fallback time.Duration) time.Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return fallback
-	}
-	return d
-}
-
-func parseRateLimitOverrides(raw string) map[string]int {
+// ParseRateLimitOverrides parses comma-separated tenant:limit pairs. A
+// malformed, tenantless, or negative entry is skipped so the remaining
+// overrides still apply.
+func ParseRateLimitOverrides(raw string) map[string]int {
 	overrides := map[string]int{}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

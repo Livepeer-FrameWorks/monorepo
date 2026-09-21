@@ -7,6 +7,7 @@
 package foghornfederationpb
 
 import (
+	common "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -921,6 +922,7 @@ type RemoteClipRequest struct {
 	StopMs             int64                  `protobuf:"varint,11,opt,name=stop_ms,json=stopMs,proto3" json:"stop_ms,omitempty"`
 	DurationSec        int64                  `protobuf:"varint,12,opt,name=duration_sec,json=durationSec,proto3" json:"duration_sec,omitempty"`
 	RequestingCluster  string                 `protobuf:"bytes,13,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
+	Actor              *common.RequestActor   `protobuf:"bytes,14,opt,name=actor,proto3" json:"actor,omitempty"` // Optional, principal clip.requested is attributed to
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1044,6 +1046,13 @@ func (x *RemoteClipRequest) GetRequestingCluster() string {
 		return x.RequestingCluster
 	}
 	return ""
+}
+
+func (x *RemoteClipRequest) GetActor() *common.RequestActor {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
 }
 
 type RemoteClipResponse struct {
@@ -2979,13 +2988,14 @@ func (x *MigrateArtifactMetadataResponse) GetError() string {
 
 // ForwardArtifactCommandRequest forwards an artifact operation to a peer cluster.
 type ForwardArtifactCommandRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Command       string                 `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`                               // "stop_dvr", "delete_clip", "delete_dvr", "delete_vod"
-	ArtifactHash  string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Clip hash, DVR hash, or VOD hash
-	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	StreamId      string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"` // Optional, used by StopDVR for stream context
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Command           string                 `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`                               // "stop_dvr", "delete_clip", "delete_dvr", "delete_vod"
+	ArtifactHash      string                 `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Clip hash, DVR hash, or VOD hash
+	TenantId          string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamId          string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                // Optional, used by StopDVR for stream context
+	RequestedByUserId string                 `protobuf:"bytes,5,opt,name=requested_by_user_id,json=requestedByUserId,proto3" json:"requested_by_user_id,omitempty"` // Optional, deletion requester for the artifact_deleted audit event
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ForwardArtifactCommandRequest) Reset() {
@@ -3042,6 +3052,13 @@ func (x *ForwardArtifactCommandRequest) GetTenantId() string {
 func (x *ForwardArtifactCommandRequest) GetStreamId() string {
 	if x != nil {
 		return x.StreamId
+	}
+	return ""
+}
+
+func (x *ForwardArtifactCommandRequest) GetRequestedByUserId() string {
+	if x != nil {
+		return x.RequestedByUserId
 	}
 	return ""
 }
@@ -3531,7 +3548,7 @@ var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
-	"\x18foghorn_federation.proto\x12\x12foghorn_federation\x1a\x15media_placement.proto\"\xef\x01\n" +
+	"\x18foghorn_federation.proto\x12\x12foghorn_federation\x1a\x15media_placement.proto\x1a\fcommon.proto\"\xef\x01\n" +
 	"\x12QueryStreamRequest\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x1d\n" +
@@ -3631,7 +3648,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\bdtsh_url\x18\x13 \x01(\tR\adtshUrl\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10R\x11est_ready_secondsR\fdvr_segmentsR\x10peer_relay_tokenR\x15peer_relay_dtsh_token\"\xb8\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10R\x11est_ready_secondsR\fdvr_segmentsR\x10peer_relay_tokenR\x15peer_relay_dtsh_token\"\xe4\x03\n" +
 	"\x11RemoteClipRequest\x120\n" +
 	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -3648,7 +3665,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	" \x01(\x03R\astartMs\x12\x17\n" +
 	"\astop_ms\x18\v \x01(\x03R\x06stopMs\x12!\n" +
 	"\fduration_sec\x18\f \x01(\x03R\vdurationSec\x12-\n" +
-	"\x12requesting_cluster\x18\r \x01(\tR\x11requestingCluster\"\x8d\x01\n" +
+	"\x12requesting_cluster\x18\r \x01(\tR\x11requestingCluster\x12*\n" +
+	"\x05actor\x18\x0e \x01(\v2\x14.common.RequestActorR\x05actor\"\x8d\x01\n" +
 	"\x12RemoteClipResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +
@@ -3827,12 +3845,13 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x1fMigrateArtifactMetadataResponse\x12%\n" +
 	"\x0emigrated_count\x18\x01 \x01(\x05R\rmigratedCount\x12%\n" +
 	"\x0ealready_exists\x18\x02 \x01(\x05R\ralreadyExists\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\x98\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xc9\x01\n" +
 	"\x1dForwardArtifactCommandRequest\x12\x18\n" +
 	"\acommand\x18\x01 \x01(\tR\acommand\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12\x1b\n" +
-	"\tstream_id\x18\x04 \x01(\tR\bstreamId\"P\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12/\n" +
+	"\x14requested_by_user_id\x18\x05 \x01(\tR\x11requestedByUserId\"P\n" +
 	"\x1eForwardArtifactCommandResponse\x12\x18\n" +
 	"\ahandled\x18\x01 \x01(\bR\ahandled\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xff\x03\n" +
@@ -3935,58 +3954,60 @@ var file_foghorn_federation_proto_goTypes = []any{
 	(*DeleteStorageObjectsRequest)(nil),             // 33: foghorn_federation.DeleteStorageObjectsRequest
 	(*DeleteStorageObjectsResponse)(nil),            // 34: foghorn_federation.DeleteStorageObjectsResponse
 	nil,                                             // 35: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	(*media_placement.CandidateQuery)(nil),          // 36: media_placement.CandidateQuery
-	(*media_placement.PreparePlacementRequest)(nil), // 37: media_placement.PreparePlacementRequest
-	(*media_placement.CandidateObservation)(nil),    // 38: media_placement.CandidateObservation
-	(*media_placement.Preparation)(nil),             // 39: media_placement.Preparation
+	(*common.RequestActor)(nil),                     // 36: common.RequestActor
+	(*media_placement.CandidateQuery)(nil),          // 37: media_placement.CandidateQuery
+	(*media_placement.PreparePlacementRequest)(nil), // 38: media_placement.PreparePlacementRequest
+	(*media_placement.CandidateObservation)(nil),    // 39: media_placement.CandidateObservation
+	(*media_placement.Preparation)(nil),             // 40: media_placement.Preparation
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
 	3,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
 	35, // 1: foghorn_federation.PrepareArtifactResponse.segment_urls:type_name -> foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
-	14, // 2: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
-	15, // 3: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
-	16, // 4: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
-	13, // 5: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
-	20, // 6: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
-	18, // 7: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
-	22, // 8: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
-	23, // 9: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
-	17, // 10: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
-	19, // 11: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
-	21, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
-	26, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
-	0,  // 14: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
-	36, // 15: foghorn_federation.FoghornFederation.QueryPlacementCandidates:input_type -> media_placement.CandidateQuery
-	37, // 16: foghorn_federation.FoghornFederation.PreparePlacement:input_type -> media_placement.PreparePlacementRequest
-	1,  // 17: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
-	4,  // 18: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
-	6,  // 19: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
-	8,  // 20: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
-	10, // 21: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
-	12, // 22: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
-	24, // 23: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
-	27, // 24: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
-	29, // 25: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
-	31, // 26: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
-	33, // 27: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
-	38, // 28: foghorn_federation.FoghornFederation.QueryPlacementCandidates:output_type -> media_placement.CandidateObservation
-	39, // 29: foghorn_federation.FoghornFederation.PreparePlacement:output_type -> media_placement.Preparation
-	2,  // 30: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	5,  // 31: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	7,  // 32: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	9,  // 33: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	11, // 34: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	12, // 35: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	25, // 36: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	28, // 37: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	30, // 38: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
-	32, // 39: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
-	34, // 40: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
-	28, // [28:41] is the sub-list for method output_type
-	15, // [15:28] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	36, // 2: foghorn_federation.RemoteClipRequest.actor:type_name -> common.RequestActor
+	14, // 3: foghorn_federation.PeerMessage.edge_telemetry:type_name -> foghorn_federation.EdgeTelemetry
+	15, // 4: foghorn_federation.PeerMessage.replication_event:type_name -> foghorn_federation.ReplicationEvent
+	16, // 5: foghorn_federation.PeerMessage.cluster_summary:type_name -> foghorn_federation.ClusterEdgeSummary
+	13, // 6: foghorn_federation.PeerMessage.stream_lifecycle:type_name -> foghorn_federation.StreamLifecycleEvent
+	20, // 7: foghorn_federation.PeerMessage.stream_ad:type_name -> foghorn_federation.StreamAdvertisement
+	18, // 8: foghorn_federation.PeerMessage.artifact_ad:type_name -> foghorn_federation.ArtifactAdvertisement
+	22, // 9: foghorn_federation.PeerMessage.peer_heartbeat:type_name -> foghorn_federation.PeerHeartbeat
+	23, // 10: foghorn_federation.PeerMessage.capacity_summary:type_name -> foghorn_federation.CapacitySummary
+	17, // 11: foghorn_federation.ClusterEdgeSummary.edges:type_name -> foghorn_federation.EdgeSnapshot
+	19, // 12: foghorn_federation.ArtifactAdvertisement.artifacts:type_name -> foghorn_federation.ArtifactLocation
+	21, // 13: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
+	26, // 14: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
+	0,  // 15: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
+	37, // 16: foghorn_federation.FoghornFederation.QueryPlacementCandidates:input_type -> media_placement.CandidateQuery
+	38, // 17: foghorn_federation.FoghornFederation.PreparePlacement:input_type -> media_placement.PreparePlacementRequest
+	1,  // 18: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
+	4,  // 19: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
+	6,  // 20: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
+	8,  // 21: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
+	10, // 22: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
+	12, // 23: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
+	24, // 24: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
+	27, // 25: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
+	29, // 26: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
+	31, // 27: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
+	33, // 28: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
+	39, // 29: foghorn_federation.FoghornFederation.QueryPlacementCandidates:output_type -> media_placement.CandidateObservation
+	40, // 30: foghorn_federation.FoghornFederation.PreparePlacement:output_type -> media_placement.Preparation
+	2,  // 31: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	5,  // 32: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	7,  // 33: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	9,  // 34: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	11, // 35: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	12, // 36: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	25, // 37: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	28, // 38: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	30, // 39: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	32, // 40: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
+	34, // 41: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
+	29, // [29:42] is the sub-list for method output_type
+	16, // [16:29] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_federation_proto_init() }

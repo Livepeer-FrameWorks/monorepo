@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -73,14 +75,17 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 	defer mockDB.Close()
 
 	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil, nil)
-	tenantID := "tenant-456"
+	tenantID := "a0000000-0000-4000-8000-000000000456"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"billing_model"}).AddRow("prepaid"))
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
 		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDomainEvent(mock, "account.suspended", tenantID)
+	mock.ExpectCommit()
 
 	err = enforcer.EnforcePrepaidThresholds(context.Background(), tenantID, -500, -1001)
 	if err != nil {
@@ -90,6 +95,49 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+// The suspension and account.suspended commit together: a failed event insert
+// rolls the suspension back and no external step runs.
+func TestEnforcePrepaidThresholds_SuspensionRollsBackWhenEventInsertFails(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	revoker := &recordingDNSRevoker{}
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil, revoker)
+	tenantID := "a0000000-0000-4000-8000-000000000457"
+
+	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"billing_model"}).AddRow("prepaid"))
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
+		WithArgs(tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.domain_event_outbox`).
+		WillReturnError(errors.New("outbox unavailable"))
+	mock.ExpectRollback()
+
+	err = enforcer.EnforcePrepaidThresholds(context.Background(), tenantID, -500, -1001)
+	if err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("err = %v, want the outbox failure", err)
+	}
+	if revoker.calls != 0 {
+		t.Fatalf("DNS revocation ran %d times after a rolled-back suspension", revoker.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+type recordingDNSRevoker struct{ calls int }
+
+func (r *recordingDNSRevoker) RevokeDNSEntitlements(context.Context, string) error {
+	r.calls++
+	return nil
 }
 
 func TestEnforcePrepaidThresholds_DoesNotSuspendAtThreshold(t *testing.T) {

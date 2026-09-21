@@ -166,7 +166,7 @@ type Location struct {
 	// projection of an accepted PUSH_REWRITE on this cluster) and the matching
 	// PUSH_INPUT_CLOSE / STREAM_END (or owner-unhealthy short-circuit). It is a
 	// PROJECTION of the database's accept/reject decision, not an admission gate:
-	// duplicate rejection is the DB's authority (CreateIngestSession under the
+	// duplicate rejection is the DB's authority (MintIngestSession under the
 	// stream-scoped advisory lock). Consumers READ it for routing/offline typing;
 	// they never decide admission from it.
 	SourceActive bool
@@ -183,7 +183,7 @@ type Location struct {
 	// SourceConnectorPID is the MistServer connector PID (X-PID) of the CURRENT
 	// source session, stamped by ProjectSource. Diagnostic/identity metadata on the
 	// projected source; the same-session admission decision it once gated is now the
-	// DB's (CreateIngestSession keys on node + start_trigger_uuid). Local-cluster only.
+	// DB's (MintIngestSession keys on node + start_trigger_uuid). Local-cluster only.
 	SourceConnectorPID int64
 
 	// SourceGeneration is the durable ingest-session id of the current push source. Source ownership
@@ -194,7 +194,7 @@ type Location struct {
 	// SourceTriggerUUID is the Mist X-Trigger-UUID of the source's admitting PUSH_REWRITE trigger
 	// execution — stable across THAT execution's blocking-trigger retries, but a distinct value for a
 	// later reconnect's PUSH_REWRITE (it identifies a trigger firing, not the publisher connection's
-	// lifetime). Stamped by ProjectSource. The DB folds it into CreateIngestSession's uniqueness key
+	// lifetime). Stamped by ProjectSource. The DB folds it into MintIngestSession's uniqueness key
 	// (node + start_trigger_uuid) so a re-fired admission is idempotent. Here it is projected identity
 	// metadata. Empty for callers with no Mist trigger identity (pull sources, tests). Local only.
 	SourceTriggerUUID string

@@ -3,14 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	sidecarconfig "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/edgeseed"
@@ -22,10 +20,15 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 )
+
+// shutdownDrainTimeout bounds how long in-flight requests may finish after
+// SIGINT or SIGTERM once the restart is announced. Foghorn holds the health
+// of an announced restart for 5 to 30 seconds (20 by default), and that window
+// has to cover the announcement, the exit, and the supervisor restart.
+const shutdownDrainTimeout = 3 * time.Second
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "seed-edge" {
@@ -36,7 +39,7 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "scrub-edge-credentials" {
-		if err := control.RunCredentialCleanupWorker(context.Background(), os.Getenv("HELMSMAN_STATE_DIR"), os.Getenv("NODE_ID"), os.Getenv("HELMSMAN_ENROLLMENT_TOKEN_FILE"), os.Getenv("HELMSMAN_RUNTIME_ENV_FILE")); err != nil {
+		if err := scrubEdgeCredentials(); err != nil {
 			fmt.Fprintln(os.Stderr, "scrub-edge-credentials:", err)
 			os.Exit(1)
 		}
@@ -52,13 +55,18 @@ func main() {
 	// Load environment variables
 	config.LoadEnv(logger)
 
-	// Load configuration
-	cfg := sidecarconfig.LoadHelmsmanConfig()
-	if strings.TrimSpace(cfg.StateDir) == "" {
-		logger.Fatal("HELMSMAN_STATE_DIR is required for durable node identity and media-control state")
+	configOptions := config.Options{Service: appconfig.ServiceID, Logger: logger}
+	appCfg, err := config.Load[appconfig.Helmsman](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
+	appCfg.ApplyLogLevel(logger)
+	liveConfig := config.NewLive(appCfg, configOptions)
+	appconfig.Install(liveConfig)
+	cfg := sidecarconfig.NewHelmsmanConfig(appCfg)
+
 	go control.ObserveCredentialCleanup(context.Background(), cfg.StateDir, cfg.EnrollmentTokenFile, cfg.RuntimeEnvFile)
-	if _, err := restream.DestinationPolicyFromEnvironment(); err != nil {
+	if _, err := restream.DestinationPolicyFromValues(appCfg.RestreamAllowPrivateDestinations, appCfg.RestreamAllowedPrivateCIDRs, appCfg.RestreamDeniedCIDRs); err != nil {
 		logger.WithError(err).Fatal("invalid restream destination policy")
 	}
 
@@ -68,13 +76,19 @@ func main() {
 	healthChecker := monitoring.NewHealthChecker("helmsman", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("helmsman", version.Version, version.GitCommit)
 
-	// Add health checks for external dependencies
-	// Note: Helmsman only talks to MistServer (local) and Foghorn (gRPC stream)
-	healthChecker.AddCheck("mistserver", monitoring.HTTPServiceHealthCheck("MistServer", cfg.MistServerURL+"/api"))
-
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+	// Health and readiness run the same node-local checks: Helmsman only
+	// needs the local MistServer to serve, and a Foghorn outage must not take
+	// the node out of rotation. Readiness additionally reports draining once
+	// shutdown starts.
+	mistServerCheck := monitoring.HTTPServiceHealthCheck("MistServer", cfg.MistServerURL+"/api")
+	configCheck := monitoring.ConfigurationHealthCheck(map[string]string{
 		"NODE_ID": cfg.NodeID,
-	}))
+	})
+	healthChecker.AddCheck("mistserver", mistServerCheck)
+	healthChecker.AddCheck("config", configCheck)
+	readiness := monitoring.NewReadinessChecker("helmsman", version.Version)
+	readiness.AddCheck("mistserver", mistServerCheck)
+	readiness.AddCheck("config", configCheck)
 
 	// Create infrastructure sidecar metrics using handlers.HandlerMetrics directly
 	handlerMetrics := &handlers.HandlerMetrics{
@@ -158,9 +172,24 @@ func main() {
 		"edge_public_url": cfg.EdgePublicURL,
 	}).Info("Added MistServer node for monitoring")
 
-	// Setup router with unified monitoring
-	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
-	managementRouter := server.SetupServiceRouter(logger, "helmsman-management", healthChecker, metricsCollector)
+	// Helmsman has no service token, so neither router serves the /debug
+	// surface.
+	r := server.NewServiceRouter(server.RouterSpec{
+		Service: "helmsman",
+		Logger:  logger,
+		Health:  healthChecker,
+		Ready:   readiness,
+		Metrics: metricsCollector,
+		Runtime: appCfg.HTTPRuntime,
+	})
+	managementRouter := server.NewServiceRouter(server.RouterSpec{
+		Service: "helmsman-management",
+		Logger:  logger,
+		Health:  healthChecker,
+		Ready:   readiness,
+		Metrics: metricsCollector,
+		Runtime: appCfg.HTTPRuntime,
+	})
 
 	// Operator and diagnostic routes stay on the loopback-only management
 	// listener. The public/Mist listener contains only data-plane callbacks and
@@ -249,28 +278,18 @@ func main() {
 		webhooks.POST("/mist/process_exit", handlers.HandleProcessExit)
 	}
 
-	// Graceful shutdown handling
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-quit
+	// server.Run calls this only when SIGINT or SIGTERM stopped it, so the
+	// announcement covers every planned exit and never a listener failure.
+	signaled := false
+	signalStopHook := func(_ context.Context, sig os.Signal) {
+		signaled = true
 		logger.WithField("signal", sig.String()).Info("Shutdown signal received")
 
-		// Relay has no background fills to stop — cold fetches live
-		// inside HTTP request handlers and cancel through the request
-		// context when the HTTP server stops accepting.
-
-		// Stop storage manager
-		handlers.StopStorageManager()
-
-		// Stop cleanup monitor
-		handlers.StopCleanupMonitor()
-
-		// Announce the planned exit so Foghorn holds DNS health for a
-		// bounded reconnect window (systemd restarts us in seconds; the
-		// data plane keeps serving meanwhile). A crash skips this, so
-		// unannounced disconnects still go unhealthy immediately.
+		// Announce the planned exit before the listeners drain, so Foghorn
+		// holds DNS health for a bounded reconnect window (the supervisor
+		// restarts us in seconds; the data plane keeps serving meanwhile). A
+		// crash skips this, so unannounced disconnects still go unhealthy
+		// immediately.
 		if err := control.AnnounceRestart(logging.NewLoggerWithService("helmsman-shutdown")); err != nil {
 			logger.WithError(err).Error("Failed to announce restart to Foghorn")
 		} else {
@@ -279,42 +298,56 @@ func main() {
 
 		// Brief pause to allow final messages to be sent
 		time.Sleep(500 * time.Millisecond)
-
-		logger.WithFields(logging.Fields{
-			"reason":    "graceful_shutdown",
-			"service":   "helmsman",
-			"timestamp": time.Now().Format(time.RFC3339),
-		}).Info("Shutting down Helmsman gracefully...")
-
-		os.Exit(0)
-	}()
-
-	// Start server with graceful shutdown
-	serverConfig := server.DefaultConfig("helmsman", "18007")
-	serverConfig.BindAddr = os.Getenv("HELMSMAN_BIND_ADDR")
-	managementPort := fmt.Sprintf("%d", servicedefs.HelmsmanManagementPort)
-	managementConfig := server.DefaultConfig("helmsman-management", managementPort)
-	managementConfig.Port = config.GetEnv("HELMSMAN_MANAGEMENT_PORT", managementPort)
-	managementConfig.BindAddr = config.GetEnv("HELMSMAN_MANAGEMENT_BIND_ADDR", "127.0.0.1")
-	if !isLoopbackBind(managementConfig.BindAddr) {
-		logger.WithField("bind_addr", managementConfig.BindAddr).Fatal("Helmsman management listener must bind loopback")
 	}
+	shutdownHook := func(context.Context) {
+		// Relay has no background fills to stop — cold fetches live
+		// inside HTTP request handlers and cancel through the request
+		// context when the HTTP server stops accepting.
+		handlers.StopStorageManager()
+		handlers.StopCleanupMonitor()
+	}
+
 	server.RegisterEnvFileReload("helmsman", logger)
-	if err := server.StartAll([]server.Listener{
-		{Config: serverConfig, Router: r},
-		{Config: managementConfig, Router: managementRouter},
-	}, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	runErr := server.Run(context.Background(), server.RunSpec{
+		Service: "helmsman",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP: []server.HTTPListener{
+			{Name: "helmsman", BindAddr: listenHost(appCfg.PublicBindAddr), Port: appCfg.Port, Handler: r},
+			{Name: "helmsman-management", BindAddr: listenHost(appCfg.ManagementBindAddr), Port: appCfg.ManagementPort, Handler: managementRouter},
+		},
+		OnReload:        []server.ReloadCallback{liveConfig.Reload},
+		OnSignalStop:    []func(context.Context, os.Signal){signalStopHook},
+		OnShutdown:      []func(context.Context){shutdownHook},
+		ShutdownTimeout: shutdownDrainTimeout,
+	})
+	if runErr != nil {
+		if !signaled {
+			logger.WithError(runErr).Fatal("Server exited with error")
+		}
+		logger.WithError(runErr).Warn("Listeners did not drain before shutdown")
 	}
+
+	logger.WithFields(logging.Fields{
+		"reason":    "graceful_shutdown",
+		"service":   "helmsman",
+		"timestamp": time.Now().Format(time.RFC3339),
+	}).Info("Helmsman stopped")
 }
 
-func isLoopbackBind(bindAddr string) bool {
-	bindAddr = strings.TrimSpace(strings.Trim(bindAddr, "[]"))
-	if strings.EqualFold(bindAddr, "localhost") {
-		return true
+// scrubEdgeCredentials runs the scrub-edge-credentials subcommand.
+func scrubEdgeCredentials() error {
+	scrub, err := config.Load[appconfig.HelmsmanScrubEdgeCredentials](config.Options{Service: appconfig.ServiceID})
+	if err != nil {
+		return err
 	}
-	ip := net.ParseIP(bindAddr)
-	return ip != nil && ip.IsLoopback()
+	return control.RunCredentialCleanupWorker(context.Background(), scrub.StateDir, scrub.NodeID, scrub.EnrollmentTokenFile, scrub.RuntimeEnvFile)
+}
+
+// listenHost strips IPv6 brackets from a configured bind address, because
+// server.Run joins the host and port itself.
+func listenHost(bindAddr string) string {
+	return strings.Trim(strings.TrimSpace(bindAddr), "[]")
 }
 
 func registerMistAdminRoutes(r *gin.Engine, mistServerURL string, logger logging.Logger) {

@@ -96,8 +96,8 @@ func HandleList(out io.Writer, args []string) error {
 		return nil
 	}
 	for _, m := range migs {
-		fmt.Fprintf(out, "%s  service=%s  introduced_in=%s  required_before=%s\n",
-			m.ID, m.Service, m.IntroducedIn, m.RequiredBeforePhase)
+		fmt.Fprintf(out, "%s  service=%s  introduced_in=%s  required_before=%s  irreversible=%t\n",
+			m.ID, m.Service, m.IntroducedIn, m.RequiredBeforePhase, m.Irreversible)
 	}
 	return nil
 }
@@ -493,12 +493,13 @@ type registryEntry struct {
 	IntroducedIn        string `json:"introduced_in"`
 	RequiredBeforePhase string `json:"required_before_phase"`
 	Description         string `json:"description"`
+	Irreversible        bool   `json:"irreversible"`
 }
 
 func registryJSONList(migs []Migration) []registryEntry {
 	out := make([]registryEntry, 0, len(migs))
 	for _, m := range migs {
-		out = append(out, registryEntry{m.ID, m.Service, m.IntroducedIn, m.RequiredBeforePhase, m.Description})
+		out = append(out, registryEntry{m.ID, m.Service, m.IntroducedIn, m.RequiredBeforePhase, m.Description, m.Irreversible})
 	}
 	return out
 }

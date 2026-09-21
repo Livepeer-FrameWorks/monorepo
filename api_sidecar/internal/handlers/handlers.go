@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/leases"
@@ -227,7 +228,7 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 	InitPrometheusMonitor(logger)
 
 	// Perform initial artifact scan
-	if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
+	if storagePath := appconfig.Runtime().StorageLocalPath; storagePath != "" {
 		totalBytes, artifactCount, complete := scanLocalArtifacts(storagePath)
 		logger.WithFields(logging.Fields{
 			"storage_path": storagePath,

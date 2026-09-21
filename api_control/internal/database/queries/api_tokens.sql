@@ -81,9 +81,18 @@ ORDER BY created_at ASC, id ASC
 LIMIT sqlc.arg(row_limit);
 
 -- name: RevokeAPIToken :one
-UPDATE commodore.api_tokens
+-- was_active is the state before this update, so a repeated revoke is
+-- recognisable as no change.
+WITH target AS (
+    SELECT id, is_active
+    FROM commodore.api_tokens
+    WHERE id = sqlc.arg(token_id)::uuid
+      AND (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
+      AND tenant_id = sqlc.arg(tenant_id)::uuid
+    FOR UPDATE
+)
+UPDATE commodore.api_tokens AS t
 SET is_active = false, updated_at = NOW()
-WHERE id = sqlc.arg(token_id)::uuid
-  AND (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
-  AND tenant_id = sqlc.arg(tenant_id)::uuid
-RETURNING token_name;
+FROM target
+WHERE t.id = target.id
+RETURNING t.token_name, target.is_active AS was_active;

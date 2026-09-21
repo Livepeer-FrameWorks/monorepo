@@ -15,7 +15,6 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
@@ -24,7 +23,6 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
@@ -641,14 +639,12 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		TenantId: tenantID,
 	}
 	updates := 0
-	changedFields := []string{}
 
 	if input.Name != nil {
 		trimmed := strings.TrimSpace(*input.Name)
 		if trimmed != "" {
 			updateReq.Name = &trimmed
 			updates++
-			changedFields = append(changedFields, "name")
 		}
 	}
 
@@ -670,7 +666,6 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 			subdomain := strings.ToLower(strings.TrimSpace(val))
 			updateReq.Subdomain = &subdomain
 			updates++
-			changedFields = append(changedFields, "subdomain")
 		}
 
 		if v, present := raw["customDomain"]; present {
@@ -681,7 +676,6 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 			trimmed := strings.TrimSpace(val)
 			updateReq.CustomDomain = &trimmed
 			updates++
-			changedFields = append(changedFields, "custom_domain")
 		}
 
 		if _, present := raw["deploymentModel"]; present {
@@ -692,7 +686,6 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	if input.MonitoringEnabled != nil {
 		updateReq.MonitoringEnabled = input.MonitoringEnabled
 		updates++
-		changedFields = append(changedFields, "monitoring_enabled")
 	}
 
 	if updates == 0 {
@@ -705,18 +698,6 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant")
 		return nil, fmt.Errorf("failed to update tenant: %w", err)
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTenantUpdated,
-		ResourceType: "tenant",
-		ResourceId:   tenantID,
-		Payload: &ipcpb.ServiceEvent_TenantEvent{
-			TenantEvent: &ipcpb.TenantEvent{
-				TenantId:      tenantID,
-				ChangedFields: changedFields,
-			},
-		},
-	})
 
 	return r.DoGetTenant(ctx)
 }
@@ -840,37 +821,6 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		r.Logger.WithError(err).Error("Failed to update stream")
 		return nil, fmt.Errorf("failed to update stream: %w", err)
 	}
-
-	changedFields := []string{}
-	if input.Name != nil {
-		changedFields = append(changedFields, "title")
-	}
-	if input.Description != nil {
-		changedFields = append(changedFields, "description")
-	}
-	if input.Record != nil {
-		changedFields = append(changedFields, "is_recording")
-	}
-	if input.IngestMode != nil {
-		changedFields = append(changedFields, "ingest_mode")
-	}
-	if input.PullSource != nil {
-		changedFields = append(changedFields, "pull_source")
-	}
-	if input.Monitoring != nil {
-		changedFields = append(changedFields, "monitoring_enabled")
-	}
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventStreamUpdated,
-		ResourceType: "stream",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId:      id,
-				ChangedFields: changedFields,
-			},
-		},
-	})
 
 	return stream, nil
 }
@@ -1179,19 +1129,6 @@ func (r *Resolver) DoCreateClusterSubscription(ctx context.Context, clusterID st
 	if err != nil {
 		return nil, fmt.Errorf("failed to subscribe: %w", err)
 	}
-	if resp.GetStatus() == "active" {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventTenantClusterAssigned,
-			ResourceType: "cluster",
-			ResourceId:   clusterID,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId: clusterID,
-					TenantId:  tenantID,
-				},
-			},
-		})
-	}
 	return resp, nil
 }
 
@@ -1238,18 +1175,6 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 	if err != nil {
 		return false, fmt.Errorf("failed to unsubscribe: %w", err)
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTenantClusterUnassigned,
-		ResourceType: "cluster",
-		ResourceId:   clusterID,
-		Payload: &ipcpb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &ipcpb.ClusterEvent{
-				ClusterId: clusterID,
-				TenantId:  tenantID,
-			},
-		},
-	})
 	return true, nil
 }
 
@@ -1451,24 +1376,6 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 	if resp == nil {
 		r.Logger.Error("Quartermaster returned empty edge cluster response")
 		return &model.ValidationError{Message: "Failed to create edge cluster"}, nil
-	}
-
-	if resp != nil && resp.Cluster != nil {
-		clusterID := resp.Cluster.ClusterId
-		if clusterID == "" {
-			clusterID = resp.Cluster.Id
-		}
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterCreated,
-			ResourceType: "cluster",
-			ResourceId:   clusterID,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId: clusterID,
-					TenantId:  tenantID,
-				},
-			},
-		})
 	}
 
 	return &model.CreateEdgeClusterResponse{
@@ -1725,18 +1632,6 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 		}, nil
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventClusterUpdated,
-		ResourceType: "cluster",
-		ResourceId:   clusterID,
-		Payload: &ipcpb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &ipcpb.ClusterEvent{
-				ClusterId: clusterID,
-				TenantId:  tenantID,
-			},
-		},
-	})
-
 	// Enrich with pricing from Purser before returning
 	cluster := resp.Cluster
 	pricing, err := r.Clients.Purser.GetClusterPricing(ctx, clusterID)
@@ -1794,21 +1689,6 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 		}, nil
 	}
 
-	if invite != nil {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterInviteCreated,
-			ResourceType: "cluster_invite",
-			ResourceId:   invite.Id,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId: invite.ClusterId,
-					TenantId:  tenantID,
-					InviteId:  invite.Id,
-				},
-			},
-		})
-	}
-
 	return invite, nil
 }
 
@@ -1841,18 +1721,6 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 			Message: fmt.Sprintf("Failed to revoke invite: %v", err),
 		}, nil
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventClusterInviteRevoked,
-		ResourceType: "cluster_invite",
-		ResourceId:   inviteID,
-		Payload: &ipcpb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &ipcpb.ClusterEvent{
-				TenantId: tenantID,
-				InviteId: inviteID,
-			},
-		},
-	})
 
 	return &model.DeleteSuccess{Success: true}, nil
 }
@@ -1955,21 +1823,6 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 		}, nil
 	}
 
-	if sub != nil {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterSubscriptionRequested,
-			ResourceType: "cluster_subscription",
-			ResourceId:   sub.Id,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId:      sub.ClusterId,
-					TenantId:       tenantID,
-					SubscriptionId: sub.Id,
-				},
-			},
-		})
-	}
-
 	return sub, nil
 }
 
@@ -2009,21 +1862,6 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to accept invite: %v", err),
 		}, nil
-	}
-
-	if sub != nil {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterSubscriptionApproved,
-			ResourceType: "cluster_subscription",
-			ResourceId:   sub.Id,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId:      sub.ClusterId,
-					TenantId:       tenantID,
-					SubscriptionId: sub.Id,
-				},
-			},
-		})
 	}
 
 	return sub, nil
@@ -2087,21 +1925,6 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to approve subscription: %v", err),
 		}, nil
-	}
-
-	if sub != nil {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterSubscriptionApproved,
-			ResourceType: "cluster_subscription",
-			ResourceId:   sub.Id,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId:      sub.ClusterId,
-					TenantId:       tenantID,
-					SubscriptionId: sub.Id,
-				},
-			},
-		})
 	}
 
 	return sub, nil
@@ -2179,30 +2002,6 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to reject subscription: %v", err),
 		}, nil
-	}
-
-	if sub != nil {
-		eventReason := ""
-		reasonCode := ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_UNSPECIFIED
-		if reason != nil {
-			eventReason = truncateReason(*reason)
-			reasonCode = parseRejectReasonCode(*reason)
-		}
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventClusterSubscriptionRejected,
-			ResourceType: "cluster_subscription",
-			ResourceId:   sub.Id,
-			TenantId:     tenantID,
-			Payload: &ipcpb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &ipcpb.ClusterEvent{
-					ClusterId:        sub.ClusterId,
-					TenantId:         tenantID,
-					SubscriptionId:   sub.Id,
-					Reason:           eventReason,
-					RejectReasonCode: reasonCode,
-				},
-			},
-		})
 	}
 
 	return sub, nil
@@ -2810,18 +2609,6 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 		}, nil
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTenantUpdated,
-		ResourceType: "tenant",
-		ResourceId:   tenantID,
-		Payload: &ipcpb.ServiceEvent_TenantEvent{
-			TenantEvent: &ipcpb.TenantEvent{
-				TenantId:      tenantID,
-				ChangedFields: []string{"primary_cluster_id"},
-			},
-		},
-	})
-
 	return cluster, nil
 }
 
@@ -2875,8 +2662,9 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		return nil, nil
 	}
 
-	srtPort := config.GetEnvInt("STREAMING_SRT_PORT", 8889)
-	rtmpPort := config.GetEnvInt("STREAMING_RTMP_PORT", 1935)
+	settings := r.streamingSettings()
+	srtPort := settings.SRTPort
+	rtmpPort := settings.RTMPPort
 
 	cfg := &model.StreamingConfig{
 		IngestDomain: strPtr(streamingConfigDomain("edge-ingest", slug, baseURL)),
@@ -2909,7 +2697,7 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *model.StreamingConfig, baseURL string) {
 	rootDomain := normalizeStreamingBaseDomain(baseURL)
 	if rootDomain == "" {
-		rootDomain = strings.TrimSpace(config.GetEnv("BRAND_DOMAIN", ""))
+		rootDomain = strings.TrimSpace(r.streamingSettings().RootDomain)
 	}
 	if rootDomain == "" {
 		return

@@ -1,0 +1,58 @@
+# Shared selections of the public SDK operations. Every result union spreads
+# the error fragments of each error member it declares.
+
+fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+
+fragment ValidationErrorFields on ValidationError {
+  __typename
+  message
+  code
+  field
+  constraint
+}
+
+fragment AuthErrorFields on AuthError {
+  __typename
+  message
+  code
+}
+
+fragment NotFoundErrorFields on NotFoundError {
+  __typename
+  message
+  code
+  resourceType
+  resourceId
+}
+
+fragment RateLimitErrorFields on RateLimitError {
+  __typename
+  message
+  code
+  retryAfter
+}
+
+fragment DeleteSuccessFields on DeleteSuccess {
+  __typename
+  success
+  deletedId
+  pending
+}
+
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+  posterUrl
+  spriteVttUrl
+  spriteJpgUrl
+  assetKey
+}
+
+fragment EffectiveRetentionFields on EffectiveRetention {
+  retentionDays
+  retentionUntil
+  source
+}

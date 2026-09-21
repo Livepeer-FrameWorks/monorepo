@@ -337,11 +337,11 @@ func (r *Resolver) DoPlatformTenantInvoices(ctx context.Context, tenantID string
 	return r.DoGetInvoicesConnection(platformTenantCtx(ctx, tenantID), first, after, last, before)
 }
 
-func (r *Resolver) DoPlatformTenantPrepaidBalance(ctx context.Context, tenantID string, currency *string) (*model.PrepaidBalance, error) {
+func (r *Resolver) DoPlatformTenantPrepaidBalance(ctx context.Context, tenantID string) (*model.PrepaidBalance, error) {
 	if err := r.platformGate(ctx, "platform.tenant.billing.prepaidBalance", tenantID); err != nil {
 		return nil, err
 	}
-	return r.DoGetPrepaidBalance(platformTenantCtx(ctx, tenantID), currency)
+	return r.DoGetPrepaidBalance(platformTenantCtx(ctx, tenantID))
 }
 
 func (r *Resolver) DoPlatformTenantBalanceTransactions(ctx context.Context, tenantID string, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {

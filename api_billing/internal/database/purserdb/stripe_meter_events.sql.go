@@ -45,6 +45,13 @@ WHERE li.invoice_id = $2::uuid
   AND li.amount > 0
   AND NULLIF(li.meter, '') IS NOT NULL
   AND NULLIF(route.stripe_meter_event_name, '') IS NOT NULL
+  -- Meter events feed a Stripe subscription; a tenant without one is billed
+  -- only on Purser invoices.
+  AND EXISTS (
+      SELECT 1 FROM purser.tenant_subscriptions ts
+      WHERE ts.tenant_id = $1::uuid
+        AND ts.stripe_subscription_id IS NOT NULL
+  )
 ON CONFLICT (invoice_line_item_id, stripe_meter_event_name) DO NOTHING
 `
 

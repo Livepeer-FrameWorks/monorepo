@@ -1,0 +1,167 @@
+# Public tenant events, the same messages webhooks deliver. Filter with types
+# (e.g. ["clip.ready", "clip.failed"]) and streamId; data carries the payload of
+# the event's type. The reason fields of the account, custom domain, and
+# payment events are aliased: their enum types differ from the media reason.
+subscription TenantEvents($types: [String!], $streamId: ID) {
+  tenantEvents(types: $types, streamId: $streamId) {
+    id
+    type
+    time
+    subject
+    data {
+      __typename
+      ... on StreamCreated {
+        streamId
+        name
+        playbackId
+      }
+      ... on StreamUpdated {
+        streamId
+        changedFields
+      }
+      ... on StreamDeleted {
+        streamId
+      }
+      ... on StreamKeyRotated {
+        streamId
+      }
+      ... on StreamConnected {
+        streamId
+        protocol
+      }
+      ... on StreamLive {
+        streamId
+      }
+      ... on StreamIdle {
+        streamId
+      }
+      ... on ClipRequested {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+      }
+      ... on ClipReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        reason
+      }
+      ... on RecordingReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on RecordingFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        reason
+      }
+      ... on UploadCreated {
+        artifact {
+          ...EventArtifactFields
+        }
+        filename
+        expectedSizeBytes
+      }
+      ... on UploadCompleted {
+        artifact {
+          ...EventArtifactFields
+        }
+        sizeBytes
+      }
+      ... on UploadAborted {
+        artifact {
+          ...EventArtifactFields
+        }
+      }
+      ... on UploadReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on UploadFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        reason
+      }
+      ... on MultistreamStatusChanged {
+        streamId
+        targetId
+        targetName
+        status
+        previousStatus
+      }
+      ... on ApiTokenCreated {
+        tokenId
+        name
+        permissions
+        expiresAt
+      }
+      ... on ApiTokenRevoked {
+        tokenId
+      }
+      ... on AccountSuspended {
+        suspensionReason: reason
+      }
+      ... on CustomDomainVerified {
+        domain
+      }
+      ... on CustomDomainFailed {
+        domain
+        domainFailureReason: reason
+      }
+      ... on InvoiceCreated {
+        invoiceId
+        amountDue {
+          amountMinor
+          currency
+        }
+        periodStart
+        periodEnd
+        dueAt
+      }
+      ... on InvoicePaid {
+        invoiceId
+        amountPaid {
+          amountMinor
+          currency
+        }
+      }
+      ... on PaymentFailed {
+        paymentId
+        invoiceId
+        amount {
+          amountMinor
+          currency
+        }
+        paymentFailureReason: reason
+        provider
+        providerReferenceId
+      }
+      ... on TopupCredited {
+        topupId
+        amount {
+          amountMinor
+          currency
+        }
+      }
+      ... on BillingDetailsUpdated {
+        changedFields
+      }
+    }
+  }
+}

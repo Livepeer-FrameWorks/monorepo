@@ -1,0 +1,18 @@
+ALTER TABLE purser.tenant_subscriptions
+    VALIDATE CONSTRAINT chk_tenant_subscriptions_presentment_currency;
+ALTER TABLE purser.pending_topups
+    VALIDATE CONSTRAINT chk_pending_topups_fx;
+ALTER TABLE purser.crypto_wallets
+    VALIDATE CONSTRAINT chk_crypto_wallets_fx;
+ALTER TABLE purser.x402_payment_quotes
+    VALIDATE CONSTRAINT chk_x402_payment_quotes_fx;
+ALTER TABLE purser.payment_reversals
+    VALIDATE CONSTRAINT chk_payment_reversals_fx;
+ALTER TABLE purser.billing_payments
+    VALIDATE CONSTRAINT chk_billing_payments_fx;
+ALTER TABLE purser.billing_invoices
+    VALIDATE CONSTRAINT chk_billing_invoices_presentment;
+ALTER TABLE purser.simplified_invoices
+    VALIDATE CONSTRAINT chk_simplified_invoices_eur_amounts;
+ALTER TABLE purser.crypto_invoices
+    VALIDATE CONSTRAINT chk_crypto_invoices_eur_amounts;

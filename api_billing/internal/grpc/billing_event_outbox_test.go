@@ -60,7 +60,7 @@ func TestEnqueueBillingEventTxInsertsAndBackfillsTenant(t *testing.T) {
 	id, err := s.EnqueueBillingEventTx(
 		context.Background(), s.db,
 		"payment_succeeded", "tenant-1", "user-1", "payment", "pay-9",
-		&ipcpb.BillingEvent{},
+		&ipcpb.BillingEvent{}, nil,
 	)
 	if err != nil {
 		t.Fatalf("EnqueueBillingEventTx: %v", err)
@@ -84,7 +84,7 @@ func TestEnqueueBillingEventTxNilPayloadDefaults(t *testing.T) {
 
 	id, err := s.EnqueueBillingEventTx(
 		context.Background(), s.db,
-		"topup_created", "tenant-2", "", "topup", "tp-1", nil,
+		"topup_created", "tenant-2", "", "topup", "tp-1", nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("EnqueueBillingEventTx: %v", err)
@@ -104,7 +104,7 @@ func TestEnqueueBillingEventTxScanErrorWrapped(t *testing.T) {
 
 	_, err := s.EnqueueBillingEventTx(
 		context.Background(), s.db,
-		"x", "tenant-1", "", "r", "rid", &ipcpb.BillingEvent{},
+		"x", "tenant-1", "", "r", "rid", &ipcpb.BillingEvent{}, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -259,7 +259,7 @@ func TestNewPurserServerDoesNotBoxTypedNilDecklogClient(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"xpub"}).AddRow("test-xpub"))
 
 	var decklogClient *decklogclient.BatchedClient
-	server := NewPurserServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, decklogClient, nil)
+	server := NewPurserServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, decklogClient, nil, nil)
 	if server.decklogClient != nil {
 		t.Fatalf("typed-nil Decklog client was boxed as non-nil: %#v", server.decklogClient)
 	}

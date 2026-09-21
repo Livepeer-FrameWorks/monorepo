@@ -14,7 +14,7 @@ import (
 )
 
 const claimServiceEventOutboxBatch = `-- name: ClaimServiceEventOutboxBatch :many
-SELECT id::text AS id, payload::text AS payload, attempts, created_at
+SELECT id::text AS id, COALESCE(event_id, id)::text AS event_id, payload::text AS payload, attempts, created_at
 FROM commodore.service_event_outbox
 WHERE completed_at IS NULL
   AND (claimed_at IS NULL OR claimed_at < NOW() - ($1::text)::interval)
@@ -30,6 +30,7 @@ type ClaimServiceEventOutboxBatchParams struct {
 
 type ClaimServiceEventOutboxBatchRow struct {
 	ID        string    `db:"id" json:"id"`
+	EventID   string    `db:"event_id" json:"event_id"`
 	Payload   string    `db:"payload" json:"payload"`
 	Attempts  int32     `db:"attempts" json:"attempts"`
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
@@ -46,6 +47,7 @@ func (q *Queries) ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimSer
 		var i ClaimServiceEventOutboxBatchRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.EventID,
 			&i.Payload,
 			&i.Attempts,
 			&i.CreatedAt,
@@ -67,22 +69,29 @@ const completeServiceEventOutbox = `-- name: CompleteServiceEventOutbox :exec
 UPDATE commodore.service_event_outbox
 SET completed_at = NOW(), last_error = NULL
 WHERE id = $1::uuid
+  AND lease_token = $2::uuid
 `
 
-func (q *Queries) CompleteServiceEventOutbox(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, completeServiceEventOutbox, id)
+type CompleteServiceEventOutboxParams struct {
+	ID         string `db:"id" json:"id"`
+	LeaseToken string `db:"lease_token" json:"lease_token"`
+}
+
+func (q *Queries) CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error {
+	_, err := q.db.ExecContext(ctx, completeServiceEventOutbox, arg.ID, arg.LeaseToken)
 	return err
 }
 
 const enqueueServiceEvent = `-- name: EnqueueServiceEvent :one
 INSERT INTO commodore.service_event_outbox
-    (event_type, tenant_id, user_id, resource_type, resource_id, payload)
-VALUES ($1, $2::uuid, $3,
-        $4, $5, $6::text::jsonb)
+    (event_id, event_type, tenant_id, user_id, resource_type, resource_id, payload)
+VALUES ($1::uuid, $2, $3::uuid, $4,
+        $5, $6, $7::text::jsonb)
 RETURNING id::text
 `
 
 type EnqueueServiceEventParams struct {
+	EventID      string `db:"event_id" json:"event_id"`
 	EventType    string `db:"event_type" json:"event_type"`
 	TenantID     string `db:"tenant_id" json:"tenant_id"`
 	UserID       string `db:"user_id" json:"user_id"`
@@ -93,6 +102,7 @@ type EnqueueServiceEventParams struct {
 
 func (q *Queries) EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, enqueueServiceEvent,
+		arg.EventID,
 		arg.EventType,
 		arg.TenantID,
 		arg.UserID,
@@ -109,26 +119,39 @@ const failServiceEventOutbox = `-- name: FailServiceEventOutbox :exec
 UPDATE commodore.service_event_outbox
 SET attempts = $1, last_error = $2, claimed_at = NULL
 WHERE id = $3::uuid
+  AND lease_token = $4::uuid
 `
 
 type FailServiceEventOutboxParams struct {
-	Attempts  int32          `db:"attempts" json:"attempts"`
-	LastError sql.NullString `db:"last_error" json:"last_error"`
-	ID        string         `db:"id" json:"id"`
+	Attempts   int32          `db:"attempts" json:"attempts"`
+	LastError  sql.NullString `db:"last_error" json:"last_error"`
+	ID         string         `db:"id" json:"id"`
+	LeaseToken string         `db:"lease_token" json:"lease_token"`
 }
 
 func (q *Queries) FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error {
-	_, err := q.db.ExecContext(ctx, failServiceEventOutbox, arg.Attempts, arg.LastError, arg.ID)
+	_, err := q.db.ExecContext(ctx, failServiceEventOutbox,
+		arg.Attempts,
+		arg.LastError,
+		arg.ID,
+		arg.LeaseToken,
+	)
 	return err
 }
 
 const markServiceEventOutboxClaimed = `-- name: MarkServiceEventOutboxClaimed :exec
 UPDATE commodore.service_event_outbox
-SET claimed_at = NOW()
-WHERE id = ANY($1::uuid[])
+SET claimed_at = NOW(),
+    lease_token = $1::uuid
+WHERE id = ANY($2::uuid[])
 `
 
-func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error {
-	_, err := q.db.ExecContext(ctx, markServiceEventOutboxClaimed, pq.Array(ids))
+type MarkServiceEventOutboxClaimedParams struct {
+	LeaseToken string   `db:"lease_token" json:"lease_token"`
+	Ids        []string `db:"ids" json:"ids"`
+}
+
+func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkServiceEventOutboxClaimedParams) error {
+	_, err := q.db.ExecContext(ctx, markServiceEventOutboxClaimed, arg.LeaseToken, pq.Array(arg.Ids))
 	return err
 }

@@ -44,7 +44,7 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 	// Prior attempt already claimed 'completing' AND persisted spec+descriptor atomically; this retry
 	// finds it 'completing', so neither the claim nor the persist runs again.
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 	// An already-'completing' retry loads the persisted contract and uses ITS parts/upload-id.
@@ -52,7 +52,7 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 	// Ambiguous S3 error + Exists=true -> skip re-completion, run 'completing' -> 'processing' + job + event.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID, "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -61,9 +61,8 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectTransitionInsert(mock, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 	mock.ExpectQuery(`FROM foghorn\.artifacts a\s+LEFT JOIN foghorn\.vod_metadata`).
 		WithArgs("hash-1").
@@ -84,7 +83,7 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 	})
@@ -114,7 +113,7 @@ func TestCompleteVodUpload_AmbiguousErrorObjectAbsentLeavesCompleting(t *testing
 	defer cleanup()
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 	// An already-'completing' retry loads the persisted contract before completing.
@@ -123,7 +122,7 @@ func TestCompleteVodUpload_AmbiguousErrorObjectAbsentLeavesCompleting(t *testing
 	// further expectations, so any stray write would fail the test.
 
 	_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 	})

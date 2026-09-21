@@ -1,0 +1,38 @@
+query ListStreams($page: ConnectionInput, $search: String) {
+  streamsConnection(page: $page, search: $search) {
+    nodes {
+      ...StreamFields
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
+query GetStream($id: ID!) {
+  stream(id: $id) {
+    ...StreamFields
+  }
+}
+
+query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
+  streamKeysConnection(streamId: $streamId, page: $page) {
+    nodes {
+      ...StreamKeyFields
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
+query ListPushTargets($streamId: ID!) {
+  stream(id: $streamId) {
+    id
+    pushTargets {
+      ...PushTargetFields
+    }
+  }
+}

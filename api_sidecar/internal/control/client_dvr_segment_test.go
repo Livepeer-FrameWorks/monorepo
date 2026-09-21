@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -183,7 +184,7 @@ func TestDVRSegmentResponseHandlersIgnoreUnknown(t *testing.T) {
 
 func TestFireAndForgetDVRSenders(t *testing.T) {
 	t.Run("MarkDVRSegmentUploaded", func(t *testing.T) {
-		t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+		appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 		stream := connectFake(t)
 		if err := SendMarkDVRSegmentUploaded("dvr-1", "seg-1", 4096); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -195,7 +196,7 @@ func TestFireAndForgetDVRSenders(t *testing.T) {
 	})
 
 	t.Run("DVRSegmentDropped", func(t *testing.T) {
-		t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+		appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 		stream := connectFake(t)
 		if err := SendDVRSegmentDropped("dvr-1", "seg-1", "disk_pressure", "/p", 0, 2000, 2000, 4096, true); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -242,7 +243,7 @@ func TestFireAndForgetDVRSenders(t *testing.T) {
 }
 
 func TestFireAndForgetDVRSendersDisconnected(t *testing.T) {
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	clearConn()
 	if err := SendMarkDVRSegmentUploaded("d", "s", 1); err == nil {
 		t.Fatal("MarkDVRSegmentUploaded: expected error when disconnected")

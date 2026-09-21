@@ -269,6 +269,12 @@ ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS catalog_next_attempt_at T
 -- genuinely-stuck row out to a long backoff so newer rows always get a turn. Reset to 0 on a
 -- successful projection.
 ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS catalog_projection_attempts INTEGER NOT NULL DEFAULT 0;
+-- Aggregate version of the artifact's domain events. Every transition that publishes a
+-- clip, recording, or upload event (and a chapter event, on its parent recording)
+-- increments it in the transition's transaction; the row lock it takes makes version
+-- order equal commit order across Foghorn replicas. It is independent of
+-- catalog_revision, which advances only on catalog-projected field changes.
+ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 
 -- Source-owned per-artifact catalog revision. Updates to one artifact serialize on its row,
 -- so OLD+1 is the ordering domain Commodore actually compares and cannot regress across
@@ -739,6 +745,12 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     projection_state       VARCHAR(16) NOT NULL DEFAULT 'pending',
     source_revision        BIGINT,
     projected_at           TIMESTAMPTZ,
+    -- Public stream UUID captured at admission; keys the stream.connected/live/idle domain
+    -- events. NULL on sessions admitted before it was recorded, which emit none of them.
+    stream_id              UUID,
+    -- First playable STREAM_BUFFER from the session's own node. Set once by a compare-and-set
+    -- that also enqueues stream.live, so replicas and repeated buffer triggers emit nothing.
+    playable_at            TIMESTAMPTZ,
     UNIQUE (id, tenant_id, stream_internal_name),
     CONSTRAINT ck_foghorn_ingest_sessions_projection_state
         CHECK (projection_state IN ('pending', 'active')),
@@ -793,7 +805,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_artifacts_active_dvr_per_generation
 
 -- Durable close-before-insert evidence: a PUSH_INPUT_CLOSE observed for a connector with no ingest
 -- session row yet (concurrent trigger dispatch + WAL redelivery can process a close before its own
--- PUSH_REWRITE). CreateIngestSession consults this in the mint path (under the (tenant, stream)
+-- PUSH_REWRITE). MintIngestSession consults this in the mint path (under the (tenant, stream)
 -- advisory lock the close also takes) and denies a late rewrite whose start is at or before a recorded
 -- close for the same connector, so a dead publisher is never resurrected as an active session. Swept
 -- on a TTL by the ingest session reaper. See migration
@@ -1589,6 +1601,48 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_tenant
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_stream
     ON foghorn.artifact_event_outbox(stream_id, created_at DESC)
     WHERE stream_id <> '';
+
+-- Transactional outbox for Foghorn's domain events (pkg/events/outbox). Rows are
+-- written in the transaction that commits the artifact or ingest-session state
+-- change they describe and relayed to Decklog PublishDomainEvents. An artifact
+-- event that also has a legacy artifact_event_outbox row shares its event_id with
+-- that row's id. The DDL is outbox.TableDDL("foghorn") verbatim.
+CREATE TABLE IF NOT EXISTS foghorn.domain_event_outbox (
+    event_id          UUID PRIMARY KEY,
+    event_type        TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    aggregate_type    TEXT NOT NULL,
+    aggregate_id      TEXT NOT NULL,
+    aggregate_version BIGINT NOT NULL DEFAULT 0,
+    scope             TEXT NOT NULL,
+    tenant_id         UUID,
+    actor_auth_type   TEXT NOT NULL DEFAULT '',
+    actor_user_id     TEXT NOT NULL DEFAULT '',
+    actor_token_hash  TEXT NOT NULL DEFAULT '',
+    occurred_at       TIMESTAMPTZ NOT NULL,
+    payload           BYTEA NOT NULL,
+    enqueued_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    claimed_at        TIMESTAMPTZ,
+    lease_token       UUID,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT,
+    completed_at      TIMESTAMPTZ,
+    CONSTRAINT chk_foghorn_domain_event_outbox_scope CHECK (scope IN ('tenant', 'platform')),
+    CONSTRAINT chk_foghorn_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_pending
+    ON foghorn.domain_event_outbox (enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_aggregate
+    ON foghorn.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_completed
+    ON foghorn.domain_event_outbox (completed_at)
+    WHERE completed_at IS NOT NULL;
 
 -- Durable command ledger for artifact creation attempts, keyed by the Commodore
 -- creation-intent request_id. A create handler writes 'accepted' FIRST — before any

@@ -40,6 +40,13 @@ func (e *CapabilityError) Error() string {
 func (e *CapabilityError) Unwrap() error { return e.Err }
 
 var capabilityCatalog = map[string][]Capability{
+	"bosun": {
+		{Name: "tenant endpoints and secrets", Engine: EnginePostgres, Probe: "SELECT e.tenant_id, e.id, e.event_types, e.api_version, e.status, e.consecutive_failures, e.failing_since, s.secret_ciphertext, s.state, s.expires_at FROM bosun.webhook_endpoints e JOIN bosun.webhook_endpoint_secrets s ON s.tenant_id = e.tenant_id AND s.endpoint_id = e.id LIMIT 0"},
+		{Name: "delivery ledger leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, event_id, kind, status, attempts, next_attempt_at, lease_token, leased_until, replay_count FROM bosun.webhook_deliveries LIMIT 0"},
+		{Name: "event ledger", Engine: EnginePostgres, Probe: "SELECT tenant_id, event_id, event_type, schema_name, payload, occurred_at, received_at FROM bosun.webhook_events LIMIT 0"},
+		{Name: "disable notification outbox", Engine: EnginePostgres, Probe: "SELECT tenant_id, id, endpoint_id, kind, attempts, next_attempt_at, lease_token, completed_at FROM bosun.webhook_notification_outbox LIMIT 0"},
+		{Name: "domain event outbox", Engine: EnginePostgres, Probe: "SELECT event_id, event_type, tenant_id, lease_token, completed_at FROM bosun.domain_event_outbox LIMIT 0"},
+	},
 	"commodore": {
 		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0"},
 		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0"},
@@ -73,6 +80,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "distributed ledger-worker locking", Engine: EnginePostgres, Probe: "SELECT pg_try_advisory_xact_lock(hashtext('periscope-ingest:capability'))"},
 		{Name: "API delivery identity", Engine: EngineClickHouse, Probe: "SELECT tenant_id, source_event_id, ingested_at_ms FROM periscope.api_requests LIMIT 0"},
 		{Name: "viewer attribution", Engine: EngineClickHouse, Probe: "SELECT tenant_id, cluster_id, node_id, session_id FROM periscope.viewer_connection_events LIMIT 0"},
+		{Name: "domain event projections", Engine: EngineClickHouse, Probe: "SELECT a.tenant_id, a.artifact_id, a.version, e.actor_auth_type, e.actor_token_hash FROM periscope.artifact_state_current_v2 AS a, periscope.api_events AS e LIMIT 0"},
 	},
 	"periscope-query": {
 		{Name: "delegated-token replay fencing", Engine: EnginePostgres, Probe: "SELECT jti, expires_at FROM periscope.delegated_jwt_replays LIMIT 0"},

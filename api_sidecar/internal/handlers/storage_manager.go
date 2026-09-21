@@ -15,6 +15,7 @@ import (
 
 	"io"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
@@ -187,7 +188,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	})
 
 	// Register processing job handler
-	procHandler := NewProcessingJobHandler(logger, os.Getenv("MISTSERVER_URL"), basePath, os.Getenv("HELMSMAN_STATE_DIR"))
+	procHandler := NewProcessingJobHandler(logger, appconfig.MistServerURL(), basePath, appconfig.StateDir())
 	control.SetProcessingJobHandler(func(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 		procHandler.Handle(req, send)
 	})
@@ -1392,7 +1393,7 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *ipcpb.DtshSyncR
 				}
 			}
 			vodStreamName := "vod+" + assetHash
-			if genErr := GenerateDTSHForPath(os.Getenv("MISTSERVER_URL"), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
+			if genErr := GenerateDTSHForPath(appconfig.MistServerURL(), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
 				return fmt.Errorf("dtsh %s and on-demand generation failed: %w", reason, genErr)
 			}
 		}

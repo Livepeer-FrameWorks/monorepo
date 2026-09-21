@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 )
@@ -21,7 +22,7 @@ func TestReconcileFailedTimeoutsSkipsWithoutReversal(t *testing.T) {
 	auth := testX402Authorization("25000000")
 	server := newTestRPCServer(t, testX402Receipt(t, auth), "0x20")
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -50,8 +51,8 @@ func TestReconcileFailedTimeoutsSkipsWithoutReversal(t *testing.T) {
 func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 	server := newTestRPCServer(t, nil, "0x64")
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
-	t.Setenv("X402_REORG_DEPTH_BLOCKS", "1")
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "X402_REORG_DEPTH_BLOCKS", "1")
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -121,7 +122,7 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 	auth := testX402Authorization("25000000")
 	server := newTestRPCServer(t, testX402Receipt(t, auth), "0x20")
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -134,7 +135,7 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 		ID:          "nonce-3",
 		Network:     "base",
 		TxHash:      "0xcredit",
-		TenantID:    "tenant-1",
+		TenantID:    webhookTenantID,
 		AmountCents: 2500,
 		SettledAt:   time.Now().Add(-5 * time.Minute),
 		AuthPayload: testX402PayloadJSON(t, auth),
@@ -144,19 +145,20 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 	mock.ExpectQuery("SELECT status, tenant_id::text AS tenant_id, amount_cents, tx_hash").
 		WithArgs("nonce-3").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id", "amount_cents", "tx_hash"}).
-			AddRow("pending", "tenant-1", int64(2500), "0xcredit"))
+			AddRow("pending", webhookTenantID, int64(2500), "0xcredit"))
 	mock.ExpectQuery("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), "topup", sqlmock.AnyArg(), "nonce-3", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), webhookTenantID, int64(2500), "topup", sqlmock.AnyArg(), "nonce-3", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
-		WithArgs("tenant-1", "EUR").
+		WithArgs(webhookTenantID, "EUR").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery("UPDATE purser.prepaid_balances").
-		WithArgs(int64(2500), "tenant-1", "EUR").
+		WithArgs(int64(2500), webhookTenantID, "EUR").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(3500)))
 	mock.ExpectExec("UPDATE purser.balance_transactions").
 		WithArgs(int64(3500), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectDomainEvent(mock, "billing.topup_credited", webhookTenantID)
 	mock.ExpectExec("UPDATE purser.x402_nonces").
 		WithArgs(int64(16), int64(21000), "nonce-3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -165,6 +167,9 @@ func TestReconcilePendingSettlementCreditsMissingLedgerBeforeConfirm(t *testing.
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE purser.x402_payment_quotes").
 		WithArgs("0xcredit", "nonce-3").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO purser.crypto_accounting_anomalies").
+		WithArgs("nonce-3").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
@@ -337,8 +342,8 @@ func TestMarkConfirmedWritesSettlementEventInTransaction(t *testing.T) {
 func TestReconcileConfirmedSettlementsReorgRollsBackStatusWhenOutboxInsertFails(t *testing.T) {
 	server := newTestRPCServer(t, nil, "0x64")
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
-	t.Setenv("X402_REORG_DEPTH_BLOCKS", "1")
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "X402_REORG_DEPTH_BLOCKS", "1")
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {

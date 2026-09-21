@@ -47,6 +47,19 @@ func newGuardServer(t *testing.T) *PurserServer {
 	return &PurserServer{db: mockDB, logger: logging.NewLogger()}
 }
 
+// newProfileGuardServer answers the tenant presentment-currency lookup that
+// top-up guards run before validating amounts.
+func newProfileGuardServer(t *testing.T, tenantID, presentmentCurrency string) *PurserServer {
+	t.Helper()
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = mockDB.Close() })
+	expectCollectionProfile(mock, tenantID, presentmentCurrency)
+	return &PurserServer{db: mockDB, logger: logging.NewLogger()}
+}
+
 // TestMethodInputGuards asserts the InvalidArgument validation guards at the top
 // of large gRPC methods. An explicit service-auth context bypasses tenant scope,
 // so the empty-required-field guards are reached directly.
@@ -113,9 +126,10 @@ func TestMethodInputGuards(t *testing.T) {
 			})
 			return err
 		}, codes.InvalidArgument},
-		{"CreateCardTopup below provider minimum", func(s *PurserServer) error {
+		{"CreateCardTopup below provider minimum", func(*PurserServer) error {
+			s := newProfileGuardServer(t, "t1", "EUR")
 			_, err := s.CreateCardTopup(ctx, &purserpb.CreateCardTopupRequest{
-				TenantId: "t1", AmountCents: 499, Currency: "EUR", SuccessUrl: "https://x/ok", CancelUrl: "https://x/no", Provider: "stripe",
+				TenantId: "t1", AmountCents: 499, SuccessUrl: "https://x/ok", CancelUrl: "https://x/no", Provider: "stripe",
 			})
 			return err
 		}, codes.InvalidArgument},
@@ -127,12 +141,6 @@ func TestMethodInputGuards(t *testing.T) {
 		}, codes.InvalidArgument},
 		{"CreateCryptoTopup non-positive amount", func(s *PurserServer) error {
 			_, err := s.CreateCryptoTopup(ctx, &purserpb.CreateCryptoTopupRequest{TenantId: "t1", ExpectedAmountCents: 0})
-			return err
-		}, codes.InvalidArgument},
-		{"CreateCryptoTopup unsupported currency", func(s *PurserServer) error {
-			_, err := s.CreateCryptoTopup(ctx, &purserpb.CreateCryptoTopupRequest{
-				TenantId: "t1", ExpectedAmountCents: 100, Currency: "GBP",
-			})
 			return err
 		}, codes.InvalidArgument},
 		{"GetCryptoTopup empty id", func(s *PurserServer) error {

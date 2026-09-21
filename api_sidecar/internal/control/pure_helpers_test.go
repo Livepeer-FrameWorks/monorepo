@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/storage"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -30,13 +31,13 @@ func TestURLEscape(t *testing.T) {
 
 func TestRelayBaseURL(t *testing.T) {
 	t.Run("falls back to colocated loopback when env unset", func(t *testing.T) {
-		t.Setenv("HELMSMAN_RELAY_BASE_URL", "")
+		appconfigtest.Setenv(t, "HELMSMAN_RELAY_BASE_URL", "")
 		if got := relayBaseURL(); got != "http://127.0.0.1:18007" {
 			t.Errorf("relayBaseURL() = %q, want loopback default", got)
 		}
 	})
 	t.Run("honours env and trims trailing slash", func(t *testing.T) {
-		t.Setenv("HELMSMAN_RELAY_BASE_URL", "http://helmsman:18007/")
+		appconfigtest.Setenv(t, "HELMSMAN_RELAY_BASE_URL", "http://helmsman:18007/")
 		if got := relayBaseURL(); got != "http://helmsman:18007" {
 			t.Errorf("relayBaseURL() = %q, want trimmed service URL", got)
 		}

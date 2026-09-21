@@ -5,13 +5,13 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -38,7 +38,8 @@ type GRPCAuthConfig struct {
 	// DelegatedJWTAudience, when set, is required on API-token delegation
 	// assertions. Interactive session JWTs do not carry this claim.
 	DelegatedJWTAudience string
-	// MetadataPolicy controls how service-token metadata is handled.
+	// MetadataPolicy controls how service-token metadata is handled. Unset
+	// behaves as MetadataPolicyDeny.
 	MetadataPolicy ServiceTokenMetadataPolicy
 }
 
@@ -69,10 +70,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		serviceOnlyMap[m] = true
 	}
 
-	policy := cfg.MetadataPolicy
-	if policy == MetadataPolicyUnset {
-		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
-	}
+	policy := effectiveMetadataPolicy(cfg.MetadataPolicy)
 
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// Skip auth for certain methods (health checks, etc.)
@@ -193,10 +191,7 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 		serviceOnlyMap[m] = true
 	}
 
-	policy := cfg.MetadataPolicy
-	if policy == MetadataPolicyUnset {
-		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
-	}
+	policy := effectiveMetadataPolicy(cfg.MetadataPolicy)
 
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if skipMap[info.FullMethod] {
@@ -428,16 +423,31 @@ func applyDemoModeMetadata(ctx context.Context, md metadata.MD) context.Context 
 	return ctx
 }
 
-func parseMetadataPolicy(value string) ServiceTokenMetadataPolicy {
+// ParseMetadataPolicy maps a GRPC_METADATA_POLICY value (allow, audit, or
+// deny) to its interceptor policy. Any other value, including an empty one,
+// is an error.
+func ParseMetadataPolicy(value string) (ServiceTokenMetadataPolicy, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "audit":
-		return MetadataPolicyAudit
-	case "deny":
-		return MetadataPolicyDeny
-	case "allow", "":
-		return MetadataPolicyAllow
+	case config.MetadataPolicyAllow:
+		return MetadataPolicyAllow, nil
+	case config.MetadataPolicyAudit:
+		return MetadataPolicyAudit, nil
+	case config.MetadataPolicyDeny:
+		return MetadataPolicyDeny, nil
 	default:
-		return MetadataPolicyAllow
+		return MetadataPolicyUnset, fmt.Errorf("unknown gRPC metadata policy %q: want allow, audit, or deny", value)
+	}
+}
+
+// effectiveMetadataPolicy treats an unset or unknown policy as deny, so an
+// interceptor built without an explicit policy never trusts caller identity
+// metadata.
+func effectiveMetadataPolicy(policy ServiceTokenMetadataPolicy) ServiceTokenMetadataPolicy {
+	switch policy {
+	case MetadataPolicyAllow, MetadataPolicyAudit:
+		return policy
+	default:
+		return MetadataPolicyDeny
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/lib/pq"
 )
 
@@ -59,6 +60,34 @@ func TestApplyServiceDefinitionFallbackUsesCanonicalHealthMetadata(t *testing.T)
 	}
 }
 
+// TestApplyServiceDefinitionFallbackUsesFleetReadinessPath pins the poller's fallback to the fleet-wide readiness path.
+// Chandler serves /ready in every supported release, so it is probed there. A Go service whose /ready arrived in a
+// release that may not be running everywhere yet (servicedefs.ReadySince) stays on /health: the poller cannot see
+// which release an instance runs, and probing /ready on an older binary would mark it unhealthy.
+func TestApplyServiceDefinitionFallbackUsesFleetReadinessPath(t *testing.T) {
+	chandler := serviceInstance{serviceID: "chandler"}
+	applyServiceDefinitionFallback(&chandler)
+	if chandler.path != "/ready" {
+		t.Fatalf("chandler fallback path = %q, want /ready", chandler.path)
+	}
+
+	bridge := serviceInstance{serviceID: "bridge"}
+	applyServiceDefinitionFallback(&bridge)
+	def, _ := servicedefs.Lookup("bridge")
+	if bridge.path != def.ReadinessPath() {
+		t.Fatalf("bridge fallback path = %q, want the fleet readiness path %q", bridge.path, def.ReadinessPath())
+	}
+	if def.ReadySince != "" && bridge.path != "/health" {
+		t.Fatalf("bridge fallback path = %q while ReadySince=%s, want /health", bridge.path, def.ReadySince)
+	}
+
+	registered := serviceInstance{serviceID: "bridge", path: "/ready"}
+	applyServiceDefinitionFallback(&registered)
+	if registered.path != "/ready" {
+		t.Fatalf("a registered path must win over the fallback; got %q", registered.path)
+	}
+}
+
 func TestHTTPHealthURL(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -101,7 +130,7 @@ func TestPollOnceRetriesSchemaVersionMismatch(t *testing.T) {
 	mock.ExpectQuery("SELECT si.instance_id, si.service_id").
 		WillReturnRows(rows)
 
-	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0); err != nil {
+	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
 		t.Fatalf("pollOnce returned error after retry: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -134,7 +163,7 @@ func TestPollOnceExcludesFoghornOwnedEdgeServices(t *testing.T) {
 	})
 	mock.ExpectQuery("poller excludes edge services").WillReturnRows(rows)
 
-	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0); err != nil {
+	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
 		t.Fatalf("pollOnce returned error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

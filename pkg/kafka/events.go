@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // Event represents a generic Kafka event
@@ -63,6 +64,11 @@ type ServiceEvent struct {
 	SchemaVersion         int32  `json:"schema_version,omitempty"`
 	CorrelationID         string `json:"correlation_id,omitempty"`
 	CausationID           string `json:"causation_id,omitempty"`
+
+	// Actor of the request that produced the event (ipcpb.ServiceEvent
+	// actor_auth_type / actor_token_hash).
+	ActorAuthType  string `json:"actor_auth_type,omitempty"`
+	ActorTokenHash uint64 `json:"actor_token_hash,omitempty"`
 }
 
 // EventHandler interface for handling Kafka events
@@ -150,6 +156,8 @@ type ConsumerInterface interface {
 // ProducerInterface defines the interface for Kafka producers
 type ProducerInterface interface {
 	ProduceMessage(topic string, key []byte, value []byte, headers map[string]string) error
+	// ProduceRecords returns after Kafka acknowledged every record.
+	ProduceRecords(ctx context.Context, records []*kgo.Record) error
 	PublishTypedBatch(events []AnalyticsEvent) error // Typed method for analytics events
 	PublishTypedEvent(event *AnalyticsEvent) error   // Single typed event method
 	Close() error

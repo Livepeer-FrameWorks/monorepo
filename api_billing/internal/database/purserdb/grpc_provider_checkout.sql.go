@@ -192,6 +192,42 @@ func (q *Queries) LinkProviderIntentCustomer(ctx context.Context, arg LinkProvid
 	return err
 }
 
+const lockProviderIntentPaymentID = `-- name: LockProviderIntentPaymentID :one
+SELECT COALESCE(provider_payment_id, '')::text AS provider_payment_id
+FROM purser.payment_provider_intents
+WHERE id = $1::text::uuid
+FOR UPDATE
+`
+
+// Locks the intent row and returns the provider payment it already names.
+func (q *Queries) LockProviderIntentPaymentID(ctx context.Context, intentID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockProviderIntentPaymentID, intentID)
+	var provider_payment_id string
+	err := row.Scan(&provider_payment_id)
+	return provider_payment_id, err
+}
+
+const lockTenantSubscriptionMollieID = `-- name: LockTenantSubscriptionMollieID :one
+SELECT id::text AS id, COALESCE(mollie_subscription_id, '')::text AS mollie_subscription_id
+FROM purser.tenant_subscriptions
+WHERE tenant_id = $1::text::uuid
+FOR UPDATE
+`
+
+type LockTenantSubscriptionMollieIDRow struct {
+	ID                   string `db:"id" json:"id"`
+	MollieSubscriptionID string `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+}
+
+// Locks the tenant's subscription row and returns the Mollie subscription it
+// already names.
+func (q *Queries) LockTenantSubscriptionMollieID(ctx context.Context, tenantID string) (LockTenantSubscriptionMollieIDRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantSubscriptionMollieID, tenantID)
+	var i LockTenantSubscriptionMollieIDRow
+	err := row.Scan(&i.ID, &i.MollieSubscriptionID)
+	return i, err
+}
+
 const setProviderIntentCustomer = `-- name: SetProviderIntentCustomer :exec
 UPDATE purser.payment_provider_intents
 SET provider_customer_id = $1, updated_at = NOW()

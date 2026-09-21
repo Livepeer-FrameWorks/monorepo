@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	livepeerchain "github.com/Livepeer-FrameWorks/monorepo/pkg/livepeer/chain"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -24,16 +25,16 @@ import (
 const testFundingPrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
 
 func TestNewLivepeerDepositMonitorValidatesFundingIdentity(t *testing.T) {
-	t.Setenv("ARBITRUM_RPC_ENDPOINT", "https://arb.example")
-	t.Setenv("X402_GAS_WALLET_PRIVKEY", testFundingPrivateKey)
+	appconfigtest.Set(t, "ARBITRUM_RPC_ENDPOINT", "https://arb.example")
+	appconfigtest.Set(t, "X402_GAS_WALLET_PRIVKEY", testFundingPrivateKey)
 	key, err := crypto.HexToECDSA(testFundingPrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := crypto.PubkeyToAddress(key.PublicKey).Hex()
-	t.Setenv("X402_GAS_WALLET_ADDRESS", address)
+	appconfigtest.Set(t, "X402_GAS_WALLET_ADDRESS", address)
 
-	monitor, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil)
+	monitor, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, "")
 	if err != nil {
 		t.Fatalf("valid funding identity rejected: %v", err)
 	}
@@ -41,13 +42,13 @@ func TestNewLivepeerDepositMonitorValidatesFundingIdentity(t *testing.T) {
 		t.Fatalf("funding address=%q, want %q", monitor.gasWalletAddress, address)
 	}
 
-	t.Setenv("X402_GAS_WALLET_ADDRESS", "0x1111111111111111111111111111111111111111")
-	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil); err == nil || !strings.Contains(err.Error(), "does not match") {
+	appconfigtest.Set(t, "X402_GAS_WALLET_ADDRESS", "0x1111111111111111111111111111111111111111")
+	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, ""); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched funding identity accepted: %v", err)
 	}
 
-	t.Setenv("X402_GAS_WALLET_PRIVKEY", "")
-	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil); err == nil {
+	appconfigtest.Set(t, "X402_GAS_WALLET_PRIVKEY", "")
+	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, ""); err == nil {
 		t.Fatal("missing funding private key accepted")
 	}
 }

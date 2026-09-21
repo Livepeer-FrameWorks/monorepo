@@ -11,21 +11,21 @@ import (
 )
 
 // solventBalance returns a FakePurser whose only stubbed call is a positive
-// prepaid balance — enough for GetCapabilities' balance gate to pass.
+// prepaid balance — enough for ToolAccess' balance gate to pass.
 func solventBalance() *clientstest.FakePurser {
 	return &clientstest.FakePurser{
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 500, AvailableBalanceCents: 500}, nil
 		},
 	}
 }
 
-func TestGetCapabilities_Solvent_AllEnabled(t *testing.T) {
+func TestToolAccess_Solvent_AllEnabled(t *testing.T) {
 	c := checkerWith(solventBalance())
-	caps := c.GetCapabilities(ctxTenant("t1"))
+	caps := c.ToolAccess(ctxTenant("t1"))
 	for _, k := range []string{"create_stream", "update_stream", "delete_stream", "create_clip", "start_dvr", "create_vod_upload", "complete_vod_upload", "delete_vod_asset"} {
 		if !caps[k] {
 			t.Fatalf("solvent tenant should have %q enabled", k)
@@ -33,19 +33,19 @@ func TestGetCapabilities_Solvent_AllEnabled(t *testing.T) {
 	}
 }
 
-func TestGetCapabilities_Broke_OnlyRatedToolsDisabled(t *testing.T) {
+func TestToolAccess_Broke_OnlyRatedToolsDisabled(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 		},
 		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
 			return &purserpb.PaymentRequirements{}, nil
 		},
 	})
-	caps := c.GetCapabilities(ctxTenant("t1"))
+	caps := c.ToolAccess(ctxTenant("t1"))
 	for _, k := range []string{"create_clip", "start_dvr", "create_vod_upload", "complete_vod_upload", "ask_consultant", "execute_query"} {
 		if caps[k] {
 			t.Fatalf("unfunded tenant must not have rated capability %q: %+v", k, caps)
@@ -79,7 +79,7 @@ func TestCheckBalance_NoTenant_Errors(t *testing.T) {
 // than silently passing or blocking.
 func TestCheckBalance_UnknownModel_Errors(t *testing.T) {
 	c := checkerWith(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return nil, errors.New("no balance row")
 		},
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
@@ -135,7 +135,7 @@ func TestGetBlockers_BalanceCheckErrorIsDescriptive(t *testing.T) {
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return nil, errors.New("no balance row")
 		},
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {

@@ -68,7 +68,8 @@ func TestInvoiceEmailDispatcherReadsPermanentHeaderAndLineItems(t *testing.T) {
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"amount", "metered_amount", "gross_metered_amount", "currency", "due_date", "status",
-		}).AddRow(19.75, 9.75, 9.75, "EUR", dueDate, "pending"))
+			"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date",
+		}).AddRow(19.75, 9.75, 9.75, "EUR", dueDate, "pending", 2313, "USD", "1.1712000000", "2026-09-01"))
 	mock.ExpectQuery(`FROM purser\.invoice_line_items\s+WHERE invoice_id = \$1::text::uuid\s+AND tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -79,9 +80,12 @@ func TestInvoiceEmailDispatcherReadsPermanentHeaderAndLineItems(t *testing.T) {
 	var delivered []EmailInvoiceLineItem
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: &JobManager{db: db},
-		send: func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, gotDueDate time.Time, lineItems []EmailInvoiceLineItem) error {
-			if recipient != "billing@example.com" || invoiceID != "invoice-1" || amount != 19.75 || currency != "EUR" || !gotDueDate.Equal(dueDate) {
+		send: func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, gotDueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error {
+			if recipient != "billing@example.com" || invoiceID != "invoice-1" || amount != 23.13 || currency != "USD" || !gotDueDate.Equal(dueDate) {
 				t.Errorf("unexpected email header: recipient=%s invoice=%s amount=%v currency=%s due=%s", recipient, invoiceID, amount, currency, gotDueDate)
+			}
+			if fx != (EmailFX{EURAmount: "19.75", UnitsPerEUR: "1.1712", ReferenceDate: "2026-09-01"}) {
+				t.Errorf("invoice EUR total, rate and date = %+v", fx)
 			}
 			delivered = lineItems
 			return nil
@@ -135,6 +139,11 @@ func TestInvoiceEmailOutboxClaimLeasesRowsForHorizontalWorkers(t *testing.T) {
 	}
 }
 
+var overdueReminderColumns = []string{
+	"amount_due_cents", "currency", "eur_amount_cents", "presentment_units_per_eur", "presentment_reference_date",
+	"due_date", "status", "latest_reminder_stage",
+}
+
 func TestInvoiceEmailDispatcherSendsOutstandingOverdueAmount(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -145,16 +154,19 @@ func TestInvoiceEmailDispatcherSendsOutstandingOverdueAmount(t *testing.T) {
 	dueDate := time.Now().Add(-8 * 24 * time.Hour)
 	mock.ExpectQuery(`SELECT GREATEST[\s\S]+FROM purser\.billing_invoices bi[\s\S]+WHERE bi\.id = \$1::text::uuid[\s\S]+AND bi\.tenant_id = \$2::text::uuid`).
 		WithArgs("invoice-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"amount_due", "currency", "due_date", "status", "latest_reminder_stage"}).
-			AddRow(4.25, "EUR", dueDate, "overdue", 7))
+		WillReturnRows(sqlmock.NewRows(overdueReminderColumns).
+			AddRow(425, "GBP", 1990, "0.8636", "2026-09-01", dueDate, "overdue", 7))
 
 	called := false
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: &JobManager{db: db},
-		sendReminder: func(recipient, invoiceID string, amount float64, currency string, daysPastDue int) error {
+		sendReminder: func(recipient, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error {
 			called = true
-			if recipient != "billing@example.com" || invoiceID != "invoice-1" || amount != 4.25 || currency != "EUR" || daysPastDue < 7 {
+			if recipient != "billing@example.com" || invoiceID != "invoice-1" || amount != 4.25 || currency != "GBP" || daysPastDue < 7 {
 				t.Fatalf("unexpected reminder: recipient=%s invoice=%s amount=%v currency=%s days=%d", recipient, invoiceID, amount, currency, daysPastDue)
+			}
+			if fx != (EmailFX{EURAmount: "19.90", UnitsPerEUR: "0.8636", ReferenceDate: "2026-09-01"}) {
+				t.Fatalf("reminder EUR total, rate and date = %+v", fx)
 			}
 			return nil
 		},
@@ -183,11 +195,11 @@ func TestInvoiceEmailDispatcherSkipsSettledReminder(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT GREATEST[\s\S]+FROM purser\.billing_invoices bi`).
 		WithArgs("invoice-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"amount_due", "currency", "due_date", "status", "latest_reminder_stage"}).
-			AddRow(0, "EUR", time.Now().Add(-8*24*time.Hour), "paid", 7))
+		WillReturnRows(sqlmock.NewRows(overdueReminderColumns).
+			AddRow(0, "EUR", 1990, "1.0000000000", "2026-09-01", time.Now().Add(-8*24*time.Hour), "paid", 7))
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: &JobManager{db: db},
-		sendReminder: func(string, string, float64, string, int) error {
+		sendReminder: func(string, string, float64, string, int, EmailFX) error {
 			t.Fatal("settled reminder must not be sent")
 			return nil
 		},
@@ -208,11 +220,11 @@ func TestInvoiceEmailDispatcherSkipsSupersededReminderStage(t *testing.T) {
 	defer db.Close()
 	mock.ExpectQuery(`SELECT GREATEST[\s\S]+FROM purser\.billing_invoices bi`).
 		WithArgs("invoice-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"amount_due", "currency", "due_date", "status", "latest_reminder_stage"}).
-			AddRow(4.25, "EUR", time.Now().Add(-8*24*time.Hour), "overdue", 7))
+		WillReturnRows(sqlmock.NewRows(overdueReminderColumns).
+			AddRow(425, "EUR", 425, "1.0000000000", "2026-09-01", time.Now().Add(-8*24*time.Hour), "overdue", 7))
 	dispatcher := &invoiceEmailDispatcher{
 		jobs: &JobManager{db: db},
-		sendReminder: func(string, string, float64, string, int) error {
+		sendReminder: func(string, string, float64, string, int, EmailFX) error {
 			t.Fatal("superseded stage must not be sent")
 			return nil
 		},

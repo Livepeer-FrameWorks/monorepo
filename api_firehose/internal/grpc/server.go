@@ -15,9 +15,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -255,6 +255,8 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *ipcpb.Servi
 		SchemaVersion:         event.GetSchemaVersion(),
 		CorrelationID:         event.GetCorrelationId(),
 		CausationID:           event.GetCausationId(),
+		ActorAuthType:         event.GetActorAuthType(),
+		ActorTokenHash:        event.GetActorTokenHash(),
 	}
 	// Envelope v2 backfill: legacy producers don't stamp source_region or
 	// source_cluster_id; fall back to Decklog's own identity so MirrorMaker
@@ -838,13 +840,14 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 
 // GRPCServerConfig contains configuration for creating a Decklog gRPC server
 type GRPCServerConfig struct {
-	Producer      kafka.ProducerInterface
-	Logger        logging.Logger
-	Metrics       *DecklogMetrics
-	CertFile      string
-	KeyFile       string
-	AllowInsecure bool
-	ServiceToken  string
+	Producer       kafka.ProducerInterface
+	Logger         logging.Logger
+	Metrics        *DecklogMetrics
+	CertFile       string
+	KeyFile        string
+	AllowInsecure  bool
+	ServiceToken   string
+	MetadataPolicy middleware.ServiceTokenMetadataPolicy
 	// ServiceEventsTopic overrides the topic for ServiceEvent publishing.
 	ServiceEventsTopic string
 	// RawTriggersTopic overrides the topic Decklog uses to republish the
@@ -859,8 +862,9 @@ type GRPCServerConfig struct {
 	SourceClusterID string
 }
 
-// NewGRPCServer creates a new gRPC server with proper TLS configuration
-func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
+// NewGRPCServer creates a new gRPC server with proper TLS configuration. It
+// waits up to two minutes for the TLS files, and stops waiting when ctx ends.
+func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
 	tlsCfg := grpcutil.ServerTLSConfig{
@@ -868,7 +872,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
 		return nil, fmt.Errorf("wait for Decklog gRPC TLS files: %w", err)
@@ -883,8 +887,9 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 
 	// Chain auth interceptor with logging interceptor
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: cfg.ServiceToken,
-		Logger:       cfg.Logger,
+		ServiceToken:   cfg.ServiceToken,
+		MetadataPolicy: cfg.MetadataPolicy,
+		Logger:         cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
@@ -904,7 +909,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	}))
 	// Register gRPC health checking service
 	hs := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(server, hs)
+	fwserver.RegisterHealthServer(server, hs)
 	reflection.Register(server)
 	return server, nil
 }

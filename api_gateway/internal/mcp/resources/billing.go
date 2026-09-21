@@ -11,7 +11,6 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -55,7 +54,7 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 	server.AddResource(&mcp.Resource{
 		URI:         "billing://invoices",
 		Name:        "Invoices",
-		Description: "Recent draft and permanent invoices with itemized meter quantities, units, dimensions, and cluster attribution.",
+		Description: "Recent draft and permanent invoices with itemized meter quantities, units, dimensions, and cluster attribution. Amounts are EUR; finalized invoices add the total charged in the presentment currency with the ECB rate and reference date.",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return handleBillingInvoices(ctx, clients, logger)
@@ -64,7 +63,7 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 	server.AddResource(&mcp.Resource{
 		URI:         "billing://payments",
 		Name:        "Invoice Payments",
-		Description: "Recent invoice payment attempts and their confirmation state. Retry a failed payment with pay_invoice; pending calls are resumed idempotently.",
+		Description: "Recent invoice payment attempts and their confirmation state, with the amount charged and the EUR amount applied at the ECB rate. Retry a failed payment with pay_invoice; pending calls are resumed idempotently.",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return handleBillingPayments(ctx, clients, logger)
@@ -107,6 +106,59 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 	})
 }
 
+// ConversionInfo is a payment amount in the currency charged and the EUR
+// amount that reached the ledger or the invoice, at an ECB reference rate
+// (identity for EUR).
+type ConversionInfo struct {
+	OriginalAmountCents int64  `json:"original_amount_cents"`
+	OriginalCurrency    string `json:"original_currency"`
+	EURAmountCents      int64  `json:"eur_amount_cents"`
+	UnitsPerEUR         string `json:"units_per_eur"`
+	RateSource          string `json:"rate_source"`
+	ReferenceDate       string `json:"reference_date"`
+}
+
+// NewConversionInfo returns nil when the payment carries no FX record.
+func NewConversionInfo(fx *purserpb.FxConversion) *ConversionInfo {
+	if fx == nil || fx.GetOriginalCurrency() == "" {
+		return nil
+	}
+	return &ConversionInfo{
+		OriginalAmountCents: fx.GetOriginalAmountCents(),
+		OriginalCurrency:    fx.GetOriginalCurrency(),
+		EURAmountCents:      fx.GetEurAmountCents(),
+		UnitsPerEUR:         fx.GetUnitsPerEur(),
+		RateSource:          fx.GetSource(),
+		ReferenceDate:       fx.GetReferenceDate(),
+	}
+}
+
+// DescribeConversion states the charged amount, the EUR amount, and the rate,
+// for example "25.00 USD = 21.37 EUR at 1.1698 USD per EUR (ECB reference
+// date 2026-09-16)". An EUR payment is stated as its EUR amount alone.
+func DescribeConversion(fx *purserpb.FxConversion) string {
+	if fx == nil || fx.GetOriginalCurrency() == "" {
+		return ""
+	}
+	eur := FormatMinorUnits(fx.GetEurAmountCents(), "EUR")
+	if strings.EqualFold(fx.GetOriginalCurrency(), "EUR") {
+		return eur
+	}
+	return fmt.Sprintf("%s = %s at %s %s per EUR (ECB reference date %s)",
+		FormatMinorUnits(fx.GetOriginalAmountCents(), fx.GetOriginalCurrency()), eur,
+		fx.GetUnitsPerEur(), fx.GetOriginalCurrency(), fx.GetReferenceDate())
+}
+
+// FormatMinorUnits renders cents of a two-decimal currency, e.g. "21.37 EUR".
+func FormatMinorUnits(cents int64, currency string) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d %s", sign, cents/100, cents%100, currency)
+}
+
 type BillingDocumentInfo struct {
 	ID             string `json:"id"`
 	Kind           string `json:"kind"`
@@ -117,6 +169,13 @@ type BillingDocumentInfo struct {
 	IssuedAt       string `json:"issued_at"`
 	RetentionUntil string `json:"retention_until"`
 	DownloadURI    string `json:"download_uri"`
+	// EUR amounts and the ECB rate the charged amount converts at, when the
+	// document states them.
+	EURAmountCents  *int64 `json:"eur_amount_cents,omitempty"`
+	NetEURCents     *int64 `json:"net_eur_cents,omitempty"`
+	VATEURCents     *int64 `json:"vat_eur_cents,omitempty"`
+	UnitsPerEUR     string `json:"units_per_eur,omitempty"`
+	FXReferenceDate string `json:"fx_reference_date,omitempty"`
 }
 
 func handleBillingDocuments(ctx context.Context, clients *clients.ServiceClients) (*mcp.ReadResourceResult, error) {
@@ -136,7 +195,9 @@ func handleBillingDocuments(ctx context.Context, clients *clients.ServiceClients
 		info := BillingDocumentInfo{
 			ID: document.GetId(), Kind: document.GetKind(), DocumentNumber: document.GetDocumentNumber(),
 			AmountCents: document.GetAmountCents(), Currency: document.GetCurrency(), Status: document.GetStatus(),
-			DownloadURI: "billing://documents/" + document.GetKind() + "/" + document.GetId(),
+			DownloadURI:    "billing://documents/" + document.GetKind() + "/" + document.GetId(),
+			EURAmountCents: document.EurAmountCents, NetEURCents: document.NetEurCents, VATEURCents: document.VatEurCents,
+			UnitsPerEUR: document.GetUnitsPerEur(), FXReferenceDate: document.GetFxReferenceDate(),
 		}
 		if document.GetIssuedAt() != nil {
 			info.IssuedAt = document.GetIssuedAt().AsTime().UTC().Format(time.RFC3339)
@@ -221,7 +282,7 @@ func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, 
 
 	// Get detailed prepaid balance
 	if info.BillingModel == "prepaid" {
-		balance, err := clients.Purser.GetPrepaidBalance(ctx, tenantID, billing.DefaultCurrency())
+		balance, err := clients.Purser.GetPrepaidBalance(ctx, tenantID)
 		if err != nil {
 			logger.WithError(err).Debug("Failed to get prepaid balance")
 		} else {
@@ -456,6 +517,15 @@ type InvoiceInfo struct {
 	UpdatedAt            string            `json:"updated_at,omitempty"`
 	UsageDetails         map[string]any    `json:"usage_details,omitempty"`
 	LineItems            []InvoiceLineInfo `json:"line_items"`
+
+	// Presentment fields are set once the invoice is finalized: the total
+	// charged in the tenant's presentment currency at the ECB rate of the
+	// finalization date. The amounts above stay in EUR.
+	PresentmentAmountCents   *int64 `json:"presentment_amount_cents,omitempty"`
+	PresentmentCurrency      string `json:"presentment_currency,omitempty"`
+	PresentmentUnitsPerEUR   string `json:"presentment_units_per_eur,omitempty"`
+	PresentmentReferenceDate string `json:"presentment_reference_date,omitempty"`
+	FinalizedAt              string `json:"finalized_at,omitempty"`
 }
 
 type InvoicesResponse struct {
@@ -474,6 +544,9 @@ type PaymentInfo struct {
 	ConfirmedAt string  `json:"confirmed_at,omitempty"`
 	CreatedAt   string  `json:"created_at,omitempty"`
 	UpdatedAt   string  `json:"updated_at,omitempty"`
+	// Conversion is the amount charged and the EUR amount applied to the
+	// invoice, at the ECB rate of payment creation.
+	Conversion *ConversionInfo `json:"conversion,omitempty"`
 }
 
 type PaymentsResponse struct {
@@ -520,6 +593,14 @@ func invoiceInfo(invoice *purserpb.Invoice) InvoiceInfo {
 		PrepaidCreditApplied: invoice.GetPrepaidCreditApplied(),
 		Currency:             invoice.GetCurrency(),
 		LineItems:            make([]InvoiceLineInfo, 0, len(invoice.GetLineItems())),
+
+		PresentmentAmountCents:   invoice.PresentmentAmountCents,
+		PresentmentCurrency:      invoice.GetPresentmentCurrency(),
+		PresentmentUnitsPerEUR:   invoice.GetPresentmentUnitsPerEur(),
+		PresentmentReferenceDate: invoice.GetPresentmentReferenceDate(),
+	}
+	if invoice.GetFinalizedAt() != nil {
+		info.FinalizedAt = invoice.GetFinalizedAt().AsTime().UTC().Format("2006-01-02T15:04:05Z")
 	}
 	if invoice.GetPeriodStart() != nil {
 		info.PeriodStart = invoice.GetPeriodStart().AsTime().UTC().Format("2006-01-02T15:04:05Z")
@@ -607,6 +688,7 @@ func handleBillingPayments(ctx context.Context, clients *clients.ServiceClients,
 			Currency:    payment.GetCurrency(),
 			Status:      payment.GetStatus(),
 			ProviderRef: payment.GetTxId(),
+			Conversion:  NewConversionInfo(payment.GetFx()),
 		}
 		if payment.GetConfirmedAt() != nil {
 			info.ConfirmedAt = payment.GetConfirmedAt().AsTime().UTC().Format(time.RFC3339)
@@ -638,7 +720,7 @@ func handleBillingPayment(ctx context.Context, uri string, clients *clients.Serv
 	info := PaymentInfo{
 		ID: payment.GetId(), InvoiceID: payment.GetInvoiceId(), Method: payment.GetMethod(),
 		Amount: payment.GetAmount(), Currency: payment.GetCurrency(), Status: payment.GetStatus(),
-		ProviderRef: payment.GetTxId(),
+		ProviderRef: payment.GetTxId(), Conversion: NewConversionInfo(payment.GetFx()),
 	}
 	if payment.GetConfirmedAt() != nil {
 		info.ConfirmedAt = payment.GetConfirmedAt().AsTime().UTC().Format(time.RFC3339)

@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 )
 
 const suspensionThresholdCents int64 = -1000
@@ -97,8 +101,21 @@ func (e *ThresholdEnforcer) invalidateTenantCache(ctx context.Context, tenantID,
 	}
 }
 
+// suspendTenantForBalance suspends the tenant's active subscriptions and
+// commits account.suspended with the suspension. Every external call runs
+// after that commit.
 func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
-	rowsAffected, err := purserdb.New(e.db).SuspendActiveTenantSubscriptions(ctx, tenantID)
+	var rowsAffected int64
+	err := database.WithRetryablePostgresTx(ctx, e.db, nil, func(tx *sql.Tx) error {
+		var suspendErr error
+		rowsAffected, suspendErr = purserdb.New(tx).SuspendActiveTenantSubscriptions(ctx, tenantID)
+		if suspendErr != nil || rowsAffected == 0 {
+			return suspendErr
+		}
+		return billingevents.NewAndEnqueue(ctx, tx, tenantID, tenantID, &publicv1.AccountSuspended{
+			Reason: publicv1.SuspensionReason_SUSPENSION_REASON_BALANCE_EXHAUSTED,
+		}, events.Actor{})
+	})
 	if err != nil {
 		return err
 	}
@@ -167,7 +184,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 	}
 
 	balance := float64(balanceCents) / 100
-	if err := e.emailService.SendAccountSuspendedEmail(billingEmail.String, tenantName, balance, billing.DefaultCurrency()); err != nil {
+	if err := e.emailService.SendAccountSuspendedEmail(billingEmail.String, tenantName, balance, billing.LedgerCurrency); err != nil {
 		e.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,

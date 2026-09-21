@@ -112,6 +112,19 @@ type Query {
   incident(id: ID!): IncidentDetail
 
   """
+  Platform release and shipped product features. Readable without
+  authentication so clients can detect what this server supports before
+  signing in.
+  """
+  serverInfo: ServerInfo!
+
+  """
+  What the current tenant can use, built only from gates the platform enforces.
+  Describes enforcement; it never grants access itself.
+  """
+  capabilities: Capabilities!
+
+  """
   List all streams for the current tenant with pagination.
   """
   streamsConnection(
@@ -217,15 +230,10 @@ type Query {
   mollieMandates: [MollieMandate!]!
 
   """
-  Get the current prepaid balance for the tenant.
+  Get the current prepaid balance for the tenant, held in EUR.
   Only available for tenants with billing_model = 'prepaid'.
   """
-  prepaidBalance(
-    """
-    Currency code (defaults to EUR).
-    """
-    currency: String = "EUR"
-  ): PrepaidBalance
+  prepaidBalance: PrepaidBalance
 
   """
   Get billing details for the current tenant.
@@ -568,6 +576,48 @@ type Query {
   developerTokensConnection(page: ConnectionInput): DeveloperTokensConnection!
 
   """
+  Get one of the tenant's webhook endpoints.
+  """
+  webhookEndpoint(id: ID!): WebhookEndpoint
+
+  """
+  List the tenant's webhook endpoints, oldest first. A tenant has at most 10,
+  so one page holds them all.
+  """
+  webhookEndpointsConnection(page: ConnectionInput): WebhookEndpointsConnection!
+
+  """
+  List webhook deliveries newest first, optionally filtered. Only forward
+  pagination is supported.
+  """
+  webhookDeliveriesConnection(
+    "Only deliveries to this endpoint."
+    endpointId: ID
+    "Only deliveries in these statuses."
+    statuses: [WebhookDeliveryStatus!]
+    "Only deliveries of this event type, e.g. \"stream.live\"."
+    eventType: String
+    "Only deliveries of this event."
+    eventId: ID
+    "Only deliveries created at or after this time."
+    createdAfter: Time
+    "Only deliveries created before this time."
+    createdBefore: Time
+    page: ConnectionInput
+  ): WebhookDeliveriesConnection!
+
+  """
+  Get one webhook delivery with every HTTP attempt.
+  """
+  webhookDelivery(id: ID!): WebhookDelivery
+
+  """
+  The public event types an endpoint can subscribe to, as used in
+  eventTypes. "*" subscribes to every type.
+  """
+  webhookEventTypes: [String!]!
+
+  """
   Get a single playback signing key by ID. Tenant-scoped.
   """
   signingKey(id: ID!): SigningKey
@@ -659,7 +709,7 @@ type Query {
 
   """
   Read server-authoritative state of an in-flight VOD upload session.
-  Polling complement to the VodLifecycle subscription; intended for reload-recovery
+  Polling complement to the upload events of tenantEvents; intended for reload-recovery
   and agent workflows that need a request/response shape.
   """
   vodUploadStatus(
@@ -1754,6 +1804,73 @@ type Mutation {
   ): RevokeDeveloperTokenResult!
 
   """
+  Create an outbound webhook endpoint. The response carries the signing secret
+  once; it is never returned again. A tenant can have at most 10 endpoints.
+  """
+  createWebhookEndpoint(input: CreateWebhookEndpointInput!): CreateWebhookEndpointResult!
+
+  """
+  Change an endpoint's URL, description, or event types. Omitted fields keep
+  their value.
+  """
+  updateWebhookEndpoint(
+    "The endpoint ID."
+    id: ID!
+    input: UpdateWebhookEndpointInput!
+  ): UpdateWebhookEndpointResult!
+
+  """
+  Delete an endpoint with its signing secrets and delivery log.
+  """
+  deleteWebhookEndpoint("The endpoint ID." id: ID!): DeleteWebhookEndpointResult!
+
+  """
+  Enable a disabled endpoint. Deliveries skipped while it was disabled are not
+  sent again; replay them with replayWebhookDeliveries.
+  """
+  enableWebhookEndpoint("The endpoint ID." id: ID!): WebhookEndpointResult!
+
+  """
+  Disable an endpoint. Its pending deliveries are skipped.
+  """
+  disableWebhookEndpoint("The endpoint ID." id: ID!): WebhookEndpointResult!
+
+  """
+  Replace an endpoint's signing secret and return the new one once. The
+  previous secret keeps signing alongside it for 24 hours, unless
+  revokePrevious is true.
+  """
+  rotateWebhookEndpointSecret(
+    "The endpoint ID."
+    id: ID!
+    "Stop signing with the previous secret immediately."
+    revokePrevious: Boolean = false
+  ): RotateWebhookEndpointSecretResult!
+
+  """
+  Send a signed webhook.test event to the endpoint and wait for the result.
+  At most one test per endpoint every 10 seconds.
+  """
+  testWebhookEndpoint("The endpoint ID." id: ID!): TestWebhookEndpointResult!
+
+  """
+  Send a finished delivery again under the same ID, so the receiver sees the
+  same webhook-id. The endpoint must be enabled.
+  """
+  replayWebhookDelivery("The delivery ID." id: ID!): ReplayWebhookDeliveryResult!
+
+  """
+  Send again the failed and skipped deliveries of one endpoint created in
+  [createdAfter, createdBefore), oldest first, at most 1000 per call. Call
+  again while hasMore is true.
+  """
+  replayWebhookDeliveries(
+    endpointId: ID!
+    createdAfter: Time!
+    createdBefore: Time!
+  ): ReplayWebhookDeliveriesResult!
+
+  """
   Generate a new ES256 playback signing keypair. The private key is returned
   ONCE in the response and never stored or returned again — capture it.
   Up to 10 active keys per tenant; revoke before re-creating.
@@ -2157,6 +2274,20 @@ union UpdateTenantResult = Tenant | ValidationError | AuthError
 union CreateDeveloperTokenResult = DeveloperToken | ValidationError | RateLimitError | AuthError
 union RevokeDeveloperTokenResult = DeleteSuccess | NotFoundError | AuthError
 
+# Outbound webhook result unions
+union CreateWebhookEndpointResult = WebhookEndpointSecret | ValidationError | AuthError
+union UpdateWebhookEndpointResult = WebhookEndpoint | ValidationError | NotFoundError | AuthError
+union DeleteWebhookEndpointResult = DeleteSuccess | NotFoundError | AuthError
+union WebhookEndpointResult = WebhookEndpoint | NotFoundError | AuthError
+union RotateWebhookEndpointSecretResult = WebhookEndpointSecret | NotFoundError | AuthError
+union TestWebhookEndpointResult = WebhookTestResult | NotFoundError | RateLimitError | AuthError
+union ReplayWebhookDeliveryResult = WebhookDelivery | ValidationError | NotFoundError | AuthError
+union ReplayWebhookDeliveriesResult =
+  | WebhookReplayResult
+  | ValidationError
+  | NotFoundError
+  | AuthError
+
 # Playback access control result unions
 union CreateSigningKeyResult =
   | CreateSigningKeySuccess
@@ -2229,22 +2360,14 @@ type Subscription {
   liveTrackListUpdates(streamId: ID!): TrackListUpdate!
 
   """
-  Clip creation lifecycle events (queued, processing, complete, error).
-  Use playbackId from clip records (or clipHash if needed) to correlate.
+  Public events of the current tenant, as webhooks deliver them: stream
+  lifecycle, clip, recording, and upload lifecycle, multistream status, API
+  tokens, billing, account, and custom domain events. Each event's data is the
+  registered payload of its type. Pass types to receive only those event types
+  (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events
+  whose payload names that stream.
   """
-  liveClipLifecycle(streamId: ID!): ClipLifecycle!
-
-  """
-  DVR recording lifecycle events (started, recording, stopped, error).
-  Use playbackId from DVR records (or dvrHash if needed) to correlate.
-  """
-  liveDvrLifecycle(streamId: ID!): DVREvent!
-
-  """
-  VOD upload lifecycle events for all tenant uploads.
-  Tracks upload progress from initiation to completion.
-  """
-  liveVodLifecycle: VodLifecycle!
+  tenantEvents(types: [String!], streamId: ID): PublicEvent!
 
   """
   Storage events for recordings and artifacts.
@@ -2322,9 +2445,6 @@ type TenantEvent {
   viewerMetrics: ViewerMetrics
   connectionEvent: ConnectionEvent
   trackListUpdate: TrackListUpdate # Real-time track updates from Signalman
-  clipLifecycle: ClipLifecycle # Real-time clip lifecycle from Signalman
-  dvrEvent: DVREvent
-  vodLifecycle: VodLifecycle # Real-time VOD upload lifecycle from Signalman
   storageEvent: StorageEvent
   storageSnapshot: StorageSnapshot
   processingEvent: ProcessingUsageRecord
@@ -2354,22 +2474,6 @@ type SkipperInvestigationEvent {
   resourceType: String!
 }
 
-# DVR lifecycle event - bound to ipcpb.DVRLifecycleData
-type DVREvent {
-  status: String!
-  dvrHash: String!
-  playbackId: String
-  manifestPath: String
-  startedAt: Int
-  endedAt: Int
-  sizeBytes: Float
-  segmentCount: Int
-  error: String
-  nodeId: String
-  streamId: ID
-  stream: Stream
-}
-
 # Real-time track list update from Signalman - bound to ipcpb.StreamTrackListTrigger
 type TrackListUpdate {
   streamId: ID!
@@ -2388,51 +2492,6 @@ type TrackListUpdate {
   primaryAudioCodec: String
   primaryAudioChannels: Int
   primaryAudioSampleRate: Int
-}
-
-# Real-time clip lifecycle event from Signalman - bound to ipcpb.ClipLifecycleData
-type ClipLifecycle {
-  stage: Int!
-  clipHash: String!
-  playbackId: String
-  progressPercent: Int
-  filePath: String
-  s3Url: String
-  sizeBytes: Float
-  error: String
-  startedAt: Int
-  completedAt: Int
-  nodeId: String
-  streamId: ID
-  stream: Stream
-  # Timing info for progress display (enriched by Foghorn)
-  startUnix: Int
-  stopUnix: Int
-  durationSec: Int
-  clipMode: String
-}
-
-# Real-time VOD upload lifecycle event from Signalman - bound to ipcpb.VodLifecycleData
-type VodLifecycle {
-  status: Int! # VodLifecycleData.Status enum value
-  vodHash: String! # Artifact hash (from Commodore)
-  playbackId: String
-  uploadId: String # S3 multipart upload ID
-  filename: String
-  contentType: String # MIME type (video/mp4, etc.)
-  sizeBytes: Float # Expected or actual size
-  s3Url: String # Final S3 URL when completed
-  filePath: String # Local file path (if applicable)
-  error: String
-  startedAt: Int # When upload started (unix timestamp)
-  completedAt: Int # When upload/processing completed
-  nodeId: String # Processing node (if any)
-  expiresAt: Int # Retention expiration (unix timestamp)
-  # Media metadata (populated after processing)
-  durationMs: Int
-  resolution: String # "1920x1080"
-  videoCodec: String
-  audioCodec: String
 }
 
 # Input types
@@ -2907,7 +2966,7 @@ type VodUploadedPart {
 
 """
 Server-authoritative state of an in-flight multipart upload. Returned as a polling
-complement to the realtime VodLifecycle subscription, used for reload-recovery and
+complement to the upload events of the tenantEvents subscription, used for reload-recovery and
 agent (MCP) workflows.
 """
 type VodUploadStatus {
@@ -3140,7 +3199,7 @@ input CreatePaymentInput {
 Input for updating enterprise subscription custom terms.
 """
 input UpdateSubscriptionCustomTermsInput {
-  "Custom feature flags."
+  "Custom support terms."
   customFeatures: BillingFeaturesInput
   "Per-subscription pricing rule overrides (wholesale replace by meter)."
   pricingOverrides: [PricingRuleInput!]
@@ -3165,17 +3224,10 @@ input EntitlementEntryInput {
 }
 
 """
-Feature flag configuration for custom subscriptions.
+Support terms for a custom subscription. Processing customization follows the
+tier, so it is not set here.
 """
 input BillingFeaturesInput {
-  "DVR recording capability."
-  recording: Boolean
-  "Analytics dashboard access."
-  analytics: Boolean
-  "Custom branding options."
-  customBranding: Boolean
-  "API access for automation."
-  apiAccess: Boolean
   "Support level (community, email, priority, dedicated)."
   supportLevel: String
   "SLA guarantees."
@@ -3441,10 +3493,8 @@ enum CardPaymentProvider {
 Input for creating a card-based prepaid balance top-up.
 """
 input CreateCardTopupInput {
-  "Amount to top up in cents. Minimum €5.00 (500 cents); maximum 10,000,000 cents."
+  "Amount to charge, in cents of the tenant's presentment currency. Minimum 500 cents; maximum 10,000,000 cents."
   amountCents: Int!
-  "Currency code (default: EUR)."
-  currency: String
   "Payment provider to use."
   provider: CardPaymentProvider!
   "URL to redirect after successful payment."
@@ -3471,6 +3521,31 @@ type CardTopupResult {
   checkoutUrl: String!
   "When the checkout session expires."
   expiresAt: Time!
+  "Amount charged, in cents of `currency`."
+  amountCents: Int!
+  "Tenant presentment currency the checkout charges in (EUR, USD, GBP)."
+  currency: Currency!
+  "EUR amount the top-up credits, locked at the ECB rate when the checkout was created."
+  conversion: CurrencyConversion
+}
+
+"""
+Conversion of a payment into the EUR prepaid ledger and invoice currency.
+EUR amounts use the identity rate.
+"""
+type CurrencyConversion {
+  "Amount charged, in cents of `originalCurrency`."
+  originalAmountCents: Int!
+  "Currency charged (EUR, USD, GBP)."
+  originalCurrency: Currency!
+  "EUR cents credited or applied."
+  eurAmountCents: Int!
+  "Units of `originalCurrency` one euro buys, as a decimal string (\"1\" for EUR)."
+  unitsPerEur: String!
+  "Rate source: identity (EUR), ecb (ECB reference rate), or legacy_quote (USD rate quoted before ECB rates were stored)."
+  source: String!
+  "ECB reference date of the rate (YYYY-MM-DD)."
+  referenceDate: String!
 }
 
 """
@@ -3511,12 +3586,10 @@ enum CryptoAsset {
 Input for creating a crypto top-up deposit address.
 """
 input CreateCryptoTopupInput {
-  "Target credit amount in `currency` cents. Minimum 1 cent; maximum 10,000,000 cents."
+  "Amount in cents of the tenant's presentment currency. Minimum 1 cent; maximum 10,000,000 cents."
   amountCents: Int!
   "Crypto asset to receive (ETH or USDC; LPT not yet supported)."
   asset: CryptoAsset!
-  "Currency the prepaid balance is denominated in. USD or EUR; defaults to EUR."
-  currency: String
 }
 
 """
@@ -3535,7 +3608,7 @@ type CryptoTopupResult {
   asset: CryptoAsset!
   "Human-readable asset symbol (\"ETH\" | \"USDC\")."
   assetSymbol: String!
-  "Echo of input amountCents (USD or EUR cents per the request)."
+  "Echo of input amountCents, in cents of the tenant's presentment currency."
   expectedAmountCents: Int!
   "When this deposit address expires (24 hours from creation)."
   expiresAt: Time!
@@ -3551,6 +3624,8 @@ type CryptoTopupResult {
   quotedAt: Time!
   "Network the deposit address lives on (\"ethereum\" | \"arbitrum\" | \"base\")."
   network: String!
+  "Presentment amount and the EUR credit it converts to, locked with the quote."
+  conversion: CurrencyConversion
 }
 
 """
@@ -3577,7 +3652,7 @@ type CryptoTopupStatus {
   receivedAmountToken: String
   "Amount credited to balance in `creditedAmountCurrency` cents."
   creditedAmountCents: Int
-  "ISO-4217 currency the credit landed in (\"USD\" | \"EUR\")."
+  "Ledger currency of the credit, EUR."
   creditedAmountCurrency: String
   "Source of the locked price quote (\"chainlink\" | \"one_to_one\")."
   quoteSource: String
@@ -3589,6 +3664,8 @@ type CryptoTopupStatus {
   detectedAt: Time
   "When balance was credited."
   completedAt: Time
+  "Presentment amount and the EUR credit it converts to, locked with the quote."
+  conversion: CurrencyConversion
 }
 
 """
@@ -3905,8 +3982,10 @@ type CustomDomainStatus {
   domain: String!
   """
   pending_verification | verified | pending_alias | cert_issuing | cert_issued |
-  cert_failed | tearing_down — verbatim from Navigator. pending_alias means the
-  CNAMEs are verified and the domain waits for the tenant alias certificate.
+  cert_failed | verification_failed | tearing_down — verbatim from Navigator.
+  pending_alias means the CNAMEs are verified and the domain waits for the tenant
+  alias certificate. verification_failed means the CNAMEs were not verified
+  within the fixed verification period.
   """
   state: String!
   """
@@ -5109,43 +5188,124 @@ type EntitlementEntry {
 }
 
 """
-Feature flags for a billing tier.
-These control access to platform capabilities.
+Release and shipped feature set of this server.
+"""
+type ServerInfo {
+  "Platform release version, for example v0.3.11."
+  version: String!
+  "Sorted slugs of shipped product features in the platform feature registry."
+  features: [String!]!
+}
+
+"""
+Enforced gates for the current tenant. Each section is read from the service
+that enforces it and cached per tenant for 30 seconds. When that service is
+unavailable, the last cached section is returned; without one the section is
+null and the response carries an error.
+"""
+type Capabilities {
+  tenant: TenantCapabilities
+  clusters: [ClusterCapabilities!]
+  "When the oldest returned section was read from its source."
+  observedAt: Time!
+}
+
+"""
+Tenant-wide gates.
+"""
+type TenantCapabilities {
+  "Whether the caller holds the platform operator grant."
+  platformOperator: Boolean!
+  "Upper bound on recording retention the tenant can set."
+  recordingRetention: RecordingRetentionCap!
+  "Whether the tenant may override the tier's processing profiles."
+  processingCustomizable: Boolean!
+  "Whether the tenant's custom subdomain alias is published."
+  customSubdomain: Boolean!
+  "Whether the tenant's custom domain is published."
+  customDomain: Boolean!
+}
+
+"""
+Recording retention bound from the tenant's billing tier.
+"""
+type RecordingRetentionCap {
+  "Whether a maximum applies."
+  capped: Boolean!
+  "Maximum retention in days when capped."
+  maxDays: Int
+}
+
+"""
+A cluster the tenant is entitled to route to.
+"""
+type ClusterCapabilities {
+  clusterId: String!
+  clusterName: String!
+  "preferred, official, or subscribed."
+  role: String!
+  "Access level of the tenant's grant (shared, dedicated, priority)."
+  accessLevel: String!
+  media: ClusterMediaCapabilities!
+}
+
+"""
+Media verbs a cluster accepts for the tenant now. Each is true only when the
+capacity owner's consent permits it and at least one active edge node reported
+the capability within the health freshness window, so it can lag by up to that
+window.
+"""
+type ClusterMediaCapabilities {
+  ingest: Boolean!
+  playback: Boolean!
+  storage: Boolean!
+  processing: Boolean!
+}
+
+"""
+Contractual and enforced properties of a billing tier. Usage limits are
+entitlements, not features.
 """
 type BillingFeatures {
-  "DVR recording capability."
-  recording: Boolean!
-  "Analytics dashboard access."
-  analytics: Boolean!
-  "Custom branding options."
-  customBranding: Boolean!
-  "API access for automation."
-  apiAccess: Boolean!
   "Support level (community, email, priority, dedicated)."
   supportLevel: String!
   "Whether SLA guarantees apply."
   sla: Boolean!
+  "Whether the tenant may override the tier's processing profiles."
+  processingCustomizable: Boolean!
 }
 
 """
 A billing invoice for a subscription period.
-Includes base subscription and metered usage charges.
+Includes base subscription and metered usage charges. Amounts are computed in
+EUR; a finalized invoice is presented and charged in the tenant's presentment
+currency at the ECB rate of its finalization date.
 """
 type Invoice {
   "Unique invoice identifier."
   id: ID!
-  "Total amount due (after credits applied)."
+  "Total amount due in EUR (after credits applied)."
   amount: Money!
-  "Base subscription amount."
+  "Base subscription amount in EUR."
   baseAmount: Money!
-  "Metered usage charges (net; 0 while usage is waived during beta)."
+  "Metered usage charges in EUR (net; 0 while usage is waived during beta)."
   meteredAmount: Money!
   "Unwaived metered total — what usage would have cost. Equals meteredAmount when usage is not waived; the would-have-cost figure when it is."
   grossMeteredAmount: Money!
-  "Prepaid balance credit applied to this invoice."
+  "Prepaid balance credit applied to this invoice, in EUR."
   prepaidCreditApplied: Money!
-  "Invoice currency."
+  "Currency of the amounts above, EUR."
   currency: Currency!
+  "Total charged, in cents of `presentmentCurrency`. Null until the invoice is finalized."
+  presentmentAmountCents: Int
+  "Currency the invoice is presented and charged in (EUR, USD, GBP). Empty until the invoice is finalized."
+  presentmentCurrency: String
+  "Units of `presentmentCurrency` one euro buys at finalization, as a decimal string. Empty until the invoice is finalized."
+  presentmentUnitsPerEur: String
+  "ECB reference date of the presentment rate (YYYY-MM-DD). Empty until the invoice is finalized."
+  presentmentReferenceDate: String
+  "When the invoice was finalized and its presentment amount fixed."
+  finalizedAt: Time
   "Invoice status (draft, open, paid, void)."
   status: InvoiceStatus!
   "Payment due date."
@@ -5242,6 +5402,8 @@ type TenantSubscription {
   pendingTier: BillingTier
   pendingEffectiveAt: Time
   pendingReason: String
+  "Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR."
+  presentmentCurrency: Currency!
   createdAt: Time!
   updatedAt: Time!
 }
@@ -5280,6 +5442,8 @@ type InvoicePayment {
   confirmedAt: Time
   createdAt: Time!
   updatedAt: Time!
+  "Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation."
+  conversion: CurrencyConversion
 }
 
 type InvoicePaymentEdge {
@@ -5412,6 +5576,8 @@ type Payment {
   network: String
   quotedAt: Time
   createdAt: Time!
+  "Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation."
+  conversion: CurrencyConversion
 }
 
 """
@@ -5561,7 +5727,7 @@ type PrepaidBalance {
   reservedBalanceCents: Int!
   "Spendable balance after active reservations (balanceCents - reservedBalanceCents)."
   availableBalanceCents: Int!
-  "Currency code (USD, EUR)."
+  "Ledger currency, always EUR."
   currency: String!
   "Alert threshold in cents."
   lowBalanceThresholdCents: Int!
@@ -5637,6 +5803,8 @@ type BillingDetails {
   isComplete: Boolean!
   "When billing details were last updated."
   updatedAt: Time
+  "Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists."
+  presentmentCurrency: Currency
 }
 
 """
@@ -6028,6 +6196,178 @@ type DeveloperToken {
   expiresAt: Time
   "When the token was created."
   createdAt: Time
+}
+
+"""
+An outbound webhook endpoint. FrameWorks POSTs the tenant's public events of
+the subscribed types to its URL, signed with the Standard Webhooks scheme
+(webhook-id, webhook-timestamp, webhook-signature headers).
+"""
+type WebhookEndpoint {
+  "Endpoint ID."
+  id: ID!
+  "The https URL deliveries are sent to."
+  url: String!
+  "Free-text description."
+  description: String!
+  "Public event types the endpoint receives; \"*\" receives every type."
+  eventTypes: [String!]!
+  "Public event package version the payloads are rendered with, e.g. \"v1\"."
+  apiVersion: String!
+  status: WebhookEndpointStatus!
+  "Why the endpoint is disabled; null while enabled."
+  disabledReason: WebhookEndpointDisabledReason
+  "When the endpoint was disabled; null while enabled."
+  disabledAt: Time
+  "Failed attempts since the last successful delivery."
+  consecutiveFailures: Int!
+  "First failed attempt since the last successful delivery."
+  failingSince: Time
+  lastSuccessAt: Time
+  lastFailureAt: Time
+  "Until when the previous signing secret still signs deliveries; null when there is none."
+  previousSecretExpiresAt: Time
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+"""
+An endpoint with its signing secret, returned only when the secret is created
+or rotated.
+"""
+type WebhookEndpointSecret {
+  endpoint: WebhookEndpoint!
+  "The signing secret, \"whsec_\" followed by base64. Store it now; it is never shown again."
+  secret: String!
+}
+
+enum WebhookEndpointStatus {
+  ENABLED
+  DISABLED
+}
+
+enum WebhookEndpointDisabledReason {
+  "Disabled through the API or dashboard."
+  USER
+  "Disabled automatically after at least 20 consecutive failed attempts over at least 5 days without a success."
+  FAILING
+}
+
+enum WebhookDeliveryStatus {
+  "Waiting for the first attempt or a retry."
+  PENDING
+  SUCCEEDED
+  "Every attempt of the retry schedule (about 3 days) failed, or a test delivery failed."
+  FAILED
+  "The endpoint was disabled before the delivery succeeded."
+  SKIPPED
+}
+
+enum WebhookDeliveryKind {
+  EVENT
+  TEST
+}
+
+"""
+One delivery of one event to one endpoint, or a test delivery.
+"""
+type WebhookDelivery {
+  "Delivery ID. A replay keeps it."
+  id: ID!
+  endpointId: ID!
+  "The event ID, sent as webhook-id and as the body's id. Null for test deliveries."
+  eventId: ID
+  eventType: String!
+  kind: WebhookDeliveryKind!
+  status: WebhookDeliveryStatus!
+  "Attempts since the delivery was created or last replayed."
+  attempts: Int!
+  "When the next attempt is due; null unless pending."
+  nextAttemptAt: Time
+  "HTTP status of the last attempt; 0 when no response arrived."
+  lastStatusCode: Int!
+  "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success."
+  lastErrorClass: String!
+  deliveredAt: Time
+  replayCount: Int!
+  lastReplayedAt: Time
+  createdAt: Time!
+  updatedAt: Time!
+  "Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections."
+  attemptHistory: [WebhookDeliveryAttempt!]!
+}
+
+"""
+One HTTP attempt of a delivery.
+"""
+type WebhookDeliveryAttempt {
+  id: ID!
+  attemptNumber: Int!
+  "HTTP status; 0 when no response arrived."
+  statusCode: Int!
+  errorClass: String!
+  latencyMs: Int!
+  "At most 1 KiB of the response body."
+  responseExcerpt: String!
+  attemptedAt: Time!
+}
+
+"""
+The result of a test delivery.
+"""
+type WebhookTestResult {
+  delivery: WebhookDelivery!
+  attempt: WebhookDeliveryAttempt!
+}
+
+"""
+The result of a range replay.
+"""
+type WebhookReplayResult {
+  replayedCount: Int!
+  "More failed or skipped deliveries remain in the range."
+  hasMore: Boolean!
+}
+
+type WebhookEndpointEdge {
+  cursor: String!
+  node: WebhookEndpoint!
+}
+
+type WebhookEndpointsConnection {
+  edges: [WebhookEndpointEdge!]!
+  nodes: [WebhookEndpoint!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type WebhookDeliveryEdge {
+  cursor: String!
+  node: WebhookDelivery!
+}
+
+type WebhookDeliveriesConnection {
+  edges: [WebhookDeliveryEdge!]!
+  nodes: [WebhookDelivery!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+input CreateWebhookEndpointInput {
+  "An https URL of a public host."
+  url: String!
+  description: String
+  "Public event types to receive; \"*\" receives every type. See webhookEventTypes."
+  eventTypes: [String!]!
+  "Public event package version; defaults to \"v1\"."
+  apiVersion: String
+}
+
+input UpdateWebhookEndpointInput {
+  url: String
+  description: String
+  "Replaces the subscribed event types when set."
+  eventTypes: [String!]
 }
 
 """
@@ -8231,7 +8571,7 @@ type TenantAdminBilling {
   tenantId: ID!
   snapshot: TenantBillingSnapshot
   invoices(page: ConnectionInput): InvoicesConnection!
-  prepaidBalance(currency: String = "EUR"): PrepaidBalance
+  prepaidBalance: PrepaidBalance
   balanceTransactions(
     page: ConnectionInput
     transactionType: String
@@ -8718,3 +9058,370 @@ union MediaCapacityConsentChangeResult =
   | MediaPlacementError
   | AuthError
   | NotFoundError
+
+# ==================== Public events ====================
+# Generated from the event registry (pkg/proto/events/public/v1). Delivered by
+# Subscription.tenantEvents; webhooks carry the same messages.
+
+# BEGIN GENERATED: public events (scripts/eventsgql; run make graphql-events, do not edit)
+"""
+A public tenant event as its owning service emitted it. data is the registered
+message of type, unchanged; webhooks deliver the same message.
+"""
+type PublicEvent {
+  "Event ID, stable across redeliveries."
+  id: ID!
+  "Registered event type, e.g. stream.live."
+  type: String!
+  "When the state change committed."
+  time: Time!
+  "The aggregate the event belongs to, as <aggregate>/<id>, e.g. streams/<stream id>."
+  subject: String!
+  data: PublicEventData!
+}
+
+"""
+Payload of a PublicEvent: one member per public event type. Fields of the same
+name can have different types across members (reason is a different enum per
+event family); alias them when one selection covers several.
+"""
+union PublicEventData =
+  | AccountSuspended
+  | ApiTokenCreated
+  | ApiTokenRevoked
+  | BillingDetailsUpdated
+  | InvoiceCreated
+  | InvoicePaid
+  | PaymentFailed
+  | TopupCredited
+  | ClipFailed
+  | ClipReady
+  | ClipRequested
+  | CustomDomainFailed
+  | CustomDomainVerified
+  | MultistreamStatusChanged
+  | RecordingFailed
+  | RecordingReady
+  | StreamConnected
+  | StreamCreated
+  | StreamDeleted
+  | StreamIdle
+  | StreamKeyRotated
+  | StreamLive
+  | StreamUpdated
+  | UploadAborted
+  | UploadCompleted
+  | UploadCreated
+  | UploadFailed
+  | UploadReady
+
+"""
+`account.suspended` event. Aggregate: `tenants`.
+"""
+type AccountSuspended {
+  reason: EventSuspensionReason!
+}
+
+"""
+`api_token.created` event. Aggregate: `api_tokens`.
+"""
+type ApiTokenCreated {
+  tokenId: ID!
+  name: String!
+  permissions: [String!]!
+  expiresAt: Time
+}
+
+"""
+`api_token.revoked` event. Aggregate: `api_tokens`.
+"""
+type ApiTokenRevoked {
+  tokenId: ID!
+}
+
+"""
+`billing.details_updated` event. Aggregate: `tenants`.
+"""
+type BillingDetailsUpdated {
+  changedFields: [String!]!
+}
+
+"""
+`billing.invoice_created` event. Aggregate: `invoices`.
+"""
+type InvoiceCreated {
+  invoiceId: ID!
+  amountDue: EventMoney
+  periodStart: Time
+  periodEnd: Time
+  dueAt: Time
+}
+
+"""
+`billing.invoice_paid` event. Aggregate: `invoices`.
+"""
+type InvoicePaid {
+  invoiceId: ID!
+  amountPaid: EventMoney
+}
+
+"""
+`billing.payment_failed` event. Aggregate: `payments`.
+"""
+type PaymentFailed {
+  paymentId: ID!
+  invoiceId: ID!
+  amount: EventMoney
+  reason: EventPaymentFailureReason!
+  provider: String!
+  providerReferenceId: ID!
+}
+
+"""
+`billing.topup_credited` event. Aggregate: `topups`.
+"""
+type TopupCredited {
+  topupId: ID!
+  amount: EventMoney
+}
+
+"""
+`clip.failed` event. Aggregate: `artifacts`.
+"""
+type ClipFailed {
+  artifact: EventArtifact
+  reason: EventMediaFailureReason!
+}
+
+"""
+`clip.ready` event. Aggregate: `artifacts`.
+"""
+type ClipReady {
+  artifact: EventArtifact
+  durationMs: Int!
+  sizeBytes: Int!
+}
+
+"""
+`clip.requested` event. Aggregate: `artifacts`.
+"""
+type ClipRequested {
+  artifact: EventArtifact
+  durationMs: Int!
+}
+
+"""
+`custom_domain.failed` event. Aggregate: `custom_domains`.
+"""
+type CustomDomainFailed {
+  domain: String!
+  reason: EventCustomDomainFailureReason!
+}
+
+"""
+`custom_domain.verified` event. Aggregate: `custom_domains`.
+"""
+type CustomDomainVerified {
+  domain: String!
+}
+
+"""
+`multistream.status_changed` event. Aggregate: `push_targets`.
+"""
+type MultistreamStatusChanged {
+  streamId: ID!
+  targetId: ID!
+  targetName: String!
+  status: EventMultistreamStatus!
+  previousStatus: EventMultistreamStatus!
+}
+
+"""
+`recording.failed` event. Aggregate: `artifacts`.
+"""
+type RecordingFailed {
+  artifact: EventArtifact
+  reason: EventMediaFailureReason!
+}
+
+"""
+`recording.ready` event. Aggregate: `artifacts`.
+"""
+type RecordingReady {
+  artifact: EventArtifact
+  durationMs: Int!
+  sizeBytes: Int!
+}
+
+"""
+`stream.connected` event. Aggregate: `streams`.
+"""
+type StreamConnected {
+  streamId: ID!
+  protocol: EventIngestProtocol!
+}
+
+"""
+`stream.created` event. Aggregate: `streams`.
+"""
+type StreamCreated {
+  streamId: ID!
+  name: String!
+  playbackId: ID!
+}
+
+"""
+`stream.deleted` event. Aggregate: `streams`.
+"""
+type StreamDeleted {
+  streamId: ID!
+}
+
+"""
+`stream.idle` event. Aggregate: `streams`.
+"""
+type StreamIdle {
+  streamId: ID!
+}
+
+"""
+`stream.key_rotated` event. Aggregate: `streams`.
+"""
+type StreamKeyRotated {
+  streamId: ID!
+}
+
+"""
+`stream.live` event. Aggregate: `streams`.
+"""
+type StreamLive {
+  streamId: ID!
+}
+
+"""
+`stream.updated` event. Aggregate: `streams`.
+"""
+type StreamUpdated {
+  streamId: ID!
+  changedFields: [String!]!
+}
+
+"""
+`upload.aborted` event. Aggregate: `artifacts`.
+"""
+type UploadAborted {
+  artifact: EventArtifact
+}
+
+"""
+`upload.completed` event. Aggregate: `artifacts`.
+"""
+type UploadCompleted {
+  artifact: EventArtifact
+  sizeBytes: Int!
+}
+
+"""
+`upload.created` event. Aggregate: `artifacts`.
+"""
+type UploadCreated {
+  artifact: EventArtifact
+  filename: String!
+  expectedSizeBytes: Int!
+}
+
+"""
+`upload.failed` event. Aggregate: `artifacts`.
+"""
+type UploadFailed {
+  artifact: EventArtifact
+  reason: EventMediaFailureReason!
+}
+
+"""
+`upload.ready` event. Aggregate: `artifacts`.
+"""
+type UploadReady {
+  artifact: EventArtifact
+  durationMs: Int!
+  sizeBytes: Int!
+}
+
+"Part of a public event payload (frameworks.events.public.v1.Artifact)."
+type EventArtifact {
+  artifactId: ID!
+  kind: EventArtifactKind!
+  streamId: ID!
+  playbackId: ID!
+}
+
+"Part of a public event payload (frameworks.events.public.v1.Money)."
+type EventMoney {
+  amountMinor: Int!
+  currency: String!
+}
+
+"Values of frameworks.events.public.v1.ArtifactKind, named as in the proto and the webhook JSON."
+enum EventArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED
+  ARTIFACT_KIND_CLIP
+  ARTIFACT_KIND_RECORDING
+  ARTIFACT_KIND_UPLOAD
+}
+
+"Values of frameworks.events.public.v1.CustomDomainFailureReason, named as in the proto and the webhook JSON."
+enum EventCustomDomainFailureReason {
+  CUSTOM_DOMAIN_FAILURE_REASON_UNSPECIFIED
+  CUSTOM_DOMAIN_FAILURE_REASON_VERIFICATION_EXPIRED
+  CUSTOM_DOMAIN_FAILURE_REASON_CERTIFICATE_FAILED
+}
+
+"Values of frameworks.events.public.v1.IngestProtocol, named as in the proto and the webhook JSON."
+enum EventIngestProtocol {
+  INGEST_PROTOCOL_UNSPECIFIED
+  INGEST_PROTOCOL_RTMP
+  INGEST_PROTOCOL_SRT
+  INGEST_PROTOCOL_WHIP
+  INGEST_PROTOCOL_PULL
+}
+
+"Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON."
+enum EventMediaFailureReason {
+  MEDIA_FAILURE_REASON_UNSPECIFIED
+  MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE
+  MEDIA_FAILURE_REASON_PROCESSING_FAILED
+  MEDIA_FAILURE_REASON_STORAGE_FAILED
+  MEDIA_FAILURE_REASON_INVALID_INPUT
+  MEDIA_FAILURE_REASON_QUOTA_EXCEEDED
+  MEDIA_FAILURE_REASON_TIMED_OUT
+}
+
+"Values of frameworks.events.public.v1.MultistreamStatus, named as in the proto and the webhook JSON."
+enum EventMultistreamStatus {
+  MULTISTREAM_STATUS_UNSPECIFIED
+  MULTISTREAM_STATUS_IDLE
+  MULTISTREAM_STATUS_PENDING
+  MULTISTREAM_STATUS_PUSHING
+  MULTISTREAM_STATUS_RETRYING
+  MULTISTREAM_STATUS_STOPPING
+  MULTISTREAM_STATUS_FAILED
+}
+
+"Values of frameworks.events.public.v1.PaymentFailureReason, named as in the proto and the webhook JSON."
+enum EventPaymentFailureReason {
+  PAYMENT_FAILURE_REASON_UNSPECIFIED
+  PAYMENT_FAILURE_REASON_DECLINED
+  PAYMENT_FAILURE_REASON_INSUFFICIENT_FUNDS
+  PAYMENT_FAILURE_REASON_EXPIRED_METHOD
+  PAYMENT_FAILURE_REASON_AUTHENTICATION_REQUIRED
+  PAYMENT_FAILURE_REASON_PROCESSING_ERROR
+}
+
+"Values of frameworks.events.public.v1.SuspensionReason, named as in the proto and the webhook JSON."
+enum EventSuspensionReason {
+  SUSPENSION_REASON_UNSPECIFIED
+  SUSPENSION_REASON_BALANCE_EXHAUSTED
+  SUSPENSION_REASON_PAYMENT_OVERDUE
+  SUSPENSION_REASON_POLICY
+}
+# END GENERATED: public events

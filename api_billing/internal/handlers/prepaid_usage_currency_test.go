@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 )
 
 // processPrepaidUsage must refuse to settle usage priced in a currency other
@@ -19,10 +17,7 @@ func TestProcessPrepaidUsage_CurrencyMismatchRejected(t *testing.T) {
 	const tenant, tier = "tenant-1", "61000000-0000-4000-8000-000000000001"
 	const subscriptionID = "62000000-0000-4000-8000-000000000001"
 
-	other := "USD"
-	if billing.DefaultCurrency() == other {
-		other = "EUR"
-	}
+	const other = "USD"
 
 	// Tier header + rules both in the non-default currency (internally
 	// consistent so LoadEffectiveTier accepts them), metering enabled.

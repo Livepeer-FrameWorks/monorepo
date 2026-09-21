@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
@@ -56,12 +58,15 @@ type billingOutboxRow struct {
 }
 
 // EnqueueBillingEventTx writes a billing-event outbox row inside the
-// caller's transaction. A failed INSERT rolls back with the caller's tx.
+// caller's transaction. domain, when the same fact has a domain event, is
+// written to the domain outbox in the same transaction and its ID becomes the
+// legacy row's ID. A failed INSERT rolls back with the caller's tx.
 func (s *PurserServer) EnqueueBillingEventTx(
 	ctx context.Context,
 	exec purserdb.DBTX,
 	eventType, tenantID, userID, resourceType, resourceID string,
 	payload *ipcpb.BillingEvent,
+	domain *events.Event,
 ) (string, error) {
 	if payload == nil {
 		payload = &ipcpb.BillingEvent{}
@@ -73,7 +78,13 @@ func (s *PurserServer) EnqueueBillingEventTx(
 	if err != nil {
 		return "", fmt.Errorf("marshal billing event: %w", err)
 	}
-	id := uuid.Must(uuid.NewV7())
+	if err = billingevents.Enqueue(ctx, exec, domain); err != nil {
+		return "", err
+	}
+	id, err := billingevents.LegacyRowID(domain)
+	if err != nil {
+		return "", fmt.Errorf("billing event id: %w", err)
+	}
 	persistedID, err := purserdb.New(exec).EnqueueBillingEventOutbox(ctx, purserdb.EnqueueBillingEventOutboxParams{
 		ID: id, EventType: eventType, TenantID: tenantID, UserID: userID,
 		ResourceType: resourceType, ResourceID: resourceID, BillingEvent: billingJSON,

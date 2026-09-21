@@ -22,6 +22,7 @@ SET status = 'cert_issued',
     next_attempt_at = NULL,
     last_renewal_error = NULL,
     last_renewal_error_at = NULL,
+    failure_reported_at = NULL,
     updated_at = NOW()
 WHERE tenant_id = $3::uuid
   AND domain = $4
@@ -65,30 +66,34 @@ func (q *Queries) DeleteTenantCustomDomain(ctx context.Context, arg DeleteTenant
 
 const ensureTenantCustomDomain = `-- name: EnsureTenantCustomDomain :one
 INSERT INTO navigator.tenant_custom_domains
-    (tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at)
-VALUES ($1::uuid, $2, 'pending_verification', $3, NOW(), NOW())
+    (tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at, verification_started_at)
+VALUES ($1::uuid, $2, 'pending_verification', $3, NOW(), NOW(), NOW())
 ON CONFLICT (tenant_id, domain) DO UPDATE SET
-    status = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    status = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                   THEN 'pending_verification' ELSE navigator.tenant_custom_domains.status END,
-    issuer_id = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    issuer_id = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                      THEN NULL ELSE navigator.tenant_custom_domains.issuer_id END,
-    cert_issued_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    cert_issued_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                           THEN NULL ELSE navigator.tenant_custom_domains.cert_issued_at END,
-    cert_expires_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    cert_expires_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                            THEN NULL ELSE navigator.tenant_custom_domains.cert_expires_at END,
-    last_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_error = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                       THEN NULL ELSE navigator.tenant_custom_domains.last_error END,
-    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_renewal_error = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                               THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error END,
-    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    last_renewal_error_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                                  THEN NULL ELSE navigator.tenant_custom_domains.last_renewal_error_at END,
-    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+    next_attempt_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
                            THEN NULL ELSE navigator.tenant_custom_domains.next_attempt_at END,
+    verification_started_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
+                                   THEN NOW() ELSE navigator.tenant_custom_domains.verification_started_at END,
+    failure_reported_at = CASE WHEN navigator.tenant_custom_domains.status IN ('tearing_down', 'verification_failed')
+                               THEN NULL ELSE navigator.tenant_custom_domains.failure_reported_at END,
     updated_at = NOW()
 RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
           last_verified_at, cert_issued_at, cert_expires_at, last_error,
           created_at, updated_at, last_renewal_error, last_renewal_error_at,
-          next_attempt_at
+          next_attempt_at, verification_started_at, failure_reported_at
 `
 
 type EnsureTenantCustomDomainParams struct {
@@ -97,6 +102,9 @@ type EnsureTenantCustomDomainParams struct {
 	AcmeDnsSubdomain string `db:"acme_dns_subdomain" json:"acme_dns_subdomain"`
 }
 
+// A tearing_down or verification_failed row is reactivated: verification
+// restarts with a fresh period and the stale certificate, error, retry, and
+// failure-report state is cleared. Any other row keeps its worker-driven state.
 func (q *Queries) EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenantCustomDomainParams) (NavigatorTenantCustomDomain, error) {
 	row := q.db.QueryRowContext(ctx, ensureTenantCustomDomain, arg.TenantID, arg.Domain, arg.AcmeDnsSubdomain)
 	var i NavigatorTenantCustomDomain
@@ -115,19 +123,71 @@ func (q *Queries) EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenant
 		&i.LastRenewalError,
 		&i.LastRenewalErrorAt,
 		&i.NextAttemptAt,
+		&i.VerificationStartedAt,
+		&i.FailureReportedAt,
 	)
 	return i, err
 }
 
-const failTenantCustomDomainIssuance = `-- name: FailTenantCustomDomainIssuance :execrows
+const expireTenantCustomDomainVerifications = `-- name: ExpireTenantCustomDomainVerifications :many
 UPDATE navigator.tenant_custom_domains
+SET status = 'verification_failed',
+    failure_reported_at = NOW(),
+    updated_at = NOW()
+WHERE status = 'pending_verification'
+  AND verification_started_at < NOW() - $1::bigint * INTERVAL '1 second'
+RETURNING tenant_id, domain
+`
+
+type ExpireTenantCustomDomainVerificationsRow struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	Domain   string `db:"domain" json:"domain"`
+}
+
+// Fails every pending domain whose verification period has passed and returns
+// them for their custom_domain.failed events.
+func (q *Queries) ExpireTenantCustomDomainVerifications(ctx context.Context, periodSeconds int64) ([]ExpireTenantCustomDomainVerificationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, expireTenantCustomDomainVerifications, periodSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExpireTenantCustomDomainVerificationsRow{}
+	for rows.Next() {
+		var i ExpireTenantCustomDomainVerificationsRow
+		if err := rows.Scan(&i.TenantID, &i.Domain); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const failTenantCustomDomainIssuance = `-- name: FailTenantCustomDomainIssuance :one
+WITH prior AS MATERIALIZED (
+    SELECT custom_domain.tenant_id, custom_domain.domain, custom_domain.failure_reported_at
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = $3::uuid
+      AND custom_domain.domain = $4
+      AND custom_domain.status = 'cert_issuing'
+    FOR UPDATE
+)
+UPDATE navigator.tenant_custom_domains AS custom_domain
 SET status = 'cert_failed',
     last_error = NULLIF($1::text, ''),
     next_attempt_at = NOW() + $2::bigint * INTERVAL '1 second',
+    failure_reported_at = COALESCE(prior.failure_reported_at, NOW()),
     updated_at = NOW()
-WHERE tenant_id = $3::uuid
-  AND domain = $4
-  AND status = 'cert_issuing'
+FROM prior
+WHERE custom_domain.tenant_id = prior.tenant_id
+  AND custom_domain.domain = prior.domain
+RETURNING (prior.failure_reported_at IS NULL)::boolean AS first_failure
 `
 
 type FailTenantCustomDomainIssuanceParams struct {
@@ -137,17 +197,19 @@ type FailTenantCustomDomainIssuanceParams struct {
 	Domain            string `db:"domain" json:"domain"`
 }
 
-func (q *Queries) FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failTenantCustomDomainIssuance,
+// Moves a cert_issuing domain to cert_failed. first_failure is true only when
+// no failure of this domain was reported since its last successful issuance
+// or reactivation, so retry cycles through cert_failed report nothing new.
+func (q *Queries) FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, failTenantCustomDomainIssuance,
 		arg.ErrMsg,
 		arg.RetryAfterSeconds,
 		arg.TenantID,
 		arg.Domain,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	var first_failure bool
+	err := row.Scan(&first_failure)
+	return first_failure, err
 }
 
 const finalizeTenantCustomDomainRemoval = `-- name: FinalizeTenantCustomDomainRemoval :execrows
@@ -199,7 +261,7 @@ const getTenantCustomDomain = `-- name: GetTenantCustomDomain :one
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = $1::uuid AND domain = $2
 `
@@ -227,6 +289,8 @@ func (q *Queries) GetTenantCustomDomain(ctx context.Context, arg GetTenantCustom
 		&i.LastRenewalError,
 		&i.LastRenewalErrorAt,
 		&i.NextAttemptAt,
+		&i.VerificationStartedAt,
+		&i.FailureReportedAt,
 	)
 	return i, err
 }
@@ -235,7 +299,7 @@ const listTenantCustomDomains = `-- name: ListTenantCustomDomains :many
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE tenant_id = $1::uuid
 ORDER BY domain ASC
@@ -265,6 +329,8 @@ func (q *Queries) ListTenantCustomDomains(ctx context.Context, tenantID string) 
 			&i.LastRenewalError,
 			&i.LastRenewalErrorAt,
 			&i.NextAttemptAt,
+			&i.VerificationStartedAt,
+			&i.FailureReportedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -283,7 +349,7 @@ const listTenantCustomDomainsByStatus = `-- name: ListTenantCustomDomainsByStatu
 SELECT tenant_id, domain, status, acme_dns_subdomain, issuer_id,
        last_verified_at, cert_issued_at, cert_expires_at, last_error,
        created_at, updated_at, last_renewal_error, last_renewal_error_at,
-       next_attempt_at
+       next_attempt_at, verification_started_at, failure_reported_at
 FROM navigator.tenant_custom_domains
 WHERE status = ANY($1::text[])
 ORDER BY updated_at ASC
@@ -313,6 +379,8 @@ func (q *Queries) ListTenantCustomDomainsByStatus(ctx context.Context, statuses 
 			&i.LastRenewalError,
 			&i.LastRenewalErrorAt,
 			&i.NextAttemptAt,
+			&i.VerificationStartedAt,
+			&i.FailureReportedAt,
 		); err != nil {
 			return nil, err
 		}

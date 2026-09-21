@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package frameworks.events.internal.v1;
+
+// Go reserves "internal" path elements, so the generated package lives in
+// events/internalv1 where every service can import it.
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
+
+import "google/protobuf/struct.proto";
+import "common.proto";
+import "events/options.proto";
+
+// Messages in this package are platform-internal domain events. Consumers
+// inside the platform read them; they are never delivered to tenants.
+
+message TenantCreated {
+  option (frameworks.events.event) = {type: "tenant.created", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
+  string tenant_id = 1;
+  common.SignupAttribution attribution = 2;
+}
+
+message TenantUpdated {
+  option (frameworks.events.event) = {type: "tenant.updated", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
+  string tenant_id = 1;
+  repeated string changed_fields = 2;
+}
+
+message TenantDeleted {
+  option (frameworks.events.event) = {type: "tenant.deleted", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
+  string tenant_id = 1;
+}
+
+message TenantClusterAssigned {
+  option (frameworks.events.event) = {type: "tenant.cluster_assigned", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+message TenantClusterUnassigned {
+  option (frameworks.events.event) = {type: "tenant.cluster_unassigned", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+// ClusterCreated and ClusterUpdated describe infrastructure, so they are
+// platform-scoped: the owner, when there is one, is a payload field and never
+// the envelope tenant.
+message ClusterCreated {
+  option (frameworks.events.event) = {type: "cluster.created", visibility: VISIBILITY_INTERNAL, scope: SCOPE_PLATFORM, aggregate: "clusters"};
+  string cluster_id = 1;
+  string owner_tenant_id = 2;
+}
+
+message ClusterUpdated {
+  option (frameworks.events.event) = {type: "cluster.updated", visibility: VISIBILITY_INTERNAL, scope: SCOPE_PLATFORM, aggregate: "clusters"};
+  string cluster_id = 1;
+  string owner_tenant_id = 2;
+  repeated string changed_fields = 3;
+  // before_state and after_state carry typed operator-access audit state.
+  google.protobuf.Struct before_state = 4;
+  google.protobuf.Struct after_state = 5;
+}
+
+// Cluster invites belong to the cluster owner's tenant.
+message ClusterInviteCreated {
+  option (frameworks.events.event) = {type: "cluster.invite_created", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "cluster_invites"};
+  string invite_id = 1;
+  string cluster_id = 2;
+  string invited_tenant_id = 3;
+}
+
+message ClusterInviteRevoked {
+  option (frameworks.events.event) = {type: "cluster.invite_revoked", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "cluster_invites"};
+  string invite_id = 1;
+  string cluster_id = 2;
+}
+
+enum ClusterRejectReason {
+  CLUSTER_REJECT_REASON_UNSPECIFIED = 0;
+  CLUSTER_REJECT_REASON_CAPACITY = 1;
+  CLUSTER_REJECT_REASON_POLICY = 2;
+  CLUSTER_REJECT_REASON_ELIGIBILITY = 3;
+  CLUSTER_REJECT_REASON_DUPLICATE = 4;
+  CLUSTER_REJECT_REASON_WITHDRAWN = 5;
+  CLUSTER_REJECT_REASON_OTHER = 99;
+}
+
+// Cluster subscriptions belong to the subscribing tenant.
+message ClusterSubscriptionRequested {
+  option (frameworks.events.event) = {type: "cluster.subscription_requested", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "cluster_subscriptions"};
+  string subscription_id = 1;
+  string cluster_id = 2;
+}
+
+message ClusterSubscriptionApproved {
+  option (frameworks.events.event) = {type: "cluster.subscription_approved", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "cluster_subscriptions"};
+  string subscription_id = 1;
+  string cluster_id = 2;
+}
+
+message ClusterSubscriptionRejected {
+  option (frameworks.events.event) = {type: "cluster.subscription_rejected", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "cluster_subscriptions"};
+  string subscription_id = 1;
+  string cluster_id = 2;
+  ClusterRejectReason reject_reason = 3;
+  string reason = 4;
+}

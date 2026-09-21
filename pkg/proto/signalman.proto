@@ -4,6 +4,7 @@ package signalman;
 
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman;signalmanpb";
 
+import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "ipc.proto";  // For MistTrigger payloads
 
@@ -23,6 +24,10 @@ enum Channel {
   // may subscribe, CHANNEL_ALL does not include it, and its events are never
   // delivered to tenant subscribers.
   CHANNEL_PLATFORM = 7;
+  // Public domain events (pkg/events registry, visibility PUBLIC) of the
+  // subscriber's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent payload.
+  // Subscribers name it explicitly: CHANNEL_ALL does not include it.
+  CHANNEL_EVENTS = 8;
 }
 
 enum EventType {
@@ -68,6 +73,9 @@ enum EventType {
 
   // AI events (channel: AI)
   EVENT_TYPE_SKIPPER_INVESTIGATION = 60;
+
+  // Public domain event (channel: events)
+  EVENT_TYPE_TENANT_EVENT = 70;
 }
 
 // ============================================================================
@@ -118,6 +126,7 @@ message EventData {
     helmsmancontrol.MessageLifecycleData message_lifecycle = 23;
     helmsmancontrol.StreamChangeEvent stream_change = 24;
     helmsmancontrol.IncidentEvent incident_updated = 25;
+    TenantEvent tenant_event = 26;
   }
 
   reserved 13;
@@ -132,6 +141,17 @@ message EventData {
   string stream_origin_cluster_id = 43;
   int32 schema_version = 44;
   string control_cell_id = 45;
+}
+
+// A public domain event as its producer emitted it. data holds the registered
+// message of the type (a frameworks.events.public.v1 message; the type URL names
+// it), so a consumer binds it without a mapping step.
+message TenantEvent {
+  string id = 1;                     // ce_id, stable across redeliveries
+  string type = 2;                   // registered type, e.g. "stream.live"
+  google.protobuf.Timestamp time = 3;  // when the state change committed
+  string subject = 4;                // "<aggregate>/<id>", e.g. "streams/<uuid>"
+  google.protobuf.Any data = 5;
 }
 
 // ============================================================================

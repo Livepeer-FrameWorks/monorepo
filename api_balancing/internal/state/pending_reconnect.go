@@ -1,10 +1,8 @@
 package state
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // Announced-restart reconnect window. Helmsman sends a "node_restarting"
@@ -21,23 +19,30 @@ import (
 // path.
 const EventNodeRestarting = "node_restarting"
 
-var (
-	restartWindowOnce sync.Once
-	restartWindowVal  time.Duration
-)
+const defaultRestartReconnectWindow = 20 * time.Second
+
+// restartReconnectWindow holds the configured window in nanoseconds; zero
+// means SetRestartReconnectWindowSeconds has not been called.
+var restartReconnectWindow atomic.Int64
+
+// SetRestartReconnectWindowSeconds sets the window RestartReconnectWindow
+// reports, clamped to 5-30s: long enough for a systemd restart +
+// control-stream reconnect, short enough that a poweroff (which also
+// announces — SIGTERM can't tell the difference) stays well inside the DNS
+// reconciler's 60s tick.
+func SetRestartReconnectWindowSeconds(seconds int) {
+	seconds = min(max(seconds, 5), 30)
+	restartReconnectWindow.Store(int64(time.Duration(seconds) * time.Second))
+}
 
 // RestartReconnectWindow is how long an announced restart holds node health
-// before the disconnect is finalized as unhealthy. Clamped to 5-30s: long
-// enough for a systemd restart + control-stream reconnect, short enough
-// that a poweroff (which also announces — SIGTERM can't tell the
-// difference) stays well inside the DNS reconciler's 60s tick.
+// before the disconnect is finalized as unhealthy: the value set with
+// SetRestartReconnectWindowSeconds, or 20s when none was set.
 func RestartReconnectWindow() time.Duration {
-	restartWindowOnce.Do(func() {
-		seconds := config.GetEnvInt("FOGHORN_RESTART_RECONNECT_WINDOW_SECONDS", 20)
-		seconds = min(max(seconds, 5), 30)
-		restartWindowVal = time.Duration(seconds) * time.Second
-	})
-	return restartWindowVal
+	if window := restartReconnectWindow.Load(); window > 0 {
+		return time.Duration(window)
+	}
+	return defaultRestartReconnectWindow
 }
 
 // SetNodePendingReconnect arms the reconnect window for an announced restart.

@@ -3,10 +3,10 @@ package control
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
@@ -38,21 +38,7 @@ func resetServedClusters(t *testing.T) {
 
 func setInstanceID(t *testing.T, id string) {
 	t.Helper()
-	prev := os.Getenv("FOGHORN_INSTANCE_ID")
-	if id == "" {
-		_ = os.Unsetenv("FOGHORN_INSTANCE_ID")
-	} else {
-		if err := os.Setenv("FOGHORN_INSTANCE_ID", id); err != nil {
-			t.Fatalf("Setenv: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if prev == "" {
-			_ = os.Unsetenv("FOGHORN_INSTANCE_ID")
-		} else {
-			_ = os.Setenv("FOGHORN_INSTANCE_ID", prev)
-		}
-	})
+	useFoghornConfig(t, &appconfig.Foghorn{InstanceID: id})
 }
 
 func TestLoadServedClustersFrom_SuccessPopulatesWithCorrectArgs(t *testing.T) {

@@ -28,22 +28,22 @@ SELECT
     pc.processes_live, pc.processes_dvr, pc.processes_clip, pc.processes_dvr_finalize, pc.processes_vod
 FROM (VALUES
 ('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included usage.', 0.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
+'{"support_level": "community"}',
 'community', 'none', true, 0, false, true, false),
 ('free', 'Free', 'Self-hosted with Livepeer transcoding. Watermarked player, no SLA.', 0.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
+'{"support_level": "community"}',
 'community', 'none', true, 1, false, false, true),
 ('supporter', 'Supporter', '120K delivered mins, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
+'{"support_level": "basic"}',
 'basic', 'none', true, 2, false, false, false),
 ('developer', 'Developer', '500K delivered mins, priority processing, team features, advanced analytics. ~500-1K viewers.', 249.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "support_level": "priority"}',
+'{"support_level": "priority"}',
 'priority', 'standard', true, 3, false, false, false),
 ('production', 'Production', '2M delivered mins, dedicated processing capacity, 24/7 support + SLA. ~2-5K viewers.', 999.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "enterprise"}',
+'{"sla": true, "support_level": "enterprise"}',
 'enterprise', 'premium', true, 4, false, false, false),
 ('enterprise', 'Enterprise', 'Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.', 0.00, 'EUR',
-'{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "dedicated", "processing_customizable": true}',
+'{"sla": true, "support_level": "dedicated", "processing_customizable": true}',
 'dedicated', 'custom', true, 5, true, false, false)
 ) AS v(
     tier_name, display_name, description, base_price, currency,
@@ -137,14 +137,14 @@ ON CONFLICT (tier_id, meter) DO UPDATE SET
 INSERT INTO purser.tenant_subscriptions (
     tenant_id, tier_id, status, billing_email, started_at, next_billing_date,
     billing_period_start, billing_period_end,
-    payment_method, mollie_subscription_id
+    payment_method, mollie_subscription_id, presentment_currency
 )
 SELECT
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', bt.id, 'active', 'demo@frameworks.network',
     NOW(), NOW() + INTERVAL '1 month',
     DATE_TRUNC('month', NOW()),
     DATE_TRUNC('month', NOW()) + INTERVAL '1 month',
-    'mollie', 'sub_demo_123'
+    'mollie', 'sub_demo_123', 'EUR'
 FROM purser.billing_tiers bt
 WHERE bt.tier_name = 'developer'
   AND NOT EXISTS (SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001');
@@ -473,7 +473,8 @@ ON CONFLICT (invoice_id, line_key) DO UPDATE SET
 -- Payment records linked to paid invoices
 
 INSERT INTO purser.billing_payments (
-    id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at
+    id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at,
+    original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES
 -- Payment for previous month invoice
 (
@@ -485,7 +486,8 @@ INSERT INTO purser.billing_payments (
     'tr_demo_sepa_001',
     'confirmed',
     DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
-    DATE_TRUNC('month', NOW()) + INTERVAL '5 days'
+    DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
+    25036, 'EUR', 25036, 1, 'identity', (DATE_TRUNC('month', NOW()) + INTERVAL '5 days')::date
 ),
 -- Payment for two months ago invoice
 (
@@ -497,13 +499,20 @@ INSERT INTO purser.billing_payments (
     'tr_demo_sepa_002',
     'confirmed',
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
-    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days'
+    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
+    24996, 'EUR', 24996, 1, 'identity', (DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days')::date
 )
 ON CONFLICT (id) DO UPDATE SET
     amount = EXCLUDED.amount,
     currency = EXCLUDED.currency,
     status = EXCLUDED.status,
-    confirmed_at = EXCLUDED.confirmed_at;
+    confirmed_at = EXCLUDED.confirmed_at,
+    original_amount_cents = EXCLUDED.original_amount_cents,
+    original_currency = EXCLUDED.original_currency,
+    eur_amount_cents = EXCLUDED.eur_amount_cents,
+    fx_units_per_eur = EXCLUDED.fx_units_per_eur,
+    fx_source = EXCLUDED.fx_source,
+    fx_reference_date = EXCLUDED.fx_reference_date;
 
 -- ============================================================================
 -- PURSER: Demo Balance Transactions (Prepaid Audit Trail)

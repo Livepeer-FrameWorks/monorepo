@@ -1,0 +1,23 @@
+# Send a signed webhook.test event to an endpoint and return the attempt
+mutation TestWebhookEndpoint($id: ID!) {
+  testWebhookEndpoint(id: $id) {
+    __typename
+    ... on WebhookTestResult {
+      delivery {
+        ...WebhookDeliveryFields @mask_disable
+      }
+      attempt {
+        ...WebhookDeliveryAttemptFields @mask_disable
+      }
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on RateLimitError {
+      ...RateLimitErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

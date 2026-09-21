@@ -110,26 +110,28 @@ func TestCreditPrepaidBalanceTxNewCredit(t *testing.T) {
 	defer db.Close()
 	h := &X402Handler{db: db, logger: logging.NewLogger()}
 
+	const tenantID = "a0000000-0000-4000-8000-000000000402"
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO purser\.balance_transactions`).
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(500), "topup", sqlmock.AnyArg(), "nonce-2", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), tenantID, int64(500), "topup", sqlmock.AnyArg(), "nonce-2", "x402_payment", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
-		WithArgs("tenant-1", "EUR").
+		WithArgs(tenantID, "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`UPDATE purser\.prepaid_balances`).
-		WithArgs(int64(500), "tenant-1", "EUR").
+		WithArgs(int64(500), tenantID, "EUR").
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(1500)))
 	mock.ExpectExec(`UPDATE purser\.balance_transactions`).
 		WithArgs(int64(1500), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDomainEvent(mock, "billing.topup_credited", tenantID)
 	mock.ExpectCommit()
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	bal, err := h.creditPrepaidBalanceTx(context.Background(), tx, "tenant-1", 500, "nonce-2", "0xabcdef0123456789aa", "x402 topup")
+	bal, err := h.creditPrepaidBalanceTx(context.Background(), tx, tenantID, 500, "nonce-2", "0xabcdef0123456789aa", "x402 topup")
 	if err != nil {
 		t.Fatalf("creditPrepaidBalanceTx: %v", err)
 	}

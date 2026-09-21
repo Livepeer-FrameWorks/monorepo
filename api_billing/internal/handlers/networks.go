@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"os"
+	"frameworks/api_billing/internal/appconfig"
 )
 
 // NetworkConfig holds configuration for a blockchain network
@@ -41,14 +41,14 @@ func TokenDecimals(asset string) (int32, bool) {
 	}
 }
 
-// GetRPCEndpoint returns the RPC endpoint from environment
+// GetRPCEndpoint returns the configured RPC endpoint for RPCEndpointEnv.
 func (n NetworkConfig) GetRPCEndpoint() string {
-	return os.Getenv(n.RPCEndpointEnv)
+	return appconfig.Runtime().NetworkSetting(n.RPCEndpointEnv)
 }
 
-// GetExplorerAPIKey returns the explorer API key from environment
+// GetExplorerAPIKey returns the configured explorer API key for ExplorerAPIEnv.
 func (n NetworkConfig) GetExplorerAPIKey() string {
-	return os.Getenv(n.ExplorerAPIEnv)
+	return appconfig.Runtime().NetworkSetting(n.ExplorerAPIEnv)
 }
 
 // Networks is the registry of all supported networks
@@ -188,7 +188,7 @@ var DefaultRPCEndpoints = map[string]string{
 
 // GetRPCEndpointWithDefault returns the RPC endpoint, falling back to default
 func (n NetworkConfig) GetRPCEndpointWithDefault() string {
-	if endpoint := os.Getenv(n.RPCEndpointEnv); endpoint != "" {
+	if endpoint := appconfig.Runtime().NetworkSetting(n.RPCEndpointEnv); endpoint != "" {
 		return endpoint
 	}
 	return DefaultRPCEndpoints[n.RPCEndpointEnv]

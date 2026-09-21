@@ -23,31 +23,33 @@ type PageEmbeddedEvent struct {
 }
 
 type CrawlScheduler struct {
-	crawler        *Crawler
-	db             *sql.DB
-	pageCache      *PageCacheStore
-	health         *HealthTracker
-	interval       time.Duration
-	tenantID       string
-	sitemaps       []string
-	sitemapsDir    string
-	logger         logging.Logger
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	onPageEmbedded func(PageEmbeddedEvent)
+	crawler         *Crawler
+	db              *sql.DB
+	pageCache       *PageCacheStore
+	health          *HealthTracker
+	interval        time.Duration
+	tenantID        string
+	sitemaps        []string
+	sitemapsDir     string
+	sourceVariables map[string]string
+	logger          logging.Logger
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	onPageEmbedded  func(PageEmbeddedEvent)
 }
 
 type SchedulerConfig struct {
-	Crawler        *Crawler
-	DB             *sql.DB
-	PageCache      *PageCacheStore
-	Health         *HealthTracker
-	Interval       time.Duration
-	TenantID       string
-	Sitemaps       []string
-	SitemapsDir    string
-	Logger         logging.Logger
-	OnPageEmbedded func(PageEmbeddedEvent)
+	Crawler         *Crawler
+	DB              *sql.DB
+	PageCache       *PageCacheStore
+	Health          *HealthTracker
+	Interval        time.Duration
+	TenantID        string
+	Sitemaps        []string
+	SitemapsDir     string
+	SourceVariables map[string]string
+	Logger          logging.Logger
+	OnPageEmbedded  func(PageEmbeddedEvent)
 }
 
 func NewCrawlScheduler(cfg SchedulerConfig) *CrawlScheduler {
@@ -60,16 +62,17 @@ func NewCrawlScheduler(cfg SchedulerConfig) *CrawlScheduler {
 		health = NewHealthTracker()
 	}
 	return &CrawlScheduler{
-		crawler:        cfg.Crawler,
-		db:             cfg.DB,
-		pageCache:      cfg.PageCache,
-		health:         health,
-		interval:       interval,
-		tenantID:       cfg.TenantID,
-		sitemaps:       cfg.Sitemaps,
-		sitemapsDir:    cfg.SitemapsDir,
-		logger:         cfg.Logger,
-		onPageEmbedded: cfg.OnPageEmbedded,
+		crawler:         cfg.Crawler,
+		db:              cfg.DB,
+		pageCache:       cfg.PageCache,
+		health:          health,
+		interval:        interval,
+		tenantID:        cfg.TenantID,
+		sitemaps:        cfg.Sitemaps,
+		sitemapsDir:     cfg.SitemapsDir,
+		sourceVariables: cfg.SourceVariables,
+		logger:          cfg.Logger,
+		onPageEmbedded:  cfg.OnPageEmbedded,
 	}
 }
 
@@ -191,7 +194,17 @@ func (s *CrawlScheduler) loadSources() []crawlSource {
 					if line == "" || strings.HasPrefix(line, "#") {
 						continue
 					}
-					add(os.ExpandEnv(line))
+					missing := false
+					expanded := os.Expand(line, func(key string) string {
+						value := s.sourceVariables[key]
+						if value == "" {
+							missing = true
+						}
+						return value
+					})
+					if !missing {
+						add(expanded)
+					}
 				}
 			}()
 		}

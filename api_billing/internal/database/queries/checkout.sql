@@ -155,7 +155,13 @@ WHERE payment.invoice_id = invoice.id
 
 -- name: LockPendingTopupForCheckout :one
 SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
-       checkout_id, provider_payment_id
+       checkout_id, provider_payment_id, refunded_amount_cents,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.pending_topups
 WHERE id = sqlc.arg(topup_id)::text::uuid
 FOR UPDATE;
@@ -172,6 +178,29 @@ WHERE id = sqlc.arg(topup_id)::text::uuid
   AND UPPER(currency) = UPPER(sqlc.arg(currency)::text)
   AND (checkout_id IS NULL OR checkout_id = NULLIF(sqlc.arg(session_id)::text, ''))
   AND (provider_payment_id IS NULL OR provider_payment_id = NULLIF(sqlc.arg(provider_payment_id)::text, ''));
+
+-- name: HoldPendingTopupForOperatorReview :exec
+-- A settled top-up that cannot be credited stays pending with a needs_review
+-- reversal row, so an operator resolves the paid amount (refund or converted
+-- credit) instead of the ledger absorbing it.
+INSERT INTO purser.payment_reversals (
+    tenant_id, pending_topup_id, provider, reversal_type, provider_reversal_id,
+    provider_charge_id, amount_cents, currency, status, reason,
+    operator_review_required, actor_kind, evidence_ref,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
+) VALUES (
+    sqlc.arg(tenant_id)::text::uuid, sqlc.arg(topup_id)::text::uuid, sqlc.arg(provider),
+    'manual', sqlc.arg(review_key), NULLIF(sqlc.arg(provider_payment_id)::text, ''),
+    sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text, 'needs_review', sqlc.arg(reason),
+    TRUE, 'webhook', sqlc.arg(evidence_ref),
+    CASE WHEN sqlc.narg(fx_source)::text IS NULL THEN NULL ELSE sqlc.arg(amount_cents)::bigint END,
+    CASE WHEN sqlc.narg(fx_source)::text IS NULL THEN NULL ELSE sqlc.arg(currency)::text END,
+    sqlc.narg(eur_amount_cents)::bigint,
+    sqlc.narg(fx_units_per_eur)::text::numeric, sqlc.narg(fx_source)::text,
+    sqlc.narg(fx_reference_date)::date
+)
+ON CONFLICT (provider, provider_reversal_id) DO NOTHING;
 
 -- name: CompletePendingTopup :exec
 UPDATE purser.pending_topups

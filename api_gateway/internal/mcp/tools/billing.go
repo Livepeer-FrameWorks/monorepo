@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
+	"frameworks/api_gateway/internal/mcp/resources"
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -221,6 +222,10 @@ type PayInvoiceResult struct {
 	Network                string  `json:"network,omitempty"`
 	ExpiresAt              string  `json:"expires_at,omitempty"`
 	Message                string  `json:"message"`
+
+	// Conversion is the amount charged and the EUR amount applied to the
+	// invoice, at the ECB rate of payment creation.
+	Conversion *resources.ConversionInfo `json:"conversion,omitempty"`
 }
 
 func handlePayInvoice(ctx context.Context, args PayInvoiceInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -267,6 +272,7 @@ func handlePayInvoice(ctx context.Context, args PayInvoiceInput, clients *client
 		Asset:                  resp.GetAssetSymbol(),
 		Network:                resp.GetNetwork(),
 		Message:                "Payment is pending confirmation.",
+		Conversion:             resources.NewConversionInfo(resp.GetFx()),
 	}
 	if resp.GetExpiresAt() != nil {
 		result.ExpiresAt = resp.GetExpiresAt().AsTime().UTC().Format(time.RFC3339)
@@ -281,7 +287,7 @@ func handlePayInvoice(ctx context.Context, args PayInvoiceInput, clients *client
 
 // TopupBalanceInput represents input for topup_balance tool.
 type TopupBalanceInput struct {
-	AmountCents int64  `json:"amount_cents" jsonschema:"Amount to credit, in tenant currency cents (USD or EUR per the account). Minimum: 1 cent; maximum: 10000000 cents."`
+	AmountCents int64  `json:"amount_cents" jsonschema:"Amount to pay, in cents of the tenant's presentment currency (EUR, USD, or GBP, from the billing country). The EUR balance is credited at the ECB rate locked with the quote. Minimum: 1 cent; maximum: 10000000 cents."`
 	Asset       string `json:"asset,omitempty" jsonschema:"Crypto asset to send: USDC or ETH. Default: USDC. (LPT is reserved and currently rejected.)"`
 }
 
@@ -319,12 +325,11 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 		return toolError(fmt.Sprintf("Invalid asset: %s. Valid options: USDC, ETH", args.Asset))
 	}
 
-	// Call Purser to create crypto top-up
+	// Purser denominates the amount in the tenant's presentment currency.
 	resp, err := clients.Purser.CreateCryptoTopup(ctx, &purserpb.CreateCryptoTopupRequest{
 		TenantId:            tenantID,
 		ExpectedAmountCents: args.AmountCents,
 		Asset:               assetEnum,
-		Currency:            billing.DefaultCurrency(),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create crypto topup")
@@ -340,6 +345,9 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 			resp.ExpiresAt.AsTime().Format("2006-01-02T15:04:05Z"),
 		)
 	}
+	if credit := resources.DescribeConversion(resp.GetFx()); credit != "" {
+		message += " Credits your EUR balance: " + credit + "."
+	}
 
 	result := TopupResult{
 		TopupID:        resp.TopupId,
@@ -352,6 +360,8 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 		PriceUSD:       resp.QuotedPriceUsd,
 		QuoteSource:    resp.QuoteSource,
 		Network:        resp.Network,
+		Currency:       resp.GetFx().GetOriginalCurrency(),
+		Conversion:     resources.NewConversionInfo(resp.GetFx()),
 	}
 
 	return toolSuccess(result)
@@ -373,6 +383,10 @@ type CheckTopupResult struct {
 	TxHash           string `json:"tx_hash,omitempty"`
 	Confirmations    int32  `json:"confirmations,omitempty"`
 	Message          string `json:"message"`
+
+	// Conversion is the presentment amount of the top-up and the EUR credit
+	// locked with its quote at the ECB rate.
+	Conversion *resources.ConversionInfo `json:"conversion,omitempty"`
 }
 
 func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -398,20 +412,31 @@ func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *client
 		TxHash:           resp.TxHash,
 		Confirmations:    resp.Confirmations,
 		CreditedCurrency: resp.CreditedAmountCurrency,
+		Conversion:       resources.NewConversionInfo(resp.GetFx()),
 	}
+	quote := resources.DescribeConversion(resp.GetFx())
 
 	switch resp.Status {
 	case "completed":
 		result.CreditedCents = resp.CreditedAmountCents
 		ccy := resp.CreditedAmountCurrency
 		if ccy == "" {
-			ccy = "USD"
+			ccy = billing.LedgerCurrency
 		}
-		result.Message = fmt.Sprintf("Payment confirmed! %d %s cents credited to your balance (tx: %s).", resp.CreditedAmountCents, ccy, resp.TxHash)
+		result.Message = fmt.Sprintf("Payment confirmed! %s credited to your balance (tx: %s).", resources.FormatMinorUnits(resp.CreditedAmountCents, ccy), resp.TxHash)
+		if quote != "" {
+			result.Message += " Locked quote: " + quote + "."
+		}
 	case "confirming":
 		result.Message = fmt.Sprintf("Payment detected (tx: %s). Waiting for confirmations (%d so far).", resp.TxHash, resp.Confirmations)
+		if quote != "" {
+			result.Message += " Locked quote: " + quote + "."
+		}
 	case "pending":
 		result.Message = "Payment not yet received. Please complete the transfer and check again."
+		if quote != "" {
+			result.Message += " Locked quote: " + quote + "."
+		}
 	case "expired":
 		result.Message = "Top-up request expired. Create a new top-up request."
 	default:

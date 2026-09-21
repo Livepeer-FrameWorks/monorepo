@@ -3,7 +3,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE id = sqlc.arg(topup_id)::text::uuid;
 
@@ -12,7 +14,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE provider = sqlc.arg(provider) AND checkout_id = sqlc.arg(checkout_id);
 
@@ -21,7 +25,9 @@ SELECT id, tenant_id, provider, COALESCE(checkout_id, '')::text AS checkout_id,
        amount_cents, currency, status, expires_at, completed_at,
        balance_transaction_id,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       original_amount_cents, original_currency::text AS original_currency, eur_amount_cents,
+       fx_units_per_eur::text AS fx_units_per_eur, fx_source, fx_reference_date
 FROM purser.pending_topups
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND (NOT sqlc.arg(filter_status)::boolean OR status = sqlc.arg(status))
@@ -47,13 +53,18 @@ RETURNING id::text AS id;
 INSERT INTO purser.pending_topups (
     id, tenant_id, provider, checkout_id, amount_cents, currency,
     status, expires_at, billing_email, billing_name, billing_company,
-    billing_vat_number, intent_id
+    billing_vat_number, intent_id,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(topup_id)::text::uuid, sqlc.arg(tenant_id)::text::uuid,
-    sqlc.arg(provider), NULL, sqlc.arg(amount_cents), sqlc.arg(currency),
+    sqlc.arg(provider), NULL, sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text,
     'pending', sqlc.arg(expires_at), sqlc.narg(billing_email),
     sqlc.narg(billing_name), sqlc.narg(billing_company),
-    sqlc.narg(billing_vat_number), sqlc.arg(intent_id)::text::uuid
+    sqlc.narg(billing_vat_number), sqlc.arg(intent_id)::text::uuid,
+    sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text, sqlc.arg(eur_amount_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_source)::text,
+    sqlc.arg(fx_reference_date)::date
 );
 
 -- name: FailPendingCardTopup :execrows
@@ -78,7 +89,10 @@ SELECT id::text AS id, tenant_id::text AS tenant_id, wallet_address, asset,
        COALESCE(received_amount_base_units::text, '')::text AS received_amount_base_units,
        credited_amount_cents, expires_at, detected_at, completed_at,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       credited_amount_currency, quote_source, COALESCE(network, '')::text AS network
+       credited_amount_currency, quote_source, COALESCE(network, '')::text AS network,
+       original_amount_cents, COALESCE(original_currency, '')::text AS original_currency, eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source, fx_reference_date
 FROM purser.crypto_wallets
 WHERE id = sqlc.arg(topup_id)::text::uuid
   AND purpose = 'prepaid'

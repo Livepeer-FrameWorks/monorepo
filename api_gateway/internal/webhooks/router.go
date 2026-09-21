@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -54,9 +53,9 @@ var allowedProviders = map[string][]string{
 }
 
 // NewRouter creates a new webhook router with the given service handlers.
-// Service names should match the URL path: /webhooks/{service}/{provider}
-func NewRouter(logger logging.Logger) *Router {
-	rateLimitPerMin := config.GetEnvInt("WEBHOOK_RATE_LIMIT_PER_MIN", 300)
+// Service names should match the URL path: /webhooks/{service}/{provider}.
+// A rateLimitPerMin of 0 or less disables per-client rate limiting.
+func NewRouter(logger logging.Logger, rateLimitPerMin int) *Router {
 	var limiter *WebhookRateLimiter
 	if rateLimitPerMin > 0 {
 		limiter = NewWebhookRateLimiter(rateLimitPerMin, time.Minute, 10*time.Minute)

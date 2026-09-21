@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -93,7 +94,7 @@ func TestEmbeddedFacilitatorRebroadcastsIdenticalPreparedTransactionAfterUnknown
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
 	}))
 	defer server.Close()
-	t.Setenv(network.RPCEndpointEnv, server.URL)
+	appconfigtest.Set(t, network.RPCEndpointEnv, server.URL)
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -189,7 +190,7 @@ func TestEmbeddedFacilitatorDoesNotBroadcastBeforePreparedAttemptCommits(t *test
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
 	}))
 	defer rpcServer.Close()
-	t.Setenv(network.RPCEndpointEnv, rpcServer.URL)
+	appconfigtest.Set(t, network.RPCEndpointEnv, rpcServer.URL)
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -261,7 +262,7 @@ func TestEmbeddedFacilitatorReplaysAfterRPCAcceptanceAndDatabaseFailure(t *testi
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
 	}))
 	defer rpcServer.Close()
-	t.Setenv(network.RPCEndpointEnv, rpcServer.URL)
+	appconfigtest.Set(t, network.RPCEndpointEnv, rpcServer.URL)
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -333,7 +334,7 @@ func TestEmbeddedFacilitatorRejectsMalformedRPCQuantities(t *testing.T) {
 	}))
 	defer rpcServer.Close()
 	network := Networks["base"]
-	t.Setenv(network.RPCEndpointEnv, rpcServer.URL)
+	appconfigtest.Set(t, network.RPCEndpointEnv, rpcServer.URL)
 	handler := &X402Handler{rpc: NewRPCClient()}
 
 	if _, err := handler.getNonce(context.Background(), network, "0x1111111111111111111111111111111111111111"); err == nil {

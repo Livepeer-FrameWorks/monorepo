@@ -1,7 +1,8 @@
 -- name: EnqueueServiceEvent :one
 INSERT INTO quartermaster.service_event_outbox (
-    event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
+    event_id, event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
 ) VALUES (
+    sqlc.arg(event_id)::uuid,
     sqlc.arg(event_type)::text,
     NULLIF(sqlc.arg(tenant_id)::text, '')::uuid,
     sqlc.arg(scope)::text,
@@ -14,6 +15,7 @@ RETURNING id::text;
 
 -- name: ClaimServiceEventOutboxBatch :many
 SELECT id::text AS id,
+       COALESCE(event_id::text, '')::text AS event_id,
        payload::text AS payload,
        attempts,
        created_at

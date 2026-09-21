@@ -15,7 +15,8 @@ SELECT id, tenant_id, tier_id, status, billing_email, started_at,
        stripe_current_period_end, dunning_attempts, mollie_subscription_id,
        pending_tier_id, pending_effective_at, pending_reason,
        COALESCE(created_at, TIMESTAMP 'epoch') AS created_at,
-       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at
+       COALESCE(updated_at, TIMESTAMP 'epoch') AS updated_at,
+       presentment_currency::text AS presentment_currency
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
 ORDER BY created_at DESC
@@ -25,14 +26,14 @@ LIMIT 1;
 INSERT INTO purser.tenant_subscriptions (
     id, tenant_id, tier_id, status, billing_email, billing_model, started_at,
     trial_ends_at, next_billing_date, billing_period_start, billing_period_end,
-    payment_method, custom_features, created_at, updated_at
+    payment_method, custom_features, presentment_currency, created_at, updated_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id)::text::uuid, sqlc.arg(tier_id)::text::uuid,
     'active', sqlc.arg(billing_email), sqlc.arg(billing_model), sqlc.arg(now),
     sqlc.narg(trial_ends_at), sqlc.arg(next_billing_date),
     sqlc.arg(billing_period_start), sqlc.arg(billing_period_end),
     sqlc.arg(payment_method)::text, sqlc.arg(custom_features)::jsonb,
-    sqlc.arg(now), sqlc.arg(now)
+    sqlc.arg(presentment_currency)::text, sqlc.arg(now), sqlc.arg(now)
 );
 
 -- name: GetTenantSubscriptionTierID :one
@@ -55,7 +56,7 @@ SET tier_id = CASE WHEN sqlc.arg(set_tier_id)::boolean THEN sqlc.arg(tier_id)::t
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled';
 
 -- name: GetUpdatedSubscriptionEventState :one
-SELECT id, status, COALESCE(payment_method, '') AS payment_method
+SELECT id, status, COALESCE(payment_method, '') AS payment_method, tier_id::text AS tier_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
 ORDER BY started_at DESC, id DESC

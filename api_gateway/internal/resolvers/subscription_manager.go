@@ -12,7 +12,6 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
-	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
@@ -87,6 +86,19 @@ type SubscriptionManagerConfig struct {
 	// tenant on this Bridge replica; zero disables the cap.
 	MaxSubscriptionsPerTenant int
 	Metrics                   *GraphQLMetrics
+	// Dial configures the pooled Signalman connections.
+	Dial SignalmanDialSettings
+}
+
+// SignalmanDialSettings configure the Signalman dialer. The dialer is built
+// once, so the values apply from startup.
+type SignalmanDialSettings struct {
+	// OpenTimeout bounds how long an upstream stream waits for a ready
+	// connection. Zero uses the Signalman dialer default.
+	OpenTimeout   time.Duration
+	AllowInsecure bool
+	CACertFile    string
+	TLSServerName string
 }
 
 // NewSubscriptionManager creates a subscription manager that opens upstream
@@ -95,11 +107,11 @@ type SubscriptionManagerConfig struct {
 func NewSubscriptionManager(logger logging.Logger, cfg SubscriptionManagerConfig) *SubscriptionManager {
 	dialer, err := signalmanclient.NewDialer(signalmanclient.DialerConfig{
 		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: pkgconfig.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    pkgconfig.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    pkgconfig.GetServiceGRPCTLSServerName("signalman"),
+		AllowInsecure: cfg.Dial.AllowInsecure,
+		CACertFile:    cfg.Dial.CACertFile,
+		ServerName:    cfg.Dial.TLSServerName,
 		Logger:        logger,
-		OpenTimeout:   time.Duration(pkgconfig.GetEnvInt("SIGNALMAN_CONNECT_TIMEOUT_SECONDS", 5)) * time.Second,
+		OpenTimeout:   cfg.Dial.OpenTimeout,
 	})
 	var opener streamOpener = dialer
 	if err != nil {
@@ -720,66 +732,25 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 	return updates, nil
 }
 
-// SubscribeToLifecycle subscribes to lifecycle events (clip) and returns a channel
-func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *ipcpb.ClipLifecycleData, error) {
-	updates := make(chan *ipcpb.ClipLifecycleData, 10)
-	err := sm.startSubscription(ctx, "lifecycle", config, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS}, func() { close(updates) }, func(event *signalmanpb.SignalmanEvent) bool {
-		if event.EventType != signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE || tenantMismatch(config.TenantID, event) {
-			return true
-		}
-		if event.Data == nil {
-			return true
-		}
-		cl := event.Data.GetClipLifecycle()
-		if cl == nil || cl.GetStreamId() != streamID {
-			return true
-		}
-		return sendSubscriptionUpdate(ctx, updates, cl)
-	})
-	if err != nil {
-		return nil, err
+// SubscribeToTenantEvents subscribes to the tenant's public domain events on
+// CHANNEL_EVENTS and returns those that pass filter. An event is delivered only
+// when it is stamped with the subscriber's tenant (tenantless events never
+// match) and names a registered public type whose payload is that type's
+// message.
+func (sm *SubscriptionManager) SubscribeToTenantEvents(ctx context.Context, config ConnectionConfig, filter TenantEventFilter) (<-chan *signalmanpb.TenantEvent, error) {
+	if config.TenantID == "" {
+		return nil, fmt.Errorf("tenant events require a tenant")
 	}
-	return updates, nil
-}
-
-// SubscribeToDVRLifecycle subscribes to DVR lifecycle events and returns a channel
-func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *ipcpb.DVRLifecycleData, error) {
-	updates := make(chan *ipcpb.DVRLifecycleData, 10)
-	err := sm.startSubscription(ctx, "dvr_lifecycle", config, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS}, func() { close(updates) }, func(event *signalmanpb.SignalmanEvent) bool {
-		if event.EventType != signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE || tenantMismatch(config.TenantID, event) {
+	updates := make(chan *signalmanpb.TenantEvent, 10)
+	err := sm.startSubscription(ctx, "tenant_events", config, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_EVENTS}, func() { close(updates) }, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT || event.GetTenantId() != config.TenantID {
 			return true
 		}
-		if event.Data == nil {
+		tenantEvent := event.GetData().GetTenantEvent()
+		if tenantEvent == nil || !isRegisteredPublic(tenantEvent) || !filter.Matches(tenantEvent) {
 			return true
 		}
-		dvr := event.Data.GetDvrLifecycle()
-		if dvr == nil || dvr.GetStreamId() != streamID {
-			return true
-		}
-		return sendSubscriptionUpdate(ctx, updates, dvr)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return updates, nil
-}
-
-// SubscribeToVodLifecycle subscribes to VOD lifecycle events, which Signalman
-// delivers on the analytics channel.
-func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, config ConnectionConfig) (<-chan *ipcpb.VodLifecycleData, error) {
-	updates := make(chan *ipcpb.VodLifecycleData, 10)
-	err := sm.startSubscription(ctx, "vod_lifecycle", config, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS}, func() { close(updates) }, func(event *signalmanpb.SignalmanEvent) bool {
-		if event.EventType != signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE || tenantMismatch(config.TenantID, event) {
-			return true
-		}
-		if event.Data == nil {
-			return true
-		}
-		vod := event.Data.GetVodLifecycle()
-		if vod == nil {
-			return true
-		}
-		return sendSubscriptionUpdate(ctx, updates, vod)
+		return sendSubscriptionUpdate(ctx, updates, tenantEvent)
 	})
 	if err != nil {
 		return nil, err
@@ -934,24 +905,12 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *signalmanpb.Sign
 		// Pass proto StreamTrackListTrigger directly (bound to TrackListUpdate)
 		tenantEvent.TrackListUpdate = event.Data.GetTrackList()
 
-	case signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
-		// Pass proto ClipLifecycleData directly (bound to ClipLifecycle)
-		tenantEvent.ClipLifecycle = event.Data.GetClipLifecycle()
-
-	case signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
-		// Pass proto DVRLifecycleData directly (bound to DVREvent)
-		tenantEvent.DvrEvent = event.Data.GetDvrLifecycle()
-
 	case signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
 		// Pass proto NodeLifecycleUpdate directly (bound to SystemHealthEvent)
 		tenantEvent.SystemHealthEvent = event.Data.GetNodeLifecycle()
 
 	case signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING:
 		tenantEvent.RoutingEvent = mapSignalmanRoutingEvent(event)
-
-	case signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
-		// Pass proto VodLifecycleData directly (bound via gqlgen.yml)
-		tenantEvent.VodLifecycle = event.Data.GetVodLifecycle()
 
 	case signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
 		tenantEvent.StorageEvent = mapSignalmanStorageEvent(event)
@@ -985,8 +944,7 @@ func (sm *SubscriptionManager) getChannelForEventType(eventType signalmanpb.Even
 		signalmanpb.EventType_EVENT_TYPE_STREAM_END,
 		signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE,
 		signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE,
-		signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE,
-		signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
+		signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE:
 		return "STREAMS"
 
 	case signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
@@ -1178,10 +1136,6 @@ func getStreamIDFromProtoEvent(event *signalmanpb.SignalmanEvent) string {
 		raw = cl.GetStreamId()
 	} else if tl := event.Data.GetTrackList(); tl != nil {
 		raw = tl.GetStreamId()
-	} else if cl := event.Data.GetClipLifecycle(); cl != nil {
-		raw = cl.GetStreamId()
-	} else if dl := event.Data.GetDvrLifecycle(); dl != nil {
-		raw = dl.GetStreamId()
 	} else if lb := event.Data.GetLoadBalancing(); lb != nil {
 		raw = lb.GetStreamId()
 	} else if pr := event.Data.GetPushRewrite(); pr != nil {

@@ -92,7 +92,7 @@ func TestHandleCreateStream_ZeroBalanceCanConfigureStream(t *testing.T) {
 		},
 	}
 	purser := clientstest.SolventPurser()
-	purser.GetPrepaidBalanceFn = func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+	purser.GetPrepaidBalanceFn = func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 		return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 	}
 	sc, checker, ctx := streamToolSetup(commo, purser)

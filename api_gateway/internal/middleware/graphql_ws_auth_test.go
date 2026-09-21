@@ -37,6 +37,20 @@ func TestGraphQLOperationAuthRejectsAnonymousProtectedWebSocketQuery(t *testing.
 	}
 }
 
+func TestGraphQLOperationAuthRejectionCarriesUnauthorizedCode(t *testing.T) {
+	ctx := wsAuthOperationContext(`query { validateStreamKey(streamKey: "sk_secret") { status } }`, "")
+	handler := GraphQLOperationAuth()(ctx, func(context.Context) graphql.ResponseHandler {
+		return func(context.Context) *graphql.Response { return &graphql.Response{} }
+	})
+	resp := handler(ctx)
+	if resp == nil || len(resp.Errors) != 1 {
+		t.Fatalf("response = %#v, want one error", resp)
+	}
+	if resp.Errors[0].Extensions["code"] != "UNAUTHORIZED" {
+		t.Fatalf("extensions = %#v, want code UNAUTHORIZED", resp.Errors[0].Extensions)
+	}
+}
+
 func TestGraphQLOperationAuthAllowsOnlyPublicWebSocketQuery(t *testing.T) {
 	ctx := wsAuthOperationContext(`query { resolveIngestEndpoint(streamKey: "sk_secret") { primary { whipUrl } } }`, "")
 	reached, public := runAuthOperation(GraphQLOperationAuth(), ctx)

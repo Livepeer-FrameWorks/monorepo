@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -85,7 +86,7 @@ func HydrateAppliedManagedStreamsFromMist(logger logging.Logger) {
 	if cfg == nil {
 		return
 	}
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -275,7 +276,7 @@ func handleApplyManagedStream(logger logging.Logger, req *ipcpb.ApplyManagedStre
 	}
 	appliedManagedStreams.Unlock()
 
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -362,7 +363,7 @@ func handleRetractManagedStream(logger logging.Logger, req *ipcpb.RetractManaged
 			return
 		}
 	}
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}

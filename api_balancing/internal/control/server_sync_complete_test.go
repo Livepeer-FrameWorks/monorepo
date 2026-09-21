@@ -97,15 +97,14 @@ func expectNodeCopyGained(mock sqlmock.Sqlmock, hash, node string, size ...int64
 		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(0)))
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs(hash).
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(mockTenantUUID))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
 		WithArgs(hash, node).
 		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(int64(1), hash, node).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "artifact.node_copy_changed", hash, "artifact_node_copy", mockTenantUUID, "", hash)
 }
 
 // A successful main-upload completion verifies + PROMOTES the staging object, then applies the guarded
@@ -853,15 +852,14 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("cache"))
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs("hash-lm").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(mockTenantUUID))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
 		WithArgs("hash-lm", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(7)))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(int64(0), "hash-lm", "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "artifact.node_copy_changed", "hash-lm", "artifact_node_copy", mockTenantUUID, "", "hash-lm")
 	mock.ExpectQuery("SELECT count\\(\\*\\) FROM foghorn.artifact_nodes").
 		WithArgs("hash-lm", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))

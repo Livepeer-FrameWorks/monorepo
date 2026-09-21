@@ -4,12 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestLocalDVRSourcePullBindsOriginAndDestination(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "dvr-source-test-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "dvr-source-test-secret"})
 	sm := resetStateTrigHandlers(t)
 	sm.SetNodeConnectionInfo(t.Context(), "origin", "http://origin:8080", "", "media", nil)
 	sm.SetNodeConnectionInfo(t.Context(), "viewer-edge", "http://viewer:8080", "", "media", nil)

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
@@ -129,7 +131,7 @@ func TestSourceBalancerCapabilitySurvivesMistQueryReplacement(t *testing.T) {
 }
 
 func TestApplyBalancerCapabilitySkipsFullReconcile(t *testing.T) {
-	t.Setenv("NODE_ID", "edge-node-1")
+	appconfigtest.Setenv(t, "NODE_ID", "edge-node-1")
 	mist := &recordingMistAPI{}
 	manager := &Manager{
 		mistClient: mist,
@@ -157,7 +159,8 @@ func TestApplyBalancerCapabilitySkipsFullReconcile(t *testing.T) {
 }
 
 func TestApplySeedRejectsDowngradeWithoutOverwritingLastGoodState(t *testing.T) {
-	t.Setenv("HELMSMAN_STATE_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "NODE_ID", "edge-node-1")
+	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", t.TempDir())
 	current := &ipcpb.ConfigSeed{
 		NodeId: "edge-node-1", SeedVersion: 42,
 		FoghornBalancerBase: "https://current.example/cap",

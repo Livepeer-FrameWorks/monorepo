@@ -1,0 +1,28 @@
+# Fetch the enforced gates for the current tenant and its entitled clusters
+query GetCapabilities {
+  capabilities {
+    observedAt
+    tenant {
+      platformOperator
+      recordingRetention {
+        capped
+        maxDays
+      }
+      processingCustomizable
+      customSubdomain
+      customDomain
+    }
+    clusters {
+      clusterId
+      clusterName
+      role
+      accessLevel
+      media {
+        ingest
+        playback
+        storage
+        processing
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# Fetch one webhook endpoint
+query GetWebhookEndpoint($id: ID!) {
+  webhookEndpoint(id: $id) {
+    ...WebhookEndpointFields @mask_disable
+  }
+}

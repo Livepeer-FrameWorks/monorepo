@@ -1415,6 +1415,7 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *foghornfed
 		StreamInternalName: req.GetStreamInternalName(),
 		TenantId:           req.GetTenantId(),
 		Format:             req.GetFormat(),
+		Actor:              req.GetActor(),
 	}
 	if uid := req.GetUserId(); uid != "" {
 		clipReq.UserId = &uid
@@ -2011,8 +2012,9 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 	switch req.GetCommand() {
 	case "delete_clip":
 		resp, err := s.artifactHandler.DeleteClip(ctx, &sharedpb.DeleteClipRequest{
-			ClipHash: req.GetArtifactHash(),
-			TenantId: req.GetTenantId(),
+			ClipHash:          req.GetArtifactHash(),
+			TenantId:          req.GetTenantId(),
+			RequestedByUserId: req.GetRequestedByUserId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
@@ -2044,8 +2046,9 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 
 	case "delete_dvr":
 		resp, err := s.artifactHandler.DeleteDVR(ctx, &sharedpb.DeleteDVRRequest{
-			DvrHash:  req.GetArtifactHash(),
-			TenantId: req.GetTenantId(),
+			DvrHash:           req.GetArtifactHash(),
+			TenantId:          req.GetTenantId(),
+			RequestedByUserId: req.GetRequestedByUserId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
@@ -2058,8 +2061,9 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 
 	case "delete_vod":
 		resp, err := s.artifactHandler.DeleteVodAsset(ctx, &sharedpb.DeleteVodAssetRequest{
-			ArtifactHash: req.GetArtifactHash(),
-			TenantId:     req.GetTenantId(),
+			ArtifactHash:      req.GetArtifactHash(),
+			TenantId:          req.GetTenantId(),
+			RequestedByUserId: req.GetRequestedByUserId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {

@@ -3,8 +3,8 @@ package handlers
 import (
 	"fmt"
 	"html/template"
-	"os"
-	"strings"
+
+	"frameworks/api_billing/internal/appconfig"
 
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
@@ -55,9 +55,10 @@ var billingEmailTemplates = map[string]string{
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; margin:20px 0; border-collapse:collapse; background:#eef5f8; border-left:3px solid #0f4b6e;">
   <tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #ccdde5;">Invoice</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold; border-bottom:1px solid #ccdde5;">{{.InvoiceID}}</td></tr>
   <tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #ccdde5;">Amount</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold; border-bottom:1px solid #ccdde5;">{{money .Amount}} {{.Currency}}</td></tr>
+  {{if .FX.UnitsPerEUR}}<tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #ccdde5;">EUR total</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold; border-bottom:1px solid #ccdde5;">{{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}})</td></tr>{{end}}
   <tr><td style="padding:12px 15px; color:#667085; font-size:13px;">Due date</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold;">{{.DueDate.Format "January 2, 2006"}}</td></tr>
 </table>
-{{if .UsageWaived}}<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #2f7d69; background:#edf8f4; color:#295f52; font-size:14px; line-height:21px;"><strong>Usage is on us during beta.</strong><br>Metered usage would have cost {{money .GrossMeteredAmount}} {{.Currency}}. Your metered total is 0.00 {{.Currency}}.</div>{{end}}
+{{if .UsageWaived}}<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #2f7d69; background:#edf8f4; color:#295f52; font-size:14px; line-height:21px;"><strong>Usage is on us during beta.</strong><br>Metered usage would have cost {{money .GrossMeteredAmount}} EUR. Your metered total is 0.00 EUR.</div>{{end}}
 {{if .LineItemGroups}}
 <h2 style="margin:28px 0 12px; color:#24283b; font-size:18px; line-height:24px;">Charges</h2>
 {{range .LineItemGroups}}
@@ -78,28 +79,28 @@ var billingEmailTemplates = map[string]string{
 	"payment_success": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">We've received your payment. Thank you.</p>
-<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #2f7d69; background:#edf8f4; color:#295f52; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount paid: {{money .Amount}} {{.Currency}}<br>Payment method: {{.PaymentMethod}}{{if .PaidAt}}<br>Payment date: {{.PaidAt.Format "January 2, 2006 at 3:04 PM"}}{{end}}</div>
+<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #2f7d69; background:#edf8f4; color:#295f52; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount paid: {{money .Amount}} {{.Currency}}{{if .FX.UnitsPerEUR}}<br>EUR applied: {{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}}){{end}}<br>Payment method: {{.PaymentMethod}}{{if .PaidAt}}<br>Payment date: {{.PaidAt.Format "January 2, 2006 at 3:04 PM"}}{{end}}</div>
 <p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">Your account is up to date and services remain active.</p>
 {{template "action" (action .LoginURL "View billing")}}`,
 
 	"payment_failed": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">We were unable to process your payment.</p>
-<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #b74242; background:#fff1f1; color:#7c3030; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount: {{money .Amount}} {{.Currency}}<br>Payment method: {{.PaymentMethod}}</div>
+<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #b74242; background:#fff1f1; color:#7c3030; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount: {{money .Amount}} {{.Currency}}{{if .FX.UnitsPerEUR}}<br>EUR amount: {{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}}){{end}}<br>Payment method: {{.PaymentMethod}}</div>
 <p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">Check your payment method and try again. Contact your bank if the issue continues.</p>
 {{template "action" (action .LoginURL "Retry payment")}}`,
 
 	"payment_action_required": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Your bank requires extra confirmation before we can complete this payment.</p>
-<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #a66b16; background:#fff8e8; color:#6f4a16; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount: {{money .Amount}} {{.Currency}}</div>
+<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #a66b16; background:#fff8e8; color:#6f4a16; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount: {{money .Amount}} {{.Currency}}{{if .FX.UnitsPerEUR}}<br>EUR amount: {{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}}){{end}}</div>
 {{template "action" (action .ActionURL "Confirm payment")}}
 <p style="margin:0; color:#667085; font-size:13px; line-height:20px;">If you did not initiate this payment, contact the FrameWorks support team.</p>`,
 
 	"overdue_reminder": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">This is a reminder that the following invoice is overdue.</p>
-<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #a66b16; background:#fff8e8; color:#6f4a16; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount due: {{money .Amount}} {{.Currency}}<br>Overdue by {{.DaysPastDue}} days</div>
+<div style="margin:20px 0; padding:13px 15px; border-left:3px solid #a66b16; background:#fff8e8; color:#6f4a16; font-size:14px; line-height:22px;"><strong>Invoice {{.InvoiceID}}</strong><br>Amount due: {{money .Amount}} {{.Currency}}{{if .FX.UnitsPerEUR}}<br>Invoice EUR total: {{.FX.EURAmount}} EUR at {{.FX.UnitsPerEUR}} {{.Currency}} per EUR (ECB reference rate of {{.FX.ReferenceDate}}){{end}}<br>Overdue by {{.DaysPastDue}} days</div>
 <p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">Please make payment to avoid service interruption.</p>
 {{template "action" (action .LoginURL "Pay now")}}`,
 
@@ -132,19 +133,13 @@ func (es *EmailService) renderBillingTemplate(templateName string, data EmailDat
 			return fmt.Sprintf("%.2f", amount)
 		},
 	}
+	rt := appconfig.Runtime()
 	return emailpkg.RenderLayout(emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      rt.Logo(),
 		Preheader:    meta.Preheader,
 		Eyebrow:      meta.Eyebrow,
 		Title:        meta.Title,
-		SupportEmail: billingSupportEmail(),
+		SupportEmail: rt.Support(),
 		Content:      data,
 	}, contentTemplate, funcs)
-}
-
-func billingSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }

@@ -108,6 +108,9 @@ const (
 	KeyGraphQLOperationName Key = "graphql_operation_name"
 	KeyGraphQLComplexity    Key = "graphql_complexity"
 	KeyGraphQLErrorCount    Key = "graphql_error_count"
+	// KeyGraphQLRootFields carries the []string of root field names the
+	// operation resolved, for API usage aggregation.
+	KeyGraphQLRootFields Key = "graphql_root_fields"
 	// KeyPlaybackContentID carries the canonical viewer playback_id resolved from a
 	// (possibly Relay/global) content_id, so the MCP access middleware and the tool
 	// handler share one normalization instead of resolving twice.

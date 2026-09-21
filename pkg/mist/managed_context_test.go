@@ -31,8 +31,7 @@ func TestManagedMutationContextCancelsBeforeAndDuringDispatch(t *testing.T) {
 					<-r.Context().Done()
 				}))
 				defer server.Close()
-				client := NewClient(logging.NewLogger())
-				client.BaseURL = server.URL
+				client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: server.URL})
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				result := make(chan error, 1)

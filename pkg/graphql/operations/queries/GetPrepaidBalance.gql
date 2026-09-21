@@ -1,5 +1,5 @@
-query GetPrepaidBalance($currency: String = "EUR") {
-  prepaidBalance(currency: $currency) {
+query GetPrepaidBalance {
+  prepaidBalance {
     id
     tenantId
     balanceCents

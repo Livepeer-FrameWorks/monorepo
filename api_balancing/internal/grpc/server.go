@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
@@ -39,14 +40,16 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -392,15 +395,55 @@ func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
 	s.peerManager = pm
 }
 
-// forwardArtifactToFederation fans out a ForwardArtifactCommand to all known peers.
-// Returns (handled, error). If any peer reports handled=true, stops immediately.
 const artifactForwardPeerTimeout = 10 * time.Second
 
+// forwardArtifactToFederation fans out a ForwardArtifactCommand to all known peers.
+// Returns (handled, error). If any peer reports handled=true, stops immediately.
 func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, command, artifactHash, tenantID, streamID string) (bool, error) {
+	return s.forwardArtifactCommand(ctx, &foghornfederationpb.ForwardArtifactCommandRequest{
+		Command:      command,
+		ArtifactHash: artifactHash,
+		TenantId:     tenantID,
+		StreamId:     streamID,
+	})
+}
+
+// forwardArtifactDeletionToFederation forwards a deletion with its requester,
+// so the peer that owns the artifact attributes its artifact_deleted event.
+func (s *FoghornGRPCServer) forwardArtifactDeletionToFederation(ctx context.Context, command, artifactHash, tenantID, requestedBy string) (bool, error) {
+	return s.forwardArtifactCommand(ctx, &foghornfederationpb.ForwardArtifactCommandRequest{
+		Command:           command,
+		ArtifactHash:      artifactHash,
+		TenantId:          tenantID,
+		RequestedByUserId: requestedBy,
+	})
+}
+
+// deletionRequester is the user an artifact_deleted event is attributed to:
+// the requester the calling service named on the request, or the caller's
+// own user when it authenticated as one.
+func deletionRequester(ctx context.Context, requestedBy string) string {
+	if requestedBy != "" {
+		return requestedBy
+	}
+	return ctxkeys.GetUserID(ctx)
+}
+
+// requestedByActor attributes a requested transition's domain event to the
+// principal the calling service named on the request, with the token hash that
+// service computed. Foghorn's artifact RPCs accept only service credentials,
+// so a request that names no principal records an event without an actor.
+func requestedByActor(named *commonpb.RequestActor) events.Option {
+	actor, _ := events.ActorFromRequest(named)
+	return events.WithActor(actor)
+}
+
+func (s *FoghornGRPCServer) forwardArtifactCommand(ctx context.Context, req *foghornfederationpb.ForwardArtifactCommandRequest) (bool, error) {
+	command, artifactHash := req.GetCommand(), req.GetArtifactHash()
 	if ctx.Value(ctxkeys.KeyNoForward) != nil {
 		return false, nil
 	}
-	if tenantID == "" {
+	if req.GetTenantId() == "" {
 		s.logger.WithFields(logging.Fields{
 			"command":       command,
 			"artifact_hash": artifactHash,
@@ -420,13 +463,6 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 		clusterIDs = append(clusterIDs, clusterID)
 	}
 	sort.Strings(clusterIDs)
-
-	req := &foghornfederationpb.ForwardArtifactCommandRequest{
-		Command:      command,
-		ArtifactHash: artifactHash,
-		TenantId:     tenantID,
-		StreamId:     streamID,
-	}
 
 	for _, clusterID := range clusterIDs {
 		addr := peers[clusterID]
@@ -688,8 +724,9 @@ func resolveArtifactInitialRetention(ctx context.Context, purser *purserclient.G
 // non-enterprise tenants ignore the cluster window extension and only feel
 // the cluster cap as a ceiling, not a floor.
 func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
-	maxWindow := config.GetEnvInt("DVR_CLUSTER_MAX_WINDOW_SECONDS", 0)
-	maxEntries := config.GetEnvInt("DVR_CLUSTER_MAX_ENTRIES", 0)
+	settings := appconfig.Current()
+	maxWindow := settings.DVRClusterMaxWindowSeconds
+	maxEntries := settings.DVRClusterMaxEntries
 	if maxWindow <= 0 && maxEntries <= 0 {
 		return nil
 	}
@@ -1008,21 +1045,12 @@ func (s *FoghornGRPCServer) createClipImpl(ctx context.Context, req *sharedpb.Cr
 	if clipCluster == "" {
 		clipCluster = s.clusterID
 	}
-	// STAGE_REQUESTED precedes the foghorn.artifacts INSERT (dispatch can still reject the request
-	// before any row is written), so there is no artifact/command-ledger row to couple it to. It is
-	// therefore explicitly BEST-EFFORT analytics: the enqueue failure is logged and does NOT fail
-	// the create — the durable record of this attempt is the command ledger ('accepted', written
-	// earlier) plus the artifact row written below, not this pre-INSERT event. The outbox worker
-	// delivers enqueued events to Decklog with retry.
-	{
-		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
-		if clipCluster != "" {
-			clipData.OriginClusterId = &clipCluster
-			clipData.ServingClusterId = &clipCluster
-		}
-		if enqErr := artifactoutbox.EnqueueClipLifecycle(clipData); enqErr != nil {
-			s.logger.WithError(enqErr).WithField("clip_hash", clipHash).Error("Failed to enqueue clip requested lifecycle event (best-effort; create proceeds)")
-		}
+	// STAGE_REQUESTED commits with the state change that settles this request: the artifact
+	// insert below (with clip.requested), or the command-ledger rejection when dispatch refuses it.
+	requestedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
+	if clipCluster != "" {
+		requestedData.OriginClusterId = &clipCluster
+		requestedData.ServingClusterId = &clipCluster
 	}
 
 	// Source dispatch first — coverage-aware best-effort selection of
@@ -1038,19 +1066,18 @@ func (s *FoghornGRPCServer) createClipImpl(ctx context.Context, req *sharedpb.Cr
 		dispatch, dispatchErr = chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
 	}
 	if dispatchErr != nil {
-		// Dispatch rejected before any foghorn.artifacts row was written (INSERT happens later),
-		// so there is no state row to couple this to. Enqueue durably, no decklogClient gate.
-		{
-			failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
-			errMsg := fmt.Sprintf("clip source dispatch: %v", dispatchErr)
-			failedData.Error = &errMsg
-			if clipCluster != "" {
-				failedData.OriginClusterId = &clipCluster
-				failedData.ServingClusterId = &clipCluster
-			}
-			if enqErr := artifactoutbox.EnqueueClipLifecycle(failedData); enqErr != nil {
-				s.logger.WithError(enqErr).WithField("clip_hash", clipHash).Error("Failed to enqueue clip dispatch-failed lifecycle event")
-			}
+		// Dispatch rejected before any foghorn.artifacts row was written, so no clip exists and no
+		// domain event is published; the caller gets the error synchronously. The analytics rows
+		// commit with the command-ledger rejection.
+		failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
+		errMsg := fmt.Sprintf("clip source dispatch: %v", dispatchErr)
+		failedData.Error = &errMsg
+		if clipCluster != "" {
+			failedData.OriginClusterId = &clipCluster
+			failedData.ServingClusterId = &clipCluster
+		}
+		if rejErr := s.rejectClipCreation(ctx, req, clipHash, prog, requestedData, failedData); rejErr != nil {
+			s.logger.WithError(rejErr).WithField("clip_hash", clipHash).Error("Failed to record clip dispatch rejection; the deferred finalizer rejects the command")
 		}
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     req.GetTenantId(),
@@ -1286,6 +1313,13 @@ resolve:
 		if cmdErr := recordCreationCommandCommitted(ctx, tx, req.GetRequestId(), req.GetTenantId(), "clip", clipHash); cmdErr != nil {
 			return cmdErr
 		}
+		requested := &publicv1.ClipRequested{
+			Artifact:   artifactoutbox.ClipArtifact(clipHash, req.GetStreamId()),
+			DurationMs: durationMs,
+		}
+		if reqErr := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, requestedData, requested, requestedByActor(req.GetActor())); reqErr != nil {
+			return reqErr
+		}
 		return artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, queuedData)
 	}); txErr != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1377,7 +1411,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), "")
+		handled, forwardErr := s.forwardArtifactDeletionToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()))
 		if forwardErr != nil {
 			return nil, status.Error(codes.Internal, "failed to forward clip deletion")
 		}
@@ -1422,7 +1456,11 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 			return nil
 		}
 		transitioned = true
-		return artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData)
+		if enqErr := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); enqErr != nil {
+			return enqErr
+		}
+		return artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, clipRow.TenantID, deletionRequester(ctx, req.GetRequestedByUserId()),
+			ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, clipData.GetStreamId())
 	}); err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip")
 		return nil, status.Error(codes.Internal, "failed to delete clip")
@@ -2426,7 +2464,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), "")
+		handled, forwardErr := s.forwardArtifactDeletionToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()))
 		if forwardErr != nil {
 			return nil, status.Error(codes.Internal, "failed to forward DVR deletion")
 		}
@@ -2466,7 +2504,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 	// delete could leave an active catalog row whose bytes are already gone (on a subsequent DB
 	// failure), or leave active children the purge job can never discover. Because parent+children
 	// are marked deleted here, the standard orphan/purge flow reclaims ALL their bytes.
-	childHashes, parentTransitioned, delErr := control.SoftDeleteDVRAndChapters(ctx, req.DvrHash, req.GetTenantId())
+	childHashes, parentTransitioned, delErr := control.SoftDeleteDVRAndChapters(ctx, req.DvrHash, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()))
 	if delErr != nil {
 		s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Error("Failed to soft-delete DVR recording")
 		return nil, status.Error(codes.Internal, "failed to delete DVR recording")
@@ -3363,7 +3401,11 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 		if cmdErr := recordCreationCommandCommitted(ctx, tx, req.GetRequestId(), req.GetTenantId(), "vod", artifactHash); cmdErr != nil {
 			return cmdErr
 		}
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, &publicv1.UploadCreated{
+			Artifact:          artifactoutbox.UploadArtifact(artifactHash),
+			Filename:          req.GetFilename(),
+			ExpectedSizeBytes: req.GetSizeBytes(),
+		}, requestedByActor(req.GetActor()))
 	}); txErr != nil {
 		if abortErr := s.s3Client.AbortMultipartUpload(ctx, s3Key, uploadID); abortErr != nil {
 			s.logger.WithError(abortErr).WithField("upload_id", uploadID).Warn("Failed to abort multipart upload after create transaction failure")
@@ -3937,7 +3979,10 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 				if affected == 0 {
 					return nil // no valid transition — don't emit a false FAILED
 				}
-				return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+				return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, &publicv1.UploadFailed{
+					Artifact: artifactoutbox.UploadArtifact(artifactHash),
+					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_STORAGE_FAILED,
+				})
 			}); txErr != nil {
 				s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to commit VOD upload failure state+event")
 			}
@@ -3988,7 +4033,10 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		if _, jobErr := jobs.InsertProcessingJobWithSourceParamsTx(ctx, tx, req.TenantId, artifactHash, "process", nil, authoritativeProcessesJSON, "", nil, ""); jobErr != nil {
 			return jobErr
 		}
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, processingData)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, processingData, &publicv1.UploadCompleted{
+			Artifact:  artifactoutbox.UploadArtifact(artifactHash),
+			SizeBytes: sizeBytes.Int64,
+		}, requestedByActor(req.GetActor()))
 	}); txErr != nil {
 		// DIVERGENCE: the S3 multipart upload is complete (fresh completion or reconciled via Exists),
 		// but the durable 'processing' transition + event + job did NOT commit. The row stays
@@ -4156,7 +4204,9 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 		if execErr := queries.DeleteVodMetadata(ctx, artifactHash); execErr != nil {
 			return execErr
 		}
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, &publicv1.UploadAborted{
+			Artifact: artifactoutbox.UploadArtifact(artifactHash),
+		}, requestedByActor(req.GetActor()))
 	}); err != nil {
 		s.logger.WithError(err).Error("Failed to finalize aborted artifact")
 		return nil, status.Error(codes.Internal, "failed to clean up aborted upload")
@@ -4188,7 +4238,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), "")
+		handled, forwardErr := s.forwardArtifactDeletionToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()))
 		if forwardErr != nil {
 			return nil, status.Error(codes.Internal, "failed to forward VOD deletion")
 		}
@@ -4224,9 +4274,19 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	// would leak forever. Claiming 'uploading'->'aborting' (guarded, tenant-scoped) records the teardown as a durable
 	// obligation the AbortingVodRecoveryJob drains — it aborts the multipart idempotently, then converges to 'deleted'
 	// (deleting vod_metadata + emitting DELETED). AbortVodUpload uses the same claim.
+	// The claim is the deletion's state change, so artifact_deleted commits with it.
 	if currentStatus == "uploading" {
-		n, claimErr := foghorndb.New(s.db).ClaimVodAbort(ctx, foghorndb.ClaimVodAbortParams{
-			ArtifactHash: req.ArtifactHash, TenantID: req.GetTenantId(),
+		var n int64
+		claimErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+			var claimTxErr error
+			n, claimTxErr = foghorndb.New(tx).ClaimVodAbort(ctx, foghorndb.ClaimVodAbortParams{
+				ArtifactHash: req.ArtifactHash, TenantID: req.GetTenantId(),
+			})
+			if claimTxErr != nil || n == 0 {
+				return claimTxErr
+			}
+			return artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()),
+				ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "")
 		})
 		if claimErr != nil {
 			s.logger.WithError(claimErr).WithField("artifact_hash", req.ArtifactHash).Error("Failed to claim uploading VOD for abort-on-delete")
@@ -4279,7 +4339,11 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			return nil
 		}
 		transitioned = true
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+		if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+			return enqErr
+		}
+		return artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, req.GetTenantId(), deletionRequester(ctx, req.GetRequestedByUserId()),
+			ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "")
 	}); err != nil {
 		s.logger.WithError(err).Error("Failed to delete VOD asset")
 		return nil, status.Error(codes.Internal, "failed to delete VOD asset")

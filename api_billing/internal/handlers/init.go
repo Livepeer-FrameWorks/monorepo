@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -37,6 +38,7 @@ type PurserMetrics struct {
 	CryptoAnomalyOldest       *prometheus.GaugeVec
 	CryptoInvoiceReview       *prometheus.GaugeVec
 	CryptoLedgerReversals     *prometheus.GaugeVec
+	FXRateReferenceAge        *prometheus.GaugeVec // labels: currency
 }
 
 // Service owns the dependencies for the Stripe/Mollie webhook and checkout
@@ -52,6 +54,12 @@ type Service struct {
 	stripeClient               *billingstripe.Client
 	decklogClient              *decklogclient.BatchedClient
 	convergeTenantEntitlements func(context.Context, string) error
+	// chargeAdvanceBaseFee is the JobManager's advance base-fee charge, set by
+	// NewJobManager, used when a payment-method setup activates a tier.
+	chargeAdvanceBaseFee func(context.Context, string) error
+	// closeAdvanceBilledPeriod is the JobManager's early period close, set by
+	// NewJobManager, used when a tenant billed in advance changes tier.
+	closeAdvanceBilledPeriod func(context.Context, string, time.Time) (time.Time, error)
 }
 
 // SetTenantEntitlementConverger wires the post-commit repair used by webhook

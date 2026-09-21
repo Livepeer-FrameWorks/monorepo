@@ -91,7 +91,7 @@ func TestPlaybackPolicyRepository_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	if _, err := server.SetPlaybackPolicy(ctx, &commodorepb.SetPlaybackPolicyRequest{
 		StreamId: streamID,
 		Type:     "jwt",

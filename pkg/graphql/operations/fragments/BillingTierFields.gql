@@ -12,12 +12,9 @@ fragment BillingTierFields on BillingTier {
   meteringEnabled
   isEnterprise
   features {
-    recording
-    analytics
-    customBranding
-    apiAccess
     supportLevel
     sla
+    processingCustomizable
   }
   pricingRules {
     meter

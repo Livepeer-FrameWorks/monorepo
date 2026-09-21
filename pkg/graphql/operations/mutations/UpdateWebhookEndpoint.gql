@@ -1,0 +1,18 @@
+# Change a webhook endpoint's URL, description, or event types
+mutation UpdateWebhookEndpoint($id: ID!, $input: UpdateWebhookEndpointInput!) {
+  updateWebhookEndpoint(id: $id, input: $input) {
+    __typename
+    ... on WebhookEndpoint {
+      ...WebhookEndpointFields @mask_disable
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

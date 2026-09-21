@@ -6,8 +6,8 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/rating"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // clusterScopedLineKey produces the stable per-cluster invoice line identity.
@@ -81,7 +81,7 @@ func TestBuildRatingInputForUsage(t *testing.T) {
 	if len(in.Quantities) != 1 || in.Quantities[0].Dimensions["output_codec"] != "h264" {
 		t.Errorf("dimensioned quantity not preserved: %#v", in.Quantities)
 	}
-	if in.WaiveUsageCharges != config.WaiveUsageChargesEnabled() {
+	if in.WaiveUsageCharges != appconfig.Runtime().WaiveUsageCharges {
 		t.Errorf("WaiveUsageCharges = %v, want config value", in.WaiveUsageCharges)
 	}
 }

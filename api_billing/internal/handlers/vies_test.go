@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -21,7 +22,7 @@ func TestValidateVIESVATPersistsAuthoritativeEvidence(t *testing.T) {
 		_, _ = w.Write([]byte(`<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><checkVatResponse xmlns="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><countryCode>NL</countryCode><vatNumber>123456789B01</vatNumber><requestDate>2026-08-20</requestDate><valid>true</valid><name>Example BV</name><address>Amsterdam</address></checkVatResponse></soap:Body></soap:Envelope>`))
 	}))
 	defer server.Close()
-	t.Setenv("VIES_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "VIES_ENDPOINT", server.URL)
 
 	db, mock, err := sqlmock.New()
 	if err != nil {

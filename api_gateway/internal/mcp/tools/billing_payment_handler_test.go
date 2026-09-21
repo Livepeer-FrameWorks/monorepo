@@ -100,6 +100,10 @@ func TestHandleTopupBalance_DefaultsToUSDC(t *testing.T) {
 			return &purserpb.CreateCryptoTopupResponse{
 				TopupId: "tp1", DepositAddress: "0xabc", AssetSymbol: "USDC",
 				ExpectedAmountCents: req.ExpectedAmountCents, ExpiresAt: timestamppb.New(time.Unix(1000, 0)),
+				Fx: &purserpb.FxConversion{
+					OriginalAmountCents: req.ExpectedAmountCents, OriginalCurrency: "GBP", EurAmountCents: 2895,
+					UnitsPerEur: "0.8636", Source: "ecb", ReferenceDate: "2026-09-16",
+				},
 			}, nil
 		},
 	}
@@ -115,8 +119,38 @@ func TestHandleTopupBalance_DefaultsToUSDC(t *testing.T) {
 	if gotReq.ExpectedAmountCents != 2500 || gotReq.TenantId != "t1" {
 		t.Errorf("amount/tenant not forwarded: %+v", gotReq)
 	}
-	if r, ok := out.(TopupResult); !ok || r.TopupID != "tp1" {
-		t.Errorf("unexpected result: %T %+v", out, out)
+	r, ok := out.(TopupResult)
+	if !ok || r.TopupID != "tp1" {
+		t.Fatalf("unexpected result: %T %+v", out, out)
+	}
+	if r.Currency != "GBP" || r.Conversion == nil || r.Conversion.EURAmountCents != 2895 || r.Conversion.ReferenceDate != "2026-09-16" {
+		t.Errorf("presentment amount and EUR credit not stated: %+v", r)
+	}
+	if !strings.Contains(r.Message, "25.00 GBP = 28.95 EUR at 0.8636 GBP per EUR (ECB reference date 2026-09-16)") {
+		t.Errorf("message does not state the EUR credit and rate: %q", r.Message)
+	}
+}
+
+func TestHandleCheckTopup_CompletedStatesEURCreditAndRate(t *testing.T) {
+	sc := clientstest.Clients(clientstest.WithPurser(&clientstest.FakePurser{
+		GetCryptoTopupFn: func(_ context.Context, id string) (*purserpb.CryptoTopup, error) {
+			return &purserpb.CryptoTopup{
+				Id: id, Status: "completed", CreditedAmountCents: 4273, CreditedAmountCurrency: "EUR", TxHash: "0xtx",
+				Fx: &purserpb.FxConversion{OriginalAmountCents: 5000, OriginalCurrency: "USD", EurAmountCents: 4273, UnitsPerEur: "1.1702", Source: "ecb", ReferenceDate: "2026-09-15"},
+			}, nil
+		},
+	}))
+	_, out, err := handleCheckTopup(toolsCtx("t1"), CheckTopupInput{TopupID: "tp1"}, sc, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := out.(CheckTopupResult)
+	if r.Conversion == nil || r.Conversion.OriginalAmountCents != 5000 || r.Conversion.UnitsPerEUR != "1.1702" {
+		t.Fatalf("conversion = %+v", r.Conversion)
+	}
+	want := "Payment confirmed! 42.73 EUR credited to your balance (tx: 0xtx). Locked quote: 50.00 USD = 42.73 EUR at 1.1702 USD per EUR (ECB reference date 2026-09-15)."
+	if r.Message != want {
+		t.Fatalf("message = %q, want %q", r.Message, want)
 	}
 }
 

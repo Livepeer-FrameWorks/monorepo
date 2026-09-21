@@ -5,13 +5,15 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 )
 
 func TestX402Reconciler_GetLatestBlockNumber_DecodeAndErrorHandling(t *testing.T) {
-	t.Setenv("TEST_RECONCILER_RPC_ENDPOINT", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 	network := NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_RECONCILER_RPC_ENDPOINT",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 	}
 	reconciler := &X402Reconciler{}
 
@@ -59,10 +61,10 @@ func TestX402Reconciler_GetLatestBlockNumber_DecodeAndErrorHandling(t *testing.T
 }
 
 func TestX402Reconciler_GetTransactionReceipt_DecodeAndErrorHandling(t *testing.T) {
-	t.Setenv("TEST_RECONCILER_RPC_ENDPOINT", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 	network := NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_RECONCILER_RPC_ENDPOINT",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 	}
 	reconciler := &X402Reconciler{}
 

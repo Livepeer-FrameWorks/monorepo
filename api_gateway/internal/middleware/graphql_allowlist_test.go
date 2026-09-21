@@ -21,6 +21,18 @@ func TestIsAllowlistedOperation(t *testing.T) {
 			rationale: "networkStatus is in the read allowlist",
 		},
 		{
+			name:      "serverInfo passes without a token",
+			query:     `query GetServerInfo { serverInfo { version features } }`,
+			want:      true,
+			rationale: "clients feature-detect before authenticating",
+		},
+		{
+			name:      "capabilities requires a token",
+			query:     `query { serverInfo { version } capabilities { observedAt } }`,
+			want:      false,
+			rationale: "capabilities is tenant data and must not ride the public serverInfo gate",
+		},
+		{
 			name:      "non-allowlisted query field rejected",
 			query:     `query { tenants { id } }`,
 			want:      false,

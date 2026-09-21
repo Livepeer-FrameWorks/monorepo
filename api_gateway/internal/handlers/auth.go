@@ -9,7 +9,6 @@ import (
 	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -111,18 +110,47 @@ type AuthHandlers struct {
 	commodore    commodore.Interface
 	logger       logging.Logger
 	cookieDomain string
+	runtime      func() AuthRuntime
+}
+
+// AuthConfig configures AuthHandlers.
+type AuthConfig struct {
+	// CookieDomain is the Domain attribute on auth cookies. Empty scopes them
+	// to the request host; ".example.com" shares them across subdomains. A
+	// leading dot is ignored.
+	CookieDomain string
+	// Runtime is read on each request, so an env-file reload takes effect.
+	Runtime func() AuthRuntime
+}
+
+// AuthRuntime holds the auth settings read on each request.
+type AuthRuntime struct {
+	// SecureCookies sets the Secure attribute on auth cookies. It is false in
+	// development, where the web app is served over plain HTTP.
+	SecureCookies bool
+	// WebappPublicURL is the public web application URL returned to native
+	// clients for browser handoff.
+	WebappPublicURL string
 }
 
 // NewAuthHandlers creates a new auth handlers instance.
-// COOKIE_DOMAIN controls the Domain attribute on auth cookies.
-// Leave empty for single-domain deployments (default).
-// Set to ".example.com" for cross-subdomain cookie sharing (e.g. docs site).
-func NewAuthHandlers(commodoreClient commodore.Interface, logger logging.Logger) *AuthHandlers {
+func NewAuthHandlers(commodoreClient commodore.Interface, logger logging.Logger, cfg AuthConfig) *AuthHandlers {
 	return &AuthHandlers{
 		commodore:    commodoreClient,
 		logger:       logger,
-		cookieDomain: config.GetCookieDomain(),
+		cookieDomain: strings.TrimPrefix(strings.TrimSpace(cfg.CookieDomain), "."),
+		runtime:      cfg.Runtime,
 	}
+}
+
+// runtimeSettings returns the current per-request settings. Handlers built
+// without a Runtime getter use the zero value: non-secure cookies and no
+// webapp URL.
+func (h *AuthHandlers) runtimeSettings() AuthRuntime {
+	if h.runtime == nil {
+		return AuthRuntime{}
+	}
+	return h.runtime()
 }
 
 // Login handles user login
@@ -170,8 +198,7 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 		}
 
 		// Set all auth tokens as HttpOnly cookies.
-		isDev := config.IsDevelopment()
-		secure := !isDev
+		secure := h.runtimeSettings().SecureCookies
 		sameSite := http.SameSiteLaxMode
 
 		// Access token - short-lived, httpOnly
@@ -300,8 +327,7 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 		}
 
 		// Set all auth tokens as HttpOnly cookies (same as Login).
-		isDev := config.IsDevelopment()
-		secure := !isDev
+		secure := h.runtimeSettings().SecureCookies
 		sameSite := http.SameSiteLaxMode
 
 		// Access token - short-lived, httpOnly
@@ -440,8 +466,7 @@ func (h *AuthHandlers) Logout() gin.HandlerFunc {
 		}
 
 		// Clear all auth cookies (must match domain and Secure flag to actually clear).
-		isDev := config.IsDevelopment()
-		secure := !isDev
+		secure := h.runtimeSettings().SecureCookies
 		c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 		c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 		c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
@@ -472,8 +497,7 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 			// refresh just set.
 			if st, ok := status.FromError(err); ok && st.Code() == codes.Unauthenticated {
 				// Clear invalid cookies (must match Secure flag to actually clear).
-				isDev := config.IsDevelopment()
-				secure := !isDev
+				secure := h.runtimeSettings().SecureCookies
 				c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 				c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
 				c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
@@ -485,8 +509,7 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		}
 
 		// Set all auth tokens as HttpOnly cookies.
-		isDev := config.IsDevelopment()
-		secure := !isDev
+		secure := h.runtimeSettings().SecureCookies
 		sameSite := http.SameSiteLaxMode
 
 		// Access token - short-lived, httpOnly
@@ -616,7 +639,7 @@ func (h *AuthHandlers) ForgotPassword() gin.HandlerFunc {
 // so browser handoff uses the same public URL as hosted login.
 func (h *AuthHandlers) WebappURL() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		webappURL := strings.TrimRight(strings.TrimSpace(config.GetEnv("WEBAPP_PUBLIC_URL", "")), "/")
+		webappURL := strings.TrimRight(strings.TrimSpace(h.runtimeSettings().WebappPublicURL), "/")
 		if webappURL == "" {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webapp public URL is not configured"})
 			return

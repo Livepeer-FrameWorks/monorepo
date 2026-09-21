@@ -6,12 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 func TestPrepareProcessingDispatchConfigBindsAssignedJob(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "dispatch-secret")
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn {
+		return &appconfig.Foghorn{BalancerCapabilitySecret: "dispatch-secret"}
+	}))
 	now := time.Unix(1_800_000_000, 0).UTC()
 	authoritative := `[{"process":"Livepeer","workload":"vod","deadline_ms":30000,"min_speed":0.5,"frameworks_gateway_cluster_ids":["gateway-eu"],"target_profiles":[{"name":"360p","height":360,"bitrate":900000}]}]`
 	job := &processingJob{
@@ -46,7 +49,9 @@ func TestPrepareProcessingDispatchConfigBindsAssignedJob(t *testing.T) {
 }
 
 func TestPrepareProcessingDispatchConfigFailsClosedWithoutBinding(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "dispatch-secret")
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn {
+		return &appconfig.Foghorn{BalancerCapabilitySecret: "dispatch-secret"}
+	}))
 	config := `[{"process":"Livepeer","workload":"vod","frameworks_gateway_cluster_ids":["gateway-eu"],"target_profiles":[{"height":360}]}]`
 	job := &processingJob{JobID: "job", TenantID: "tenant"}
 	if _, err := prepareProcessingDispatchConfig(config, job, "edge", "media", time.Now()); err == nil {

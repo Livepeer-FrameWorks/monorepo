@@ -7,7 +7,6 @@ package clusterurls
 
 import (
 	"context"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,12 +40,13 @@ type Resolver struct {
 }
 
 // NewResolver returns a resolver wired to the given Quartermaster client.
-// Call Start to begin the background refresh loop.
-func NewResolver(qm *qmclient.GRPCClient, logger logging.Logger) *Resolver {
+// A non-empty publicChandlerBase overrides the per-cluster origin for every
+// cluster. Call Start to begin the background refresh loop.
+func NewResolver(qm *qmclient.GRPCClient, logger logging.Logger, publicChandlerBase string) *Resolver {
 	r := &Resolver{
 		qm:                 qm,
 		logger:             logger,
-		publicChandlerBase: strings.TrimRight(strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")), "/"),
+		publicChandlerBase: strings.TrimRight(strings.TrimSpace(publicChandlerBase), "/"),
 	}
 	empty := map[string]string{}
 	r.snapshot.Store(&empty)

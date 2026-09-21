@@ -17,7 +17,7 @@ import (
 // pin the residual arithmetic and the idempotency gate — the parts that would
 // silently lose or double-count money if they regressed.
 func TestDeductPrepaidBalanceForUsageMicro(t *testing.T) {
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	t.Run("residual accumulates and commits whole cents on boundary cross", func(t *testing.T) {
 		mockDB, mock, err := sqlmock.New()

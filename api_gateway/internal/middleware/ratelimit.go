@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +35,20 @@ type RateLimitConfig struct {
 	Logger logging.Logger
 	// CleanupInterval is how often to clean up expired entries (default: 1 minute)
 	CleanupInterval time.Duration
+	// Settings is read on every access decision, so an env-file reload takes
+	// effect. Nil uses the default public limits and no documentation link.
+	Settings func() AccessSettings
+}
+
+// AccessSettings are the rate-limit settings read on each access decision.
+type AccessSettings struct {
+	// PublicLimitPerMinute and PublicBurst bound unauthenticated callers per
+	// client IP. Values below 1 use the defaults.
+	PublicLimitPerMinute int
+	PublicBurst          int
+	// DocsPublicURL links 429 responses to the rate-limit documentation when
+	// non-empty.
+	DocsPublicURL string
 }
 
 // RateLimiter implements a sliding window rate limiter
@@ -342,7 +355,7 @@ func PublicOperationRateLimitMiddlewareWithLimits(rl *RateLimiter, tp *TrustedPr
 			"X-RateLimit-Reset":     strconv.Itoa(resetSeconds),
 		}
 		if !allowed {
-			decision := rateLimitExceededDecision(limit, resetSeconds, headers)
+			decision := rateLimitExceededDecision(limit, resetSeconds, headers, rl.settings().DocsPublicURL)
 			for key, value := range decision.Headers {
 				c.Header(key, value)
 			}
@@ -551,7 +564,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 		limit, burst := 0, 0
 		if rlIsPublic {
-			limit, burst = publicRateLimits()
+			limit, burst = rl.publicRateLimits()
 		} else if getLimits != nil {
 			limit, burst = getLimits(rlTenant)
 		}
@@ -573,7 +586,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			}
 			logger.WithFields(fields).Warn("Rate limit exceeded")
 		}
-		decision := rateLimitExceededDecision(limit, resetSeconds, headers)
+		decision := rateLimitExceededDecision(limit, resetSeconds, headers, rl.settings().DocsPublicURL)
 		return &decision
 	}
 
@@ -972,9 +985,9 @@ func postpaidCollectionRequiredDecision(headers map[string]string) AccessDecisio
 
 // rateLimitExceededDecision builds the shared 429 Too Many Requests response for
 // both authenticated (per-tenant) and public (per-IP) rate-limit rejections.
-func rateLimitExceededDecision(limit, resetSeconds int, headers map[string]string) AccessDecision {
+func rateLimitExceededDecision(limit, resetSeconds int, headers map[string]string, docsURL string) AccessDecision {
 	headers["Retry-After"] = strconv.Itoa(resetSeconds)
-	docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
+	docsURL = strings.TrimSpace(docsURL)
 	response := map[string]any{
 		"error":       "rate_limit_exceeded",
 		"message":     "Too many requests. Please retry after the specified time.",
@@ -994,26 +1007,32 @@ func rateLimitExceededDecision(limit, resetSeconds int, headers map[string]strin
 
 // Public (unauthenticated) request rate limits, applied per client IP. Kept low
 // since legitimate public callers hit these endpoints once per ingest/playback
-// start, not per frame. Overridable via env for operators behind shared NAT.
+// start, not per frame. Operators behind shared NAT override them through
+// RateLimitConfig.Settings.
 const (
 	defaultPublicRateLimitPerMinute = 60
 	defaultPublicRateLimitBurst     = 30
 )
 
-// publicRateLimits returns the per-IP limit/burst for unauthenticated callers,
-// honoring PUBLIC_RATE_LIMIT_PER_MINUTE / PUBLIC_RATE_LIMIT_BURST when set to a
-// positive integer, otherwise the defaults.
-func publicRateLimits() (limit, burst int) {
-	limit, burst = defaultPublicRateLimitPerMinute, defaultPublicRateLimitBurst
-	if v := strings.TrimSpace(os.Getenv("PUBLIC_RATE_LIMIT_PER_MINUTE")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
+// settings returns the current access settings; a nil limiter or getter
+// yields the zero value.
+func (rl *RateLimiter) settings() AccessSettings {
+	if rl == nil || rl.config.Settings == nil {
+		return AccessSettings{}
 	}
-	if v := strings.TrimSpace(os.Getenv("PUBLIC_RATE_LIMIT_BURST")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			burst = n
-		}
+	return rl.config.Settings()
+}
+
+// publicRateLimits returns the per-IP limit/burst for unauthenticated callers:
+// the configured values when positive, otherwise the defaults.
+func (rl *RateLimiter) publicRateLimits() (limit, burst int) {
+	limit, burst = defaultPublicRateLimitPerMinute, defaultPublicRateLimitBurst
+	s := rl.settings()
+	if s.PublicLimitPerMinute > 0 {
+		limit = s.PublicLimitPerMinute
+	}
+	if s.PublicBurst > 0 {
+		burst = s.PublicBurst
 	}
 	return limit, burst
 }

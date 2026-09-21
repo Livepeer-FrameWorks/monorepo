@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -25,6 +24,7 @@ import (
 
 	quartermasterdb "frameworks/api_tenants/internal/database/quartermasterdb"
 	geobucket "frameworks/api_tenants/internal/geo"
+	"frameworks/api_tenants/internal/serviceeventoutbox"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
@@ -35,6 +35,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -45,6 +46,7 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -52,12 +54,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
@@ -107,6 +109,11 @@ type QuartermasterServer struct {
 	// can't drift and hand Foghorn a hostname Navigator has already pruned.
 	physicalEndpointStaleSeconds       int
 	clusterAccessMaterializationSecret string
+
+	// eventTokenHasher hashes the calling API token for domain event actor
+	// attribution with Bridge's usage hash secret. Emitting a domain event
+	// without it fails the mutation's transaction.
+	eventTokenHasher *events.TokenHasher
 }
 
 const (
@@ -148,19 +155,31 @@ func (s *QuartermasterServer) SetPhysicalEndpointStaleSeconds(seconds int) {
 	}
 }
 
+// SetClusterAccessMaterializationSecret configures the key shared with Purser
+// that authenticates cluster-access materialization and revocation proofs. An
+// empty secret rejects every proof.
+func (s *QuartermasterServer) SetClusterAccessMaterializationSecret(secret string) {
+	s.clusterAccessMaterializationSecret = strings.TrimSpace(secret)
+}
+
+// SetEventTokenHasher configures the hasher for domain event actor
+// attribution.
+func (s *QuartermasterServer) SetEventTokenHasher(hasher *events.TokenHasher) {
+	s.eventTokenHasher = hasher
+}
+
 // NewQuartermasterServer creates a new Quartermaster gRPC server
 func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, geoipReader *geoip.Reader, metrics *ServerMetrics) *QuartermasterServer {
 	return &QuartermasterServer{
-		db:                                 db,
-		logger:                             logger,
-		peerWatch:                          newPeerWatchHub(),
-		navigatorClient:                    navigatorClient,
-		decklogClient:                      decklogClient,
-		purserClient:                       purserClient,
-		geoipReader:                        geoipReader,
-		metrics:                            metrics,
-		physicalEndpointStaleSeconds:       defaultPhysicalEndpointStaleSeconds,
-		clusterAccessMaterializationSecret: strings.TrimSpace(os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")),
+		db:                           db,
+		logger:                       logger,
+		peerWatch:                    newPeerWatchHub(),
+		navigatorClient:              navigatorClient,
+		decklogClient:                decklogClient,
+		purserClient:                 purserClient,
+		geoipReader:                  geoipReader,
+		metrics:                      metrics,
+		physicalEndpointStaleSeconds: defaultPhysicalEndpointStaleSeconds,
 	}
 }
 
@@ -694,27 +713,14 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	// any cluster. region_id / cell_id / cluster_class / health_status ride
 	// along so Commodore's plan-aware route filter can reject ineligible peers
 	// without a second round-trip.
-	var peerRows []quartermasterdb.ListTenantClusterRoutingPeersRow
-	peerErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var queryErr error
-		peerRows, queryErr = queries.ListTenantClusterRoutingPeers(ctx, tenantID)
-		return queryErr
-	})
+	peerRows, peerErr := loadTenantRoutingPeers(ctx, queries, tenantID)
 	if peerErr != nil {
 		s.logger.WithError(peerErr).WithField("tenant_id", tenantID).Error("Failed to resolve tenant routing peers")
 		return nil, status.Errorf(codes.Internal, "database error resolving tenant routing peers: %v", peerErr)
 	}
 	for _, peerRow := range peerRows {
 		foghornGrpcAddr, _ := buildAdvertiseAddr(peerRow.FoghornAdvertiseHost, peerRow.FoghornPort)
-		var role string
-		switch peerRow.ClusterID {
-		case primaryClusterID:
-			role = "preferred"
-		case officialClusterID:
-			role = "official"
-		default:
-			role = "subscribed"
-		}
+		role := routingPeerRole(peerRow.ClusterID, primaryClusterID, officialClusterID)
 		resp.ClusterPeers = append(resp.ClusterPeers, &clusterpeerpb.TenantClusterPeer{
 			ClusterId:               peerRow.ClusterID,
 			ClusterSlug:             dns.SanitizeLabel(peerRow.ClusterID),
@@ -2552,7 +2558,8 @@ func (s *QuartermasterServer) enqueueCustomDomainDesiredStateTx(ctx context.Cont
 	if err != nil {
 		return fmt.Errorf("lookup custom-domain eligibility: %w", err)
 	}
-	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
+	eligibility := customDomainEligibility(row)
+	if !eligibility.EntitlementsObserved {
 		return nil
 	}
 	domain := strings.TrimSpace(row.CustomDomain.String)
@@ -2560,7 +2567,7 @@ func (s *QuartermasterServer) enqueueCustomDomainDesiredStateTx(ctx context.Cont
 		return nil
 	}
 	action := "remove"
-	if row.CustomSubdomainEnabled && row.CustomDomainEnabled && row.IsActive.Valid && row.IsActive.Bool && row.HasCluster {
+	if eligibility.customDomain() {
 		action = "ensure"
 	}
 	if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, domain, action); err != nil {
@@ -2588,10 +2595,11 @@ func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx
 	if !row.IsActive.Valid {
 		return fmt.Errorf("lookup tenant for alias ensure: eligibility fields are NULL")
 	}
-	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
+	eligibility := aliasEligibility(row)
+	if !eligibility.EntitlementsObserved {
 		return nil
 	}
-	if !row.IsActive.Bool || !row.CustomSubdomainEnabled || !row.HasCluster {
+	if !eligibility.customSubdomain() {
 		return nil // not eligible for an alias (matches the backstop's "want")
 	}
 	label := strings.TrimSpace(row.Subdomain.String)
@@ -2628,10 +2636,11 @@ func (s *QuartermasterServer) enqueueTenantAliasDesiredStateTx(ctx context.Conte
 	if !row.IsActive.Valid {
 		return errors.New("lookup tenant alias desired state: eligibility fields are NULL")
 	}
-	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
+	eligibility := aliasEligibility(row)
+	if !eligibility.EntitlementsObserved {
 		return nil
 	}
-	if !row.IsActive.Bool || !row.CustomSubdomainEnabled || !row.HasCluster {
+	if !eligibility.customSubdomain() {
 		return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, strings.TrimSpace(row.Subdomain.String))
 	}
 	return s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true)
@@ -4021,7 +4030,12 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 	if len(resourceLimitsJSON) > 0 {
 		resourceLimits = validString(string(resourceLimitsJSON))
 	}
-	if err := quartermasterdb.New(tx).BootstrapTenantClusterAccess(ctx, quartermasterdb.BootstrapTenantClusterAccessParams{
+	txQueries := quartermasterdb.New(tx)
+	wasActive, err := lockClusterAccessBeforeGrantTx(ctx, txQueries, tenantID, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read tenant_cluster_access: %v", err)
+	}
+	if err := txQueries.BootstrapTenantClusterAccess(ctx, quartermasterdb.BootstrapTenantClusterAccessParams{
 		TenantID: tenantID, ClusterID: clusterID, ResourceLimits: resourceLimits,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
@@ -4034,6 +4048,9 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 	}
 	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
+	if err := s.recordClusterAccessActivatedTx(ctx, tx, txQueries, wasActive, tenantID, clusterID, req.GetActor()); err != nil {
+		return nil, err
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -4127,12 +4144,18 @@ func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req 
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	changed, err := quartermasterdb.New(tx).MaterializeTenantClusterAccess(ctx, quartermasterdb.MaterializeTenantClusterAccessParams{
+	txQueries := quartermasterdb.New(tx)
+	wasActive, err := lockClusterAccessBeforeGrantTx(ctx, txQueries, tenantID, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read tenant cluster access: %v", err)
+	}
+	accessIDs, err := txQueries.MaterializeTenantClusterAccess(ctx, quartermasterdb.MaterializeTenantClusterAccessParams{
 		TenantID: tenantID, ClusterID: clusterID, AccessSource: accessSource, SubscriptionStatus: subscriptionStatus,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "materialize tenant cluster access: %v", err)
 	}
+	changed := len(accessIDs)
 	if changed > 0 && subscriptionStatus == "active" {
 		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
@@ -4143,9 +4166,24 @@ func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req 
 		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterAccessMaterialized, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue access materialization audit: %v", enqErr)
 		}
+		if err := s.recordClusterAccessActivatedTx(ctx, tx, txQueries, wasActive, tenantID, clusterID, req.GetActor()); err != nil {
+			return nil, err
+		}
 	}
 	if changed > 0 && subscriptionStatus == "pending_approval" {
-		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRequested, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_subscription", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
+		// The service event keeps the authorization reference in
+		// subscription_id; the domain event names the access row, which is the
+		// subscription every later approval or rejection refers to.
+		subscriptionID := accessIDs[0]
+		actor, actorErr := s.requestActor(ctx, req.GetActor())
+		if actorErr != nil {
+			return nil, status.Errorf(codes.Internal, "attribute marketplace access request: %v", actorErr)
+		}
+		if enqErr := s.emitClusterEventAsTx(ctx, tx, actor,
+			s.buildClusterEvent(eventClusterSubscriptionRequested, tenantID, actor.UserID, clusterID, "cluster_subscription", tenantID+":"+clusterID, "", reference, accessSource),
+			&serviceeventoutbox.Domain{TenantID: tenantID, AggregateID: subscriptionID, Message: &internalv1.ClusterSubscriptionRequested{
+				SubscriptionId: subscriptionID, ClusterId: clusterID,
+			}}); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue marketplace access request audit: %v", enqErr)
 		}
 	}
@@ -4153,6 +4191,59 @@ func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req 
 		return nil, status.Errorf(codes.Internal, "commit materialized cluster access: %v", err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// lockClusterAccessBeforeGrantTx takes the (tenant, cluster) grant lock and
+// reports whether access is active before this grant writes. Every grant that
+// records tenant.cluster_assigned calls it first, so two concurrent first
+// grants cannot both read "no access": the second reads after the first
+// commits and records nothing.
+func lockClusterAccessBeforeGrantTx(ctx context.Context, queries *quartermasterdb.Queries, tenantID, clusterID string) (bool, error) {
+	if err := queries.LockTenantClusterAccessKey(ctx, quartermasterdb.LockTenantClusterAccessKeyParams{
+		TenantID: tenantID, ClusterID: clusterID,
+	}); err != nil {
+		return false, err
+	}
+	return tenantClusterAccessActiveTx(ctx, queries, tenantID, clusterID)
+}
+
+// tenantClusterAccessActiveTx locks tenantID's access row for clusterID and
+// reports whether it grants access; no row grants none.
+func tenantClusterAccessActiveTx(ctx context.Context, queries *quartermasterdb.Queries, tenantID, clusterID string) (bool, error) {
+	active, err := queries.LockTenantClusterAccessActive(ctx, quartermasterdb.LockTenantClusterAccessActiveParams{
+		TenantID: tenantID, ClusterID: clusterID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return active, err
+}
+
+// recordClusterAccessActivatedTx records tenant.cluster_assigned in tx when
+// the access row, which granted no access before the write (wasActive), grants
+// access now. A write that leaves access as it was records nothing, so a
+// replayed grant is silent. The event is attributed to the principal the
+// calling service named, or to the calling service.
+func (s *QuartermasterServer) recordClusterAccessActivatedTx(ctx context.Context, tx *sql.Tx, queries *quartermasterdb.Queries, wasActive bool, tenantID, clusterID string, named *commonpb.RequestActor) error {
+	if wasActive {
+		return nil
+	}
+	active, err := tenantClusterAccessActiveTx(ctx, queries, tenantID, clusterID)
+	if err != nil {
+		return status.Errorf(codes.Internal, "read tenant cluster access: %v", err)
+	}
+	if !active {
+		return nil
+	}
+	actor, err := s.requestActor(ctx, named)
+	if err != nil {
+		return status.Errorf(codes.Internal, "attribute tenant_cluster_assigned: %v", err)
+	}
+	if err := s.emitClusterEventAsTx(ctx, tx, actor,
+		s.buildClusterEvent(eventTenantClusterAssigned, tenantID, actor.UserID, clusterID, "cluster", clusterID, "", "", ""), nil); err != nil {
+		return status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", err)
+	}
+	return nil
 }
 
 // RevokeMaterializedClusterAccess is the source-bound inverse of commercial
@@ -4505,6 +4596,9 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *q
 	}
 	if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+	}
+	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, middleware.GetUserID(ctx), clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -8200,7 +8294,10 @@ func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *quar
 	if event.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "event.tenant_id is required")
 	}
-	id, err := s.EnqueueServiceEventTx(ctx, s.db, event)
+	// A forwarded event belongs to its originating service, so Quartermaster
+	// never publishes a domain event for it; the row keeps the caller's
+	// event_id when one is set.
+	id, err := serviceeventoutbox.EnqueueWithDomain(ctx, s.db, event, nil, events.Actor{})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue service event: %v", err)
 	}
@@ -8884,6 +8981,20 @@ func (s *QuartermasterServer) emitClusterEventTx(ctx context.Context, tx *sql.Tx
 	return err
 }
 
+// emitClusterEventWithDomainTx writes a cluster service event together with a
+// domain event the caller built, for sites whose service event does not carry
+// every field of the domain event.
+func (s *QuartermasterServer) emitClusterEventWithDomainTx(ctx context.Context, tx *sql.Tx, event *ipcpb.ServiceEvent, domain *serviceeventoutbox.Domain) error {
+	if ctxkeys.IsDemoMode(ctx) {
+		return nil
+	}
+	if tx == nil {
+		return errors.New("cluster event requires the mutation's transaction")
+	}
+	_, err := s.enqueueServiceEventWithDomainTx(ctx, tx, event, domain)
+	return err
+}
+
 func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 	row, err := quartermasterdb.New(s.db).GetInfrastructureCluster(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -9545,7 +9656,11 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 		}); createErr != nil {
 			return fmt.Errorf("create invite: %w", createErr)
 		}
-		return s.emitClusterEventTx(ctx, tx, eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
+		return s.emitClusterEventWithDomainTx(ctx, tx,
+			s.buildClusterEvent(eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", ""),
+			&serviceeventoutbox.Domain{TenantID: ownerTenantID, AggregateID: id, Message: &internalv1.ClusterInviteCreated{
+				InviteId: id, ClusterId: clusterID, InvitedTenantId: invitedTenantID,
+			}})
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
@@ -10574,12 +10689,16 @@ func clusterSubscriptionFromListRow(row quartermasterdb.ClusterSubscriptionListR
 }
 
 type GRPCServerConfig struct {
+	// PeerWatchContext ends permanent peer subscriptions at drain, without
+	// cancelling ordinary RPCs that are still completing.
+	PeerWatchContext            context.Context
 	ConsentReviewKeyID          string
 	ConsentReviewPrivateKey     ed25519.PrivateKey
 	DB                          *sql.DB
 	Logger                      logging.Logger
 	ServiceToken                string
 	JWTSecret                   []byte
+	MetadataPolicy              middleware.ServiceTokenMetadataPolicy
 	NavigatorClient             *navigator.Client
 	DecklogClient               *decklogclient.BatchedClient
 	PurserClient                *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
@@ -10600,6 +10719,11 @@ type GRPCServerConfig struct {
 	// reused so DiscoverServices' public_instance_host freshness gate stays in
 	// lockstep with Navigator's physical-DNS publish freshness.
 	PhysicalEndpointStaleSeconds int
+	// ClusterAccessMaterializationSecret authenticates the cluster-access
+	// materialization and revocation proofs minted by Purser.
+	ClusterAccessMaterializationSecret string
+	// EventTokenHasher attributes domain events to the calling API token.
+	EventTokenHasher *events.TokenHasher
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
@@ -10624,12 +10748,13 @@ type ServerMetrics struct {
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster
-func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
+func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	// Chain auth interceptor with logging interceptor
 	grpcAuthCfg := middleware.GRPCAuthConfig{
 		ServiceToken:         cfg.ServiceToken,
 		JWTSecret:            cfg.JWTSecret,
 		Logger:               cfg.Logger,
+		MetadataPolicy:       cfg.MetadataPolicy,
 		DelegatedJWTAudience: "quartermaster",
 		ServiceOnlyMethods: []string{
 			quartermasterpb.TenantService_ResolveTenant_FullMethodName,
@@ -10677,14 +10802,14 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
-		cfg.Logger.WithError(err).Fatal("Timed out waiting for Quartermaster gRPC TLS files")
+		return nil, fmt.Errorf("wait for Quartermaster gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
-		cfg.Logger.WithError(err).Fatal("Failed to configure Quartermaster gRPC TLS")
+		return nil, fmt.Errorf("configure Quartermaster gRPC TLS: %w", err)
 	}
 	if tlsOpt != nil {
 		opts = append(opts, tlsOpt)
@@ -10701,9 +10826,14 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
+	if cfg.PeerWatchContext != nil {
+		qmServer.peerWatch.ctx = cfg.PeerWatchContext
+	}
 	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
 	qmServer.SetPlatformRootDomain(cfg.PlatformRootDomain)
 	qmServer.SetPhysicalEndpointStaleSeconds(cfg.PhysicalEndpointStaleSeconds)
+	qmServer.SetClusterAccessMaterializationSecret(cfg.ClusterAccessMaterializationSecret)
+	qmServer.SetEventTokenHasher(cfg.EventTokenHasher)
 	qmServer.mediaAuthorityRefreshClient = cfg.MediaAuthorityRefreshClient
 	qmServer.consentReviewKeyID = cfg.ConsentReviewKeyID
 	qmServer.consentReviewPrivateKey = append(ed25519.PrivateKey(nil), cfg.ConsentReviewPrivateKey...)
@@ -10730,7 +10860,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	go qmServer.runPrivateClusterControlCellReconciler(context.Background())
 	// Wake peer subscribers when the census a peer set is derived from changes.
 	// It reads nothing while no cell is subscribed.
-	go qmServer.RunPeerCensusWatcher(context.Background(), cfg.Logger)
+	go qmServer.RunPeerCensusWatcher(qmServer.peerWatch.ctx, cfg.Logger)
 
 	// Register all services
 	quartermasterpb.RegisterTenantServiceServer(server, qmServer)
@@ -10743,10 +10873,10 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(server, hs)
+	fwserver.RegisterHealthServer(server, hs)
 	reflection.Register(server)
 
-	return server
+	return server, nil
 }
 
 // unaryInterceptor logs gRPC requests

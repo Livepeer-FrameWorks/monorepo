@@ -68,11 +68,11 @@ func TestDoGetInvoicePreview(t *testing.T) {
 // map to (nil, nil), NOT a propagated error. Other gRPC errors propagate.
 func TestDoGetPrepaidBalance_NotFoundIsNotError(t *testing.T) {
 	r := purserResolver(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return nil, status.Error(codes.NotFound, "no balance")
 		},
 	})
-	got, err := r.DoGetPrepaidBalance(clientstest.AuthedCtx("t1"), nil)
+	got, err := r.DoGetPrepaidBalance(clientstest.AuthedCtx("t1"))
 	if err != nil {
 		t.Fatalf("NotFound should not be an error: %v", err)
 	}
@@ -81,37 +81,36 @@ func TestDoGetPrepaidBalance_NotFoundIsNotError(t *testing.T) {
 	}
 
 	rErr := purserResolver(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return nil, status.Error(codes.Internal, "boom")
 		},
 	})
-	if _, err := rErr.DoGetPrepaidBalance(clientstest.AuthedCtx("t1"), nil); err == nil {
+	if _, err := rErr.DoGetPrepaidBalance(clientstest.AuthedCtx("t1")); err == nil {
 		t.Fatal("non-NotFound error should propagate")
 	}
 }
 
-// The currency override is forwarded to Purser; fields map straight through.
-func TestDoGetPrepaidBalance_CurrencyOverrideAndMapping(t *testing.T) {
-	var gotCurrency string
+// The EUR ledger balance fields map straight through.
+func TestDoGetPrepaidBalance_Mapping(t *testing.T) {
+	var gotTenant string
 	r := purserResolver(&clientstest.FakePurser{
-		GetPrepaidBalanceFn: func(_ context.Context, _ string, currency string) (*purserpb.PrepaidBalance, error) {
-			gotCurrency = currency
-			return &purserpb.PrepaidBalance{Id: "b1", BalanceCents: 100, ReservedBalanceCents: 35, AvailableBalanceCents: 65, Currency: currency, IsLowBalance: true}, nil
+		GetPrepaidBalanceFn: func(_ context.Context, tenantID string) (*purserpb.PrepaidBalance, error) {
+			gotTenant = tenantID
+			return &purserpb.PrepaidBalance{Id: "b1", BalanceCents: 100, ReservedBalanceCents: 35, AvailableBalanceCents: 65, Currency: "EUR", IsLowBalance: true}, nil
 		},
 	})
-	usd := "USD"
-	got, err := r.DoGetPrepaidBalance(clientstest.AuthedCtx("t1"), &usd)
+	got, err := r.DoGetPrepaidBalance(clientstest.AuthedCtx("t1"))
 	if err != nil || got == nil {
 		t.Fatalf("DoGetPrepaidBalance = (%+v, %v)", got, err)
 	}
-	if got.BalanceCents != 100 || got.Currency != "USD" || !got.IsLowBalance {
+	if got.BalanceCents != 100 || got.Currency != "EUR" || !got.IsLowBalance {
 		t.Errorf("balance fields not mapped: %+v", got)
 	}
 	if got.ReservedBalanceCents != 35 || got.AvailableBalanceCents != 65 {
 		t.Errorf("reservation fields not mapped: %+v", got)
 	}
-	if gotCurrency != "USD" {
-		t.Errorf("currency override not forwarded: %q", gotCurrency)
+	if gotTenant != "t1" {
+		t.Errorf("tenant not forwarded: %q", gotTenant)
 	}
 }
 

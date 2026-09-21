@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
 )
@@ -106,8 +108,8 @@ func TestComputeTypedEventID(t *testing.T) {
 func TestDefaultTriggerWALDirPrefersExplicitEnv(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "wal")
 	storagePath := t.TempDir()
-	t.Setenv("FRAMEWORKS_TRIGGER_WAL_DIR", explicit)
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	appconfigtest.Setenv(t, "FRAMEWORKS_TRIGGER_WAL_DIR", explicit)
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
 
 	if got := DefaultTriggerWALDir(); got != explicit {
 		t.Fatalf("DefaultTriggerWALDir() = %q, want explicit env %q", got, explicit)
@@ -116,8 +118,8 @@ func TestDefaultTriggerWALDirPrefersExplicitEnv(t *testing.T) {
 
 func TestDefaultTriggerWALDirFallsBackToStoragePath(t *testing.T) {
 	stateDir := t.TempDir()
-	t.Setenv("FRAMEWORKS_TRIGGER_WAL_DIR", "")
-	t.Setenv("HELMSMAN_STATE_DIR", stateDir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_TRIGGER_WAL_DIR", "")
+	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", stateDir)
 
 	want := filepath.Join(stateDir, "trigger-wal")
 	if got := DefaultTriggerWALDir(); got != want {

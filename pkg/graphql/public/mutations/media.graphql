@@ -1,0 +1,94 @@
+mutation CreateClip($input: CreateClipInput!) {
+  createClip(input: $input) {
+    __typename
+    ...ClipFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation DeleteClip($id: ID!) {
+  deleteClip(id: $id) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation StartDVR($streamId: ID!) {
+  startDVR(streamId: $streamId) {
+    __typename
+    ...DVRRequestFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation StopDVR($dvrHash: ID!) {
+  stopDVR(dvrHash: $dvrHash) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation DeleteDVR($dvrHash: ID!) {
+  deleteDVR(dvrHash: $dvrHash) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation CreateVodUpload($input: CreateVodUploadInput!) {
+  createVodUpload(input: $input) {
+    __typename
+    ... on VodUploadSession {
+      id
+      artifactId
+      artifactHash
+      playbackId
+      partSize
+      parts {
+        partNumber
+        presignedUrl
+      }
+      expiresAt
+    }
+    ...ValidationErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
+  completeVodUpload(input: $input) {
+    __typename
+    ...VodAssetFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation AbortVodUpload($uploadId: ID!) {
+  abortVodUpload(uploadId: $uploadId) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation DeleteVodAsset($id: ID!) {
+  deleteVodAsset(id: $id) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}

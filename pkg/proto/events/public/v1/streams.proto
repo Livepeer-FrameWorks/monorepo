@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package frameworks.events.public.v1;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1";
+
+import "events/options.proto";
+
+message StreamCreated {
+  option (frameworks.events.event) = {type: "stream.created", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+  string name = 2;
+  string playback_id = 3;
+}
+
+message StreamUpdated {
+  option (frameworks.events.event) = {type: "stream.updated", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+  // changed_fields lists the public stream fields that changed, by API name.
+  repeated string changed_fields = 2;
+}
+
+message StreamDeleted {
+  option (frameworks.events.event) = {type: "stream.deleted", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+}
+
+// StreamKeyRotated reports that the stream's ingest key was replaced. The key
+// itself is never part of an event.
+message StreamKeyRotated {
+  option (frameworks.events.event) = {type: "stream.key_rotated", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+}
+
+enum IngestProtocol {
+  INGEST_PROTOCOL_UNSPECIFIED = 0;
+  INGEST_PROTOCOL_RTMP = 1;
+  INGEST_PROTOCOL_SRT = 2;
+  INGEST_PROTOCOL_WHIP = 3;
+  INGEST_PROTOCOL_PULL = 4;
+}
+
+// StreamConnected reports a new ingest session for the stream.
+message StreamConnected {
+  option (frameworks.events.event) = {type: "stream.connected", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+  IngestProtocol protocol = 2;
+}
+
+// StreamLive reports that the stream became playable.
+message StreamLive {
+  option (frameworks.events.event) = {type: "stream.live", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+}
+
+// StreamIdle reports that the stream's ingest session ended.
+message StreamIdle {
+  option (frameworks.events.event) = {type: "stream.idle", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
+  string stream_id = 1;
+}

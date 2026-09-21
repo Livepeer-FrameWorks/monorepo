@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
@@ -338,7 +339,7 @@ func initDVRManager() {
 			jobs:        make(map[string]*DVRJob),
 			storagePath: storagePath,
 			storageCap:  sidecarcfg.GetStorageCapacityBytes(),
-			mistClient:  mist.NewClient(logger),
+			mistClient:  mist.NewClient(logger, appconfig.MistClient()),
 		}
 
 		logger.WithField("storage_path", storagePath).Info("DVR manager initialized")

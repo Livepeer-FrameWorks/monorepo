@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 )
 
 // A scannable recording root with no matching layout is positive absence evidence. An unreadable
 // root remains inconclusive so storage failures cannot authorize teardown.
 func TestDVRFingerprintByHash_GenuineAbsenceConverges(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", root)
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", root)
 	// The dvr root exists and is scannable, but carries no layout for this hash → genuinely absent.
 	if err := os.MkdirAll(filepath.Join(root, "dvr", "node-x"), 0o755); err != nil {
 		t.Fatalf("seed dvr root: %v", err)

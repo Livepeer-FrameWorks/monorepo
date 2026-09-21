@@ -1,11 +1,9 @@
 package config
 
 import (
-	"os"
 	"runtime"
-	"strconv"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"frameworks/api_sidecar/internal/appconfig"
 
 	"golang.org/x/sys/unix"
 )
@@ -17,9 +15,9 @@ func getSystemMemoryBytes() uint64 {
 	return getMemoryBytes()
 }
 
-// HelmsmanConfig holds all configuration for the Helmsman sidecar.
-// Required vars will cause the service to fail at startup if missing.
-// Optional vars have sensible defaults or disable features when empty.
+// HelmsmanConfig is the startup configuration snapshot handed to the control
+// client. It is built once from the typed appconfig.Helmsman; values that must
+// follow a SIGHUP reload are read through appconfig.Runtime instead.
 type HelmsmanConfig struct {
 	// Required - service identity
 	NodeID             string
@@ -39,8 +37,8 @@ type HelmsmanConfig struct {
 
 	// Cold storage thresholds (S3 credentials are held by Foghorn, not here!)
 	// Helmsman receives presigned URLs from Foghorn for secure uploads/downloads
-	FreezeThreshold   float64 // Start freezing at this disk usage % (default: 85)
-	TargetAfterFreeze float64 // Target usage after freeze (default: 70)
+	FreezeThreshold   float64 // Start freezing at this disk usage fraction (default: 0.85)
+	TargetAfterFreeze float64 // Target usage after freeze (default: 0.70)
 
 	// Capabilities (all default to true)
 	CapIngest     bool
@@ -79,103 +77,75 @@ type HelmsmanConfig struct {
 	// RelayTrustedCIDR is a comma-separated CIDR list whose RemoteAddr
 	// bypasses the relay authorize gate like loopback (still requiring no
 	// proxy-forward markers). Only needed when Mist dials Helmsman over a
-	// non-loopback service address (the dev compose bridge, where Mist and
-	// Helmsman are separate containers). Empty in production — native hosts
-	// and the single edge container both reach Helmsman on 127.0.0.1.
+	// non-loopback address. Empty on native hosts and in the edge container,
+	// dev compose included, where Mist reaches Helmsman on 127.0.0.1.
 	// NEVER set to a range that covers peer nodes — peer reads authorize
 	// via Foghorn.
 	RelayTrustedCIDR string
 }
 
-// LoadHelmsmanConfig loads configuration from environment variables.
-// Call this after config.LoadEnv() has been called.
-func LoadHelmsmanConfig() *HelmsmanConfig {
+// NewHelmsmanConfig builds the control client's startup snapshot from the
+// typed Helmsman configuration. Malformed numeric and boolean values resolve
+// to the same fallbacks the environment readers used before typed
+// configuration.
+func NewHelmsmanConfig(cfg *appconfig.Helmsman) *HelmsmanConfig {
+	capIngest, capEdge, capStorage, capProcessing := cfg.Capabilities()
+	freezeThreshold, targetAfterFreeze := cfg.StorageThresholds()
 	return &HelmsmanConfig{
-		// Required
-		NodeID:             config.RequireEnv("NODE_ID"),
-		FoghornControlAddr: config.RequireEnv("FOGHORN_CONTROL_ADDR"),
+		NodeID:             cfg.NodeID,
+		FoghornControlAddr: cfg.FoghornControlAddr,
 
-		// MistServer (required for health checks)
-		MistServerURL:   config.RequireEnv("MISTSERVER_URL"),
-		MistAPIUsername: config.GetEnv("MIST_API_USERNAME", ""),
-		MistAPIPassword: config.GetEnv("MIST_API_PASSWORD", ""),
+		MistServerURL:   cfg.MistServerURL,
+		MistAPIUsername: cfg.MistAPIUsername,
+		MistAPIPassword: cfg.MistAPIPassword,
 
-		// Durable sidecar state is separate from replaceable media storage.
-		StateDir: config.GetEnv("HELMSMAN_STATE_DIR", ""),
+		StateDir:             cfg.StateDir,
+		StorageLocalPath:     cfg.StorageLocalPath,
+		StorageS3Bucket:      cfg.StorageS3Bucket,
+		StorageS3Prefix:      cfg.StorageS3Prefix,
+		StorageCapacityBytes: cfg.StorageCapacity(),
 
-		// Storage (optional - empty disables local storage features)
-		StorageLocalPath:     config.GetEnv("HELMSMAN_STORAGE_LOCAL_PATH", ""),
-		StorageS3Bucket:      config.GetEnv("HELMSMAN_STORAGE_S3_BUCKET", ""),
-		StorageS3Prefix:      config.GetEnv("HELMSMAN_STORAGE_S3_PREFIX", ""),
-		StorageCapacityBytes: parseUint64(config.GetEnv("HELMSMAN_STORAGE_CAPACITY_BYTES", "0")),
+		FreezeThreshold:   freezeThreshold,
+		TargetAfterFreeze: targetAfterFreeze,
 
-		// Cold storage thresholds (S3 creds are in Foghorn, not here!)
-		FreezeThreshold:   parseFloat64(config.GetEnv("HELMSMAN_FREEZE_THRESHOLD", "0.85")),
-		TargetAfterFreeze: parseFloat64(config.GetEnv("HELMSMAN_TARGET_AFTER_FREEZE", "0.70")),
+		CapIngest:     capIngest,
+		CapEdge:       capEdge,
+		CapStorage:    capStorage,
+		CapProcessing: capProcessing,
 
-		// Capabilities (default true)
-		CapIngest:     config.GetEnvBool("HELMSMAN_CAP_INGEST", true),
-		CapEdge:       config.GetEnvBool("HELMSMAN_CAP_EDGE", true),
-		CapStorage:    config.GetEnvBool("HELMSMAN_CAP_STORAGE", true),
-		CapProcessing: config.GetEnvBool("HELMSMAN_CAP_PROCESSING", true),
+		MaxTranscodes: cfg.MaxTranscodeSlots(),
 
-		// Limits (0 = no limit / auto)
-		MaxTranscodes: config.GetEnvInt("HELMSMAN_MAX_TRANSCODES", 0),
+		EdgePublicURL:       cfg.EdgePublicURL,
+		EnrollmentToken:     cfg.EnrollmentToken,
+		RotateNodeIdentity:  cfg.RotateNodeIdentityRequested(),
+		EnrollmentTokenFile: cfg.EnrollmentTokenFile,
+		RuntimeEnvFile:      cfg.RuntimeEnvFile,
 
-		// Edge node
-		EdgePublicURL:       config.RequireEnv("EDGE_PUBLIC_URL"),
-		EnrollmentToken:     config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
-		RotateNodeIdentity:  config.GetEnvBool("HELMSMAN_ROTATE_NODE_IDENTITY", false),
-		EnrollmentTokenFile: config.GetEnv("HELMSMAN_ENROLLMENT_TOKEN_FILE", ""),
-		RuntimeEnvFile:      config.GetEnv("HELMSMAN_RUNTIME_ENV_FILE", ""),
+		WebhookURL: cfg.MistWebhookBaseURL,
 
-		// Webhook URL (defaults handled at usage site if empty)
-		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
+		RelayTrustedCIDR: cfg.RelayTrustedCIDR,
 
-		// Trusted CIDR for the local Mist→Helmsman hop (dev compose bridge
-		// only). Empty in production — loopback only.
-		RelayTrustedCIDR: config.GetEnv("HELMSMAN_RELAY_TRUSTED_CIDR", ""),
+		GRPCAllowInsecure: cfg.GRPCInsecureAllowed(),
+		GRPCTLSCertPath:   cfg.GRPCTLSCertPath,
+		GRPCTLSKeyPath:    cfg.GRPCTLSKeyPath,
+		GRPCTLSCAPath:     cfg.GRPCTLSCAPath,
+		GRPCTLSServerName: cfg.FoghornGRPCTLSServerName,
 
-		// gRPC TLS / trust
-		GRPCAllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		GRPCTLSCertPath:   config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-		GRPCTLSKeyPath:    config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-		GRPCTLSCAPath:     config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		GRPCTLSServerName: config.GetServiceGRPCTLSServerName("foghorn"),
+		BlockingGraceMs: cfg.BlockingGrace(),
 
-		BlockingGraceMs: config.GetEnvInt("HELMSMAN_BLOCKING_GRACE_MS", 2000),
-
-		RequestedMode: config.GetEnv("HELMSMAN_OPERATIONAL_MODE", "normal"),
+		RequestedMode: cfg.RequestedOperationalMode,
 	}
-}
-
-func parseUint64(s string) uint64 {
-	if s == "" {
-		return 0
-	}
-	v, _ := strconv.ParseUint(s, 10, 64)
-	return v
-}
-
-func parseFloat64(s string) float64 {
-	if s == "" {
-		return 0
-	}
-	v, _ := strconv.ParseFloat(s, 64)
-	return v
 }
 
 // GetStoragePath returns the canonical local storage path for Helmsman artifacts.
 func GetStoragePath() string {
-	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
-	if storagePath == "" {
-		storagePath = "/var/lib/frameworks/edge-storage"
-	}
-	return storagePath
+	return appconfig.Runtime().StoragePathOrDefault()
 }
 
+// GetStorageCapacityBytes returns HELMSMAN_STORAGE_CAPACITY_BYTES, or 0 when it
+// is unset or not an unsigned integer.
 func GetStorageCapacityBytes() uint64 {
-	return parseUint64(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"))
+	return appconfig.Runtime().StorageCapacity()
 }
 
 // ConfiguredBandwidthLimitBytesPerSec returns an operator-pinned node bandwidth
@@ -183,16 +153,7 @@ func GetStorageCapacityBytes() uint64 {
 // stores bw_limit in bytes/sec; HELMSMAN_BW_LIMIT_MBPS is accepted for operator
 // convenience.
 func ConfiguredBandwidthLimitBytesPerSec() uint64 {
-	if v := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_BYTES_PER_SEC")); v > 0 {
-		return v
-	}
-	if v := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_BYTES")); v > 0 {
-		return v
-	}
-	if mbps := parseUint64(os.Getenv("HELMSMAN_BW_LIMIT_MBPS")); mbps > 0 {
-		return mbps * 1000 * 1000 / 8
-	}
-	return 0
+	return appconfig.Runtime().BandwidthLimitBytesPerSecond()
 }
 
 // HardwareSpecs holds detected hardware information

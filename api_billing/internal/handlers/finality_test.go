@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 )
 
 func TestGetFinalityHeadUsesFinalizedTag(t *testing.T) {
@@ -29,7 +31,7 @@ func TestGetFinalityHeadUsesFinalizedTag(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 
 	head, err := GetFinalityHead(context.Background(), NewRPCClient(), Networks["base"])
 	if err != nil {
@@ -57,8 +59,8 @@ func TestValidateCryptoCustodyNetworkAcceptsNonContractTreasury(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
-	t.Setenv("CRYPTO_TREASURY_BASE", "0x1111111111111111111111111111111111111111")
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "CRYPTO_TREASURY_BASE", "0x1111111111111111111111111111111111111111")
 
 	if err := ValidateCryptoCustodyNetwork(context.Background(), NewRPCClient(), Networks["base"], "ETH"); err != nil {
 		t.Fatalf("ValidateCryptoCustodyNetwork: %v", err)
@@ -73,7 +75,7 @@ func TestGetFinalityHeadFailsClosedWhenUnavailable(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": nil})
 	}))
 	defer server.Close()
-	t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+	appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 
 	if _, err := GetFinalityHead(context.Background(), NewRPCClient(), Networks["base"]); err == nil {
 		t.Fatal("expected unavailable finalized head to fail closed")

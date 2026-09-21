@@ -2,25 +2,19 @@ package server
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
-// ReloadCallback is fired when Start receives SIGHUP. Callbacks re-read
+// ReloadCallback is fired when Run receives SIGHUP. Callbacks re-read
 // file-based config or rotate TLS material; they must not block (run any
 // work in a goroutine) and should return any error for logging. Returning
 // an error does not abort subsequent callbacks — every registered hook
@@ -33,11 +27,11 @@ var (
 )
 
 // RegisterReload appends a callback that fires whenever the process
-// receives SIGHUP while Start is running. Registration order is preserved;
+// receives SIGHUP while Run is serving. Registration order is preserved;
 // callbacks run sequentially. Safe to call from init() or from goroutines
-// after Start blocks on its quit channel.
+// while Run is serving.
 //
-// Even when no callback is registered, Start still installs a SIGHUP
+// Even when no callback is registered, Run still installs a SIGHUP
 // listener — that's what neuters Go's default-terminate disposition for
 // the signal cluster-wide, so `systemctl reload <service>` is a true
 // no-op rather than a kill for every Go service.
@@ -70,6 +64,7 @@ func snapshotReloadFns() []ReloadCallback {
 // SIGHUP-doesn't-terminate property can be verified without spinning up a
 // real HTTP server.
 func startReloadListener(logger logging.Logger, serviceName string) func() {
+	configReloadFailures.WithLabelValues(serviceName).Add(0)
 	reloadCh := make(chan os.Signal, 1)
 	signal.Notify(reloadCh, syscall.SIGHUP)
 	done := make(chan struct{})
@@ -78,8 +73,7 @@ func startReloadListener(logger logging.Logger, serviceName string) func() {
 		for range reloadCh {
 			for _, fn := range snapshotReloadFns() {
 				if err := fn(); err != nil {
-					logger.WithError(err).WithField("service", serviceName).
-						Warn("reload callback returned error")
+					recordReloadFailure(logger, serviceName, err)
 				}
 			}
 		}
@@ -91,26 +85,6 @@ func startReloadListener(logger logging.Logger, serviceName string) func() {
 	}
 }
 
-// Config represents server configuration
-type Config struct {
-	Port         string
-	BindAddr     string // defaults to "" (all interfaces); set "127.0.0.1" for local-only
-	ServiceName  string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
-	TLSCertFile  string
-	TLSKeyFile   string
-}
-
-// Listener pairs one HTTP listener configuration with its router. StartAll
-// gives services with distinct public and internal surfaces one shutdown and
-// signal lifecycle without merging their route tables.
-type Listener struct {
-	Config Config
-	Router http.Handler
-}
-
 type trailingSlashFallbackKey struct{}
 
 // HandleOptionalTrailingSlash registers a route for both slash spellings.
@@ -119,146 +93,6 @@ func HandleOptionalTrailingSlash(routes gin.IRoutes, method, relativePath string
 	if alternate := alternateTrailingSlashPath(relativePath); alternate != relativePath {
 		routes.Handle(method, alternate, handlers...)
 	}
-}
-
-// DefaultConfig returns default server configuration
-func DefaultConfig(serviceName, defaultPort string) Config {
-	return Config{
-		Port:         config.GetEnv("PORT", defaultPort),
-		ServiceName:  serviceName,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-}
-
-// Start starts the HTTP server with graceful shutdown
-func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
-	return StartAll([]Listener{{Config: cfg, Router: router}}, logger)
-}
-
-// StartAll starts multiple independently routed HTTP listeners and shuts them
-// down together. A bind/TLS failure on any listener stops the whole service.
-func StartAll(listeners []Listener, logger logging.Logger) error {
-	if len(listeners) == 0 {
-		return fmt.Errorf("at least one HTTP listener is required")
-	}
-	servers := make([]*http.Server, 0, len(listeners))
-	for _, listener := range listeners {
-		cfg := listener.Config
-		if listener.Router == nil {
-			return fmt.Errorf("HTTP listener %q has no router", cfg.ServiceName)
-		}
-		if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
-			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-				return fmt.Errorf("HTTP listener %q requires both certificate and key files", cfg.ServiceName)
-			}
-		}
-		servers = append(servers, &http.Server{
-			Addr: cfg.BindAddr + ":" + cfg.Port, Handler: listener.Router,
-			ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
-		})
-	}
-
-	errCh := make(chan error, len(servers))
-	for i, srv := range servers {
-		cfg := listeners[i].Config
-		go func() {
-			logger.WithFields(logging.Fields{"address": srv.Addr, "service": cfg.ServiceName}).Info("Starting HTTP server")
-			var err error
-			if cfg.TLSCertFile != "" {
-				err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-			} else {
-				err = srv.ListenAndServe()
-			}
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- fmt.Errorf("HTTP listener %s (%s): %w", cfg.ServiceName, srv.Addr, err)
-			}
-		}()
-	}
-
-	// Reload listener — SIGHUP fires every registered ReloadCallback.
-	// Installing the listener also neuters Go's default-terminate
-	// disposition for SIGHUP: with no callbacks registered, the signal
-	// is silently consumed and the process keeps running.
-	stopReload := startReloadListener(logger, listeners[0].Config.ServiceName)
-	defer stopReload()
-
-	// Wait for interrupt signal or a listener failure.
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	var serveErr error
-	select {
-	case <-quit:
-	case serveErr = <-errCh:
-	}
-	signal.Stop(quit)
-
-	logger.Info("Shutting down HTTP listeners...")
-
-	// Graceful shutdown with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	shutdownErrs := make([]error, 0, len(servers)+1)
-	if serveErr != nil {
-		shutdownErrs = append(shutdownErrs, serveErr)
-	}
-	for _, srv := range servers {
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown %s: %w", srv.Addr, err))
-		}
-	}
-
-	logger.Info("HTTP listeners stopped")
-	return errors.Join(shutdownErrs...)
-}
-
-// SetupServiceRouter creates a fully configured router with monitoring
-func SetupServiceRouter(
-	logger logging.Logger,
-	serviceName string,
-	healthChecker *monitoring.HealthChecker,
-	metricsCollector *monitoring.MetricsCollector,
-) *gin.Engine {
-	// Set Gin mode based on environment
-	if config.GetEnv("GIN_MODE", "debug") == "release" {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
-	router := gin.New()
-	router.RedirectTrailingSlash = false
-
-	// Parse CORS allowed origins from environment
-	var allowedOrigins []string
-	if originsStr := config.GetEnv("ALLOWED_ORIGINS", ""); originsStr != "" {
-		for o := range strings.SplitSeq(originsStr, ",") {
-			if trimmed := strings.TrimSpace(o); trimmed != "" {
-				allowedOrigins = append(allowedOrigins, trimmed)
-			}
-		}
-	}
-	devMode := config.GetEnv("GIN_MODE", "debug") != "release"
-
-	// Add common middleware
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware(allowedOrigins, devMode))
-
-	// Add metrics middleware
-	router.Use(metricsCollector.MetricsMiddleware())
-
-	// Register real monitoring endpoints
-	healthHandler := healthChecker.Handler()
-	router.GET("/health", healthHandler)
-	router.HEAD("/health", healthHandler)
-	router.GET("/metrics", metricsCollector.Handler())
-	router.NoRoute(func(c *gin.Context) {
-		retryAlternateTrailingSlashPath(router, c)
-	})
-
-	return router
 }
 
 func retryAlternateTrailingSlashPath(router *gin.Engine, c *gin.Context) {

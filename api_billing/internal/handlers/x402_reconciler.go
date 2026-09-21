@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/google/uuid"
 
@@ -77,6 +77,7 @@ func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets boo
 		}
 		finalizeSettlement = handlers[0].finalizeConfirmedSettlementEffects
 	}
+	rt := appconfig.Runtime()
 	return &X402Reconciler{
 		db:                  database,
 		logger:              log,
@@ -84,9 +85,9 @@ func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets boo
 		includeTestnets:     includeTestnets,
 		rebroadcastTransfer: rebroadcastTransfer,
 		finalizeSettlement:  finalizeSettlement,
-		recoveryWindowHours: readEnvInt("X402_RECOVERY_WINDOW_HOURS", 168),
-		reorgDepthBlocks:    readEnvInt("X402_REORG_DEPTH_BLOCKS", 50),
-		rpcErrorLimit:       readEnvInt("X402_RPC_ERROR_LIMIT", 5),
+		recoveryWindowHours: positiveOrDefault(rt.X402RecoveryWindowHours, 168),
+		reorgDepthBlocks:    positiveOrDefault(rt.X402ReorgDepthBlocks, 50),
+		rpcErrorLimit:       positiveOrDefault(rt.X402RPCErrorLimit, 5),
 		rpcErrorCounts:      make(map[string]int),
 	}
 }
@@ -195,7 +196,7 @@ func (r *X402Reconciler) reconcileSubmittingIntents(ctx context.Context) {
 				})
 			emitBillingTelemetryEvent(ctx, r.db, r.logger, eventX402AccountingAnomaly, it.TenantID, "x402_nonce", it.ID, &ipcpb.BillingEvent{
 				Amount:   float64(it.AmountCents) / 100,
-				Currency: billing.DefaultCurrency(),
+				Currency: billing.LedgerCurrency,
 				Status:   "authorization consumed without recorded tx_hash",
 				Provider: it.Network,
 			})
@@ -748,7 +749,7 @@ func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID st
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	queries := purserdb.New(tx)
 	recoveryExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
@@ -858,7 +859,7 @@ func (r *X402Reconciler) markConfirmed(ctx context.Context, s PendingSettlement,
 		}
 		return emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &ipcpb.BillingEvent{
 			Amount:   float64(s.AmountCents) / 100,
-			Currency: billing.DefaultCurrency(),
+			Currency: billing.LedgerCurrency,
 			Status:   "confirmed",
 		})
 	})
@@ -904,7 +905,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	queries := purserdb.New(tx)
 	creditExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
@@ -964,7 +965,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 
 	if err := emitBillingEventTx(ctx, tx, eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
 		Amount:   float64(amountCents) / 100,
-		Currency: billing.DefaultCurrency(),
+		Currency: billing.LedgerCurrency,
 		Status:   "failed",
 	}); err != nil {
 		r.logger.WithError(err).Error("Failed to enqueue x402 settlement failed event")
@@ -1028,16 +1029,11 @@ func truncateTxHash(txHash string) string {
 	return txHash
 }
 
-func readEnvInt(key string, defaultValue int) int {
-	value, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(value) == "" {
+func positiveOrDefault(value, defaultValue int) int {
+	if value <= 0 {
 		return defaultValue
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return defaultValue
-	}
-	return parsed
+	return value
 }
 
 func (r *X402Reconciler) trackRPCError(network string, err error, txHash, tenantID string) {

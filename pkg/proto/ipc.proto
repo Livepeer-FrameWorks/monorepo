@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
+import "events/envelope.proto";
 
 // Coarse geospatial bucket (H3 index + resolution)
 message GeoBucket {
@@ -52,6 +53,13 @@ service DecklogService {
   // (transcode/AI outcomes) require both stream_tenant_id and
   // cluster_owner_tenant_id.
   rpc SendGatewayTelemetry(GatewayTelemetryEvent) returns (google.protobuf.Empty);
+  // Domain events from producer outboxes onto domain.events. The whole batch
+  // is validated before anything is produced: a missing ID, a tenant that does
+  // not match the type's scope, or a payload that does not decode as its
+  // registered message is INVALID_ARGUMENT; an unregistered type is
+  // FAILED_PRECONDITION, so producers wait for an upgraded Decklog. The RPC
+  // returns only after Kafka acknowledged every record.
+  rpc PublishDomainEvents(frameworks.events.DomainEventBatch) returns (frameworks.events.PublishDomainEventsResponse);
 }
 
 // ServiceEvent represents service-level telemetry emitted by core services.
@@ -94,6 +102,13 @@ message ServiceEvent {
   int32  schema_version = 54;
   string correlation_id = 55;
   string causation_id = 56;
+
+  // Actor of the request that produced the event, in the same form as the
+  // domain event actor (events.Actor): auth type ("jwt", "api_token",
+  // "wallet", "service") and, for API tokens, the keyed token hash Bridge
+  // records in api_request_batch.token_hashes, so audit rows join usage.
+  string actor_auth_type = 57;
+  uint64 actor_token_hash = 58;
 }
 
 message AuthEvent {
@@ -3124,6 +3139,11 @@ message APIRequestAggregate {
   uint64 llm_output_tokens = 13;    // Exact provider-reported output tokens
   string model = 14;                // Provider model identifier
   string provider = 15;             // LLM provider identifier
+  // Sorted, distinct GraphQL root field names the aggregate's requests
+  // resolved (field names, not aliases). operation_name is client-chosen;
+  // root_fields names the API surface actually used. Empty for MCP tool calls,
+  // whose operation_name is the server-defined tool name.
+  repeated string root_fields = 16;
 }
 
 

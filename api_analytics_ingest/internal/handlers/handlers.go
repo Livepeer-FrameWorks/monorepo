@@ -44,6 +44,12 @@ type PeriscopeMetrics struct {
 	ProjectionDivergences *prometheus.CounterVec
 	LedgerLeader          *prometheus.GaugeVec
 	LedgerCursorLag       *prometheus.GaugeVec
+	// DomainEvents counts domain.events records by type and outcome
+	// (processed, unknown_type, invalid, error). An unknown_type record comes
+	// from a producer registry newer than this binary and is skipped, so a
+	// non-zero rate means Periscope Ingest must be upgraded. Labels:
+	// event_type, status.
+	DomainEvents *prometheus.CounterVec
 }
 
 // AnalyticsHandler handles analytics events
@@ -2282,6 +2288,27 @@ func getUint64SliceFromMap(data map[string]interface{}, key string) []uint64 {
 	}
 }
 
+// getStringSliceFromMap reads a JSON string array; non-string elements are
+// skipped. It returns an empty, non-nil slice when the key is absent, since
+// ClickHouse array columns take no NULL.
+func getStringSliceFromMap(data map[string]interface{}, key string) []string {
+	out := []string{}
+	if data == nil {
+		return out
+	}
+	switch v := data[key].(type) {
+	case []string:
+		return append(out, v...)
+	case []interface{}:
+		for _, raw := range v {
+			if s, ok := raw.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 // processStreamBuffer handles STREAM_BUFFER webhook events with rich health metrics
 func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream buffer event: %s", event.EventID)
@@ -3531,6 +3558,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 			LLMProvider: agg.GetProvider(), UserHashes: userHashes, TokenHashes: tokenHashes,
 			SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 			StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+			RootFields: agg.GetRootFields(),
 		}); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": agg.GetTenantId(),
@@ -3780,6 +3808,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 			LLMProvider: getStringFromMap(aggMap, "provider"), UserHashes: userHashes, TokenHashes: tokenHashes,
 			SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 			StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+			RootFields: getStringSliceFromMap(aggMap, "root_fields"),
 		}); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": getStringFromMap(aggMap, "tenant_id"),
@@ -4066,6 +4095,7 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 		Details: string(detailsJSON), Timestamp: event.Timestamp, ClusterID: event.SourceClusterID,
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		ActorAuthType: event.ActorAuthType, ActorTokenHash: event.ActorTokenHash,
 	}); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()

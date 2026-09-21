@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"frameworks/api_control/internal/appconfig"
 	"frameworks/api_control/internal/bootstrap"
 	commodoregrpc "frameworks/api_control/internal/grpc"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -30,19 +31,20 @@ import (
 
 // newSourceURIEncrypter constructs the same rotating keyring the runtime
 // Commodore service uses for pull-input source URIs.
-func newSourceURIEncrypter() (fieldcrypt.FieldCipher, error) {
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	fieldKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
-	previous, err := fieldcrypt.ParseFieldKeySet(config.GetEnv("FIELD_ENCRYPTION_PREVIOUS_KEYS", ""))
+func newSourceURIEncrypter(cfg *appconfig.CommodoreBootstrap) (fieldcrypt.FieldCipher, error) {
+	if cfg.JWTSecret == "" || cfg.FieldEncryptionKey == "" {
+		return nil, errors.New("JWT_SECRET and FIELD_ENCRYPTION_KEY are required to encrypt pull-stream source URIs")
+	}
+	previous, err := fieldcrypt.ParseFieldKeySet(cfg.FieldEncryptionPreviousKeys)
 	if err != nil {
 		return nil, err
 	}
-	explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(config.GetEnv("FIELD_ENCRYPTION_LEGACY_SECRETS", ""))
+	explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(cfg.FieldEncryptionLegacySecrets)
 	if err != nil {
 		return nil, err
 	}
 	legacy := make([][]byte, 0, len(previous)+len(explicitLegacy)+1)
-	legacy = append(legacy, []byte(jwtSecret))
+	legacy = append(legacy, []byte(cfg.JWTSecret))
 	legacy = append(legacy, explicitLegacy...)
 	keyIDs := make([]string, 0, len(previous))
 	for keyID := range previous {
@@ -53,8 +55,8 @@ func newSourceURIEncrypter() (fieldcrypt.FieldCipher, error) {
 		legacy = append(legacy, previous[keyID])
 	}
 	return fieldcrypt.NewFieldKeyring(
-		config.GetEnv("FIELD_ENCRYPTION_KEY_ID", "primary"),
-		[]byte(fieldKey), previous, legacy, "pull-source-uri",
+		cfg.FieldEncryptionKeyID,
+		[]byte(cfg.FieldEncryptionKey), previous, legacy, "pull-source-uri",
 	)
 }
 
@@ -116,14 +118,18 @@ func runBootstrapCommand(args []string) int {
 	}
 
 	config.LoadEnv(logger)
-	dbURL := config.RequireEnv("DATABASE_URL")
+	cfg, err := config.Load[appconfig.CommodoreBootstrap](config.Options{Service: "commodore", Logger: logger})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
+		return 1
+	}
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "commodore"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
-	resolver, err := newGRPCResolver(logger)
+	resolver, err := newGRPCResolver(logger, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "commodore bootstrap: tenant resolver: %v\n", err)
 		return 1
@@ -131,7 +137,7 @@ func runBootstrapCommand(args []string) int {
 	defer resolver.Close()
 
 	ctx := context.Background()
-	if nodeErr := requireSourceLocationNodePlacement(ctx, desired.Commodore, db, resolver, logger); nodeErr != nil {
+	if nodeErr := requireSourceLocationNodePlacement(ctx, desired.Commodore, db, resolver, cfg, logger); nodeErr != nil {
 		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", nodeErr)
 		return 1
 	}
@@ -154,7 +160,7 @@ func runBootstrapCommand(args []string) int {
 		len(res.Created), len(res.Updated), len(res.Noop))
 
 	if streams := desired.Commodore.PullStreams; len(streams) > 0 {
-		encrypter, encrypterErr := newSourceURIEncrypter()
+		encrypter, encrypterErr := newSourceURIEncrypter(cfg)
 		if encrypterErr != nil {
 			_ = tx.Rollback() //nolint:errcheck // already in error path
 			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
@@ -226,34 +232,33 @@ func runBootstrapCommand(args []string) int {
 // declared source locations that name nodes. It runs before the bootstrap
 // transaction opens, so a refusal writes nothing in apply or --dry-run, and the
 // capability refresh it may trigger never waits on bootstrap's row locks.
-func requireSourceLocationNodePlacement(ctx context.Context, section bootstrap.CommodoreSection, db *sql.DB, resolver *grpcTenantResolver, logger logging.Logger) error {
+func requireSourceLocationNodePlacement(ctx context.Context, section bootstrap.CommodoreSection, db *sql.DB, resolver *grpcTenantResolver, cfg *appconfig.CommodoreBootstrap, logger logging.Logger) error {
 	requirements, err := bootstrap.NodeSourceLocationRequirements(section)
 	if err != nil || len(requirements) == 0 {
 		return err
 	}
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:           config.GetEnv("PURSER_GRPC_ADDR", "purser:19003"),
+		GRPCAddr:           cfg.PurserGRPCAddr,
 		Timeout:            10 * time.Second,
 		Logger:             logger,
-		ServiceToken:       serviceToken,
+		ServiceToken:       cfg.ServiceToken,
 		PreferServiceToken: true,
-		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+		AllowInsecure:      cfg.AllowInsecure,
+		CACertFile:         cfg.CAPath,
+		ServerName:         cfg.PurserGRPCTLSServerName,
 	})
 	if err != nil {
 		return fmt.Errorf("node placement readiness: dial purser: %w", err)
 	}
 	defer func() { _ = purserClient.Close() }()
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
-		ServiceToken:  serviceToken,
+		ServiceToken:  cfg.ServiceToken,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		MaxIdleTime:   time.Minute,
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.FoghornGRPCTLSServerName,
+		AllowInsecure: cfg.AllowInsecure,
 	})
 	defer func() { _ = foghornPool.Close() }()
 	checker := commodoregrpc.NewPlacementNodeChecker(commodoregrpc.PlacementNodeCheckerConfig{
@@ -262,6 +267,7 @@ func requireSourceLocationNodePlacement(ctx context.Context, section bootstrap.C
 		QuartermasterClient: resolver.client,
 		PurserClient:        purserClient,
 		FoghornPool:         foghornPool,
+		SystemTenantID:      cfg.SystemTenantUUID(),
 	})
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -275,17 +281,15 @@ type grpcTenantResolver struct {
 	client *qmclient.GRPCClient
 }
 
-func newGRPCResolver(logger logging.Logger) (*grpcTenantResolver, error) {
-	addr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+func newGRPCResolver(logger logging.Logger, cfg *appconfig.CommodoreBootstrap) (*grpcTenantResolver, error) {
 	client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      addr,
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dial quartermaster: %w", err)

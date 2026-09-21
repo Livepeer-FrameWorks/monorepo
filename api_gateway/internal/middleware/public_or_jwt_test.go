@@ -14,6 +14,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type errReader struct{}
@@ -286,5 +288,45 @@ func TestPublicOrJWTAuthWebSocketUpgradePassesThrough(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthAnswers503WhenTheAPITokenCheckFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sc := wsInitClientsWith(t, nil, status.Error(codes.Unavailable, "commodore down"))
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), sc))
+	r.POST("/graphql", func(c *gin.Context) {
+		t.Fatal("request must not reach the handler")
+	})
+
+	body := []byte(`{"query":"query { streamsConnection { edges { node { id } } } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer fw_api_token_value")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("auth backend down: status = %d, want 503 so clients retry instead of treating the token as rejected", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthAnswers401ForARejectedAPIToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), wsInitClients(t)))
+	r.POST("/graphql", func(c *gin.Context) {
+		t.Fatal("request must not reach the handler")
+	})
+
+	body := []byte(`{"query":"query { streamsConnection { edges { node { id } } } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer fw_api_token_value")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("rejected token: status = %d, want 401", w.Code)
 	}
 }

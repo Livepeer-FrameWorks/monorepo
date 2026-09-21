@@ -36,11 +36,10 @@ var (
 // credentials and no forwarded-IP headers, so Mist's loopback auto-auth
 // fires and Mist never sees the operator's session.
 //
-// Only loopback upstreams are supported — which covers production: native
-// hosts and the single edge container both reach Mist on 127.0.0.1.
-// Non-loopback upstreams (the dev compose bridge / retired multi-container
-// layout, where Helmsman dials the mistserver container by service name)
-// return 501 because that hop cannot rely on Mist's loopback auto-auth.
+// Only loopback upstreams are supported — which covers every deployment:
+// native hosts and the edge container, dev compose included, reach Mist on
+// 127.0.0.1. A non-loopback upstream returns 501 because that hop cannot rely
+// on Mist's loopback auto-auth.
 func MistAdminProxy(mistURL string, logger logging.Logger) gin.HandlerFunc {
 	target, err := url.Parse(mistURL)
 	if err != nil || target.Host == "" || target.Scheme == "" {

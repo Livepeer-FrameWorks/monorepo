@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
@@ -1520,10 +1521,10 @@ func sweepDurableOutboxQuarantineLocked(dir string, now time.Time) error {
 }
 
 func durableOutboxDir() string {
-	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR")); dir != "" {
+	if dir := strings.TrimSpace(appconfig.Runtime().ControlOutboxDir); dir != "" {
 		return dir
 	}
-	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+	if stateDir := strings.TrimSpace(appconfig.StateDir()); stateDir != "" {
 		return filepath.Join(stateDir, "control-outbox")
 	}
 	cacheDir, err := os.UserCacheDir()
@@ -3126,16 +3127,11 @@ func IsConnected() bool {
 }
 
 // relayBaseURL returns the URL Mist on this node uses to reach Helmsman's
-// /internal/artifact/* read-through relay. Reads HELMSMAN_RELAY_BASE_URL
-// when set (the dev compose bridge, where Mist resolves to a service name
-// like http://helmsman:18007); falls back to http://127.0.0.1:18007 for
-// production, where Mist and Helmsman share loopback on native hosts and
-// inside the single edge container alike.
+// /internal/artifact/* read-through relay: HELMSMAN_RELAY_BASE_URL, which
+// defaults to http://127.0.0.1:18007 because Mist and Helmsman share
+// loopback on native hosts and inside the edge container.
 func relayBaseURL() string {
-	if v := strings.TrimSpace(os.Getenv("HELMSMAN_RELAY_BASE_URL")); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	return "http://127.0.0.1:18007"
+	return strings.TrimRight(appconfig.Runtime().RelayBaseURL, "/")
 }
 
 // RequestCanDelete asks Foghorn if it's safe to delete a local artifact copy.
@@ -3372,7 +3368,7 @@ func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 		return
 	}
 
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -3419,7 +3415,7 @@ func handleInvalidateSessions(logger logging.Logger, req *ipcpb.InvalidateSessio
 		return
 	}
 
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -3520,7 +3516,7 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 		}
 		return
 	}
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -3584,7 +3580,13 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 	}
 }
 
-var restreamDestinationPolicyFromEnvironment = restream.DestinationPolicyFromEnvironment
+// restreamDestinationPolicyFromEnvironment builds the multistream destination
+// policy from the current typed configuration on every activation, so a
+// SIGHUP env-file reload applies to the next activation.
+var restreamDestinationPolicyFromEnvironment = func() (restream.DestinationPolicy, error) {
+	rt := appconfig.Runtime()
+	return restream.DestinationPolicyFromValues(rt.RestreamAllowPrivateDestinations, rt.RestreamAllowedPrivateCIDRs, rt.RestreamDeniedCIDRs)
+}
 
 const restreamReconcileLaneCount = 256
 
@@ -3769,7 +3771,7 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 		return
 	}
 
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
@@ -4103,7 +4105,7 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 		generationFence.Unlock()
 	}
 
-	mistClient := mist.NewClient(logger)
+	mistClient := mist.NewClient(logger, appconfig.MistClient())
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}

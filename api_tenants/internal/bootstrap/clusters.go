@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"frameworks/api_tenants/internal/serviceeventoutbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -85,10 +86,12 @@ func ReconcileClusters(ctx context.Context, exec DBTX, clusters []Cluster, alias
 }
 
 // enqueueBootstrapClusterEvent records cluster_created / cluster_updated in the
-// service-event outbox inside the bootstrap transaction, as the gRPC handlers
-// do. Consumers such as Lookout re-read the cluster on cluster_updated, so a
+// service-event outbox, and cluster.created / cluster.updated in the domain
+// event outbox, inside the bootstrap transaction, as the gRPC handlers do. The
+// reconciler runs outside any API call, so the domain event has no actor.
+// Consumers such as Lookout re-read the cluster on cluster_updated, so a
 // bootstrap change to is_platform_official or cluster class reaches them. A
-// dry run rolls the event back with the rest of the transaction.
+// dry run rolls the events back with the rest of the transaction.
 func enqueueBootstrapClusterEvent(ctx context.Context, exec DBTX, action, clusterID, ownerID string) error {
 	eventType := "cluster_updated"
 	if action == "created" {
@@ -103,7 +106,7 @@ func enqueueBootstrapClusterEvent(ctx context.Context, exec DBTX, action, cluste
 		ResourceId:   clusterID,
 		Payload:      &ipcpb.ServiceEvent_ClusterEvent{ClusterEvent: &ipcpb.ClusterEvent{ClusterId: clusterID, TenantId: ownerID}},
 	}
-	if _, err := serviceeventoutbox.Enqueue(ctx, exec, event); err != nil {
+	if _, err := serviceeventoutbox.Enqueue(ctx, exec, event, events.Actor{}); err != nil {
 		return fmt.Errorf("enqueue %s: %w", eventType, err)
 	}
 	return nil

@@ -8,9 +8,7 @@ import (
 )
 
 func TestBuildThumbnailAssetsUsesPublicChandlerBaseOverride(t *testing.T) {
-	t.Setenv("CHANDLER_BASE_URL", "http://localhost:18090/")
-
-	r := NewResolver(nil, logging.NewLogger())
+	r := NewResolver(nil, logging.NewLogger(), "http://localhost:18090/")
 	got := r.BuildThumbnailAssets("demo-media", "stream-uuid")
 
 	if got == nil {
@@ -28,9 +26,7 @@ func TestBuildThumbnailAssetsUsesPublicChandlerBaseOverride(t *testing.T) {
 }
 
 func TestBuildThumbnailAssetsUsesClusterSnapshotWithoutOverride(t *testing.T) {
-	t.Setenv("CHANDLER_BASE_URL", "")
-
-	r := NewResolver(nil, logging.NewLogger())
+	r := NewResolver(nil, logging.NewLogger(), "")
 	snapshot := map[string]string{"demo-media": "https://chandler.demo.frameworks.network"}
 	r.snapshot.Store(&snapshot)
 
@@ -44,8 +40,6 @@ func TestBuildThumbnailAssetsUsesClusterSnapshotWithoutOverride(t *testing.T) {
 }
 
 func TestChandlerBaseForNormalizesClusterBaseURL(t *testing.T) {
-	t.Setenv("CHANDLER_BASE_URL", "")
-
 	got := chandlerBaseFor(&quartermasterpb.InfrastructureCluster{
 		ClusterId:   "media-eu-1",
 		ClusterName: "Media EU 1",

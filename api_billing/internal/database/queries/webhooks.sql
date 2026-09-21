@@ -1,9 +1,27 @@
 -- name: GetPaymentStatusEmailDetails :one
-SELECT invoice.tenant_id::text AS tenant_id, invoice.amount::float8 AS amount,
-       invoice.currency, subscription.billing_email
-FROM purser.billing_invoices invoice
+-- The payment's original amount is what the payer was charged; the FX fields
+-- state the EUR amount applied to the invoice and the rate.
+SELECT invoice.tenant_id::text AS tenant_id,
+       COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)::bigint AS amount_cents,
+       COALESCE(payment.original_currency, UPPER(payment.currency))::text AS currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_reference_date::text, '')::text AS fx_reference_date,
+       subscription.billing_email
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 JOIN purser.tenant_subscriptions subscription ON invoice.tenant_id = subscription.tenant_id
-WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid;
+WHERE payment.id = sqlc.arg(payment_id)::text::uuid
+  AND invoice.id = sqlc.arg(invoice_id)::text::uuid;
+
+-- name: GetPaymentEmailFX :one
+SELECT COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)::bigint AS amount_cents,
+       COALESCE(payment.original_currency, UPPER(payment.currency))::text AS currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_reference_date::text, '')::text AS fx_reference_date
+FROM purser.billing_payments payment
+WHERE payment.id = sqlc.arg(payment_id)::text::uuid;
 
 -- name: ClaimWebhookEvent :one
 WITH claimed AS (
@@ -39,6 +57,15 @@ UPDATE purser.webhook_events
 SET status = 'processed', processed_at = NOW(), last_error = NULL,
     provider_object_id = COALESCE(provider_object_id, NULLIF(sqlc.arg(provider_object_id), ''))
 WHERE provider = sqlc.arg(provider) AND event_id = sqlc.arg(event_id);
+
+-- name: CompleteClaimedWebhookEvent :execrows
+-- Settles a claimed event inside the transaction of its effects. It matches
+-- only a row still 'claimed', so once one delivery commits, a redelivery or a
+-- claim taken over after the lease settles nothing and must record nothing.
+UPDATE purser.webhook_events
+SET status = 'processed', processed_at = NOW(), last_error = NULL
+WHERE provider = sqlc.arg(provider) AND event_id = sqlc.arg(event_id)
+  AND status = 'claimed';
 
 -- name: MarkWebhookEventFailed :execrows
 UPDATE purser.webhook_events
@@ -145,10 +172,15 @@ LIMIT 1;
 
 -- name: InsertMollieSubscriptionPayment :exec
 INSERT INTO purser.billing_payments (
-    invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(invoice_id)::text::uuid, 'card', sqlc.arg(amount)::numeric,
-    sqlc.arg(currency), sqlc.arg(transaction_id), 'pending', NOW(), NOW()
+    sqlc.arg(currency)::text, sqlc.arg(transaction_id), 'pending', NOW(), NOW(),
+    sqlc.arg(original_amount_cents)::bigint, sqlc.arg(currency)::text, sqlc.arg(eur_amount_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_source)::text,
+    sqlc.arg(fx_reference_date)::date
 )
 ON CONFLICT DO NOTHING;
 
@@ -187,14 +219,23 @@ WHERE provider = 'stripe'
   AND provider_object_id = sqlc.arg(charge_id);
 
 -- name: InsertPendingStripeDispute :exec
+-- The pending row takes the disputed share of the payment's EUR amount at the
+-- payment's rate, so the later funds_withdrawn transition moves the same EUR.
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, provider, reversal_type,
     provider_reversal_id, provider_charge_id,
-    amount_cents, currency, status, reason
+    amount_cents, currency, status, reason,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 )
 SELECT invoice.tenant_id, payment.id, 'stripe', 'dispute',
-       sqlc.arg(dispute_id), sqlc.arg(charge_id), sqlc.arg(amount_cents),
-       sqlc.arg(currency), 'pending', sqlc.arg(reason)
+       sqlc.arg(dispute_id), sqlc.arg(charge_id), sqlc.arg(amount_cents)::bigint,
+       sqlc.arg(currency)::text, 'pending', sqlc.arg(reason),
+       sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text,
+       CASE WHEN payment.fx_source = 'identity' THEN sqlc.arg(amount_cents)::bigint
+            ELSE ROUND(payment.eur_amount_cents::numeric * sqlc.arg(amount_cents)::bigint
+                       / payment.original_amount_cents)::bigint END,
+       payment.fx_units_per_eur, payment.fx_source, payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON payment.invoice_id = invoice.id
 WHERE payment.tx_id = sqlc.arg(payment_intent_id)
@@ -211,38 +252,100 @@ WHERE provider = 'stripe'
 
 -- name: GetInvoicePaymentForReversal :one
 SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
-       invoice.tenant_id::text AS tenant_id, payment.currency
+       invoice.tenant_id::text AS tenant_id, payment.currency,
+       ROUND(payment.amount * 100)::bigint AS amount_cents,
+       COALESCE(payment.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(payment.original_currency, '')::text AS original_currency,
+       COALESCE(payment.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(payment.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(payment.fx_source, '')::text AS fx_source,
+       COALESCE(payment.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON payment.invoice_id = invoice.id
 WHERE payment.method = 'card' AND payment.tx_id = sqlc.arg(provider_payment_id)
 ORDER BY payment.created_at DESC
-LIMIT 1;
+LIMIT 1
+FOR UPDATE OF payment;
+
+-- name: GetPriorReversalTotals :one
+-- The original and EUR amounts already reversed from one payment or top-up by
+-- succeeded reversals other than provider_reversal_id. The caller holds the
+-- payment or top-up row lock, so concurrent reversals see each other.
+SELECT COALESCE(SUM(amount_cents), 0)::bigint AS original_cents,
+       COALESCE(SUM(eur_amount_cents), 0)::bigint AS eur_cents
+FROM purser.payment_reversals
+WHERE status = 'succeeded'
+  AND NOT (provider = sqlc.arg(provider) AND provider_reversal_id = sqlc.arg(provider_reversal_id))
+  AND (payment_id = sqlc.narg(payment_id)::text::uuid OR pending_topup_id = sqlc.narg(pending_topup_id)::text::uuid);
 
 -- name: GetPendingTopupForReversal :one
-SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency
+-- Locks the top-up so a reversal and the checkout credit path serialize.
+-- Credit state is read by GetPendingTopupCreditState in a later statement,
+-- which sees a credit committed while this lock was waited on.
+SELECT id::text AS topup_id, tenant_id::text AS tenant_id, currency, status, amount_cents,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.pending_topups
 WHERE provider_payment_id = sqlc.arg(provider_payment_id)
    OR checkout_id = sqlc.arg(provider_payment_id)
 ORDER BY created_at DESC
-LIMIT 1;
+LIMIT 1
+FOR UPDATE;
+
+-- name: GetPendingTopupCreditState :one
+-- The positive balance transaction keyed by the top-up is the authority for
+-- whether the top-up was credited to a balance.
+SELECT EXISTS (
+    SELECT 1 FROM purser.balance_transactions credit
+    WHERE credit.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND credit.reference_type = 'topup'
+      AND credit.reference_id = sqlc.arg(topup_id)::text::uuid
+      AND credit.amount_cents > 0
+)::boolean AS credited;
+
+-- name: ResolvePendingTopupReviewHolds :execrows
+-- Closes the operator review holds of an uncredited top-up whose paid amount
+-- the provider has fully returned; evidence_ref names the closing reversal.
+UPDATE purser.payment_reversals
+SET status = 'succeeded', operator_review_required = FALSE,
+    evidence_ref = sqlc.arg(evidence_ref), updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND pending_topup_id = sqlc.arg(topup_id)::text::uuid
+  AND reversal_type = 'manual'
+  AND status = 'needs_review';
 
 -- name: UpsertSucceededPaymentReversal :one
 INSERT INTO purser.payment_reversals (
     tenant_id, payment_id, pending_topup_id, invoice_id,
     provider, reversal_type, provider_reversal_id, provider_charge_id,
-    amount_cents, currency, status, reason
+    amount_cents, currency, status, reason,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(tenant_id)::text::uuid, sqlc.narg(payment_id)::text::uuid,
     sqlc.narg(pending_topup_id)::text::uuid, sqlc.narg(invoice_id)::text::uuid,
     sqlc.arg(provider), sqlc.arg(reversal_type), sqlc.arg(provider_reversal_id),
-    sqlc.narg(provider_charge_id), sqlc.arg(amount_cents), sqlc.arg(currency),
-    'succeeded', sqlc.narg(reason)
+    sqlc.narg(provider_charge_id), sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text,
+    'succeeded', sqlc.narg(reason),
+    sqlc.arg(amount_cents)::bigint, sqlc.arg(currency)::text, sqlc.arg(eur_amount_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_source)::text,
+    sqlc.arg(fx_reference_date)::date
 )
 ON CONFLICT (provider, provider_reversal_id) DO UPDATE SET
     payment_id = COALESCE(purser.payment_reversals.payment_id, EXCLUDED.payment_id),
     pending_topup_id = COALESCE(purser.payment_reversals.pending_topup_id, EXCLUDED.pending_topup_id),
     invoice_id = COALESCE(purser.payment_reversals.invoice_id, EXCLUDED.invoice_id),
     provider_charge_id = COALESCE(purser.payment_reversals.provider_charge_id, EXCLUDED.provider_charge_id),
+    original_amount_cents = COALESCE(purser.payment_reversals.original_amount_cents, EXCLUDED.original_amount_cents),
+    original_currency = COALESCE(purser.payment_reversals.original_currency, EXCLUDED.original_currency),
+    eur_amount_cents = COALESCE(purser.payment_reversals.eur_amount_cents, EXCLUDED.eur_amount_cents),
+    fx_units_per_eur = COALESCE(purser.payment_reversals.fx_units_per_eur, EXCLUDED.fx_units_per_eur),
+    fx_source = COALESCE(purser.payment_reversals.fx_source, EXCLUDED.fx_source),
+    fx_reference_date = COALESCE(purser.payment_reversals.fx_reference_date, EXCLUDED.fx_reference_date),
     status = 'succeeded', updated_at = NOW()
 WHERE purser.payment_reversals.status = 'pending'
 RETURNING id::text AS id;
@@ -258,18 +361,22 @@ SET reversed_paid_cents = reversed_paid_cents + sqlc.arg(amount_cents), updated_
 WHERE id = sqlc.arg(invoice_id)::text::uuid;
 
 -- name: ReopenUnderpaidBillingInvoice :execrows
+-- Coverage is measured in the currency the invoice was presented in: the
+-- original amounts of confirmed payments in that currency, net of reversals.
 UPDATE purser.billing_invoices invoice
 SET status = 'pending', reopened_at = NOW(), updated_at = NOW()
 WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid
   AND invoice.status = 'paid'
-  AND invoice.currency = sqlc.arg(currency)
+  AND COALESCE(invoice.presentment_currency, UPPER(invoice.currency)) = UPPER(sqlc.arg(currency)::text)
   AND (
-      SELECT COALESCE(SUM(payment.amount - COALESCE(payment.reversed_amount_cents, 0)::numeric / 100), 0)
+      SELECT COALESCE(SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                          - COALESCE(payment.reversed_amount_cents, 0)), 0)
       FROM purser.billing_payments payment
       WHERE payment.invoice_id = invoice.id
         AND payment.status = 'confirmed'
-        AND payment.currency = invoice.currency
-  ) < invoice.amount;
+        AND COALESCE(payment.original_currency, UPPER(payment.currency))
+            = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+  ) < COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint);
 
 -- name: GetBillingInvoiceAmountCents :one
 SELECT (amount * 100)::bigint AS amount_cents
@@ -334,10 +441,11 @@ UPDATE purser.payment_reversals
 SET operator_credit_ledger_id = sqlc.arg(operator_credit_ledger_id)::text::uuid, updated_at = NOW()
 WHERE id = sqlc.arg(payment_reversal_id)::text::uuid;
 
--- name: AddPendingTopupRefundedAmount :exec
+-- name: AddPendingTopupRefundedAmount :one
 UPDATE purser.pending_topups
 SET refunded_amount_cents = refunded_amount_cents + sqlc.arg(amount_cents), updated_at = NOW()
-WHERE id = sqlc.arg(topup_id)::text::uuid;
+WHERE id = sqlc.arg(topup_id)::text::uuid
+RETURNING refunded_amount_cents, amount_cents;
 
 -- name: InsertPrepaidTopupReversalTransaction :exec
 INSERT INTO purser.balance_transactions (
@@ -469,6 +577,14 @@ SET status = sqlc.arg(status), confirmed_at = sqlc.narg(confirmed_at),
     tx_id = COALESCE(NULLIF(tx_id, ''), sqlc.arg(transaction_id)), updated_at = NOW()
 WHERE id = sqlc.arg(payment_id)::text::uuid;
 
+-- name: LockBillingPaymentStatus :one
+SELECT payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.id = sqlc.arg(payment_id)::text::uuid
+  AND invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR UPDATE OF payment;
+
 -- name: UpdateBillingPaymentAttemptProviderStatus :exec
 UPDATE purser.billing_payment_attempts
 SET status = sqlc.arg(status),
@@ -477,17 +593,45 @@ SET status = sqlc.arg(status),
 WHERE payment_id = sqlc.arg(payment_id)::text::uuid AND provider = sqlc.arg(provider);
 
 -- name: MarkFullySettledBillingInvoicePaid :execrows
+-- Coverage is measured in the currency the invoice was presented in: the
+-- original amounts of confirmed payments in that currency, net of reversals.
 UPDATE purser.billing_invoices invoice
 SET status = 'paid', paid_at = COALESCE(invoice.paid_at, sqlc.arg(paid_at)), updated_at = NOW()
 WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid
   AND invoice.status IN ('pending', 'overdue')
   AND (
-      SELECT COALESCE(SUM(payment.amount - COALESCE(payment.reversed_amount_cents, 0)::numeric / 100), 0)
+      SELECT COALESCE(SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                          - COALESCE(payment.reversed_amount_cents, 0)), 0)
       FROM purser.billing_payments payment
       WHERE payment.invoice_id = invoice.id
         AND payment.status = 'confirmed'
-        AND payment.currency = invoice.currency
-  ) >= invoice.amount;
+        AND COALESCE(payment.original_currency, UPPER(payment.currency))
+            = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+  ) >= COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint);
+
+-- name: GetMollieFirstPaymentIntentCurrency :one
+-- The currency a Mollie first payment was created in. CreateFirstPayment
+-- creates it in the tenant's presentment currency: the EUR base fee for an EUR
+-- tenant, a zero-amount mandate payment otherwise.
+SELECT currency::text AS currency
+FROM purser.payment_provider_intents
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = 'mollie'
+  AND purpose = 'mollie_first_payment'
+  AND provider_payment_id = sqlc.arg(provider_payment_id);
+
+-- name: ResolveMollieFirstPaymentIntent :exec
+-- Records the outcome of a Mollie first payment on its intent, which ends the
+-- presentment-currency lock the open intent holds.
+UPDATE purser.payment_provider_intents
+SET status = sqlc.arg(status)::text,
+    succeeded_at = CASE WHEN sqlc.arg(status)::text = 'succeeded' THEN COALESCE(succeeded_at, NOW()) ELSE succeeded_at END,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = 'mollie'
+  AND purpose = 'mollie_first_payment'
+  AND provider_payment_id = sqlc.arg(provider_payment_id)
+  AND status IN ('pending', 'provider_open');
 
 -- name: UpsertMollieMandate :exec
 INSERT INTO purser.mollie_mandates (

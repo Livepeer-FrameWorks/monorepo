@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/shopspring/decimal"
 )
 
@@ -39,7 +40,7 @@ func TestMoneyAuditNetworkIdentifiers(t *testing.T) {
 }
 
 func TestMoneyAuditInvoiceAndClaimIdentifiers(t *testing.T) {
-	t.Setenv("WEBAPP_PUBLIC_URL", " https://app.example.test/ ")
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", " https://app.example.test/ ")
 	if got := invoiceBillingURL("invoice / 1"); got != "https://app.example.test/account/billing?invoice=invoice+%2F+1" {
 		t.Fatalf("invoice URL = %q", got)
 	}
@@ -94,13 +95,13 @@ func TestNextUTCStartIsFutureAtRequestedHour(t *testing.T) {
 }
 
 func TestNetworkRPCEndpointEnvironmentOverride(t *testing.T) {
-	const key = "PURSER_TEST_RPC_ENDPOINT"
-	t.Setenv(key, "")
+	const key = "BASE_SEPOLIA_RPC_ENDPOINT"
+	appconfigtest.Set(t, key, "")
 	network := NetworkConfig{RPCEndpointEnv: key}
 	if got := network.GetRPCEndpoint(); got != "" {
 		t.Fatalf("unset endpoint = %q", got)
 	}
-	t.Setenv(key, " https://rpc.example.test ")
+	appconfigtest.Set(t, key, " https://rpc.example.test ")
 	if got := network.GetRPCEndpoint(); strings.TrimSpace(got) != "https://rpc.example.test" {
 		t.Fatalf("environment endpoint = %q", got)
 	}

@@ -1,9 +1,11 @@
 package grpc
 
 import (
-	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"strings"
 	"testing"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/shopspring/decimal"
 )
@@ -37,8 +39,8 @@ func TestScanBillingFeatures(t *testing.T) {
 		t.Fatalf("expected nil for empty input, got %+v", got)
 	}
 
-	got = scanBillingFeatures([]byte(`{"recording":true,"analytics":true,"custom_branding":true,"api_access":true,"support_level":"premium","sla":true,"processing_customizable":true}`))
-	if got == nil || !got.Recording || !got.Analytics || !got.CustomBranding || !got.ApiAccess || got.SupportLevel != "premium" || !got.Sla || !got.ProcessingCustomizable {
+	got = scanBillingFeatures([]byte(`{"recording":true,"analytics":true,"support_level":"premium","sla":true,"processing_customizable":true}`))
+	if got == nil || got.SupportLevel != "premium" || !got.Sla || !got.ProcessingCustomizable {
 		t.Fatalf("billing features parse failed: %+v", got)
 	}
 }
@@ -58,7 +60,7 @@ func TestScanBillingAddress(t *testing.T) {
 }
 
 func TestInvoicePaymentReturnURLs(t *testing.T) {
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.com")
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.com")
 
 	success, cancel, err := invoicePaymentReturnURLs("")
 	if err != nil {
@@ -97,18 +99,15 @@ func TestInvoicePaymentReturnURLs(t *testing.T) {
 
 func TestMarshalBillingFeaturesRoundTrip(t *testing.T) {
 	bf := &purserpb.BillingFeatures{
-		Recording:      true,
-		Analytics:      true,
-		CustomBranding: true,
-		ApiAccess:      true,
-		SupportLevel:   "premium",
-		Sla:            true,
+		SupportLevel:           "premium",
+		Sla:                    true,
+		ProcessingCustomizable: true,
 	}
 	bfJSON, err := marshalBillingFeatures(bf)
 	if err != nil {
 		t.Fatalf("marshalBillingFeatures: %v", err)
 	}
-	if got := scanBillingFeatures(bfJSON); got == nil || !got.Recording || !got.Analytics || !got.CustomBranding || !got.ApiAccess || got.SupportLevel != "premium" || !got.Sla {
+	if got := scanBillingFeatures(bfJSON); got == nil || got.SupportLevel != "premium" || !got.Sla || !got.ProcessingCustomizable {
 		t.Fatalf("billing features roundtrip failed: %+v", got)
 	}
 }

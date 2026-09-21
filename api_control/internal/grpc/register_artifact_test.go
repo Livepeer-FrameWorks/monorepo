@@ -68,8 +68,8 @@ func TestRegisterDVR(t *testing.T) {
 		// upsertCreationIntent RETURNS the persisted request_id (Query, not Exec).
 		mock.ExpectQuery("INSERT INTO commodore.artifact_creation_intents").
 			WillReturnRows(sqlmock.NewRows([]string{"request_id"}).AddRow("00000000-0000-0000-0000-0000000000d1"))
+		expectLegacyEventInsert(mock, eventArtifactRegistered)
 		mock.ExpectCommit()
-		expectOutboxInsert(mock)
 
 		resp, err := s.RegisterDVR(serviceCtx(), &commodorepb.RegisterDVRRequest{
 			TenantId: "t1", UserId: "u1", StreamInternalName: "live+stream1",

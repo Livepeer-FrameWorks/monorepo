@@ -31,15 +31,17 @@ func FiatTopupMinimumCents(provider, currency string) (int64, error) {
 		switch currency {
 		case "EUR", "USD":
 			technicalMinimum = 50
+		case "GBP":
+			technicalMinimum = 30
 		default:
-			return 0, fmt.Errorf("unsupported Stripe top-up currency %s (EUR or USD only)", currency)
+			return 0, fmt.Errorf("unsupported Stripe top-up currency %s (EUR, USD, or GBP only)", currency)
 		}
 	case "mollie":
 		switch currency {
-		case "EUR", "USD":
+		case "EUR", "USD", "GBP":
 			technicalMinimum = 1
 		default:
-			return 0, fmt.Errorf("unsupported Mollie top-up currency %s (EUR or USD only)", currency)
+			return 0, fmt.Errorf("unsupported Mollie top-up currency %s (EUR, USD, or GBP only)", currency)
 		}
 	default:
 		return 0, fmt.Errorf("unsupported fiat payment provider %s", provider)

@@ -183,12 +183,7 @@ func placementGrantFacts(grant *mediaauthoritypb.TenantClusterGrant, commercial 
 	default:
 		return PlacementClusterFacts{}, ErrPlacementAuthorityInvalid
 	}
-	if grant.GetMediaConsent().GetAllowIngest() {
-		facts.AllowedVerbs = append(facts.AllowedVerbs, placement.Ingest)
-	}
-	if grant.GetMediaConsent().GetAllowServe() {
-		facts.AllowedVerbs = append(facts.AllowedVerbs, placement.Serve)
-	}
+	facts.AllowedVerbs = placement.ConsentVerbs(grant.GetMediaConsent())
 	classification := grant.GetCommercialFacts()
 	if classification.GetIngestPrice() != nil || classification.GetServePrice() != nil || len(classification.GetIngestPrices()) != 0 || len(classification.GetServePrices()) != 0 {
 		return PlacementClusterFacts{}, ErrPlacementAuthorityInvalid

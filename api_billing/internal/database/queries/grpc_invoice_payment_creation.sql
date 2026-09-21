@@ -2,16 +2,20 @@
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(invoice_id)::text, 0));
 
 -- name: GetPayableInvoiceBalance :one
+-- The balance is due in the currency the invoice was presented in, net of the
+-- original amounts of confirmed payments in that currency.
 SELECT invoice.tenant_id::text AS tenant_id,
-       invoice.amount::text AS total_amount,
-       invoice.currency,
+       COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS total_cents,
+       COALESCE(invoice.presentment_currency, UPPER(invoice.currency))::text AS currency,
        COALESCE((
-           SELECT SUM(payment.amount - (COALESCE(payment.reversed_amount_cents, 0)::numeric / 100))
+           SELECT SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                      - COALESCE(payment.reversed_amount_cents, 0))
            FROM purser.billing_payments payment
            WHERE payment.invoice_id = invoice.id
              AND payment.status = 'confirmed'
-             AND payment.currency = invoice.currency
-       ), 0)::text AS net_paid
+             AND COALESCE(payment.original_currency, UPPER(payment.currency))
+                 = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+       ), 0)::bigint AS net_paid_cents
 FROM purser.billing_invoices invoice
 WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid
   AND invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -22,7 +26,13 @@ FOR UPDATE;
 SELECT payment.id::text AS id, payment.method, payment.amount::text AS amount,
        payment.currency, payment.tx_id, payment.payment_url,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COUNT(*) OVER ()::int AS active_count
+       COUNT(*) OVER ()::int AS active_count,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE payment.invoice_id = sqlc.arg(invoice_id)::text::uuid
@@ -33,17 +43,25 @@ LIMIT 1;
 
 -- name: CreatePendingInvoicePayment :exec
 INSERT INTO purser.billing_payments (
-    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(payment_id)::text::uuid,
     sqlc.arg(invoice_id)::text::uuid,
     sqlc.arg(method),
     sqlc.arg(amount)::text::numeric,
-    sqlc.arg(currency),
+    sqlc.arg(currency)::text,
     NULLIF(sqlc.arg(tx_id)::text, ''),
     'pending',
     sqlc.arg(created_at),
-    sqlc.arg(created_at)
+    sqlc.arg(created_at),
+    sqlc.arg(original_amount_cents)::bigint,
+    sqlc.arg(currency)::text,
+    sqlc.arg(eur_amount_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric,
+    sqlc.arg(fx_source)::text,
+    sqlc.arg(fx_reference_date)::date
 );
 
 -- name: GetCryptoScannerReadiness :one

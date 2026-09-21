@@ -1,0 +1,90 @@
+mutation CreateDeveloperToken($input: CreateDeveloperTokenInput!) {
+  createDeveloperToken(input: $input) {
+    __typename
+    ...DeveloperTokenFields
+    ...ValidationErrorFields
+    ...RateLimitErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation RevokeDeveloperToken($id: ID!) {
+  revokeDeveloperToken(id: $id) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+# privateKeyPem is returned once; FrameWorks keeps only the public key.
+mutation CreateSigningKey($input: CreateSigningKeyInput!) {
+  createSigningKey(input: $input) {
+    __typename
+    ... on CreateSigningKeySuccess {
+      signingKey {
+        ...SigningKeyFields
+      }
+      privateKeyPem
+    }
+    ...ValidationErrorFields
+    ...RateLimitErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation RevokeSigningKey($id: ID!) {
+  revokeSigningKey(id: $id) {
+    __typename
+    ...SigningKeyFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation SetPlaybackPolicy($input: SetPlaybackPolicyInput!) {
+  setPlaybackPolicy(input: $input) {
+    __typename
+    ... on Stream {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields
+      }
+    }
+    ... on VodAsset {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields
+      }
+    }
+    ... on Clip {
+      id
+      playbackPolicy {
+        ...PlaybackPolicyFields
+      }
+    }
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation TestPlaybackAccess($input: TestPlaybackAccessInput!) {
+  testPlaybackAccess(input: $input) {
+    __typename
+    ... on PlaybackAccessDecision {
+      allowed
+      policyType
+      reason
+      detail
+      kid
+      claimsJson
+      webhookStatus
+      webhookLatencyMs
+      resolvedInternalName
+    }
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}

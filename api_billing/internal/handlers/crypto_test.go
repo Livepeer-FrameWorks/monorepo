@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	"frameworks/api_billing/internal/fx"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
@@ -26,39 +28,48 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
 
+	// The quote locked USD 25.00 at EUR 20.00.
+	quote := fx.Record{
+		OriginalMinor: 2500, OriginalCurrency: "USD", EURMinor: 2000,
+		UnitsPerEUR: decimal.RequireFromString("1.25"), Source: fx.SourceECB,
+		ReferenceDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC),
+	}
 	wallet := PendingWallet{
-		ID:                     "wallet-1",
-		TenantID:               "tenant-1",
-		Purpose:                "prepaid",
-		ExpectedAmountCents:    int64Ptr(2500),
-		Asset:                  "USDC",
-		CreditedAmountCurrency: "USD",
+		ID:                      "wallet-1",
+		TenantID:                "tenant-1",
+		Purpose:                 "prepaid",
+		ExpectedAmountCents:     int64Ptr(2500),
+		Asset:                   "USDC",
+		ExpectedAmountBaseUnits: big.NewInt(25_000_000),
+		FX:                      &quote,
+		CreditedAmountCurrency:  "EUR",
 	}
 
-	currency := "USD"
+	currency := "EUR"
 
 	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
 		WithArgs("tenant-1", currency).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	mock.ExpectQuery("UPDATE purser.prepaid_balances").
-		WithArgs(int64(2500), "tenant-1", currency).
-		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(2500)))
+		WithArgs(int64(2000), "tenant-1", currency).
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(2000)))
 
 	mock.ExpectExec("INSERT INTO purser.balance_transactions").
-		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2500), int64(2500), "topup",
+		WithArgs(sqlmock.AnyArg(), "tenant-1", int64(2000), int64(2000), "topup",
 			"Crypto top-up via USDC (0xabc)", "wallet-1", "crypto_payment",
 			nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("UPDATE purser.crypto_wallets").
-		WithArgs(int64(2500), "USD", "wallet-1", "tenant-1").
+		WithArgs(int64(2000), "EUR", "wallet-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	mock.ExpectRollback()
 
 	cm := &CryptoMonitor{db: mockDB, logger: logrus.New()}
-	// USDC at 6 decimals: 25.00 USDC = 25_000_000 base units, credits 2500 cents.
+	// USDC at 6 decimals: 25.00 USDC = 25_000_000 base units, credits the
+	// quote's EUR 20.00.
 	txBaseUnits := new(big.Int).SetInt64(25_000_000)
 	creditedCents, creditedCurrency, err := cm.confirmPrepaidTopup(context.Background(), tx, wallet, CryptoTransaction{
 		Hash: "0xabc",
@@ -66,11 +77,11 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if creditedCents != 2500 {
-		t.Fatalf("creditedCents = %d, want 2500", creditedCents)
+	if creditedCents != 2000 {
+		t.Fatalf("creditedCents = %d, want 2000", creditedCents)
 	}
-	if creditedCurrency != "USD" {
-		t.Fatalf("creditedCurrency = %q, want USD", creditedCurrency)
+	if creditedCurrency != "EUR" {
+		t.Fatalf("creditedCurrency = %q, want EUR", creditedCurrency)
 	}
 
 	if err := tx.Rollback(); err != nil {
@@ -230,11 +241,17 @@ func TestCreditInvoiceOverpaymentUsesLockedQuoteAndAtomicLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rate := decimal.RequireFromString("0.90")
+	// The quote priced 10 USDC (USD 10.00) at EUR 9.00; a 1.5 USDC surplus
+	// credits the same EUR per base unit.
+	quote := fx.Record{
+		OriginalMinor: 1000, OriginalCurrency: "USD", EURMinor: 900,
+		UnitsPerEUR: decimal.RequireFromString("1.1111111111"), Source: fx.SourceECB,
+		ReferenceDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC),
+	}
 	wallet := PendingWallet{
 		ID: "wallet-overpay", TenantID: "tenant-overpay", Purpose: "invoice", Asset: "USDC",
 		ExpectedAmountBaseUnits: big.NewInt(10_000_000), QuotedPriceUSD: decimal.NewFromInt(1),
-		QuotedUSDToEURRate: &rate, InvoiceCurrency: stringPtr("EUR"),
+		FX: &quote, InvoiceCurrency: stringPtr("EUR"),
 	}
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
 		WithArgs("tenant-overpay", "EUR").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -271,13 +288,13 @@ func TestCreditInvoiceOverpaymentUsesLockedQuoteAndAtomicLedger(t *testing.T) {
 }
 
 func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
-	t.Setenv("TEST_EXPLORER_API_KEY", "key")
+	appconfigtest.Set(t, "ETHERSCAN_API_KEY", "key")
 	network := NetworkConfig{
 		ChainID:        8453,
 		Name:           "base",
 		DisplayName:    "Base",
 		ExplorerAPIURL: "",
-		ExplorerAPIEnv: "TEST_EXPLORER_API_KEY",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 	}
 	cm := &CryptoMonitor{logger: logrus.New()}
 
@@ -330,13 +347,13 @@ func TestGetETHTransactions_InlineDecodeAndMapping(t *testing.T) {
 }
 
 func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
-	t.Setenv("TEST_EXPLORER_API_KEY", "key")
+	appconfigtest.Set(t, "ETHERSCAN_API_KEY", "key")
 	network := NetworkConfig{
 		ChainID:        42161,
 		Name:           "arbitrum",
 		DisplayName:    "Arbitrum One",
 		ExplorerAPIURL: "",
-		ExplorerAPIEnv: "TEST_EXPLORER_API_KEY",
+		ExplorerAPIEnv: "ETHERSCAN_API_KEY",
 	}
 	cm := &CryptoMonitor{logger: logrus.New()}
 
@@ -385,16 +402,21 @@ func TestGetERC20TransactionsForNetwork_InlineDecodeAndMapping(t *testing.T) {
 	})
 }
 
-func TestCryptoTopupAmountEurCentsUsesLockedTaxPointValue(t *testing.T) {
-	if got, err := cryptoTopupAmountEurCents(PendingWallet{}, 1234, "EUR"); err != nil || got != 1234 {
-		t.Fatalf("EUR conversion = %d, %v", got, err)
+func TestQuotedEURCentsScalesTheLockedQuote(t *testing.T) {
+	quote := fx.Record{
+		OriginalMinor: 1087, OriginalCurrency: "USD", EURMinor: 1000,
+		UnitsPerEUR: decimal.RequireFromString("1.0870"), Source: fx.SourceECB,
+		ReferenceDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC),
 	}
-	rate := decimal.RequireFromString("0.92")
-	if got, err := cryptoTopupAmountEurCents(PendingWallet{QuotedUSDToEURRate: &rate}, 1000, "USD"); err != nil || got != 920 {
-		t.Fatalf("USD conversion = %d, %v", got, err)
+	wallet := PendingWallet{ID: "wallet", ExpectedAmountBaseUnits: big.NewInt(10_870_000), FX: &quote}
+	if got, err := quotedEURCents(wallet, big.NewInt(10_870_000)); err != nil || got != 1000 {
+		t.Fatalf("exact receipt credit = %d, %v; want the quoted EUR 1000", got, err)
 	}
-	if _, err := cryptoTopupAmountEurCents(PendingWallet{}, 1000, "USD"); err == nil {
-		t.Fatal("USD conversion without locked rate must fail")
+	if got, err := quotedEURCents(wallet, big.NewInt(21_740_000)); err != nil || got != 2000 {
+		t.Fatalf("double receipt credit = %d, %v; want 2000", got, err)
+	}
+	if _, err := quotedEURCents(PendingWallet{ID: "legacy", ExpectedAmountBaseUnits: big.NewInt(1)}, big.NewInt(1)); err == nil {
+		t.Fatal("a wallet without FX fields must not be credited")
 	}
 }
 

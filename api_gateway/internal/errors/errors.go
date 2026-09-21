@@ -2,7 +2,11 @@ package errors
 
 import (
 	"context"
+	"errors"
 	"strings"
+
+	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -16,14 +20,16 @@ import (
 const defaultPublicMessage = "request failed"
 
 var grpcCodeMessages = map[codes.Code]string{
-	codes.InvalidArgument:  "invalid request",
-	codes.NotFound:         "resource not found",
-	codes.PermissionDenied: "permission denied",
-	codes.Unauthenticated:  "authentication required",
-	codes.Unavailable:      "service temporarily unavailable",
-	codes.DeadlineExceeded: "request timed out",
-	codes.AlreadyExists:    "resource already exists",
-	codes.Internal:         "internal error",
+	codes.InvalidArgument:    "invalid request",
+	codes.NotFound:           "resource not found",
+	codes.PermissionDenied:   "permission denied",
+	codes.Unauthenticated:    "authentication required",
+	codes.Unavailable:        "service temporarily unavailable",
+	codes.DeadlineExceeded:   "request timed out",
+	codes.AlreadyExists:      "resource already exists",
+	codes.FailedPrecondition: "request not allowed in the current state",
+	codes.ResourceExhausted:  "rate limit exceeded",
+	codes.Internal:           "internal error",
 }
 
 func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
@@ -43,7 +49,55 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			return presented
 		}
 		presented.Message = SanitizeErrorMessage(err, presented.Message)
+		localCode := ""
+		switch {
+		case errors.Is(err, auth.ErrUnauthenticated):
+			localCode = PublicCode(codes.Unauthenticated)
+		case errors.Is(err, middleware.ErrForbidden):
+			localCode = PublicCode(codes.PermissionDenied)
+		}
+		if localCode != "" {
+			if presented.Extensions == nil {
+				presented.Extensions = map[string]any{}
+			}
+			if _, hasCode := presented.Extensions["code"]; !hasCode {
+				presented.Extensions["code"] = localCode
+			}
+		}
+		if st, ok := status.FromError(err); ok && err != nil {
+			if presented.Extensions == nil {
+				presented.Extensions = map[string]any{}
+			}
+			if _, hasCode := presented.Extensions["code"]; !hasCode {
+				presented.Extensions["code"] = PublicCode(st.Code())
+			}
+		}
 		return presented
+	}
+}
+
+// PublicCode is the extensions.code a gRPC status code is presented as. The
+// set is part of the public API contract documented in api-reference.mdx.
+func PublicCode(code codes.Code) string {
+	switch code {
+	case codes.Unauthenticated:
+		return "UNAUTHORIZED"
+	case codes.PermissionDenied:
+		return "FORBIDDEN"
+	case codes.NotFound:
+		return "NOT_FOUND"
+	case codes.InvalidArgument, codes.OutOfRange:
+		return "VALIDATION_ERROR"
+	case codes.AlreadyExists, codes.Aborted:
+		return "CONFLICT"
+	case codes.FailedPrecondition:
+		return "FAILED_PRECONDITION"
+	case codes.ResourceExhausted:
+		return "RATE_LIMITED"
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return "UNAVAILABLE"
+	default:
+		return "INTERNAL_ERROR"
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
+
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -20,7 +22,7 @@ func TestParseEdgeTelemetryPrivateKeyAcceptsProvisionedECKey(t *testing.T) {
 		t.Fatalf("MarshalECPrivateKey failed: %v", err)
 	}
 
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("EC PRIVATE KEY", der))
+	useFoghornConfig(t, &appconfig.Foghorn{EdgeTelemetryJWTPrivateKeyPEMB64: encodeTelemetryTestPEM("EC PRIVATE KEY", der)})
 
 	got, err := parseEdgeTelemetryPrivateKey()
 	if err != nil {
@@ -38,7 +40,7 @@ func TestParseEdgeTelemetryPrivateKeyAcceptsPKCS8Key(t *testing.T) {
 		t.Fatalf("MarshalPKCS8PrivateKey failed: %v", err)
 	}
 
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("PRIVATE KEY", der))
+	useFoghornConfig(t, &appconfig.Foghorn{EdgeTelemetryJWTPrivateKeyPEMB64: encodeTelemetryTestPEM("PRIVATE KEY", der)})
 
 	got, err := parseEdgeTelemetryPrivateKey()
 	if err != nil {
@@ -56,7 +58,7 @@ func TestParseEdgeTelemetryPrivateKeyAcceptsMislabeledECKey(t *testing.T) {
 		t.Fatalf("MarshalECPrivateKey failed: %v", err)
 	}
 
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("PRIVATE KEY", der))
+	useFoghornConfig(t, &appconfig.Foghorn{EdgeTelemetryJWTPrivateKeyPEMB64: encodeTelemetryTestPEM("PRIVATE KEY", der)})
 
 	got, err := parseEdgeTelemetryPrivateKey()
 	if err != nil {
@@ -68,14 +70,14 @@ func TestParseEdgeTelemetryPrivateKeyAcceptsMislabeledECKey(t *testing.T) {
 }
 
 func TestParseEdgeTelemetryPrivateKeyRequiresEnv(t *testing.T) {
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 	if _, err := parseEdgeTelemetryPrivateKey(); err == nil {
 		t.Fatal("expected missing telemetry private key env to fail")
 	}
 }
 
 func TestParseEdgeTelemetryPrivateKeyRejectsInvalidPEM(t *testing.T) {
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", base64.StdEncoding.EncodeToString([]byte("not pem")))
+	useFoghornConfig(t, &appconfig.Foghorn{EdgeTelemetryJWTPrivateKeyPEMB64: base64.StdEncoding.EncodeToString([]byte("not pem"))})
 	if _, err := parseEdgeTelemetryPrivateKey(); err == nil {
 		t.Fatal("expected invalid telemetry private key PEM to fail")
 	}
@@ -87,7 +89,7 @@ func TestMintEdgeTelemetryTokenUsesVMAuthLabelClaimShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalECPrivateKey failed: %v", err)
 	}
-	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("EC PRIVATE KEY", der))
+	useFoghornConfig(t, &appconfig.Foghorn{EdgeTelemetryJWTPrivateKeyPEMB64: encodeTelemetryTestPEM("EC PRIVATE KEY", der)})
 
 	tokenString, _, err := mintEdgeTelemetryToken("edge-1", "cluster-1", "tenant-1")
 	if err != nil {

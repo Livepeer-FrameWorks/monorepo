@@ -23,7 +23,7 @@ func TestFinalizeIngestSessionClose_EndsAndClaimsStop(t *testing.T) {
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions\s+SET ended_at = NOW.*'push_input_close'.*started_at_unix_millis <= \$1.*RETURNING id`).
 		WithArgs(int64(9000), "tenant-a", "node-1", int64(1234), "live+s1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id", "stream_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media", ""))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*'"stop_pending"'.*ingest_generation = \$1::uuid.*RETURNING`).
 		WithArgs("gen-1", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}).AddRow("dvr-h", "storage-1"))
@@ -87,7 +87,7 @@ func TestFinalizeIngestSessionClose_EndedNoDVR(t *testing.T) {
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions.*RETURNING id`).
 		WithArgs(int64(9000), "tenant-a", "node-1", int64(1234), "live+s1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id", "stream_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media", ""))
 	// No active bound DVR: the multi-row claim returns an empty set (not ErrNoRows).
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).
 		WithArgs("gen-1", "tenant-a").

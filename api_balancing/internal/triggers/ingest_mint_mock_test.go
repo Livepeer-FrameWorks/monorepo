@@ -18,6 +18,18 @@ import (
 // (no existing session) + insert + commit; args are matched loosely (any).
 func installIngestSessionMintMock(t *testing.T) {
 	t.Helper()
+	installIngestSessionMint(t, false)
+}
+
+// installIngestSessionMintMockWithStream is installIngestSessionMintMock for an admission whose
+// stream has a public UUID: the mint transaction also records stream.connected.
+func installIngestSessionMintMockWithStream(t *testing.T) {
+	t.Helper()
+	installIngestSessionMint(t, true)
+}
+
+func installIngestSessionMint(t *testing.T, streamConnected bool) {
+	t.Helper()
 	dbMock, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -40,6 +52,12 @@ func installIngestSessionMintMock(t *testing.T) {
 														WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
+	if streamConnected {
+		mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
+			WithArgs(sqlmock.AnyArg(), "stream.connected", "foghorn", "streams", sqlmock.AnyArg(), sqlmock.AnyArg(),
+				"tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	mock.ExpectCommit()
 
 	// After the mint, handlePushRewrite projects the source only if this session is STILL the active
@@ -94,7 +112,7 @@ func installIngestSessionMintThenAbortMock(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*ended_reason\s+=\s+'projection_failed'`).
-		WillReturnRows(sqlmock.NewRows([]string{"node_id", "start_trigger_uuid"}).AddRow("edge-node-1", "test-trigger-uuid"))
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "start_trigger_uuid", "stream_id"}).AddRow("edge-node-1", "test-trigger-uuid", ""))
 	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(1)))
 	mock.ExpectExec(`INSERT INTO foghorn\.ingest_offline_effects`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()

@@ -1,0 +1,99 @@
+query GetTenantUsage($timeRange: TimeRangeInput) {
+  tenantUsage(timeRange: $timeRange) {
+    billingPeriod
+    currency
+    totalCost
+    baseAmount
+    usageAmount
+    usage {
+      resourceType
+      amount
+    }
+    costs {
+      resourceType
+      cost
+    }
+    lineItems {
+      lineKey
+      meter
+      description
+      quantity
+      includedQuantity
+      billableQuantity
+      unitPrice
+      total
+      currency
+      clusterId
+      clusterName
+      pricingSource
+      pricingLabel
+      unit
+    }
+  }
+}
+
+query ListUsageRecords($page: ConnectionInput, $timeRange: TimeRangeInput) {
+  usageRecordsConnection(page: $page, timeRange: $timeRange) {
+    nodes {
+      id
+      clusterId
+      clusterName
+      usageType
+      unit
+      dimensions
+      usageValue
+      createdAt
+      periodStart
+      periodEnd
+      granularity
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
+query GetUsageAggregates(
+  $timeRange: TimeRangeInput!
+  $granularity: String
+  $usageTypes: [String!]
+) {
+  usageAggregates(timeRange: $timeRange, granularity: $granularity, usageTypes: $usageTypes) {
+    usageType
+    periodStart
+    periodEnd
+    usageValue
+    granularity
+  }
+}
+
+query ListDeveloperTokens($page: ConnectionInput) {
+  developerTokensConnection(page: $page) {
+    nodes {
+      ...DeveloperTokenFields
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
+query ListSigningKeys($status: String, $page: ConnectionInput) {
+  signingKeysConnection(status: $status, page: $page) {
+    nodes {
+      ...SigningKeyFields
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
+query GetSigningKey($id: ID!) {
+  signingKey(id: $id) {
+    ...SigningKeyFields
+  }
+}

@@ -20,7 +20,7 @@ func TestRoutingIdentitySharedByMediaFrontDoors(t *testing.T) {
 		{"IPv6 peer", "", "[2001:db8::5]:7000", "2001:db8::5"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("TRUSTED_PROXY_CIDRS", tc.trust)
+			useTrustedProxyCIDRs(t, tc.trust)
 			for _, path := range []string{"/play/example", "/resolve/example", "/ingest/example", "/source/example"} {
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())
 				c.Request = httptest.NewRequestWithContext(context.Background(), "GET", path, nil)
@@ -48,7 +48,7 @@ func TestPublicRoutingRejectsAssertedGeography(t *testing.T) {
 	prevReader := geoipReader
 	geoipReader = nil
 	t.Cleanup(func() { geoipReader = prevReader })
-	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	useTrustedProxyCIDRs(t, "127.0.0.1/32")
 	for _, peer := range []string{"192.0.2.5:7000", "127.0.0.1:7000"} {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/stream?lat=52&lon=5", nil)
@@ -72,7 +72,7 @@ func TestPublicRoutingLooksUpTrustedClientGeography(t *testing.T) {
 	geoipCache.Set("198.51.100.5", &geoip.GeoData{Latitude: 38.9, Longitude: -77}, time.Minute)
 	geoipCache.Set("127.0.0.1", &geoip.GeoData{Latitude: 52.4, Longitude: 4.9}, time.Minute)
 	t.Cleanup(func() { geoipReader, geoipCache = prevReader, prevCache })
-	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32")
+	useTrustedProxyCIDRs(t, "127.0.0.1/32")
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/stream?lat=52&lon=5", nil)
 	c.Request.RemoteAddr = "127.0.0.1:7000"
@@ -106,7 +106,7 @@ func TestRoutingTelemetryUsesTrustedIdentity(t *testing.T) {
 	t.Cleanup(func() {
 		routingEventQueue, routingEventsDisabled, geoipReader = prevQueue, prevDisabled, prevReader
 	})
-	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	useTrustedProxyCIDRs(t, "")
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/stream", nil)
 	c.Request.RemoteAddr = "192.0.2.5:7000"

@@ -141,7 +141,7 @@ Foghorn can determine geography from either:
 
 It is recommended to point it to a local MMDB file, which ensures all events are enriched with Geo data. Only events originating from the Load Balancer can be enriched via geo headers.
 
-To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
+To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file; Foghorn refuses to start when that file is missing or cannot be opened. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
 
 ### Storage
 

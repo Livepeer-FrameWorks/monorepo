@@ -18,6 +18,16 @@ import (
 	billingstripe "frameworks/api_billing/internal/stripe"
 )
 
+// expectCollectionProfile answers the tenant presentment-currency lookup.
+func expectCollectionProfile(mock sqlmock.Sqlmock, tenantID, presentmentCurrency string) {
+	mock.ExpectQuery(`-- name: GetTenantCollectionProfile`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"presentment_currency", "status", "billing_model", "payment_method", "stripe_customer_id",
+			"stripe_subscription_id", "mollie_subscription_id", "billing_period_start", "billing_period_end", "tier_id",
+		}).AddRow(presentmentCurrency, "active", "postpaid", nil, nil, nil, nil, nil, nil, "11111111-1111-1111-1111-111111111111"))
+}
+
 func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -39,11 +49,12 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	tierID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
 	mock.ExpectQuery(`SELECT tier_name, COALESCE\(currency, 'EUR'\)::text AS currency`).
 		WithArgs(false, tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
+	expectCollectionProfile(mock, "tenant-a", "EUR")
 	mock.ExpectQuery(`SELECT pending_reason, COALESCE\(pending_tier_id::text, ''\)::text AS pending_tier_id`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"pending_reason", "pending_tier_id"}).AddRow(nil, ""))
@@ -100,8 +111,9 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	tierID := "11111111-1111-1111-1111-111111111111"
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id,\s+COALESCE\(billing_address`).
 		WithArgs("tenant-a").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
+	expectCollectionProfile(mock, "tenant-a", "EUR")
 	mock.ExpectQuery(`SELECT EXISTS\(`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -119,8 +131,13 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id`).
 		WithArgs("sub_123", "intent-mollie-sub").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid\s+FOR UPDATE`).
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "mollie_subscription_id"}).AddRow("sub-row", ""))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET mollie_subscription_id = \$1`).
 		WillReturnError(errors.New("db down"))
+	mock.ExpectRollback()
 
 	_, err = server.CreateMollieSubscription(context.Background(), &purserpb.CreateMollieSubscriptionRequest{
 		TenantId:  "tenant-a",
@@ -150,6 +167,10 @@ func (f *fakeStripeBillingClient) CreateOrGetCustomer(context.Context, billingst
 
 func (f *fakeStripeBillingClient) CreateCheckoutSession(context.Context, billingstripe.CheckoutSessionParams) (*stripelib.CheckoutSession, error) {
 	return f.session, nil
+}
+
+func (f *fakeStripeBillingClient) CreateSetupCheckoutSession(context.Context, billingstripe.SetupCheckoutParams) (*stripelib.CheckoutSession, error) {
+	return nil, errors.New("unexpected setup checkout")
 }
 
 func (f *fakeStripeBillingClient) ExpireCheckoutSession(_ context.Context, sessionID string) error {

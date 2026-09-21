@@ -9,7 +9,6 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/introspection"
 	"frameworks/api_gateway/internal/resolvers"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -68,9 +67,9 @@ type APICatalog struct {
 	Hint     string           `json:"hint"`
 }
 
-// RegisterAPISchemaResources registers API schema resources.
-func RegisterAPISchemaResources(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, logger logging.Logger) {
-	graphqlURL := config.GetGatewayGraphQLURL()
+// RegisterAPISchemaResources registers API schema resources. graphqlURL is the
+// GraphQL endpoint the catalog introspects.
+func RegisterAPISchemaResources(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, logger logging.Logger, graphqlURL string) {
 	catalogIntrospectionClient = introspection.NewClient(graphqlURL, logger)
 
 	catalogTemplateLoader = introspection.NewTemplateLoader()

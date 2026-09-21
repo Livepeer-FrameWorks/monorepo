@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"frameworks/api_sidecar/internal/appconfig"
 )
 
 // ServiceController abstracts the supervisor that owns the MistServer and
@@ -53,7 +55,7 @@ func SetServiceControllerForTest(ctrl ServiceController) func() {
 }
 
 func detectServiceController() ServiceController {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("HELMSMAN_SUPERVISOR"))) {
+	switch strings.ToLower(strings.TrimSpace(appconfig.Runtime().Supervisor)) {
 	case "s6":
 		return s6Controller{}
 	case "systemd":

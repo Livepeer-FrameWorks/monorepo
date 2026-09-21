@@ -12,6 +12,14 @@ query GetPayments($page: ConnectionInput) {
         confirmedAt
         createdAt
         updatedAt
+        conversion {
+          originalAmountCents
+          originalCurrency
+          eurAmountCents
+          unitsPerEur
+          source
+          referenceDate
+        }
       }
     }
     pageInfo {

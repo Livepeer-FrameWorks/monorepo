@@ -9,8 +9,7 @@ import (
 
 func TestChandlerBase(t *testing.T) {
 	t.Run("override_takes_precedence", func(t *testing.T) {
-		t.Setenv("CHANDLER_BASE_URL", "http://localhost:18090/")
-		r := NewResolver(nil, logging.NewLogger())
+		r := NewResolver(nil, logging.NewLogger(), "http://localhost:18090/")
 		// Even an unknown cluster resolves to the override in single-node mode.
 		if got := r.ChandlerBase("anything"); got != "http://localhost:18090" {
 			t.Fatalf("ChandlerBase = %q, want trimmed override", got)
@@ -22,8 +21,7 @@ func TestChandlerBase(t *testing.T) {
 	})
 
 	t.Run("snapshot_lookup_with_trim", func(t *testing.T) {
-		t.Setenv("CHANDLER_BASE_URL", "")
-		r := NewResolver(nil, logging.NewLogger())
+		r := NewResolver(nil, logging.NewLogger(), "")
 		snap := map[string]string{"media-1": "https://chandler.media-1.example"}
 		r.snapshot.Store(&snap)
 
@@ -40,17 +38,15 @@ func TestChandlerBase(t *testing.T) {
 }
 
 func TestNewResolverInitialState(t *testing.T) {
-	t.Run("trims_env_override", func(t *testing.T) {
-		t.Setenv("CHANDLER_BASE_URL", "  http://host:1/  ")
-		r := NewResolver(nil, logging.NewLogger())
+	t.Run("trims_override", func(t *testing.T) {
+		r := NewResolver(nil, logging.NewLogger(), "  http://host:1/  ")
 		if r.publicChandlerBase != "http://host:1" {
 			t.Errorf("publicChandlerBase = %q, want trimmed", r.publicChandlerBase)
 		}
 	})
 
-	t.Run("unset_env_leaves_empty_snapshot", func(t *testing.T) {
-		t.Setenv("CHANDLER_BASE_URL", "")
-		r := NewResolver(nil, logging.NewLogger())
+	t.Run("empty_override_leaves_empty_snapshot", func(t *testing.T) {
+		r := NewResolver(nil, logging.NewLogger(), "")
 		if r.publicChandlerBase != "" {
 			t.Errorf("publicChandlerBase = %q, want empty", r.publicChandlerBase)
 		}
@@ -79,8 +75,7 @@ func TestChandlerBaseForEarlyReturns(t *testing.T) {
 }
 
 func TestBuildThumbnailAssetsGuards(t *testing.T) {
-	t.Setenv("CHANDLER_BASE_URL", "")
-	r := NewResolver(nil, logging.NewLogger())
+	r := NewResolver(nil, logging.NewLogger(), "")
 
 	if got := r.BuildThumbnailAssets("media-1", ""); got != nil {
 		t.Errorf("empty asset key = %v, want nil", got)
@@ -108,8 +103,7 @@ func TestBuildThumbnailAssetsGuards(t *testing.T) {
 // Start must be safe and idempotent with a nil Quartermaster client: refresh
 // short-circuits, the snapshot stays empty, and a second Start is a no-op.
 func TestStartNilQMIsSafeAndIdempotent(t *testing.T) {
-	t.Setenv("CHANDLER_BASE_URL", "")
-	r := NewResolver(nil, logging.NewLogger())
+	r := NewResolver(nil, logging.NewLogger(), "")
 	ctx := t.Context() // cancelled automatically at test cleanup, stopping the goroutine
 
 	r.Start(ctx, 0) // interval 0 → defaults internally; nil qm → empty snapshot

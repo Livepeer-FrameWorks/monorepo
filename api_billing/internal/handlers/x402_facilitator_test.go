@@ -1,11 +1,16 @@
 package handlers
 
-import "testing"
+import (
+	"testing"
+
+	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
+)
 
 func TestEmbeddedFacilitatorIsProductionDefault(t *testing.T) {
-	t.Setenv("BUILD_ENV", "production")
-	t.Setenv("X402_FACILITATOR_PROVIDER", "")
-	provider, client, err := newX402FacilitatorFromEnv()
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	appconfigtest.Set(t, "X402_FACILITATOR_PROVIDER", "")
+	provider, client, err := newX402FacilitatorFromConfig(appconfig.Runtime())
 	if err != nil {
 		t.Fatalf("production embedded facilitator rejected: %v", err)
 	}
@@ -15,9 +20,9 @@ func TestEmbeddedFacilitatorIsProductionDefault(t *testing.T) {
 }
 
 func TestEmbeddedFacilitatorCanBeSelectedExplicitlyInProduction(t *testing.T) {
-	t.Setenv("BUILD_ENV", "production")
-	t.Setenv("X402_FACILITATOR_PROVIDER", "self")
-	provider, client, err := newX402FacilitatorFromEnv()
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	appconfigtest.Set(t, "X402_FACILITATOR_PROVIDER", "self")
+	provider, client, err := newX402FacilitatorFromConfig(appconfig.Runtime())
 	if err != nil {
 		t.Fatalf("explicit production embedded facilitator rejected: %v", err)
 	}

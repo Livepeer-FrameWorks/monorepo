@@ -92,6 +92,13 @@ SELECT mollie_customer_id
 FROM purser.mollie_customers
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
+-- name: LockProviderIntentPaymentID :one
+-- Locks the intent row and returns the provider payment it already names.
+SELECT COALESCE(provider_payment_id, '')::text AS provider_payment_id
+FROM purser.payment_provider_intents
+WHERE id = sqlc.arg(intent_id)::text::uuid
+FOR UPDATE;
+
 -- name: SetProviderIntentPaymentOpen :exec
 UPDATE purser.payment_provider_intents
 SET provider_payment_id = sqlc.arg(payment_id), status = 'provider_open', updated_at = NOW()
@@ -121,6 +128,14 @@ RETURNING id::text AS id;
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = sqlc.arg(subscription_id), status = 'provider_open', updated_at = NOW()
 WHERE id = sqlc.arg(intent_id)::text::uuid;
+
+-- name: LockTenantSubscriptionMollieID :one
+-- Locks the tenant's subscription row and returns the Mollie subscription it
+-- already names.
+SELECT id::text AS id, COALESCE(mollie_subscription_id, '')::text AS mollie_subscription_id
+FROM purser.tenant_subscriptions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR UPDATE;
 
 -- name: ActivateMollieTenantSubscription :execrows
 UPDATE purser.tenant_subscriptions

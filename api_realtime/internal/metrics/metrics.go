@@ -15,6 +15,20 @@ type Metrics struct {
 	KafkaDuration        *prometheus.HistogramVec
 	KafkaLag             *prometheus.GaugeVec
 	KafkaDuplicateEvents *prometheus.CounterVec
+
+	// DomainEventsDropped counts domain.events records not delivered to
+	// tenants. Labels: reason (not_public, unknown_type, registry_internal,
+	// no_tenant).
+	DomainEventsDropped *prometheus.CounterVec
+}
+
+// RecordDomainEventDropped counts a domain event withheld from tenant
+// subscribers. Labels: reason.
+func (m *Metrics) RecordDomainEventDropped(reason string) {
+	if m == nil || m.DomainEventsDropped == nil {
+		return
+	}
+	m.DomainEventsDropped.WithLabelValues(reason).Inc()
 }
 
 // RecordDuplicateEvent counts a Kafka event dropped because its event ID was

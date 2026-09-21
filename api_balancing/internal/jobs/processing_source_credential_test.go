@@ -5,11 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 )
 
 func TestAttachProcessingSourceCredential_BindsToTheServingNode(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "unit-secret")
+	t.Cleanup(appconfig.Install(func() *appconfig.Foghorn {
+		return &appconfig.Foghorn{BalancerCapabilitySecret: "unit-secret"}
+	}))
 	now := time.Unix(1_800_000_000, 0)
 
 	local := map[string]string{"source_kind": "live", "source_stream_name": "live+stream-1"}

@@ -21,7 +21,7 @@ func TestBillingEventOutboxLifecycle_RealPG(t *testing.T) {
 
 	id, err := server.EnqueueBillingEventTx(ctx, db,
 		"payment_succeeded", tenantID, "user-1", "payment", "payment-1",
-		&ipcpb.BillingEvent{},
+		&ipcpb.BillingEvent{}, nil,
 	)
 	if err != nil {
 		t.Fatalf("enqueue billing event: %v", err)

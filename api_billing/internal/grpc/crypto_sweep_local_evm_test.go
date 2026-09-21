@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -72,7 +73,7 @@ func sweepAnvilCall(t *testing.T, rpc *handlers.RPCClient, network handlers.Netw
 
 func TestNativeSweepAgainstLocalEVMNonceAndFinality(t *testing.T) { //nolint:funlen // One chain proves the full signed native-asset broadcast boundary.
 	network := handlers.Networks["base"]
-	t.Setenv(network.RPCEndpointEnv, startSweepAnvil(t, network.ChainID))
+	appconfigtest.Set(t, network.RPCEndpointEnv, startSweepAnvil(t, network.ChainID))
 	rpc := handlers.NewRPCClient()
 	key, err := ethcrypto.HexToECDSA(sweepLocalEVMPrivateKey)
 	if err != nil {

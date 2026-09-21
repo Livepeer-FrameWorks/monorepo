@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -105,7 +106,7 @@ func InitManager(logger logging.Logger) {
 		return
 	}
 	manager = &Manager{
-		mistClient: mist.NewClient(logger),
+		mistClient: mist.NewClient(logger, appconfig.MistClient()),
 		logger:     logger,
 	}
 	if seed, err := loadPersistedConfigSeed(); err != nil {
@@ -182,7 +183,7 @@ func (m *Manager) applySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 const persistedConfigSeedFilename = "config-seed.pb"
 
 func persistedConfigSeedPath() string {
-	root := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR"))
+	root := strings.TrimSpace(appconfig.StateDir())
 	if root == "" {
 		return ""
 	}
@@ -229,7 +230,7 @@ func loadPersistedConfigSeed() (*ipcpb.ConfigSeed, error) {
 	if seed.GetNodeId() == "" || seed.GetSeedVersion() == 0 {
 		return nil, errors.New("persisted ConfigSeed is missing node identity or version")
 	}
-	if expected := strings.TrimSpace(os.Getenv("NODE_ID")); expected != "" && seed.GetNodeId() != expected {
+	if expected := strings.TrimSpace(appconfig.NodeID()); expected != "" && seed.GetNodeId() != expected {
 		return nil, fmt.Errorf("persisted ConfigSeed belongs to node %q, expected %q", seed.GetNodeId(), expected)
 	}
 	return seed, nil
@@ -272,7 +273,7 @@ func (m *Manager) applyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate
 	m.lastSeed = seed
 	m.mu.Unlock()
 
-	streams := streamConfigsFromSeed(seed, seed.GetFoghornBalancerBase(), os.Getenv("NODE_ID"))
+	streams := streamConfigsFromSeed(seed, seed.GetFoghornBalancerBase(), appconfig.NodeID())
 	if len(streams) == 0 {
 		return
 	}
@@ -465,11 +466,7 @@ func (m *Manager) reconcile() {
 }
 
 func webhookBaseURL() string {
-	webhookBase := os.Getenv("HELMSMAN_WEBHOOK_URL")
-	if webhookBase == "" {
-		webhookBase = "http://localhost:18007"
-	}
-	return webhookBase
+	return appconfig.Runtime().MistWebhookBaseURL
 }
 
 // desiredTriggers builds the complete Mist trigger config managed by Helmsman.
@@ -663,32 +660,22 @@ func (m *Manager) cancelRetryLocked() {
 }
 
 func grpcCABundlePath() string {
-	if path := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH")); path != "" {
+	if path := strings.TrimSpace(appconfig.Runtime().GRPCTLSCAPath); path != "" {
 		return path
 	}
 	return "/etc/frameworks/pki/ca.crt"
 }
 
 func edgeTLSPaths() (string, string) {
-	certPath := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_CERT_PATH"))
-	if certPath == "" {
-		certPath = "/etc/frameworks/certs/cert.pem"
-	}
-	keyPath := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_KEY_PATH"))
-	if keyPath == "" {
-		keyPath = "/etc/frameworks/certs/key.pem"
-	}
-	return certPath, keyPath
+	rt := appconfig.Runtime()
+	return rt.EdgeTLSCertPath, rt.EdgeTLSKeyPath
 }
 
 // edgeBundleDir returns the directory where per-bundle cert/key files
 // are written. Each bundle gets two files in this directory keyed by a
 // sanitized bundle_id.
 func edgeBundleDir() string {
-	if dir := strings.TrimSpace(os.Getenv("HELMSMAN_TLS_BUNDLE_DIR")); dir != "" {
-		return dir
-	}
-	return "/etc/frameworks/certs/bundles"
+	return appconfig.Runtime().EdgeTLSBundleDir
 }
 
 // sanitizeBundleID maps an arbitrary bundle identity (e.g. "tenant:acme",
@@ -1256,7 +1243,7 @@ func repairManagedFileMetadata(path string, mode os.FileMode) error {
 }
 
 func caddyReadableGroupID(parentDir string) (int, bool) {
-	if groupName := strings.TrimSpace(os.Getenv("CADDY_TLS_GROUP")); groupName != "" {
+	if groupName := strings.TrimSpace(appconfig.Runtime().CaddyTLSGroup); groupName != "" {
 		if gid, err := strconv.Atoi(groupName); err == nil {
 			return gid, true
 		}
@@ -1321,9 +1308,9 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 	params := CaddyfileParams{
 		Bundles:          bundles,
 		CaddyAdminAddr:   caddyfileAdminAddr(),
-		HelmsmanUpstream: envDefault("HELMSMAN_WEBHOOK_URL", "http://localhost:18007"),
-		ChandlerUpstream: envDefault("CHANDLER_URL", "chandler:18020"),
-		MistUpstream:     envDefault("MISTSERVER_HTTP_URL", "http://mistserver:8080"),
+		HelmsmanUpstream: appconfig.Runtime().MistWebhookBaseURL,
+		ChandlerUpstream: appconfig.Runtime().ChandlerUpstream,
+		MistUpstream:     appconfig.Runtime().MistHTTPUpstream,
 	}
 	if site := seed.GetSite(); site != nil {
 		params.AcmeEmail = site.GetAcmeEmail()
@@ -1505,10 +1492,11 @@ func verifyCaddyTLSFile(path string, wantMode os.FileMode, requireGroupRead bool
 }
 
 func caddyAdminAddr() string {
-	if sock := os.Getenv("CADDY_ADMIN_SOCKET"); sock != "" {
+	rt := appconfig.Runtime()
+	if sock := rt.CaddyAdminSocket; sock != "" {
 		return "unix/" + sock
 	}
-	if url := os.Getenv("CADDY_ADMIN_URL"); url != "" {
+	if url := rt.CaddyAdminURL; url != "" {
 		return url
 	}
 	return "localhost:2019"
@@ -1532,15 +1520,8 @@ func caddyfileAdminAddr() string {
 	return raw
 }
 
-func envDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func caddyConfigPath() string {
-	return envDefault("CADDY_CONFIG_PATH", "/etc/caddy/Caddyfile")
+	return appconfig.Runtime().CaddyConfigPath
 }
 
 // reloadCaddy triggers a Caddy config reload via the admin API.
@@ -1550,8 +1531,9 @@ func caddyConfigPath() string {
 // Native: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
 // reloadCaddy returns true on success.
 func (m *Manager) reloadCaddy(content []byte) bool {
-	socketPath := os.Getenv("CADDY_ADMIN_SOCKET")
-	adminURL := os.Getenv("CADDY_ADMIN_URL")
+	rt := appconfig.Runtime()
+	socketPath := rt.CaddyAdminSocket
+	adminURL := rt.CaddyAdminURL
 
 	var client *http.Client
 	var baseURL string
@@ -1647,7 +1629,7 @@ func isCaddyLoadWarningBody(bodyText string) bool {
 
 func (m *Manager) ensureProtocols(current map[string]any) error {
 	// Get EDGE_PUBLIC_URL (full URL like http://localhost:18090/view)
-	edgeURL := os.Getenv("EDGE_PUBLIC_URL")
+	edgeURL := appconfig.EdgePublicURL()
 
 	// pubaddr is used for HTTP URLs (full public URL, typically including /view/).
 	// pubhost is used by MistServer WebRTC for ICE candidates (hostname only; no scheme/path).
@@ -1899,7 +1881,7 @@ func (m *Manager) ensureStreams(current map[string]any, seed *ipcpb.ConfigSeed) 
 			return fmt.Errorf("delete stale wildcard streams: %w", err)
 		}
 	}
-	streams := streamConfigsFromSeed(seed, base, os.Getenv("NODE_ID"))
+	streams := streamConfigsFromSeed(seed, base, appconfig.NodeID())
 	if len(streams) == 0 {
 		return nil
 	}
@@ -1914,7 +1896,7 @@ func (m *Manager) repairMissingManagedStreams(seed *ipcpb.ConfigSeed) error {
 	if base == "" {
 		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot verify MistServer streams")
 	}
-	expected := streamConfigsFromSeed(seed, base, os.Getenv("NODE_ID"))
+	expected := streamConfigsFromSeed(seed, base, appconfig.NodeID())
 	if len(expected) == 0 {
 		return nil
 	}

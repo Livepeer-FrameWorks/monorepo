@@ -1,6 +1,8 @@
 // Package artifactoutbox delivers Foghorn artifact, federation, and storage
 // facts to Decklog through a durable outbox. Producers call the Enqueue
-// helpers; a drain worker dispatches with exponential backoff.
+// helpers; a drain worker dispatches with exponential backoff. The Transition
+// helpers also write the transition's domain event in the same transaction
+// (see internal/domainevents).
 package artifactoutbox
 
 import (
@@ -11,12 +13,18 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/domainevents"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -33,6 +41,7 @@ const (
 	kindFederationEvent  = "federation_event"
 	kindArtifactNodeCopy = "artifact_node_copy"
 	kindStorageSnapshot  = "storage_snapshot"
+	kindArtifactDeleted  = "artifact_deleted"
 )
 
 func config() outbox.Config {
@@ -59,7 +68,7 @@ var (
 // Safe to call with a nil decklogClient — the worker logs "disabled" and Enqueue
 // calls still write outbox rows, so capture continues and delivery waits for a
 // client. The package-level db is only used by non-transactional enqueue helpers
-// and the drain worker; the state-coupled node-copy path always supplies its own tx.
+// and the drain worker; every Tx helper writes through the caller's transaction.
 func Init(database *sql.DB, log logging.Logger, dc *decklogclient.BatchedClient) {
 	db = database
 	logger = log
@@ -91,10 +100,6 @@ func RunWorker(ctx context.Context) {
 	worker.Run(ctx)
 }
 
-// EnqueueClipLifecycle writes a clip-lifecycle event to the outbox. The
-// drain worker dispatches to Decklog with exponential backoff. Use
-// EnqueueClipLifecycleTx when the caller already holds a transaction —
-// the INSERT then rolls back with the caller's tx on failure.
 // ErrLifecycleMissingTenant is returned when an artifact-lifecycle event is enqueued without a tenant.
 // A lifecycle event MUST be attributable — accepting an empty tenant (coerced to NULL in the outbox
 // row) is fail-open, so the enqueue is rejected. On a Tx variant this rolls back the caller's state
@@ -107,28 +112,29 @@ var ErrLifecycleMissingTenant = errors.New("artifactoutbox: lifecycle event requ
 // analytics event, so it is rejected — on a Tx variant this rolls the state transition back.
 var ErrNilLifecyclePayload = errors.New("artifactoutbox: nil lifecycle payload")
 
-func EnqueueClipLifecycle(data *ipcpb.ClipLifecycleData) error {
-	if data == nil {
-		return ErrNilLifecyclePayload
-	}
-	if data.GetTenantId() == "" {
-		return fmt.Errorf("clip %s: %w", data.GetClipHash(), ErrLifecycleMissingTenant)
-	}
-	return enqueue(context.Background(), nil, kindClipLifecycle, data.GetTenantId(),
-		data.GetStreamId(), data.GetClipHash(), data)
-}
-
+// EnqueueClipLifecycleTx writes a clip lifecycle row in tx for a transition that
+// is not a domain fact (queued, progress, deletion).
 func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.ClipLifecycleData) error {
+	return EnqueueClipTransitionTx(ctx, tx, data, nil)
+}
+
+// EnqueueClipTransitionTx writes the clip lifecycle row and, when fact is set,
+// the domain event of the transition, both in tx and under one event ID.
+// opts apply to the domain event (the actor of a requested transition).
+func EnqueueClipTransitionTx(ctx context.Context, tx execContext, data *ipcpb.ClipLifecycleData, fact proto.Message, opts ...events.Option) error {
 	if data == nil {
 		return ErrNilLifecyclePayload
 	}
 	if data.GetTenantId() == "" {
 		return fmt.Errorf("clip %s: %w", data.GetClipHash(), ErrLifecycleMissingTenant)
 	}
-	return enqueue(ctx, tx, kindClipLifecycle, data.GetTenantId(),
-		data.GetStreamId(), data.GetClipHash(), data)
+	return enqueueTransition(ctx, tx, kindClipLifecycle, data.GetTenantId(),
+		data.GetStreamId(), data.GetClipHash(), data, fact, opts...)
 }
 
+// EnqueueDVRLifecycle writes a DVR lifecycle row in its own statement. It serves
+// a DVR start rejected before any artifact row exists: there is no state change
+// to commit with, so the row is analytics only and carries no domain event.
 func EnqueueDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 	if data == nil {
 		return ErrNilLifecyclePayload
@@ -140,39 +146,44 @@ func EnqueueDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 		data.GetStreamId(), data.GetDvrHash(), data)
 }
 
+// EnqueueDVRLifecycleTx writes a DVR lifecycle row in tx for a transition that
+// is not a domain fact (started, recording, deletion).
 func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.DVRLifecycleData) error {
+	return EnqueueDVRTransitionTx(ctx, tx, data, nil)
+}
+
+// EnqueueDVRTransitionTx writes the DVR lifecycle row and, when fact is set,
+// the domain event of the transition, both in tx and under one event ID.
+func EnqueueDVRTransitionTx(ctx context.Context, tx execContext, data *ipcpb.DVRLifecycleData, fact proto.Message) error {
 	if data == nil {
 		return ErrNilLifecyclePayload
 	}
 	if data.GetTenantId() == "" {
 		return fmt.Errorf("dvr %s: %w", data.GetDvrHash(), ErrLifecycleMissingTenant)
 	}
-	return enqueue(ctx, tx, kindDVRLifecycle, data.GetTenantId(),
-		data.GetStreamId(), data.GetDvrHash(), data)
+	return enqueueTransition(ctx, tx, kindDVRLifecycle, data.GetTenantId(),
+		data.GetStreamId(), data.GetDvrHash(), data, fact)
 }
 
-// EnqueueVodLifecycle leaves stream_id blank — VOD uploads aren't always
-// associated with a live stream.
-func EnqueueVodLifecycle(data *ipcpb.VodLifecycleData) error {
-	if data == nil {
-		return ErrNilLifecyclePayload
-	}
-	if data.GetTenantId() == "" {
-		return fmt.Errorf("vod %s: %w", data.GetVodHash(), ErrLifecycleMissingTenant)
-	}
-	return enqueue(context.Background(), nil, kindVodLifecycle, data.GetTenantId(),
-		"", data.GetVodHash(), data)
-}
-
+// EnqueueVodLifecycleTx writes a VOD lifecycle row in tx for a transition that
+// is not a domain fact. VOD rows leave stream_id blank: uploads have no source
+// stream.
 func EnqueueVodLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.VodLifecycleData) error {
+	return EnqueueVodTransitionTx(ctx, tx, data, nil)
+}
+
+// EnqueueVodTransitionTx writes the VOD lifecycle row and, when fact is set,
+// the domain event of the transition, both in tx and under one event ID.
+// opts apply to the domain event (the actor of a requested transition).
+func EnqueueVodTransitionTx(ctx context.Context, tx execContext, data *ipcpb.VodLifecycleData, fact proto.Message, opts ...events.Option) error {
 	if data == nil {
 		return ErrNilLifecyclePayload
 	}
 	if data.GetTenantId() == "" {
 		return fmt.Errorf("vod %s: %w", data.GetVodHash(), ErrLifecycleMissingTenant)
 	}
-	return enqueue(ctx, tx, kindVodLifecycle, data.GetTenantId(),
-		"", data.GetVodHash(), data)
+	return enqueueTransition(ctx, tx, kindVodLifecycle, data.GetTenantId(),
+		"", data.GetVodHash(), data, fact, opts...)
 }
 
 func EnqueueFederationEvent(data *ipcpb.FederationEventData) error {
@@ -191,15 +202,64 @@ func EnqueueFederationEventTx(ctx context.Context, tx execContext, data *ipcpb.F
 		data.GetStreamId(), "", data)
 }
 
-// EnqueueArtifactNodeCopyTx writes a per-(artifact, node) local-copy transition to
-// the outbox within the caller's transaction, so the durable state change and its
-// telemetry commit atomically. tenantID rides the ServiceEvent envelope; the outbox
-// row id becomes the event_id (stable dedupe key) at dispatch.
+// EnqueueArtifactNodeCopyTx writes a per-(artifact, node) local-copy transition
+// within the caller's transaction, as the legacy artifact_node_copy service event
+// and the internal artifact.node_copy_changed domain event under one event ID.
+// tenantID rides both envelopes.
 func EnqueueArtifactNodeCopyTx(ctx context.Context, tx execContext, tenantID string, data *ipcpb.ArtifactNodeCopyEvent) error {
 	if data == nil {
 		return nil
 	}
-	return enqueue(ctx, tx, kindArtifactNodeCopy, tenantID, "", data.GetArtifactHash(), data)
+	fact := &internalv1.ArtifactNodeCopyChanged{
+		ArtifactHash: data.GetArtifactHash(),
+		NodeId:       data.GetNodeId(),
+		Role:         data.GetRole(),
+		Transition:   nodeCopyTransition(data.GetTransition()),
+		IsComplete:   data.GetIsComplete(),
+		SizeBytes:    data.GetSizeBytes(),
+	}
+	return enqueueTransition(ctx, tx, kindArtifactNodeCopy, tenantID, "", data.GetArtifactHash(), data, fact)
+}
+
+// EnqueueArtifactDeletedTx writes the artifact_deleted service event of a
+// requested clip, recording, or upload deletion in the transaction that marks the
+// artifact deleted. The event registry defines no domain type for a deletion, so
+// it stays on service_events; the outbox row ID is its event ID.
+func EnqueueArtifactDeletedTx(ctx context.Context, tx execContext, tenantID, userID string, artifactType ipcpb.ArtifactEvent_ArtifactType, artifactID, streamID string) error {
+	if tx == nil {
+		return errors.New("artifactoutbox: artifact_deleted needs the deletion transaction")
+	}
+	if tenantID == "" {
+		return fmt.Errorf("artifact %s deletion: %w", artifactID, ErrLifecycleMissingTenant)
+	}
+	ev := &ipcpb.ServiceEvent{
+		EventType:    kindArtifactDeleted,
+		Source:       domainevents.Source,
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "artifact",
+		ResourceId:   artifactID,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: &ipcpb.ArtifactEvent{
+			ArtifactType: artifactType,
+			ArtifactId:   artifactID,
+			StreamId:     streamID,
+			Status:       "deleted",
+		}},
+	}
+	return enqueue(ctx, tx, kindArtifactDeleted, tenantID, streamID, artifactID, ev)
+}
+
+func nodeCopyTransition(t ipcpb.ArtifactNodeCopyEvent_Transition) internalv1.NodeCopyTransition {
+	switch t {
+	case ipcpb.ArtifactNodeCopyEvent_GAINED:
+		return internalv1.NodeCopyTransition_NODE_COPY_TRANSITION_GAINED
+	case ipcpb.ArtifactNodeCopyEvent_LOST:
+		return internalv1.NodeCopyTransition_NODE_COPY_TRANSITION_LOST
+	case ipcpb.ArtifactNodeCopyEvent_UPDATED:
+		return internalv1.NodeCopyTransition_NODE_COPY_TRANSITION_UPDATED
+	default:
+		return internalv1.NodeCopyTransition_NODE_COPY_TRANSITION_UNSPECIFIED
+	}
 }
 
 // EnqueueStorageSnapshot durably records an authoritative periodic storage
@@ -215,32 +275,94 @@ func EnqueueStorageSnapshot(data *ipcpb.StorageSnapshot) error {
 	return enqueue(context.Background(), nil, kindStorageSnapshot, data.GetTenantId(), "", data.GetNodeId(), data)
 }
 
-// EnqueueClipLifecycleLogged enqueues to the durable outbox but LOGS an enqueue failure instead of
-// returning it — for callers that cannot propagate the error (no enclosing transaction to fail).
-// Delivery is still durable once the row is written; only the enqueue-write failure (Init never wired,
-// DB outage) is degraded to a log line so the outbox-bypass case stays observable.
-func EnqueueClipLifecycleLogged(data *ipcpb.ClipLifecycleData) {
-	if err := EnqueueClipLifecycle(data); err != nil && logger != nil {
-		logger.WithError(err).Warn("artifactoutbox: enqueue clip lifecycle")
-	}
-}
-
-func EnqueueDVRLifecycleLogged(data *ipcpb.DVRLifecycleData) {
-	if err := EnqueueDVRLifecycle(data); err != nil && logger != nil {
-		logger.WithError(err).Warn("artifactoutbox: enqueue dvr lifecycle")
-	}
-}
-
-func EnqueueVodLifecycleLogged(data *ipcpb.VodLifecycleData) {
-	if err := EnqueueVodLifecycle(data); err != nil && logger != nil {
-		logger.WithError(err).Warn("artifactoutbox: enqueue vod lifecycle")
-	}
-}
-
 // execContext is the subset of *sql.Tx / *sql.DB enqueue needs so callers
 // can share their transaction with the outbox INSERT.
 type execContext interface {
 	foghorndb.DBTX
+}
+
+// ErrDomainEventNeedsTx is returned when a transition with a domain event is
+// enqueued without the transaction of its state change.
+var ErrDomainEventNeedsTx = errors.New("artifactoutbox: a domain event needs the state-change transaction")
+
+// enqueueTransition writes the legacy row and, when fact is set, the domain
+// event into foghorn.domain_event_outbox. The legacy row then takes the event's
+// ID, so consumers of either stream see one identity for the fact. The domain
+// event is keyed by the artifact the fact names and, except for a node-copy
+// change, carries that artifact's revision as its aggregate version.
+func enqueueTransition(ctx context.Context, tx execContext, kind, tenantID, streamID, artifactID string, payload any, fact proto.Message, factOpts ...events.Option) error {
+	if fact == nil {
+		return enqueue(ctx, tx, kind, tenantID, streamID, artifactID, payload)
+	}
+	if tx == nil {
+		return ErrDomainEventNeedsTx
+	}
+	aggregateID, err := factArtifact(fact)
+	if err != nil {
+		return err
+	}
+	opts := append([]events.Option(nil), factOpts...)
+	if lifecycleFact(fact) {
+		revision, revErr := foghorndb.New(tx).BumpArtifactRevision(ctx, foghorndb.BumpArtifactRevisionParams{
+			ArtifactHash: aggregateID, TenantID: tenantID,
+		})
+		if errors.Is(revErr, sql.ErrNoRows) {
+			return fmt.Errorf("artifactoutbox: %T: %w", fact, ErrArtifactNotVersioned)
+		}
+		if revErr != nil {
+			return fmt.Errorf("advance artifact revision: %w", revErr)
+		}
+		opts = append(opts, events.WithAggregateVersion(revision))
+	}
+	ev, err := domainevents.Enqueue(ctx, tx, tenantID, aggregateID, fact, opts...)
+	if err != nil {
+		return err
+	}
+	body, err := marshalPayload(payload)
+	if err != nil {
+		return err
+	}
+	if err := foghorndb.New(tx).EnqueueArtifactEventWithID(ctx, foghorndb.EnqueueArtifactEventWithIDParams{
+		ID:         ev.ID,
+		EventKind:  kind,
+		TenantID:   tenantID,
+		StreamID:   streamID,
+		ArtifactID: artifactID,
+		Payload:    body,
+	}); err != nil {
+		return fmt.Errorf("insert artifact event outbox row: %w", err)
+	}
+	return nil
+}
+
+// ErrArtifactNotVersioned is returned when a lifecycle event names an artifact
+// the tenant has no row for, so it has no revision to carry.
+var ErrArtifactNotVersioned = errors.New("artifactoutbox: lifecycle event names no artifact row of its tenant")
+
+// lifecycleFact reports whether fact advances its artifact's revision. A
+// node-copy change is ordered per (artifact, node) by its copy version and is
+// reported from node inventory, so it neither advances nor carries the
+// artifact revision.
+func lifecycleFact(fact proto.Message) bool {
+	_, nodeCopy := fact.(*internalv1.ArtifactNodeCopyChanged)
+	return !nodeCopy
+}
+
+// factArtifact returns the artifact hash that keys fact's aggregate.
+func factArtifact(fact proto.Message) (string, error) {
+	var hash string
+	switch m := fact.(type) {
+	case interface{ GetArtifact() *publicv1.Artifact }:
+		hash = m.GetArtifact().GetArtifactId()
+	case *internalv1.ArtifactNodeCopyChanged:
+		hash = m.GetArtifactHash()
+	default:
+		return "", fmt.Errorf("artifactoutbox: %T is not an artifact event", fact)
+	}
+	if hash == "" {
+		return "", fmt.Errorf("artifactoutbox: %T names no artifact", fact)
+	}
+	return hash, nil
 }
 
 func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, artifactID string, payload any) error {
@@ -291,6 +413,8 @@ func marshalPayload(payload any) ([]byte, error) {
 	case *ipcpb.ArtifactNodeCopyEvent:
 		return protojson.Marshal(m)
 	case *ipcpb.StorageSnapshot:
+		return protojson.Marshal(m)
+	case *ipcpb.ServiceEvent:
 		return protojson.Marshal(m)
 	default:
 		return nil, fmt.Errorf("unsupported artifact event payload type %T", payload)
@@ -506,6 +630,17 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 			TenantId:  row.tenantID,
 			Payload:   &ipcpb.ServiceEvent_ArtifactNodeCopyEvent{ArtifactNodeCopyEvent: data},
 		}
+		if err := decklogClient.SendServiceEvent(ev); err != nil {
+			return []string{"decklog"}, err
+		}
+	case kindArtifactDeleted:
+		ev := &ipcpb.ServiceEvent{}
+		if err := protojson.Unmarshal(row.payload, ev); err != nil {
+			return nil, fmt.Errorf("unmarshal artifact_deleted ServiceEvent: %w", err)
+		}
+		// The row id and its commit time are fixed, so every redelivery carries the same identity.
+		ev.EventId = row.id
+		ev.Timestamp = timestamppb.New(row.createdAt)
 		if err := decklogClient.SendServiceEvent(ev); err != nil {
 			return []string{"decklog"}, err
 		}

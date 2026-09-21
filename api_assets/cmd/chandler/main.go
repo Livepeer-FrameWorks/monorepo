@@ -4,19 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
+	"frameworks/api_assets/internal/appconfig"
 	"frameworks/api_assets/internal/cache"
 	"frameworks/api_assets/internal/handlers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"github.com/gin-gonic/gin"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 )
@@ -29,34 +28,35 @@ func main() {
 	logger := logging.NewLoggerWithService("chandler")
 	config.LoadEnv(logger)
 
-	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
-	qmAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR",
-		config.GetEnv("QUARTERMASTER_HOST", "quartermaster")+":"+config.GetEnv("QUARTERMASTER_GRPC_PORT", "19002"))
-	clusterID := config.GetEnv("CLUSTER_ID", "")
+	configOptions := config.Options{Service: "chandler", Logger: logger}
+	cfg, err := config.Load[appconfig.Chandler](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	qmConfig := quartermasterClientConfig(cfg, logger)
 
 	s3Cfg := handlers.S3Config{
-		Bucket:       config.GetEnv("STORAGE_S3_BUCKET", ""),
-		Prefix:       config.GetEnv("STORAGE_S3_PREFIX", ""),
-		Region:       config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
-		Endpoint:     config.GetEnv("STORAGE_S3_ENDPOINT", ""),
-		AccessKey:    config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
-		SecretKey:    config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
-		ServiceToken: serviceToken,
+		Bucket:       cfg.S3Bucket,
+		Prefix:       cfg.S3Prefix,
+		Region:       cfg.S3Region,
+		Endpoint:     cfg.S3Endpoint,
+		AccessKey:    cfg.S3AccessKey,
+		SecretKey:    cfg.S3SecretKey,
+		ServiceToken: cfg.ServiceToken,
 	}
 
-	loadAuthority := func() error { return applyClusterS3FromQuartermaster(logger, qmAddr, serviceToken, clusterID, &s3Cfg) }
-	if err := resolveChandlerS3Serving(clusterID, config.GetEnvBool("CHANDLER_DEV_ALLOW_ENV_S3", false), loadAuthority, &s3Cfg, logger); err != nil {
+	loadAuthority := func() error { return applyClusterS3FromQuartermaster(qmConfig, cfg.ClusterID, &s3Cfg) }
+	if resolveErr := resolveChandlerS3Serving(cfg.ClusterID, cfg.DevAllowEnvS3, loadAuthority, &s3Cfg, logger); resolveErr != nil {
 		// Only a genuine authority-lookup failure returns an error; Chandler cannot obtain its authority, so fail closed.
 		// A restart re-attempts once Quartermaster is reachable.
-		logger.WithError(err).WithField("cluster_id", clusterID).Fatal("Cluster S3 lookup failed — cannot resolve the authoritative storage descriptor")
+		logger.WithError(resolveErr).WithField("cluster_id", cfg.ClusterID).Fatal("Cluster S3 lookup failed — cannot resolve the authoritative storage descriptor")
 	}
 	if s3Cfg.Bucket == "" {
 		logger.Warn("S3 bucket not configured (no cluster row, no env) — asset requests will return 503 until configured")
 	}
 
-	maxCacheBytes := int64(config.GetEnvInt("CACHE_MAX_BYTES", 50*1024*1024)) // 50MB default
-	cacheTTL := time.Duration(config.GetEnvInt("CACHE_TTL_SECONDS", 30)) * time.Second
-	lru := cache.NewLRU(maxCacheBytes, cacheTTL)
+	lru := cache.NewLRU(int64(cfg.CacheMaxBytes), time.Duration(cfg.CacheTTLSeconds)*time.Second)
 
 	healthChecker := monitoring.NewHealthChecker("chandler", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("chandler", version.Version, version.GitCommit)
@@ -70,95 +70,90 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create asset handler")
 	}
 
-	router := server.SetupServiceRouter(logger, "chandler", healthChecker, metricsCollector)
-	assetHandler.RegisterRoutes(router)
+	readiness := monitoring.NewReadinessChecker("chandler", version.Version)
+	router := newChandlerRouter(server.RouterSpec{
+		Service:            "chandler",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
+	}, assetHandler)
 
-	serverConfig := server.DefaultConfig("chandler", "18020")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Quartermaster bootstrap
-	go func() {
-		serviceToken := config.GetEnv("SERVICE_TOKEN", "")
-		qmAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR",
-			config.GetEnv("QUARTERMASTER_HOST", "quartermaster")+":"+config.GetEnv("QUARTERMASTER_GRPC_PORT", "19002"))
-
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      qmAddr,
-			Timeout:       10 * time.Second,
-			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
-			return
-		}
-		defer func() { _ = qc.Close() }()
-
-		// Advertise READINESS, not liveness: Quartermaster must consider this
-		// instance serviceable only when it can read its immutable backend. /health
-		// is up before the store is proven; /ready (servicedefs ReadyPath) is the
-		// store-backed probe. Keep the two distinct so a bad descriptor deregisters
-		// serving without flapping process liveness.
-		healthEndpoint := "/ready"
-		if def, ok := servicedefs.Lookup("chandler"); ok {
-			healthEndpoint = def.ReadinessPath()
-		}
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
-			return
-		}
-		advertiseHost := config.GetEnv("CHANDLER_HOST", "chandler")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "chandler",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-		}
-		if clusterID != "" {
-			req.ClusterId = &clusterID
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(
-			context.Background(),
-			qc,
-			req,
-			logger,
-			qmbootstrap.DefaultRetryConfig("chandler"),
-		); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap failed")
-		} else {
-			logger.Info("Quartermaster bootstrap ok")
-		}
-	}()
+	go registerWithQuartermaster(ctx, cfg, qmConfig, logger)
 
 	server.RegisterEnvFileReload("chandler", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "chandler",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
+	}
+}
+
+// newChandlerRouter builds the standard service router plus the asset routes.
+// The object-store probe is the readiness check, so /ready answers 200 only
+// while this instance can read its immutable backend and 503 otherwise.
+func newChandlerRouter(spec server.RouterSpec, assetHandler *handlers.AssetHandler) *gin.Engine {
+	spec.Ready.AddCheck("store", assetHandler.StoreReadinessCheck())
+	router := server.NewServiceRouter(spec)
+	assetHandler.RegisterRoutes(router)
+	return router
+}
+
+func quartermasterClientConfig(cfg *appconfig.Chandler, logger logging.Logger) qmclient.GRPCConfig {
+	return qmclient.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterAddr(),
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
+	}
+}
+
+// registerWithQuartermaster registers the instance with its readiness path
+// (servicedefs ReadyPath /ready), so Quartermaster treats it as serviceable
+// only while the store probe passes, without flapping process liveness.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.Chandler, qmConfig qmclient.GRPCConfig, logger logging.Logger) {
+	qc, err := qmclient.NewGRPCClient(qmConfig)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		return
+	}
+	defer func() { _ = qc.Close() }()
+
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:   "chandler",
+		Port:          cfg.Port,
+		AdvertiseHost: cfg.AdvertiseHost,
+		ClusterID:     cfg.ClusterID,
+		NodeID:        cfg.NodeID,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("chandler")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap failed")
+	} else {
+		logger.Info("Quartermaster bootstrap ok")
 	}
 }
 
 // applyClusterS3FromQuartermaster loads the local cluster's storage placement.
 // Credentials remain env-only infrastructure secrets.
-func applyClusterS3FromQuartermaster(logger logging.Logger, qmAddr, serviceToken, clusterID string, s3Cfg *handlers.S3Config) error {
-	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      qmAddr,
-		Timeout:       10 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-	})
+func applyClusterS3FromQuartermaster(qmConfig qmclient.GRPCConfig, clusterID string, s3Cfg *handlers.S3Config) error {
+	qc, err := qmclient.NewGRPCClient(qmConfig)
 	if err != nil {
 		return fmt.Errorf("quartermaster client: %w", err)
 	}

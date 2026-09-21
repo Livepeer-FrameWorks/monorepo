@@ -20,6 +20,14 @@ mutation CreatePayment($input: CreatePaymentInput!) {
       network
       quotedAt
       createdAt
+      conversion {
+        originalAmountCents
+        originalCurrency
+        eurAmountCents
+        unitsPerEur
+        source
+        referenceDate
+      }
     }
     ... on ValidationError {
       ...ValidationErrorFields @mask_disable

@@ -6,14 +6,11 @@ import (
 	"time"
 )
 
-// BillingFeatures represents the feature flags available in a billing tier.
-// NOTE: Enforcement limits (max_streams, max_viewers, bandwidth caps) belong
-// in Quartermaster tenant cluster access, not here. This is billing only.
+// BillingFeatures is the JSONB shape of purser.billing_tiers.features and
+// purser.tenant_subscriptions.custom_features. Every key describes an enforced
+// or contractual property: ProcessingCustomizable gates tenant process
+// overrides in Commodore. Usage limits live in entitlements, not here.
 type BillingFeatures struct {
-	Recording              bool   `json:"recording"`
-	Analytics              bool   `json:"analytics"`
-	CustomBranding         bool   `json:"custom_branding,omitempty"`
-	APIAccess              bool   `json:"api_access,omitempty"`
 	SupportLevel           string `json:"support_level"`
 	SLA                    bool   `json:"sla,omitempty"`
 	ProcessingCustomizable bool   `json:"processing_customizable,omitempty"`

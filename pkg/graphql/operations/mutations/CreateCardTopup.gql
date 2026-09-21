@@ -3,5 +3,15 @@ mutation CreateCardTopup($input: CreateCardTopupInput!) {
     topupId
     checkoutUrl
     expiresAt
+    amountCents
+    currency
+    conversion {
+      originalAmountCents
+      originalCurrency
+      eurAmountCents
+      unitsPerEur
+      source
+      referenceDate
+    }
   }
 }

@@ -2,11 +2,13 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -140,6 +142,10 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"is_platform_official", "is_active"}).AddRow(true, true))
 	// Access upsert + durable alias ensure ride one tx.
 	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended('tenant_cluster_access:'")).
+		WithArgs("00000000-0000-0000-0000-000000000001", "core-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`FROM quartermaster\.tenant_cluster_access\s+WHERE tenant_id = \$1::uuid\s+AND cluster_id = \$2::text\s+FOR UPDATE`).
+		WithArgs("00000000-0000-0000-0000-000000000001", "core-1").WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.tenant_cluster_access")).
 		WithArgs("00000000-0000-0000-0000-000000000001", "core-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -155,10 +161,22 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 		WithArgs("00000000-0000-0000-0000-000000000001").
 		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 			AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
+	// The grant made access active: tenant.cluster_assigned, attributed to the
+	// principal the caller named, commits with it.
+	mock.ExpectQuery(`FROM quartermaster\.tenant_cluster_access\s+WHERE tenant_id = \$1::uuid\s+AND cluster_id = \$2::text\s+FOR UPDATE`).
+		WithArgs("00000000-0000-0000-0000-000000000001", "core-1").WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(true))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.domain_event_outbox")).
+		WithArgs(sqlmock.AnyArg(), "tenant.cluster_assigned", "quartermaster", "tenants", "00000000-0000-0000-0000-000000000001",
+			sqlmock.AnyArg(), "tenant", "00000000-0000-0000-0000-000000000001", "jwt", "user-7", "", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("INSERT INTO quartermaster.service_event_outbox")).
+		WithArgs(sqlmock.AnyArg(), eventTenantClusterAssigned, "00000000-0000-0000-0000-000000000001", "tenant", "user-7", "cluster", "core-1", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("assigned-1"))
 	mock.ExpectCommit()
 
 	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "core-1",
+		Actor: &commonpb.RequestActor{AuthType: "jwt", UserId: "user-7"},
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

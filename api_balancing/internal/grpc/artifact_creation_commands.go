@@ -2,11 +2,15 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // errCreationCommandIdentityMismatch is returned when a request_id already carries a
@@ -176,6 +180,41 @@ func recordCreationCommandRejected(ctx context.Context, db foghorndb.DBTX, reque
 type creationLedgerProgress struct {
 	accepted  bool
 	committed bool
+	// rejected is set once the handler itself recorded 'rejected' together with
+	// the rejection's analytics rows, so the finalizer has nothing left to do.
+	rejected bool
+}
+
+// rejectClipCreation records a clip create refused before its artifact row
+// existed: the command ledger's CAS to 'rejected' and the attempt's REQUESTED and
+// FAILED analytics rows commit in one transaction. The rows are written only when
+// this call settled the ledger (or there is no ledger, for direct callers), so a
+// concurrently terminalized attempt gains no second rejection history. No clip
+// exists, so no domain event is published.
+func (s *FoghornGRPCServer) rejectClipCreation(ctx context.Context, req *sharedpb.CreateClipRequest, clipHash string, prog *creationLedgerProgress, rows ...*ipcpb.ClipLifecycleData) error {
+	settled := false
+	err := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		if req.GetRequestId() != "" && prog.accepted {
+			applied, err := recordCreationCommandRejected(ctx, tx, req.GetRequestId(), req.GetTenantId(), "clip", clipHash)
+			if err != nil {
+				return err
+			}
+			settled = true
+			if !applied {
+				return nil
+			}
+		}
+		for _, row := range rows {
+			if err := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil && settled {
+		prog.rejected = true
+	}
+	return err
 }
 
 // recordCreationCommandAcceptedDurable writes the in-flight 'accepted' row with a
@@ -236,15 +275,15 @@ func (s *FoghornGRPCServer) ensureCreationCommandCommitted(ctx context.Context, 
 // the artifact was not inserted (the handler's own control flow proves it), so it
 // CAS-rejects the still-'accepted' row. No-op when request_id is empty (direct-Foghorn
 // callers carry no intent), when 'accepted' was never recorded (nothing to
-// terminalize; the sweep observes an ambiguous absence), or when 'committed' already
-// ran. The reject uses a detached context so a client cancellation cannot strand an
+// terminalize; the sweep observes an ambiguous absence), or when 'committed' or the
+// handler's own 'rejected' already ran. The reject uses a detached context so a client cancellation cannot strand an
 // 'accepted' row. A CAS that matches nothing (applied false) is an already-converged
 // row — a racing commit won, or the deadline expiry already rejected it — and is not
 // an error. A failed write is only logged, because retErr is already non-nil, so the
 // create is retried and the idempotent accept pre-check re-drives to a terminal
 // outcome, with the deadline-expiry worker as the final backstop.
 func (s *FoghornGRPCServer) finalizeCreationCommand(requestID, tenantID, kind, artifactHash string, prog *creationLedgerProgress, retErr error) error {
-	if requestID == "" || retErr == nil || !prog.accepted || prog.committed {
+	if requestID == "" || retErr == nil || !prog.accepted || prog.committed || prog.rejected {
 		return retErr
 	}
 	writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

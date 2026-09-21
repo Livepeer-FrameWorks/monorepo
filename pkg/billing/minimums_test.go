@@ -16,6 +16,8 @@ func TestFiatTopupMinimumCents(t *testing.T) {
 		{name: "stripe usd", provider: "stripe", currency: "USD", want: 500},
 		{name: "mollie eur", provider: "mollie", currency: "EUR", want: 500},
 		{name: "mollie usd", provider: "mollie", currency: "usd", want: 500},
+		{name: "stripe gbp", provider: "stripe", currency: "GBP", want: 500},
+		{name: "mollie gbp", provider: "mollie", currency: "gbp", want: 500},
 		{name: "unknown provider", provider: "cash", currency: "EUR", wantErr: true},
 		{name: "unsupported currency", provider: "stripe", currency: "JPY", wantErr: true},
 	}

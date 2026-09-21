@@ -23,11 +23,11 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -8180,8 +8180,10 @@ type GRPCServerConfig struct {
 	AllowInsecure bool
 }
 
-// NewGRPCServer creates a new gRPC server for Periscope
-func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
+// NewGRPCServer creates the Periscope gRPC server. It waits up to two minutes
+// for the TLS files, returning early when ctx is cancelled, and returns TLS
+// errors instead of exiting, so server.Run owns the shutdown.
+func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	// Chain auth interceptor with logging interceptor
 	grpcAuthCfg := middleware.GRPCAuthConfig{
 		ServiceToken:         cfg.ServiceToken,
@@ -8217,14 +8219,14 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
-		cfg.Logger.WithError(err).Fatal("Timed out waiting for Periscope gRPC TLS files")
+		return nil, fmt.Errorf("wait for Periscope gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
-		cfg.Logger.WithError(err).Fatal("Failed to configure Periscope gRPC TLS")
+		return nil, fmt.Errorf("configure Periscope gRPC TLS: %w", err)
 	}
 	if tlsOpt != nil {
 		opts = append(opts, tlsOpt)
@@ -8252,10 +8254,10 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(server, hs)
+	fwserver.RegisterHealthServer(server, hs)
 	reflection.Register(server)
 
-	return server
+	return server, nil
 }
 
 // unaryInterceptor logs gRPC requests

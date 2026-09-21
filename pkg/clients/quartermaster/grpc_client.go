@@ -3,7 +3,6 @@ package quartermaster
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -40,6 +39,8 @@ type GRPCClient struct {
 	serviceRegistry quartermasterpb.ServiceRegistryServiceClient
 	ingress         quartermasterpb.IngressServiceClient
 	logger          logging.Logger
+
+	clusterAccessMaterializationSecret string
 }
 
 // GRPCConfig represents the configuration for the gRPC client
@@ -57,10 +58,14 @@ type GRPCConfig struct {
 	// PreferServiceToken sends a pure service identity, without caller identity
 	// metadata, even when the context carries a user JWT.
 	PreferServiceToken bool
-	AllowInsecure      bool
-	CACertFile         string
-	CACertPEM          string
-	ServerName         string
+	// ClusterAccessMaterializationSecret signs MaterializeClusterAccess and
+	// RevokeMaterializedClusterAccess envelopes. Those calls fail before any
+	// RPC when it is empty.
+	ClusterAccessMaterializationSecret string
+	AllowInsecure                      bool
+	CACertFile                         string
+	CACertPEM                          string
+	ServerName                         string
 }
 
 type serviceAuthContextKey struct{}
@@ -229,6 +234,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		serviceRegistry: quartermasterpb.NewServiceRegistryServiceClient(conn),
 		ingress:         quartermasterpb.NewIngressServiceClient(conn),
 		logger:          config.Logger,
+
+		clusterAccessMaterializationSecret: config.ClusterAccessMaterializationSecret,
 	}, nil
 }
 
@@ -283,6 +290,12 @@ func (c *GRPCClient) GetClusterRouting(ctx context.Context, req *quartermasterpb
 	return c.tenant.GetClusterRouting(ctx, req)
 }
 
+// GetTenantClusterCapabilities reads the tenant's custom domain eligibility and
+// per-cluster media capabilities.
+func (c *GRPCClient) GetTenantClusterCapabilities(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantClusterCapabilitiesResponse, error) {
+	return c.tenant.GetTenantClusterCapabilities(ctx, &quartermasterpb.GetTenantClusterCapabilitiesRequest{TenantId: tenantID})
+}
+
 // ResolveTenantAliases asks Quartermaster to map bootstrap aliases to tenant
 // UUIDs. Used by sibling services' bootstrap subcommands so they don't read
 // quartermaster.bootstrap_tenant_aliases directly. Aliases without a mapping
@@ -301,11 +314,15 @@ func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string)
 // access-specific override onto tenant_cluster_access.resource_limits via
 // COALESCE. Plan-level Free caps are resolved by Purser tier entitlements, so
 // normal platform bootstrap passes nil.
-func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error {
+//
+// actor names the principal tenant.cluster_assigned is attributed to; nil
+// attributes it to the calling service.
+func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits, actor *commonpb.RequestActor) error {
 	_, err := c.cluster.BootstrapClusterAccess(ctx, &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId:       tenantID,
 		ClusterId:      clusterID,
 		ResourceLimits: resourceLimits,
+		Actor:          actor,
 	})
 	return err
 }
@@ -571,7 +588,7 @@ func (c *GRPCClient) MaterializeClusterAccess(ctx context.Context, req *quarterm
 	}
 	authorizedAt := time.Now().UTC().Truncate(time.Second)
 	proof, err := auth.MintClusterAccessMaterializationProof(
-		os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET"),
+		c.clusterAccessMaterializationSecret,
 		req.GetTenantId(), req.GetClusterId(), int32(req.GetAccessSource()),
 		req.GetAuthorizationReference(), subscriptionStatus, authorizedAt,
 	)
@@ -590,7 +607,7 @@ func (c *GRPCClient) RevokeMaterializedClusterAccess(ctx context.Context, req *q
 	}
 	authorizedAt := time.Now().UTC().Truncate(time.Second)
 	proof, err := auth.MintClusterAccessRevocationProof(
-		os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET"),
+		c.clusterAccessMaterializationSecret,
 		req.GetTenantId(), req.GetClusterId(), int32(req.GetAccessSource()),
 		req.GetAuthorizationReference(), authorizedAt,
 	)

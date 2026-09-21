@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"net"
-	"strconv"
-	"strings"
 	"time"
 
+	"frameworks/api_analytics_query/internal/appconfig"
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	periscopegrpc "frameworks/api_analytics_query/internal/grpc"
 	"frameworks/api_analytics_query/internal/metrics"
@@ -16,10 +13,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -36,27 +33,25 @@ func main() {
 
 	logger.Info("Starting Periscope-Query (Analytics Query API)")
 
-	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
-	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
-	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
-	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
-	dbURL := config.RequireEnv("DATABASE_URL")
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	configOptions := config.Options{Service: "periscope-query", Logger: logger}
+	cfg, err := config.Load[appconfig.PeriscopeQuery](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
 	chConfig.ServiceName = "periscope-query"
-	chConfig.Addr = strings.Split(clickhouseAddr, ",")
-	chConfig.Database = clickhouseDB
-	chConfig.Username = clickhouseUser
-	chConfig.Password = clickhousePassword
+	chConfig.Addr = cfg.Addr
+	chConfig.Database = cfg.Database
+	chConfig.Username = cfg.User
+	chConfig.Password = cfg.Password
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
 	defer func() { _ = clickhouse.Close() }()
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "periscope-query"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	replayDB := database.MustConnect(dbConfig, logger)
 	defer func() { _ = replayDB.Close() }()
 
@@ -67,12 +62,11 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(replayDB))
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"CLICKHOUSE_ADDR": clickhouseAddr,
-		"CLICKHOUSE_DB":   clickhouseDB,
-		"DATABASE_URL":    dbURL,
-		"JWT_SECRET":      jwtSecret,
-	}))
+
+	// Queries need both stores, so readiness requires both to answer.
+	readiness := monitoring.NewReadinessChecker("periscope-query", version.Version)
+	readiness.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
+	readiness.AddCheck("postgres", monitoring.DatabaseHealthCheck(replayDB))
 
 	// Per-RPC counts + duration come from GRPCMetricsInterceptor on the
 	// GRPCRequests / GRPCDuration vectors; a parallel analytics_queries
@@ -86,90 +80,80 @@ func main() {
 		GRPCDuration:     metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
-	// Expose health and metrics over HTTP; query APIs are served over gRPC.
-	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)
+	// Expose health, readiness, and metrics over HTTP; query APIs are served over gRPC.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "periscope-query",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
+	})
 
-	// Start gRPC server in a goroutine
-	grpcPort := config.GetEnv("GRPC_PORT", "19004")
-	go func() {
-		grpcAddr := fmt.Sprintf(":%s", grpcPort)
-		lis, err := net.Listen("tcp", grpcAddr)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		grpcServer := periscopegrpc.NewGRPCServer(periscopegrpc.GRPCServerConfig{
+	// NewGRPCServer waits for the gRPC TLS files, so the server builds in the
+	// background while HTTP health already serves.
+	buildGRPCServer := func(buildCtx context.Context) (*grpc.Server, error) {
+		return periscopegrpc.NewGRPCServer(buildCtx, periscopegrpc.GRPCServerConfig{
 			ClickHouse:    clickhouse,
 			ReplayDB:      replayDB,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			JWTSecret:     []byte(jwtSecret),
+			ServiceToken:  cfg.ServiceToken,
+			JWTSecret:     []byte(cfg.JWTSecret),
 			Metrics:       serviceMetrics,
-			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CertFile:      cfg.CertPath,
+			KeyFile:       cfg.KeyPath,
+			AllowInsecure: cfg.AllowInsecure,
 		})
-		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+	}
 
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
-		}
-	}()
-
-	// Start HTTP server with graceful shutdown (health/metrics only)
-	serverConfig := server.DefaultConfig("periscope-query", "18004")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Best-effort service registration in Quartermaster (using gRPC)
-	// Must be launched BEFORE server.Start() which blocks
 	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
+		qc, qcErr := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.QuartermasterGRPCTLSServerName,
 		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		if qcErr != nil {
+			logger.WithError(qcErr).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		healthEndpoint := "/health"
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "periscope-query",
+			Port:          cfg.HTTPListen.Port,
+			AdvertiseHost: cfg.AdvertiseHost,
+			ClusterID:     cfg.ClusterID,
+			NodeID:        cfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "periscope-query",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-query")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (periscope-query) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-query")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (periscope-query) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope-query) ok")
 		}
 	}()
 
 	server.RegisterEnvFileReload("periscope-query", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "periscope-query",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
+		GRPC:    []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 }

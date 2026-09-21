@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"net"
+	"net/http"
 	"os"
-	"strconv"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+	pursermigrations "frameworks/api_billing/internal/datamigrations"
+	"frameworks/api_billing/internal/fx"
 	pursergrpc "frameworks/api_billing/internal/grpc"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
@@ -21,18 +25,42 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/shopspring/decimal"
+	"google.golang.org/grpc"
 )
 
 func main() {
 	if version.HandleCLI() {
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
+		logger := logging.NewLoggerWithService("purser")
+		config.LoadEnv(logger)
+		migrationCfg, err := config.Load[appconfig.PurserDataMigrations](config.Options{Service: "purser", Logger: logger})
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid data migration configuration")
+		}
+		pursermigrations.Register(pursermigrations.Settings{Fetch: fx.HTTPFetcher(&http.Client{})})
+		dbConfig := database.DefaultConfig()
+		dbConfig.ServiceName = "purser"
+		dbConfig.URL = migrationCfg.DatabaseURL
+		err = datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+			return database.Connect(dbConfig, logger)
+		}, os.Stdout, os.Args[1:])
+		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
+			logger.WithError(err).Fatal("Data migration command failed")
+		}
 		return
 	}
 
@@ -52,23 +80,33 @@ func main() {
 
 	logger.Info("Starting Purser (Billing API)")
 
-	dbURL := config.RequireEnv("DATABASE_URL")
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	clusterAccessMaterializationSecret := config.RequireEnv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
-	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
-
-	// Payment provider credentials (optional - service works without them)
-	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")
-	stripeWebhookSecret := config.GetEnv("STRIPE_WEBHOOK_SECRET", "")
-	mollieAPIKey := config.GetEnv("MOLLIE_API_KEY", "")
+	configOptions := config.Options{Service: "purser", Logger: logger}
+	cfg, err := config.Load[appconfig.Purser](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	geoipReader, err := geoip.Open(cfg.MMDBPath)
+	if err != nil {
+		logger.WithError(err).Warn("GeoIP unavailable; continuing without geolocation")
+	}
+	if geoipReader != nil {
+		logger.WithField("provider", geoipReader.GetProvider()).Info("GeoIP reader loaded")
+	}
+	// Internal packages read PurserRuntime through appconfig.Runtime. It is
+	// installed before any of them is constructed, and the reload callback
+	// passed to server.Run re-decodes it after a SIGHUP env-file reload.
+	runtimeConfig := config.NewLive(&cfg.PurserRuntime, configOptions)
+	appconfig.InstallRuntime(runtimeConfig)
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "purser"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
@@ -78,11 +116,9 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":                          dbURL,
-		"JWT_SECRET":                            jwtSecret,
-		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": clusterAccessMaterializationSecret,
-	}))
+
+	readiness := monitoring.NewReadinessChecker("purser", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
 	// Create custom billing metrics for HTTP handlers. invoice_operations_total
 	// was declared but has no single lifecycle owner event in the code; the
@@ -108,6 +144,7 @@ func main() {
 		CryptoAnomalyOldest:       metricsCollector.NewGauge("crypto_accounting_anomaly_oldest_age_seconds", "Age of the oldest open crypto accounting anomaly", []string{"kind"}),
 		CryptoInvoiceReview:       metricsCollector.NewGauge("crypto_invoice_review_items", "Crypto invoice deposit events requiring operator review", []string{"network"}),
 		CryptoLedgerReversals:     metricsCollector.NewGauge("crypto_ledger_reversals_total", "Durable crypto-related ledger reversals", []string{"reference_type"}),
+		FXRateReferenceAge:        metricsCollector.NewGauge("fx_rate_reference_age_seconds", "Seconds since the start of the newest stored ECB reference date", []string{"currency"}),
 	}
 
 	// Register DB connection-pool stats (open/in-use/idle gauges +
@@ -132,14 +169,16 @@ func main() {
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
 	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:           quartermasterGRPCAddr,
+		GRPCAddr:           cfg.QuartermasterGRPCAddr,
 		Timeout:            10 * time.Second,
 		Logger:             logger,
-		ServiceToken:       serviceToken,
+		ServiceToken:       cfg.ServiceToken,
 		PreferServiceToken: true,
-		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:         config.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure:      cfg.AllowInsecure,
+		CACertFile:         cfg.CAPath,
+		ServerName:         cfg.QuartermasterGRPCTLSServerName,
+
+		ClusterAccessMaterializationSecret: cfg.ClusterAccessMaterializationSecret,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -148,13 +187,13 @@ func main() {
 
 	// Create Commodore gRPC client for stream termination on suspension
 	commodoreClient, err := commodoreclnt.NewGRPCClient(commodoreclnt.GRPCConfig{
-		GRPCAddr:      commodoreGRPCAddr,
+		GRPCAddr:      cfg.CommodoreGRPCAddr,
 		Timeout:       30 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.CommodoreGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
@@ -162,50 +201,53 @@ func main() {
 	defer func() { _ = commodoreClient.Close() }()
 
 	// Create Decklog gRPC client for service events
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "purser",
-		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
 		defer func() { _ = decklogClient.Close() }()
-		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+		logger.WithField("addr", cfg.DecklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+	tokenHasher, err := events.NewTokenHasher(cfg.UsageHashSecret)
+	if err != nil {
+		logger.WithError(err).Fatal("USAGE_HASH_SECRET is required for domain event actor attribution")
 	}
 
 	// Create Periscope gRPC client for invoice enrichment (accurate unique counts, geo breakdown)
 	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
-		GRPCAddr:      periscopeGRPCAddr,
+		GRPCAddr:      cfg.PeriscopeGRPCAddr,
 		Timeout:       30 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("periscope"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.PeriscopeGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - invoice enrichment will be disabled")
 		periscopeClient = nil
 	} else {
 		defer func() { _ = periscopeClient.Close() }()
-		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
+		logger.WithField("addr", cfg.PeriscopeGRPCAddr).Info("Connected to Periscope gRPC")
 	}
 
 	// Create Stripe client (optional - service works without it)
 	var stripeClient *stripe.Client
-	if stripeSecretKey != "" {
+	if cfg.StripeSecretKey != "" {
 		stripeClient = stripe.NewClient(stripe.Config{
-			SecretKey:     stripeSecretKey,
-			WebhookSecret: stripeWebhookSecret,
+			SecretKey:     cfg.StripeSecretKey,
+			WebhookSecret: cfg.StripeWebhookSecret,
 			Logger:        logger,
 		})
 		logger.Info("Stripe client initialized")
@@ -219,10 +261,10 @@ func main() {
 
 	// Create Mollie client (optional - service works without it)
 	var mollieClient *mollie.Client
-	if mollieAPIKey != "" {
+	if cfg.MollieAPIKey != "" {
 		var err error
 		mollieClient, err = mollie.NewClient(mollie.Config{
-			APIKey: mollieAPIKey,
+			APIKey: cfg.MollieAPIKey,
 			Logger: logger,
 		})
 		if err != nil {
@@ -248,7 +290,7 @@ func main() {
 	})
 
 	// Initialize and start JobManager for background billing tasks
-	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler, billingSvc)
+	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler, billingSvc, geoipReader)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -258,8 +300,8 @@ func main() {
 	logger.Info("JobManager started - background billing jobs active")
 
 	// Start Livepeer deposit monitor (optional - requires ARBITRUM_RPC_ENDPOINT)
-	if config.GetEnvBool("LIVEPEER_DEPOSIT_MONITOR_ENABLED", false) {
-		depositMonitor, err := handlers.NewLivepeerDepositMonitor(logger, db, qmGRPCClient)
+	if cfg.LivepeerDepositMonitorEnabled {
+		depositMonitor, err := handlers.NewLivepeerDepositMonitor(logger, db, qmGRPCClient, cfg.ClusterID)
 		if err != nil {
 			logger.WithError(err).Fatal("Invalid Livepeer deposit monitor configuration")
 		}
@@ -268,96 +310,119 @@ func main() {
 		logger.Info("Livepeer deposit monitor started")
 	}
 
-	// Expose health and metrics over HTTP; billing APIs are served over gRPC.
-	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
+	// Expose health, readiness, and metrics over HTTP; billing APIs are served over gRPC.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:    "purser",
+		Logger:     logger,
+		Health:     healthChecker,
+		Ready:      readiness,
+		Metrics:    metricsCollector,
+		Runtime:    cfg.HTTPRuntime,
+		DebugToken: cfg.ServiceToken,
+		DebugConfig: func() any {
+			return config.Overlay{Base: cfg, Overrides: []any{runtimeConfig.Get()}}
+		},
+		DebugConfigOptions: configOptions,
+	})
 
-	// Start gRPC server in a goroutine
-	grpcPort := config.GetEnv("GRPC_PORT", "19003")
+	grpcServerConfig := pursergrpc.GRPCServerConfig{
+		DB:                  db,
+		Logger:              logger,
+		ServiceToken:        cfg.ServiceToken,
+		JWTSecret:           []byte(cfg.JWTSecret),
+		MetadataPolicy:      metadataPolicy,
+		GeoIPReader:         geoipReader,
+		Metrics:             serverMetrics,
+		StripeClient:        stripeClient,
+		MollieClient:        mollieClient,
+		QuartermasterClient: qmGRPCClient,
+		CommodoreClient:     commodoreClient,
+		DecklogClient:       decklogClient,
+		Billing:             billingSvc,
+		TokenHasher:         tokenHasher,
+		CertFile:            cfg.CertPath,
+		KeyFile:             cfg.KeyPath,
+		AllowInsecure:       cfg.AllowInsecure,
+	}
+	// NewGRPCServer waits up to two minutes for gRPC TLS files. Building it in
+	// the background keeps HTTP /health serving during that wait; readiness
+	// reports grpc_grpc unhealthy until the gRPC server serves.
+	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
+		return pursergrpc.NewGRPCServer(ctx, grpcServerConfig)
+	}
+
+	// Best-effort service registration in Quartermaster over a dedicated
+	// client that does not prefer the service token.
 	go func() {
-		grpcAddr := fmt.Sprintf(":%s", grpcPort)
-		lis, err := net.Listen("tcp", grpcAddr)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		grpcServer := pursergrpc.NewGRPCServer(pursergrpc.GRPCServerConfig{
-			DB:                  db,
-			Logger:              logger,
-			ServiceToken:        serviceToken,
-			JWTSecret:           []byte(jwtSecret),
-			Metrics:             serverMetrics,
-			StripeClient:        stripeClient,
-			MollieClient:        mollieClient,
-			QuartermasterClient: qmGRPCClient,
-			CommodoreClient:     commodoreClient,
-			DecklogClient:       decklogClient,
-			Billing:             billingSvc,
-			CertFile:            config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:             config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:       config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		})
-		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
-
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
-		}
-	}()
-
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("purser", "18003")
-
-	// Best-effort service registration in Quartermaster (using gRPC)
-	// Must be launched BEFORE server.Start() which blocks
-	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
+		qc, qcErr := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.QuartermasterGRPCTLSServerName,
 		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		if qcErr != nil {
+			logger.WithError(qcErr).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
 		defer func() { _ = qc.Close() }()
-		healthEndpoint := "/health"
-		httpPort, err := strconv.Atoi(serverConfig.Port)
-		if err != nil || httpPort <= 0 || httpPort > 65535 {
-			logger.WithError(err).WithField("port", serverConfig.Port).Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "purser",
+			Port:          cfg.HTTPListen.Port,
+			AdvertiseHost: cfg.AdvertiseHost,
+			ClusterID:     cfg.ClusterID,
+			NodeID:        cfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "purser",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("purser")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("purser")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (purser) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (purser) ok")
 		}
 	}()
 
+	// The domain event relay publishes committed purser.domain_event_outbox
+	// rows to Decklog. It stops after the listeners, so events committed by the
+	// last in-flight requests stay in the outbox for the next process.
+	var onShutdown []func(context.Context)
+	if decklogClient != nil {
+		relay, relayErr := eventoutbox.NewRelay(db, billingevents.Schema, decklogClient, logger)
+		if relayErr != nil {
+			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
+		}
+		relayCtx, stopRelay := context.WithCancel(context.Background())
+		relayDone := make(chan struct{})
+		go func() {
+			defer close(relayDone)
+			relay.Run(relayCtx)
+		}()
+		onShutdown = append(onShutdown, func(shutdownCtx context.Context) {
+			stopRelay()
+			select {
+			case <-relayDone:
+			case <-shutdownCtx.Done():
+			}
+		})
+	} else {
+		logger.Warn("Domain event relay disabled: no Decklog client; domain events stay in the outbox")
+	}
+
 	server.RegisterEnvFileReload("purser", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service:    "purser",
+		Logger:     logger,
+		Ready:      readiness,
+		HTTP:       []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
+		GRPC:       []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+		OnReload:   []server.ReloadCallback{runtimeConfig.Reload},
+		OnShutdown: onShutdown,
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 }
 

@@ -1,0 +1,23 @@
+# Replay the failed and skipped deliveries of one endpoint in a time range
+mutation ReplayWebhookDeliveries($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {
+  replayWebhookDeliveries(
+    endpointId: $endpointId
+    createdAfter: $createdAfter
+    createdBefore: $createdBefore
+  ) {
+    __typename
+    ... on WebhookReplayResult {
+      replayedCount
+      hasMore
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

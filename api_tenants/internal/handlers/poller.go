@@ -9,9 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,22 +27,58 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// StartHealthPoller launches a background goroutine that polls HTTP/gRPC health endpoints
-// for all registered service instances and updates their health status in the database.
 var pollerInFlight int32
 
-func StartHealthPoller() {
-	interval := time.Duration(getenvInt("QM_HEALTH_POLL_INTERVAL_SECONDS", 30)) * time.Second
-	timeout := time.Duration(getenvInt("QM_HEALTH_TIMEOUT_MS", 2000)) * time.Millisecond
-	maxConc := getenvInt("QM_HEALTH_MAX_CONCURRENCY", 8)
+// HealthPollerConfig configures StartHealthPoller. Every value except TLS is
+// read once when the poller starts.
+type HealthPollerConfig struct {
+	// PollIntervalSeconds must be positive.
+	PollIntervalSeconds int
+	TimeoutMS           int
+	// MaxConcurrency and BatchSize fall back to 8 and 200 when not positive.
+	MaxConcurrency int
+	BatchSize      int
+	// MinAgeSeconds is how old a health result must be before the instance is
+	// polled again. Negative uses the poll interval.
+	MinAgeSeconds int
+
+	GRPCWatch bool
+	// WatchRefreshSeconds must be positive when GRPCWatch is set.
+	WatchRefreshSeconds int
+	WatchBackoffSeconds int
+	WatchDialTimeoutMS  int
+	// WatchMaxConcurrency falls back to MaxConcurrency when not positive.
+	WatchMaxConcurrency int
+
+	// TLS returns the TLS settings for a gRPC health probe or watch of the
+	// given service type. It is called for every dial, so a configuration
+	// reload applies to dials made afterwards. Nil dials with no TLS overrides.
+	TLS func(serviceID string) HealthWatchTLS
+}
+
+// HealthWatchTLS is the TLS material for one gRPC health probe or watch dial.
+type HealthWatchTLS struct {
+	CAPath string
+	// ServerName overrides the certificate authority name. Empty falls back to
+	// <serviceID>.internal when CAPath is set.
+	ServerName    string
+	AllowInsecure bool
+}
+
+// StartHealthPoller launches a background goroutine that polls HTTP/gRPC health endpoints
+// for all registered service instances and updates their health status in the database.
+func StartHealthPoller(cfg HealthPollerConfig) {
+	interval := time.Duration(cfg.PollIntervalSeconds) * time.Second
+	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
+	maxConc := cfg.MaxConcurrency
 	if maxConc <= 0 {
 		maxConc = 8
 	}
-	batchSize := getenvInt("QM_HEALTH_BATCH_SIZE", 200)
+	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
 		batchSize = 200
 	}
-	minAgeSeconds := getenvInt("QM_HEALTH_MIN_AGE_SECONDS", int(interval.Seconds()))
+	minAgeSeconds := cfg.MinAgeSeconds
 	if minAgeSeconds < 0 {
 		minAgeSeconds = int(interval.Seconds())
 	}
@@ -53,17 +87,21 @@ func StartHealthPoller() {
 	sem := make(chan struct{}, maxConc)
 	minAge := time.Duration(minAgeSeconds) * time.Second
 
-	watchEnabled := getenvBool("QM_HEALTH_GRPC_WATCH", true)
-	if watchEnabled {
-		watchRefresh := time.Duration(getenvInt("QM_HEALTH_WATCH_REFRESH_SECONDS", 60)) * time.Second
-		watchBackoff := time.Duration(getenvInt("QM_HEALTH_WATCH_BACKOFF_SECONDS", 300)) * time.Second
-		watchDialTimeout := time.Duration(getenvInt("QM_HEALTH_WATCH_DIAL_TIMEOUT_MS", 2000)) * time.Millisecond
-		watchMaxConc := getenvInt("QM_HEALTH_WATCH_MAX_CONCURRENCY", maxConc)
+	tls := cfg.TLS
+	if tls == nil {
+		tls = func(string) HealthWatchTLS { return HealthWatchTLS{} }
+	}
+
+	if cfg.GRPCWatch {
+		watchRefresh := time.Duration(cfg.WatchRefreshSeconds) * time.Second
+		watchBackoff := time.Duration(cfg.WatchBackoffSeconds) * time.Second
+		watchDialTimeout := time.Duration(cfg.WatchDialTimeoutMS) * time.Millisecond
+		watchMaxConc := cfg.WatchMaxConcurrency
 		if watchMaxConc <= 0 {
 			watchMaxConc = maxConc
 		}
 		watchSem := make(chan struct{}, watchMaxConc)
-		go startGrpcHealthWatchers(watchRefresh, watchDialTimeout, watchBackoff, watchSem)
+		go startGrpcHealthWatchers(watchRefresh, watchDialTimeout, watchBackoff, watchSem, tls)
 	}
 
 	go func() {
@@ -74,7 +112,7 @@ func StartHealthPoller() {
 				time.Sleep(interval)
 				continue
 			}
-			if err := pollOnce(client, sem, batchSize, minAge); err != nil {
+			if err := pollOnce(client, sem, batchSize, minAge, tls); err != nil {
 				logger.WithError(err).Warn("health poller iteration failed")
 			}
 			atomic.StoreInt32(&pollerInFlight, 0)
@@ -168,7 +206,7 @@ func (s *serviceHealthSummary) snapshot() (map[string]serviceHealthCounts, []str
 	return byService, healthyServices, unhealthyServices, skippedServices
 }
 
-func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration) error {
+func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration, tls func(serviceID string) HealthWatchTLS) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cutoff := time.Now().Add(-minAge)
@@ -296,7 +334,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				atomic.AddInt32(&checked, 1)
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				transport, err := grpcHealthDialOption(ii)
+				transport, err := grpcHealthDialOption(ii, tls(ii.serviceID))
 				if err != nil {
 					status = "unhealthy"
 					atomic.AddInt32(&unhealthy, 1)
@@ -422,8 +460,10 @@ func applyServiceDefinitionFallback(i *serviceInstance) {
 	if strings.TrimSpace(i.proto) == "" && strings.TrimSpace(i.defaultProto) == "" {
 		i.proto = def.HealthProtocol
 	}
+	// An instance registered without a health path is probed on the fleet-wide readiness path. The poller cannot see
+	// which release the instance runs, so this stays on liveness while servicedefs.ReadySince is set.
 	if strings.TrimSpace(i.path) == "" {
-		i.path = def.HealthPath
+		i.path = def.ReadinessPath()
 	}
 	if i.port == 0 {
 		i.port = def.DefaultPort
@@ -490,43 +530,18 @@ func recordSkippedHealthCheck(instanceID string) {
 	}
 }
 
-func getenvInt(key string, def int) int {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return def
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
-func getenvBool(key string, def bool) bool {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return def
-	}
-	switch strings.ToLower(val) {
-	case "1", "true", "yes", "y", "on":
-		return true
-	case "0", "false", "no", "n", "off":
-		return false
-	default:
-		return def
-	}
-}
-
 type grpcWatchManager struct {
 	mu      sync.Mutex
 	active  map[string]context.CancelFunc
 	backoff map[string]time.Time
+	tls     func(serviceID string) HealthWatchTLS
 }
 
-func startGrpcHealthWatchers(refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}) {
+func startGrpcHealthWatchers(refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}, tls func(serviceID string) HealthWatchTLS) {
 	manager := &grpcWatchManager{
 		active:  make(map[string]context.CancelFunc),
 		backoff: make(map[string]time.Time),
+		tls:     tls,
 	}
 
 	ticker := time.NewTicker(refreshInterval)
@@ -618,7 +633,7 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 
 func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
-	transport, err := grpcHealthDialOption(inst)
+	transport, err := grpcHealthDialOption(inst, m.tls(inst.serviceID))
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch TLS config failed")
 		m.setBackoff(inst.id, backoff)
@@ -662,27 +677,13 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	}
 }
 
-func grpcHealthDialOption(inst serviceInstance) (grpc.DialOption, error) {
-	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
-	serverName, caPath := grpcHealthTLSConfig(inst, caPath, perServiceTLSServerNameForHealth(inst))
+func grpcHealthDialOption(inst serviceInstance, tls HealthWatchTLS) (grpc.DialOption, error) {
+	serverName, caPath := grpcHealthTLSConfig(inst, strings.TrimSpace(tls.CAPath), tls.ServerName)
 	return grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:    caPath,
 		ServerName:    serverName,
-		AllowInsecure: getenvBool("GRPC_ALLOW_INSECURE", false),
+		AllowInsecure: tls.AllowInsecure,
 	}, logger)
-}
-
-// perServiceTLSServerNameForHealth reads <SERVICE>_GRPC_TLS_SERVER_NAME as an
-// override for the cert authority the health poller will validate against.
-// Empty string falls through to the grpcHealthTLSConfig fallback chain
-// ("<serviceID>.internal").
-func perServiceTLSServerNameForHealth(inst serviceInstance) string {
-	serviceID := strings.TrimSpace(inst.serviceID)
-	if serviceID == "" {
-		return ""
-	}
-	key := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(serviceID))
-	return os.Getenv(key + "_GRPC_TLS_SERVER_NAME")
 }
 
 func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serverName, caFile string) {

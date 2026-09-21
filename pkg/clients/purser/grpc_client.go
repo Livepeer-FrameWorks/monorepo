@@ -493,19 +493,17 @@ func (c *GRPCClient) ListMarketplaceClusterPricings(ctx context.Context, req *pu
 // PREPAID BALANCE OPERATIONS
 // ============================================================================
 
-// GetPrepaidBalance returns the current prepaid balance for a tenant
-func (c *GRPCClient) GetPrepaidBalance(ctx context.Context, tenantID string, currency string) (*purserpb.PrepaidBalance, error) {
+// GetPrepaidBalance returns the tenant's EUR prepaid balance
+func (c *GRPCClient) GetPrepaidBalance(ctx context.Context, tenantID string) (*purserpb.PrepaidBalance, error) {
 	return c.prepaid.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{
 		TenantId: tenantID,
-		Currency: currency,
 	})
 }
 
-// InitializePrepaidBalance creates a new prepaid balance for a tenant
-func (c *GRPCClient) InitializePrepaidBalance(ctx context.Context, tenantID string, currency string, initialBalanceCents, thresholdCents int64) (*purserpb.PrepaidBalance, error) {
+// InitializePrepaidBalance creates a new EUR prepaid balance for a tenant
+func (c *GRPCClient) InitializePrepaidBalance(ctx context.Context, tenantID string, initialBalanceCents, thresholdCents int64) (*purserpb.PrepaidBalance, error) {
 	return c.prepaid.InitializePrepaidBalance(ctx, &purserpb.InitializePrepaidBalanceRequest{
 		TenantId:                 tenantID,
-		Currency:                 currency,
 		InitialBalanceCents:      initialBalanceCents,
 		LowBalanceThresholdCents: thresholdCents,
 	})
@@ -513,11 +511,10 @@ func (c *GRPCClient) InitializePrepaidBalance(ctx context.Context, tenantID stri
 
 // InitializePrepaidAccount creates subscription + prepaid balance for wallet provisioning.
 // Called by Commodore during GetOrCreateWalletUser to avoid cross-service DB inserts.
-// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
-func (c *GRPCClient) InitializePrepaidAccount(ctx context.Context, tenantID, currency string) (*purserpb.InitializePrepaidAccountResponse, error) {
+// Creates: 1) subscription with billing_model='prepaid', 2) EUR prepaid balance at 0.
+func (c *GRPCClient) InitializePrepaidAccount(ctx context.Context, tenantID string) (*purserpb.InitializePrepaidAccountResponse, error) {
 	return c.prepaid.InitializePrepaidAccount(ctx, &purserpb.InitializePrepaidAccountRequest{
 		TenantId: tenantID,
-		Currency: currency,
 	})
 }
 
@@ -536,36 +533,33 @@ func (c *GRPCClient) EnsureFreeAccount(ctx context.Context, tenantID string) (*p
 	})
 }
 
-// TopupBalance adds funds to a tenant's prepaid balance
-func (c *GRPCClient) TopupBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
+// TopupBalance adds EUR cents to a tenant's prepaid balance
+func (c *GRPCClient) TopupBalance(ctx context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
 	return c.prepaid.TopupBalance(ctx, &purserpb.TopupBalanceRequest{
 		TenantId:      tenantID,
 		AmountCents:   amountCents,
-		Currency:      currency,
 		Description:   description,
 		ReferenceId:   referenceID,
 		ReferenceType: referenceType,
 	})
 }
 
-// DeductBalance removes funds from a tenant's prepaid balance
-func (c *GRPCClient) DeductBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
+// DeductBalance removes EUR cents from a tenant's prepaid balance
+func (c *GRPCClient) DeductBalance(ctx context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
 	return c.prepaid.DeductBalance(ctx, &purserpb.DeductBalanceRequest{
 		TenantId:      tenantID,
 		AmountCents:   amountCents,
-		Currency:      currency,
 		Description:   description,
 		ReferenceId:   referenceID,
 		ReferenceType: referenceType,
 	})
 }
 
-// AdjustBalance manually adjusts a tenant's prepaid balance (admin only)
-func (c *GRPCClient) AdjustBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
+// AdjustBalance manually adjusts a tenant's EUR prepaid balance (admin only)
+func (c *GRPCClient) AdjustBalance(ctx context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error) {
 	return c.prepaid.AdjustBalance(ctx, &purserpb.AdjustBalanceRequest{
 		TenantId:      tenantID,
 		AmountCents:   amountCents,
-		Currency:      currency,
 		Description:   description,
 		ReferenceId:   referenceID,
 		ReferenceType: referenceType,

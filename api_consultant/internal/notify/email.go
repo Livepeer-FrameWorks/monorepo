@@ -4,19 +4,21 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 type EmailNotifier struct {
-	sender     *email.Sender
-	smtpConfig email.Config
-	webAppURL  string
-	logger     logging.Logger
+	sender         *email.Sender
+	smtpConfig     email.Config
+	branding       config.EmailBranding
+	brandingSource func() config.EmailBranding
+	webAppURL      string
+	logger         logging.Logger
 }
 
 type emailReportData struct {
@@ -31,10 +33,12 @@ type emailReportData struct {
 
 func NewEmailNotifier(cfg Config, logger logging.Logger) *EmailNotifier {
 	return &EmailNotifier{
-		sender:     email.NewSender(cfg.SMTP),
-		smtpConfig: cfg.SMTP,
-		webAppURL:  cfg.WebAppURL,
-		logger:     logger,
+		sender:         email.NewSender(cfg.SMTP),
+		smtpConfig:     cfg.SMTP,
+		branding:       cfg.Branding,
+		brandingSource: cfg.BrandingSource,
+		webAppURL:      cfg.WebAppURL,
+		logger:         logger,
 	}
 }
 
@@ -57,8 +61,12 @@ func (n *EmailNotifier) Notify(ctx context.Context, report Report) error {
 	}
 
 	reportURL := report.ReportURL
-	if reportURL == "" && n.webAppURL != "" && report.InvestigationID != "" {
-		reportURL = fmt.Sprintf("%s/skipper?report=%s", strings.TrimRight(n.webAppURL, "/"), report.InvestigationID)
+	webAppURL := n.webAppURL
+	if n.brandingSource != nil {
+		webAppURL = n.brandingSource().WebAppURL
+	}
+	if reportURL == "" && webAppURL != "" && report.InvestigationID != "" {
+		reportURL = fmt.Sprintf("%s/skipper?report=%s", strings.TrimRight(webAppURL, "/"), report.InvestigationID)
 	}
 
 	subject := "Skipper Investigation Report"
@@ -98,6 +106,10 @@ func (n *EmailNotifier) Notify(ctx context.Context, report Report) error {
 }
 
 func (n *EmailNotifier) renderTemplate(data emailReportData) (string, error) {
+	branding := n.branding
+	if n.brandingSource != nil {
+		branding = n.brandingSource()
+	}
 	funcs := template.FuncMap{
 		"action": func(actionURL, label string) email.Action {
 			return email.Action{URL: actionURL, Label: label}
@@ -122,20 +134,13 @@ func (n *EmailNotifier) renderTemplate(data emailReportData) (string, error) {
 	}
 
 	return email.RenderLayout(email.LayoutData{
-		LogoURL:      email.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), n.webAppURL),
+		LogoURL:      branding.Logo(),
 		Preheader:    "Skipper completed an investigation of your streaming infrastructure.",
 		Eyebrow:      "Skipper investigation",
 		Title:        "Investigation report",
-		SupportEmail: skipperSupportEmail(),
+		SupportEmail: branding.Support(),
 		Content:      data,
 	}, investigationEmailTemplate, funcs)
-}
-
-func skipperSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }
 
 const investigationEmailTemplate = `

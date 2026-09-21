@@ -94,7 +94,7 @@ func assertMediaAuthorityRefreshTriggers(t *testing.T, db *sql.DB) {
 		  FROM purser.tenant_subscriptions WHERE tenant_id = $1`, []any{tenantID}},
 		{`INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price)
 		  VALUES ($1, 'delivered_minutes', 'all_usage', 'EUR', 0, 0.01)`, []any{tierID}},
-		{`UPDATE purser.billing_tiers SET features = '{"recording":true}'::jsonb WHERE id = $1`, []any{tierID}},
+		{`UPDATE purser.billing_tiers SET features = '{"processing_customizable":true}'::jsonb WHERE id = $1`, []any{tierID}},
 		{`INSERT INTO purser.usage_records (
 		     tenant_id, cluster_id, usage_type, unit, dimension_key, source_id,
 		     report_id, usage_value, value_kind, period_start, period_end

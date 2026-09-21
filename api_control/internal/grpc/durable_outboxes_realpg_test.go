@@ -30,16 +30,17 @@ func TestDurableOutboxRepositories_RealPG(t *testing.T) {
 	if err != nil || len(serviceBatch) != 1 || serviceBatch[0].id != serviceID || serviceBatch[0].attempts != 0 {
 		t.Fatalf("first service-event claim = %#v, err = %v", serviceBatch, err)
 	}
+	firstLease := serviceBatch[0].leaseToken
 	serviceBatch, err = server.claimCommodoreServiceOutboxBatch(ctx)
 	if err != nil || len(serviceBatch) != 0 {
 		t.Fatalf("leased service-event re-claim = %#v, err = %v", serviceBatch, err)
 	}
-	server.recordCommodoreServiceOutboxFailure(ctx, serviceID, 1, errors.New("decklog unavailable"))
+	server.recordCommodoreServiceOutboxFailure(ctx, serviceID, 1, errors.New("decklog unavailable"), firstLease)
 	serviceBatch, err = server.claimCommodoreServiceOutboxBatch(ctx)
 	if err != nil || len(serviceBatch) != 1 || serviceBatch[0].attempts != 1 {
 		t.Fatalf("released service-event claim = %#v, err = %v", serviceBatch, err)
 	}
-	server.markCommodoreServiceOutboxCompleted(ctx, serviceID)
+	server.markCommodoreServiceOutboxCompleted(ctx, serviceID, serviceBatch[0].leaseToken)
 	serviceBatch, err = server.claimCommodoreServiceOutboxBatch(ctx)
 	if err != nil || len(serviceBatch) != 0 {
 		t.Fatalf("completed service-event claim = %#v, err = %v", serviceBatch, err)

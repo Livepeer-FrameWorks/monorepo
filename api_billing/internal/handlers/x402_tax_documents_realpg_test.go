@@ -102,14 +102,17 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 			if _, err := db.ExecContext(ctx, `
 				INSERT INTO purser.x402_payment_quotes (
 					id, tenant_id, resource, resource_class, network, asset, pay_to,
-					amount_atomic, credit_amount_cents, eur_per_usd_rate,
+					amount_atomic, credit_amount_cents,
 					requirements_json, status, expires_at, tax_document_kind,
-					tax_profile_snapshot, created_at
+					tax_profile_snapshot, created_at,
+					original_amount_cents, original_currency, eur_amount_cents,
+					fx_units_per_eur, fx_source, fx_reference_date
 				) VALUES ($1, $2, 'mcp://test', 'mcp', 'eip155:8453',
 				          '0x0000000000000000000000000000000000000001',
 				          '0x0000000000000000000000000000000000000002',
-				          5000000, $3, 0.8765432100, '{}', 'confirmed', NOW() + INTERVAL '1 hour',
-				          $4, $5::jsonb, $6)
+				          5000000, $3::bigint, '{}', 'confirmed', NOW() + INTERVAL '1 hour',
+				          $4, $5::jsonb, $6,
+				          ROUND($3::bigint * 1.14)::bigint, 'USD', $3::bigint, 1.14, 'ecb', DATE '2026-08-19')
 			`, quoteID, tenantID, test.amountCents, test.wantKind, profileJSON, observedAt); err != nil {
 				t.Fatal(err)
 			}
@@ -146,29 +149,46 @@ func TestCryptoTaxDocuments_RealPG(t *testing.T) { //nolint:funlen // The table 
 			if test.wantKind == "full" {
 				table = "crypto_invoices"
 			}
-			var evidence, taxStatus, fxRate, fxSource, service, registration string
+			var evidence, taxStatus, fxRate, fxSource, service, registration, currency, referenceDate string
 			var conflict bool
 			var fxObserved time.Time
-			var quantity int
+			var quantity, vatRateBps int
 			var serviceDate time.Time
+			var grossCents, amountEURCents, netEURCents, vatEURCents, netCents, vatCents int64
 			query := fmt.Sprintf(`
 				SELECT evidence_status, evidence_conflict, tax_validation_status,
-				       ecb_rate::text, fx_rate_source, fx_rate_observed_at,
+				       fx_units_per_eur::text, fx_rate_source, fx_rate_observed_at,
 				       supplier_registration_number, service_description,
-				       service_quantity, service_date
+				       service_quantity, service_date, currency, fx_reference_date::text,
+				       gross_amount_cents, net_amount_cents, vat_amount_cents,
+				       amount_eur_cents, net_eur_cents, vat_eur_cents, vat_rate_bps
 				FROM purser.%s WHERE tenant_id = $1 AND reference_id = $2
 			`, table)
 			if err := db.QueryRowContext(ctx, query, tenantID, txHash).Scan(
 				&evidence, &conflict, &taxStatus, &fxRate, &fxSource, &fxObserved,
-				&registration, &service, &quantity, &serviceDate,
+				&registration, &service, &quantity, &serviceDate, &currency, &referenceDate,
+				&grossCents, &netCents, &vatCents, &amountEURCents, &netEURCents, &vatEURCents, &vatRateBps,
 			); err != nil {
 				t.Fatal(err)
 			}
 			if evidence != test.wantEvidence || conflict != test.wantConflict || taxStatus != test.wantTaxStatus {
 				t.Fatalf("evidence/tax = (%s, %t, %s), want (%s, %t, %s)", evidence, conflict, taxStatus, test.wantEvidence, test.wantConflict, test.wantTaxStatus)
 			}
-			if fxRate != "0.876543" || !fxObserved.Equal(observedAt) || !strings.Contains(fxSource, "locked by x402 quote") {
-				t.Fatalf("FX snapshot = (%s, %s, %s), want locked quote values", fxRate, fxSource, fxObserved)
+			if fxRate != "1.1400000000" || referenceDate != "2026-08-19" || !fxObserved.Equal(observedAt) || !strings.Contains(fxSource, "locked by x402 quote") {
+				t.Fatalf("FX snapshot = (%s, %s, %s, %s), want locked quote values", fxRate, referenceDate, fxSource, fxObserved)
+			}
+			// The document keeps the USD the payer authorized and states the
+			// credited EUR with VAT extracted from the EUR amount.
+			wantNetEUR, wantVATEUR := extractVATInclusive(test.amountCents, vatRateBps)
+			wantNet, wantVAT := extractVATInclusive(grossCents, vatRateBps)
+			if currency != "USD" || grossCents != (test.amountCents*114+50)/100 || netCents != wantNet || vatCents != wantVAT {
+				t.Fatalf("original amounts = (%s, %d, %d, %d)", currency, grossCents, netCents, vatCents)
+			}
+			if amountEURCents != test.amountCents || netEURCents != wantNetEUR || vatEURCents != wantVATEUR {
+				t.Fatalf("EUR amounts = (%d, %d, %d), want (%d, %d, %d)", amountEURCents, netEURCents, vatEURCents, test.amountCents, wantNetEUR, wantVATEUR)
+			}
+			if taxStatus == "standard_vat" && vatEURCents == 0 {
+				t.Fatal("standard VAT document states zero EUR VAT")
 			}
 			if registration != "12345678" || service != "FrameWorks prepaid usage credit" || quantity != 1 || serviceDate.IsZero() {
 				t.Fatalf("legal/service fields = (%s, %s, %d, %s)", registration, service, quantity, serviceDate)

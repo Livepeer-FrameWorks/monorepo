@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/google/uuid"
 )
 
@@ -38,7 +39,7 @@ func TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG(t *test
 	}))
 	defer rpcServer.Close()
 	network := Networks["base"]
-	t.Setenv(network.RPCEndpointEnv, rpcServer.URL)
+	appconfigtest.Set(t, network.RPCEndpointEnv, rpcServer.URL)
 
 	settlementIDs := []string{uuid.NewString(), uuid.NewString()}
 	for index, settlementID := range settlementIDs {

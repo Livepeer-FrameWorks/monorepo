@@ -33,7 +33,7 @@ func TestBillingBalanceExposesSettledReservedAndAvailable(t *testing.T) {
 		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
 			return &purserpb.BillingDetails{IsComplete: true}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{
 				BalanceCents: 1000, ReservedBalanceCents: 350, AvailableBalanceCents: 650,
 				Currency: "EUR", LowBalanceThresholdCents: 500,
@@ -239,5 +239,50 @@ func TestBillingDocumentsListAndDownloadAreTenantScoped(t *testing.T) {
 	}
 	if download.Contents[0].Text != "<html>credit note</html>" || download.Contents[0].Meta["sha256"] != "digest" {
 		t.Fatalf("download = %+v", download.Contents[0])
+	}
+}
+
+func TestInvoiceAndPaymentResourcesStatePresentmentAndEURConversion(t *testing.T) {
+	presented := int64(29218)
+	finalized := timestamppb.New(time.Date(2026, 9, 1, 3, 0, 0, 0, time.UTC))
+	usdFX := &purserpb.FxConversion{
+		OriginalAmountCents: 29218, OriginalCurrency: "USD", EurAmountCents: 24946,
+		UnitsPerEur: "1.1712", Source: "ecb", ReferenceDate: "2026-09-01",
+	}
+	purser := &clientstest.FakePurser{
+		GetInvoiceFn: func(context.Context, string) (*purserpb.GetInvoiceResponse, error) {
+			return &purserpb.GetInvoiceResponse{Invoice: &purserpb.Invoice{
+				Id: "inv-usd", Status: "open", Amount: 249.46, Currency: "EUR",
+				PresentmentAmountCents: &presented, PresentmentCurrency: "USD",
+				PresentmentUnitsPerEur: "1.1712", PresentmentReferenceDate: "2026-09-01", FinalizedAt: finalized,
+			}}, nil
+		},
+		GetPaymentFn: func(context.Context, string) (*purserpb.Payment, error) {
+			return &purserpb.Payment{Id: "pay-usd", InvoiceId: "inv-usd", Method: "card", Amount: 292.18, Currency: "USD", Status: "confirmed", Fx: usdFX}, nil
+		},
+	}
+	clients := clientstest.Clients(clientstest.WithPurser(purser))
+	invoiceResult, err := handleBillingInvoice(clientstest.AuthedCtx("tenant-1"), "billing://invoices/inv-usd", clients, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoice := decodeResource[InvoiceInfo](t, invoiceResult.Contents[0].Text)
+	if invoice.Currency != "EUR" || invoice.PresentmentAmountCents == nil || *invoice.PresentmentAmountCents != 29218 ||
+		invoice.PresentmentCurrency != "USD" || invoice.PresentmentUnitsPerEUR != "1.1712" ||
+		invoice.PresentmentReferenceDate != "2026-09-01" || invoice.FinalizedAt != "2026-09-01T03:00:00Z" {
+		t.Fatalf("invoice presentment = %+v", invoice)
+	}
+
+	paymentResult, err := handleBillingPayment(clientstest.AuthedCtx("tenant-1"), "billing://payments/pay-usd", clients, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment := decodeResource[PaymentInfo](t, paymentResult.Contents[0].Text)
+	want := ConversionInfo{OriginalAmountCents: 29218, OriginalCurrency: "USD", EURAmountCents: 24946, UnitsPerEUR: "1.1712", RateSource: "ecb", ReferenceDate: "2026-09-01"}
+	if payment.Conversion == nil || *payment.Conversion != want {
+		t.Fatalf("payment conversion = %+v", payment.Conversion)
+	}
+	if got := DescribeConversion(usdFX); got != "292.18 USD = 249.46 EUR at 1.1712 USD per EUR (ECB reference date 2026-09-01)" {
+		t.Fatalf("DescribeConversion = %q", got)
 	}
 }

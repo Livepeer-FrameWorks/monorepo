@@ -14,6 +14,29 @@ import (
 	"github.com/lib/pq"
 )
 
+const bumpArtifactRevision = `-- name: BumpArtifactRevision :one
+UPDATE foghorn.artifacts
+SET revision = revision + 1
+WHERE artifact_hash = $1
+  AND tenant_id = $2::uuid
+RETURNING revision
+`
+
+type BumpArtifactRevisionParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Advances the artifact's domain-event revision inside the transition's
+// transaction. The row lock is held until commit, so a concurrent transition
+// of the same artifact reads the committed value and takes the next one.
+func (q *Queries) BumpArtifactRevision(ctx context.Context, arg BumpArtifactRevisionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, bumpArtifactRevision, arg.ArtifactHash, arg.TenantID)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
 const claimArtifactEvents = `-- name: ClaimArtifactEvents :many
 SELECT id::text, event_kind, COALESCE(tenant_id::text, '')::text AS tenant_id, stream_id, artifact_id,
        payload::text, attempts, created_at
@@ -96,6 +119,42 @@ type EnqueueArtifactEventParams struct {
 
 func (q *Queries) EnqueueArtifactEvent(ctx context.Context, arg EnqueueArtifactEventParams) error {
 	_, err := q.db.ExecContext(ctx, enqueueArtifactEvent,
+		arg.EventKind,
+		arg.TenantID,
+		arg.StreamID,
+		arg.ArtifactID,
+		arg.Payload,
+	)
+	return err
+}
+
+const enqueueArtifactEventWithID = `-- name: EnqueueArtifactEventWithID :exec
+INSERT INTO foghorn.artifact_event_outbox
+    (id, event_kind, tenant_id, stream_id, artifact_id, payload)
+VALUES (
+    $1::uuid,
+    $2,
+    NULLIF($3::text, '')::uuid,
+    $4,
+    $5,
+    $6::jsonb
+)
+`
+
+type EnqueueArtifactEventWithIDParams struct {
+	ID         string          `db:"id" json:"id"`
+	EventKind  string          `db:"event_kind" json:"event_kind"`
+	TenantID   string          `db:"tenant_id" json:"tenant_id"`
+	StreamID   string          `db:"stream_id" json:"stream_id"`
+	ArtifactID string          `db:"artifact_id" json:"artifact_id"`
+	Payload    json.RawMessage `db:"payload" json:"payload"`
+}
+
+// The legacy row of a transition that also publishes a domain event carries
+// that event's ID, so both streams deliver the fact under one identity.
+func (q *Queries) EnqueueArtifactEventWithID(ctx context.Context, arg EnqueueArtifactEventWithIDParams) error {
+	_, err := q.db.ExecContext(ctx, enqueueArtifactEventWithID,
+		arg.ID,
 		arg.EventKind,
 		arg.TenantID,
 		arg.StreamID,

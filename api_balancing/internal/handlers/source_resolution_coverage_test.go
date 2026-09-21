@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 
@@ -106,7 +107,7 @@ func seedSourceNodeCluster(nodeID, clusterID string) {
 
 func TestSourceCallerClusterIDUsesAuthenticatedNodeBinding(t *testing.T) {
 	withSeededBalancer(t)
-	t.Setenv("CLUSTER_ID", "foghorn-control-cell")
+	useFoghornConfig(t, &appconfig.Foghorn{ClusterID: "foghorn-control-cell"})
 	seedSourceNodeCluster("edgeA", "tenant-media-cluster")
 
 	if got := sourceCallerClusterID(context.Background(), "edgeA"); got != "tenant-media-cluster" {

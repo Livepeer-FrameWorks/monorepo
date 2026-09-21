@@ -1,0 +1,17 @@
+fragment WebhookEndpointFields on WebhookEndpoint {
+  id
+  url
+  description
+  eventTypes
+  apiVersion
+  status
+  disabledReason
+  disabledAt
+  consecutiveFailures
+  failingSince
+  lastSuccessAt
+  lastFailureAt
+  previousSecretExpiresAt
+  createdAt
+  updatedAt
+}

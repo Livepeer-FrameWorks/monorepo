@@ -13,5 +13,6 @@ mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
     }
     isComplete
     updatedAt
+    presentmentCurrency
   }
 }

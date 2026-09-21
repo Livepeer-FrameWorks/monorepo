@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"frameworks/api_billing/internal/appconfig"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+
+	"github.com/shopspring/decimal"
 )
 
 // EmailService handles email notifications
@@ -55,6 +56,34 @@ type EmailData struct {
 	// loop. Built by buildEmailInvoiceData; the template is otherwise
 	// responsible for nothing structural.
 	LineItemGroups []EmailLineItemGroup
+	// FX states the EUR equivalent of Amount when Currency is not EUR.
+	FX EmailFX
+}
+
+// EmailFX is the EUR amount a non-EUR amount converts to at an ECB reference
+// rate. The zero value renders nothing, which is the case for EUR amounts.
+type EmailFX struct {
+	EURAmount     string
+	UnitsPerEUR   string
+	ReferenceDate string
+}
+
+// NewEmailFX returns the FX statement for an amount charged in currency. EUR
+// amounts and amounts without a recorded rate return the zero value.
+func NewEmailFX(currency string, eurCents int64, unitsPerEUR, referenceDate string) EmailFX {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	unitsPerEUR = strings.TrimSpace(unitsPerEUR)
+	if currency == "" || currency == "EUR" || unitsPerEUR == "" || referenceDate == "" {
+		return EmailFX{}
+	}
+	if rate, err := decimal.NewFromString(unitsPerEUR); err == nil {
+		unitsPerEUR = rate.String()
+	}
+	return EmailFX{
+		EURAmount:     decimal.New(eurCents, -2).StringFixed(2),
+		UnitsPerEUR:   unitsPerEUR,
+		ReferenceDate: referenceDate,
+	}
 }
 
 // EmailInvoiceLineItem is a local presentation DTO for email templates. Built
@@ -89,23 +118,24 @@ type EmailLineItemGroup struct {
 
 // NewEmailService creates a new email service instance
 func NewEmailService(logger logging.Logger) *EmailService {
-	port, _ := strconv.Atoi(os.Getenv("SMTP_PORT"))
+	rt := appconfig.Runtime()
+	port := rt.SMTPPort
 	if port == 0 {
 		port = 587 // Default SMTP port
 	}
 
-	fromName := strings.TrimSpace(os.Getenv("FROM_NAME"))
+	fromName := strings.TrimSpace(rt.FromName)
 	if fromName == "" {
 		fromName = "FrameWorks"
 	}
 	return &EmailService{
-		smtpHost:      os.Getenv("SMTP_HOST"),
+		smtpHost:      rt.SMTPHost,
 		smtpPort:      port,
-		smtpUser:      os.Getenv("SMTP_USER"),
-		smtpPassword:  os.Getenv("SMTP_PASSWORD"),
-		fromEmail:     os.Getenv("FROM_EMAIL"),
+		smtpUser:      rt.SMTPUser,
+		smtpPassword:  rt.SMTPPassword,
+		fromEmail:     rt.FromEmail,
 		fromName:      fromName,
-		allowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
+		allowInsecure: rt.SMTPAllowInsecure,
 		logger:        logger,
 	}
 }
@@ -116,10 +146,12 @@ func (es *EmailService) IsConfigured() bool {
 }
 
 // SendInvoiceCreatedEmail sends notification when a new invoice is created.
+// amount and currency are the total charged; fx states the EUR invoice total
+// when that currency is not EUR. meteredAmount and grossMeteredAmount are EUR.
 // lineItems is the cluster-attributed presentation source of truth — the
 // caller queries purser.invoice_line_items and maps to []EmailInvoiceLineItem
 // before invoking. Do not pass usage_details; that JSON is raw/debug only.
-func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error {
+func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping invoice created email")
 		return nil
@@ -139,6 +171,7 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 		LineItemGroups:     groupEmailLineItems(lineItems),
 		UsageWaived:        grossMeteredAmount > 0 && meteredAmount == 0,
 		GrossMeteredAmount: grossMeteredAmount,
+		FX:                 fx,
 	}
 
 	body, err := es.renderTemplate("invoice_created", data)
@@ -206,7 +239,7 @@ func groupEmailLineItems(lines []EmailInvoiceLineItem) []EmailLineItemGroup {
 }
 
 // SendPaymentSuccessEmail sends notification when payment is successful
-func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, paymentMethod string) error {
+func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, paymentMethod string, fx EmailFX) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping payment success email")
 		return nil
@@ -223,6 +256,7 @@ func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoice
 		PaidAt:        &now,
 		PaymentMethod: paymentMethod,
 		LoginURL:      invoiceBillingURL(invoiceID),
+		FX:            fx,
 	}
 
 	body, err := es.renderTemplate("payment_success", data)
@@ -234,7 +268,7 @@ func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoice
 }
 
 // SendPaymentFailedEmail sends notification when payment fails
-func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, paymentMethod string) error {
+func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, paymentMethod string, fx EmailFX) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping payment failed email")
 		return nil
@@ -250,6 +284,7 @@ func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceI
 		PaymentMethod:   paymentMethod,
 		LoginURL:        invoiceBillingURL(invoiceID),
 		PaymentRequired: amount > 0,
+		FX:              fx,
 	}
 
 	body, err := es.renderTemplate("payment_failed", data)
@@ -262,7 +297,7 @@ func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceI
 
 // SendPaymentActionRequiredEmail notifies the customer that a payment needs
 // their authentication and links the relevant hosted or in-app resolution page.
-func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, actionURL string) error {
+func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, actionURL string, fx EmailFX) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping payment action-required email")
 		return nil
@@ -271,7 +306,7 @@ func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, 
 	subject := fmt.Sprintf("Action Required - Confirm Payment for Invoice %s", invoiceID)
 
 	if actionURL == "" {
-		actionURL = os.Getenv("WEBAPP_PUBLIC_URL") + "/login"
+		actionURL = appconfig.Runtime().WebAppURL + "/login"
 	}
 	data := EmailData{
 		TenantName: tenantName,
@@ -279,6 +314,7 @@ func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, 
 		Amount:     amount,
 		Currency:   currency,
 		ActionURL:  actionURL,
+		FX:         fx,
 	}
 
 	body, err := es.renderTemplate("payment_action_required", data)
@@ -289,8 +325,9 @@ func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, 
 	return es.sendEmail(tenantEmail, subject, body)
 }
 
-// SendOverdueReminderEmail sends reminder for overdue invoices
-func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, daysPastDue int) error {
+// SendOverdueReminderEmail sends reminder for overdue invoices. fx states the
+// EUR invoice total when currency is not EUR.
+func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping overdue reminder email")
 		return nil
@@ -306,6 +343,7 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 		DaysPastDue:     daysPastDue,
 		LoginURL:        invoiceBillingURL(invoiceID),
 		PaymentRequired: amount > 0,
+		FX:              fx,
 	}
 
 	body, err := es.renderTemplate("overdue_reminder", data)
@@ -317,7 +355,7 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 }
 
 func invoiceBillingURL(invoiceID string) string {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	base := strings.TrimRight(appconfig.Runtime().WebAppURL, "/")
 	return base + "/account/billing?invoice=" + url.QueryEscape(invoiceID)
 }
 
@@ -334,7 +372,7 @@ func (es *EmailService) SendAccountSuspendedEmail(tenantEmail, tenantName string
 		TenantName: tenantName,
 		Balance:    balance,
 		Currency:   currency,
-		LoginURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/") + "/account/billing",
+		LoginURL:   strings.TrimRight(strings.TrimSpace(appconfig.Runtime().WebAppURL), "/") + "/account/billing",
 	}
 
 	body, err := es.renderTemplate("account_suspended", data)
@@ -360,7 +398,7 @@ func (es *EmailService) sendEmail(to, subject, body string) error {
 		To:       to,
 		Subject:  subject,
 		HTMLBody: body,
-		ReplyTo:  billingSupportEmail(),
+		ReplyTo:  appconfig.Runtime().Support(),
 	})
 
 	if err != nil {

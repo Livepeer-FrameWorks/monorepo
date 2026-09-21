@@ -73,20 +73,22 @@ type NavigatorTenantAliasRetirement struct {
 }
 
 type NavigatorTenantCustomDomain struct {
-	TenantID           string         `db:"tenant_id" json:"tenant_id"`
-	Domain             string         `db:"domain" json:"domain"`
-	Status             string         `db:"status" json:"status"`
-	AcmeDnsSubdomain   string         `db:"acme_dns_subdomain" json:"acme_dns_subdomain"`
-	IssuerID           sql.NullString `db:"issuer_id" json:"issuer_id"`
-	LastVerifiedAt     sql.NullTime   `db:"last_verified_at" json:"last_verified_at"`
-	CertIssuedAt       sql.NullTime   `db:"cert_issued_at" json:"cert_issued_at"`
-	CertExpiresAt      sql.NullTime   `db:"cert_expires_at" json:"cert_expires_at"`
-	LastError          sql.NullString `db:"last_error" json:"last_error"`
-	CreatedAt          time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt          time.Time      `db:"updated_at" json:"updated_at"`
-	LastRenewalError   sql.NullString `db:"last_renewal_error" json:"last_renewal_error"`
-	LastRenewalErrorAt sql.NullTime   `db:"last_renewal_error_at" json:"last_renewal_error_at"`
-	NextAttemptAt      sql.NullTime   `db:"next_attempt_at" json:"next_attempt_at"`
+	TenantID              string         `db:"tenant_id" json:"tenant_id"`
+	Domain                string         `db:"domain" json:"domain"`
+	Status                string         `db:"status" json:"status"`
+	AcmeDnsSubdomain      string         `db:"acme_dns_subdomain" json:"acme_dns_subdomain"`
+	IssuerID              sql.NullString `db:"issuer_id" json:"issuer_id"`
+	LastVerifiedAt        sql.NullTime   `db:"last_verified_at" json:"last_verified_at"`
+	CertIssuedAt          sql.NullTime   `db:"cert_issued_at" json:"cert_issued_at"`
+	CertExpiresAt         sql.NullTime   `db:"cert_expires_at" json:"cert_expires_at"`
+	LastError             sql.NullString `db:"last_error" json:"last_error"`
+	CreatedAt             time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt             time.Time      `db:"updated_at" json:"updated_at"`
+	LastRenewalError      sql.NullString `db:"last_renewal_error" json:"last_renewal_error"`
+	LastRenewalErrorAt    sql.NullTime   `db:"last_renewal_error_at" json:"last_renewal_error_at"`
+	NextAttemptAt         sql.NullTime   `db:"next_attempt_at" json:"next_attempt_at"`
+	VerificationStartedAt time.Time      `db:"verification_started_at" json:"verification_started_at"`
+	FailureReportedAt     sql.NullTime   `db:"failure_reported_at" json:"failure_reported_at"`
 }
 
 type NavigatorTlsBundle struct {

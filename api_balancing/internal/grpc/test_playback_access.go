@@ -21,10 +21,10 @@ import (
 // against the policy's active keys.
 //
 // Webhook mode (fire_webhook=true and policy.type=webhook) does fire a
-// real outbound HTTPS request to the customer URL. The same SSRF-hardened
-// dialer used by the live USER_NEW path applies (see
-// triggers/playback_auth.go newSSRFHardenedClient). Customer URLs that
-// resolve to private/loopback/CGNAT addresses are blocked at dial time.
+// real outbound HTTPS request to the customer URL, through the same webhook
+// client as the live USER_NEW path (triggers/playback_auth.go
+// newPlaybackWebhookClient): the shared webhook destination policy refuses a
+// connection to any non-public address at dial time.
 //
 // fire_webhook=false on a webhook policy returns "webhook-test-skipped"
 // without making the call so an operator can inspect the policy shape

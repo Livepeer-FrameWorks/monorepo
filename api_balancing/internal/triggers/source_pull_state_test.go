@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -93,8 +94,7 @@ func TestStreamSourcePreparedPullRejectsDestinationReassignment(t *testing.T) {
 }
 
 func TestStreamSourceOtherDestinationUsesBoundResolverNotConfiguredFallback(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "frameworks.network", BalancerCapabilitySecret: "test-capability-secret"})
 	registry := control.NewStreamRegistry(nil, "cell", time.Minute)
 	previous := control.StreamRegistryInstance
 	control.SetStreamRegistry(registry)

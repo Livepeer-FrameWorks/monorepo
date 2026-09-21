@@ -12,6 +12,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
@@ -327,12 +328,12 @@ func TestValidateWindowCompletionRequiresSourceRegion(t *testing.T) {
 }
 
 func TestMeteringCompletenessRequiredFollowsExistingBetaWaiver(t *testing.T) {
-	t.Setenv("WAIVE_USAGE_CHARGES", "true")
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "true")
 	if meteringCompletenessRequired(true) {
 		t.Fatal("waived usage charges must not block subscription invoices on metering completeness")
 	}
 
-	t.Setenv("WAIVE_USAGE_CHARGES", "false")
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	if !meteringCompletenessRequired(true) {
 		t.Fatal("metered billing must require complete source windows")
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/shopspring/decimal"
@@ -86,7 +87,7 @@ func decodeRPCRequest(t *testing.T, req *http.Request) map[string]any {
 func testNetwork() NetworkConfig {
 	return NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_PRICEFEED_RPC",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 		PriceFeeds: map[string]string{
 			"ETH": "0x000000000000000000000000000000000000feed",
 		},
@@ -109,7 +110,7 @@ func TestPriceFeed_USDC_OneToOne(t *testing.T) {
 }
 
 func TestPriceFeed_ETH_HappyPath_8Decimals(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	now := time.Now()
 	stubChainlinkRPC(t, chainlinkResponse{
@@ -137,7 +138,7 @@ func TestPriceFeed_ETH_HappyPath_8Decimals(t *testing.T) {
 }
 
 func TestPriceFeed_ETH_HappyPath_18Decimals(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	// 3,300.45 USD with 18 decimals = 3300_45 followed by 16 zeros, i.e.
 	// 3,300.45 * 10^18 = 3300450000000000000000.
@@ -161,7 +162,7 @@ func TestPriceFeed_ETH_HappyPath_18Decimals(t *testing.T) {
 }
 
 func TestPriceFeed_RejectsStaleUpdate(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	stubChainlinkRPC(t, chainlinkResponse{
 		decimals:        8,
@@ -179,7 +180,7 @@ func TestPriceFeed_RejectsStaleUpdate(t *testing.T) {
 }
 
 func TestPriceFeed_RejectsNonPositiveAnswer(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	stubChainlinkRPC(t, chainlinkResponse{
 		decimals:        8,
@@ -197,7 +198,7 @@ func TestPriceFeed_RejectsNonPositiveAnswer(t *testing.T) {
 }
 
 func TestPriceFeed_RejectsIncompleteRound(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	stubChainlinkRPC(t, chainlinkResponse{
 		decimals:        8,
@@ -224,7 +225,7 @@ func TestPriceFeed_RejectsLPT_NoFeedConfigured(t *testing.T) {
 }
 
 func TestPriceFeed_CachesSuccessfulRead(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	calls := 0
 	withDefaultHTTPClient(t, &http.Client{
@@ -265,7 +266,7 @@ func TestPriceFeed_CachesSuccessfulRead(t *testing.T) {
 }
 
 func TestPriceFeed_RPCError(t *testing.T) {
-	t.Setenv("TEST_PRICEFEED_RPC", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	withDefaultHTTPClient(t, &http.Client{
 		Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {

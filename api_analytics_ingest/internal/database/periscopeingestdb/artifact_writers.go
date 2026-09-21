@@ -157,3 +157,57 @@ func PrepareVODArtifactEvent(ctx context.Context, db BatchPreparer) (*Writer[VOD
 		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.ClusterID, row.OriginClusterID, row.Filename, row.RequestID, row.Stage, row.ContentType, row.IngestNodeID, row.FilePath, row.S3URL, row.SizeBytes, row.Message, row.ExpiresAt, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ProcessingWallMS, row.SpeedMinX, row.SpeedAvgX, row.SpeedMaxX, row.HardSlowTicks, row.StaleHoldTicks, row.LockoutTicks, row.DrainMS, row.EventID}
 	})
 }
+
+const insertDomainArtifactEvent = `INSERT INTO artifact_events (
+	timestamp, tenant_id, stream_id, request_id, stage, content_type, filename,
+	size_bytes, message, source_region, event_id, record_source
+)`
+
+// DomainArtifactRecordSource marks artifact_events rows projected from
+// domain.events; artifact_events_deduped prefers the lifecycle row of the same
+// event ID over them.
+const DomainArtifactRecordSource = "domain_events"
+
+// DomainArtifactEventRow is an artifact_events row projected from a domain
+// event. Domain events carry no internal name, node, path, or URL, so those
+// columns keep their defaults. The writer always sets record_source to
+// DomainArtifactRecordSource.
+type DomainArtifactEventRow struct {
+	Timestamp                     time.Time
+	TenantID, StreamID            uuid.UUID
+	RequestID, Stage, ContentType string
+	Filename                      *string
+	SizeBytes                     *uint64
+	Message                       *string
+	SourceRegion, EventID         string
+}
+
+func PrepareDomainArtifactEvent(ctx context.Context, db BatchPreparer) (*Writer[DomainArtifactEventRow], error) {
+	return prepare(ctx, db, insertDomainArtifactEvent, func(row DomainArtifactEventRow) []interface{} {
+		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.RequestID, row.Stage, row.ContentType, row.Filename, row.SizeBytes, row.Message, row.SourceRegion, row.EventID, DomainArtifactRecordSource}
+	})
+}
+
+const insertArtifactStateV2 = `INSERT INTO artifact_state_current_v2 (
+	tenant_id, artifact_id, content_type, stream_id, stage, event_type, failure_reason,
+	filename, size_bytes, duration_ms, updated_at, event_id, aggregate_version, version
+)`
+
+type ArtifactStateV2Row struct {
+	TenantID                        uuid.UUID
+	ArtifactID, ContentType         string
+	StreamID                        uuid.UUID
+	Stage, EventType, FailureReason string
+	Filename                        *string
+	SizeBytes                       *uint64
+	DurationMS                      *int64
+	UpdatedAt                       time.Time
+	EventID                         string
+	AggregateVersion, Version       uint64
+}
+
+func PrepareArtifactStateV2(ctx context.Context, db BatchPreparer) (*Writer[ArtifactStateV2Row], error) {
+	return prepare(ctx, db, insertArtifactStateV2, func(row ArtifactStateV2Row) []interface{} {
+		return []interface{}{row.TenantID, row.ArtifactID, row.ContentType, row.StreamID, row.Stage, row.EventType, row.FailureReason, row.Filename, row.SizeBytes, row.DurationMS, row.UpdatedAt, row.EventID, row.AggregateVersion, row.Version}
+	})
+}

@@ -18,8 +18,9 @@ import (
 
 func TestGRPCAuthInterceptor_SetsAuthTypeForServiceToken(t *testing.T) {
 	interceptor := GRPCAuthInterceptor(GRPCAuthConfig{
-		ServiceToken: "service-token",
-		JWTSecret:    []byte("secret"),
+		ServiceToken:   "service-token",
+		JWTSecret:      []byte("secret"),
+		MetadataPolicy: MetadataPolicyAllow,
 	})
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{

@@ -10,6 +10,7 @@ import (
 	ipc "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	anypb "google.golang.org/protobuf/types/known/anypb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -37,6 +38,10 @@ const (
 	// may subscribe, CHANNEL_ALL does not include it, and its events are never
 	// delivered to tenant subscribers.
 	Channel_CHANNEL_PLATFORM Channel = 7
+	// Public domain events (pkg/events registry, visibility PUBLIC) of the
+	// subscriber's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent payload.
+	// Subscribers name it explicitly: CHANNEL_ALL does not include it.
+	Channel_CHANNEL_EVENTS Channel = 8
 )
 
 // Enum value maps for Channel.
@@ -50,6 +55,7 @@ var (
 		5: "CHANNEL_MESSAGING",
 		6: "CHANNEL_AI",
 		7: "CHANNEL_PLATFORM",
+		8: "CHANNEL_EVENTS",
 	}
 	Channel_value = map[string]int32{
 		"CHANNEL_UNSPECIFIED": 0,
@@ -60,6 +66,7 @@ var (
 		"CHANNEL_MESSAGING":   5,
 		"CHANNEL_AI":          6,
 		"CHANNEL_PLATFORM":    7,
+		"CHANNEL_EVENTS":      8,
 	}
 )
 
@@ -129,6 +136,8 @@ const (
 	EventType_EVENT_TYPE_MESSAGE_LIFECYCLE EventType = 50
 	// AI events (channel: AI)
 	EventType_EVENT_TYPE_SKIPPER_INVESTIGATION EventType = 60
+	// Public domain event (channel: events)
+	EventType_EVENT_TYPE_TENANT_EVENT EventType = 70
 )
 
 // Enum value maps for EventType.
@@ -161,6 +170,7 @@ var (
 		43: "EVENT_TYPE_STORAGE_SNAPSHOT",
 		50: "EVENT_TYPE_MESSAGE_LIFECYCLE",
 		60: "EVENT_TYPE_SKIPPER_INVESTIGATION",
+		70: "EVENT_TYPE_TENANT_EVENT",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":              0,
@@ -190,6 +200,7 @@ var (
 		"EVENT_TYPE_STORAGE_SNAPSHOT":         43,
 		"EVENT_TYPE_MESSAGE_LIFECYCLE":        50,
 		"EVENT_TYPE_SKIPPER_INVESTIGATION":    60,
+		"EVENT_TYPE_TENANT_EVENT":             70,
 	}
 )
 
@@ -396,6 +407,7 @@ type EventData struct {
 	//	*EventData_MessageLifecycle
 	//	*EventData_StreamChange
 	//	*EventData_IncidentUpdated
+	//	*EventData_TenantEvent
 	Payload isEventData_Payload `protobuf_oneof:"payload"`
 	// Placement envelope copied from MistTrigger. Keeping this outside the
 	// payload oneof makes live subscription events preserve the same topology
@@ -663,6 +675,15 @@ func (x *EventData) GetIncidentUpdated() *ipc.IncidentEvent {
 	return nil
 }
 
+func (x *EventData) GetTenantEvent() *TenantEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*EventData_TenantEvent); ok {
+			return x.TenantEvent
+		}
+	}
+	return nil
+}
+
 func (x *EventData) GetSourceRegion() string {
 	if x != nil {
 		return x.SourceRegion
@@ -805,6 +826,10 @@ type EventData_IncidentUpdated struct {
 	IncidentUpdated *ipc.IncidentEvent `protobuf:"bytes,25,opt,name=incident_updated,json=incidentUpdated,proto3,oneof"`
 }
 
+type EventData_TenantEvent struct {
+	TenantEvent *TenantEvent `protobuf:"bytes,26,opt,name=tenant_event,json=tenantEvent,proto3,oneof"`
+}
+
 func (*EventData_ClientLifecycle) isEventData_Payload() {}
 
 func (*EventData_NodeLifecycle) isEventData_Payload() {}
@@ -853,6 +878,87 @@ func (*EventData_StreamChange) isEventData_Payload() {}
 
 func (*EventData_IncidentUpdated) isEventData_Payload() {}
 
+func (*EventData_TenantEvent) isEventData_Payload() {}
+
+// A public domain event as its producer emitted it. data holds the registered
+// message of the type (a frameworks.events.public.v1 message; the type URL names
+// it), so a consumer binds it without a mapping step.
+type TenantEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`           // ce_id, stable across redeliveries
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`       // registered type, e.g. "stream.live"
+	Time          *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=time,proto3" json:"time,omitempty"`       // when the state change committed
+	Subject       string                 `protobuf:"bytes,4,opt,name=subject,proto3" json:"subject,omitempty"` // "<aggregate>/<id>", e.g. "streams/<uuid>"
+	Data          *anypb.Any             `protobuf:"bytes,5,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantEvent) Reset() {
+	*x = TenantEvent{}
+	mi := &file_signalman_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantEvent) ProtoMessage() {}
+
+func (x *TenantEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_signalman_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantEvent.ProtoReflect.Descriptor instead.
+func (*TenantEvent) Descriptor() ([]byte, []int) {
+	return file_signalman_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TenantEvent) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TenantEvent) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *TenantEvent) GetTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Time
+	}
+	return nil
+}
+
+func (x *TenantEvent) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *TenantEvent) GetData() *anypb.Any {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 type SignalmanEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EventType     EventType              `protobuf:"varint,1,opt,name=event_type,json=eventType,proto3,enum=signalman.EventType" json:"event_type,omitempty"`
@@ -866,7 +972,7 @@ type SignalmanEvent struct {
 
 func (x *SignalmanEvent) Reset() {
 	*x = SignalmanEvent{}
-	mi := &file_signalman_proto_msgTypes[4]
+	mi := &file_signalman_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -878,7 +984,7 @@ func (x *SignalmanEvent) String() string {
 func (*SignalmanEvent) ProtoMessage() {}
 
 func (x *SignalmanEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[4]
+	mi := &file_signalman_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -891,7 +997,7 @@ func (x *SignalmanEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalmanEvent.ProtoReflect.Descriptor instead.
 func (*SignalmanEvent) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{4}
+	return file_signalman_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SignalmanEvent) GetEventType() EventType {
@@ -943,7 +1049,7 @@ type ClientMessage struct {
 
 func (x *ClientMessage) Reset() {
 	*x = ClientMessage{}
-	mi := &file_signalman_proto_msgTypes[5]
+	mi := &file_signalman_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -955,7 +1061,7 @@ func (x *ClientMessage) String() string {
 func (*ClientMessage) ProtoMessage() {}
 
 func (x *ClientMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[5]
+	mi := &file_signalman_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -968,7 +1074,7 @@ func (x *ClientMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientMessage.ProtoReflect.Descriptor instead.
 func (*ClientMessage) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{5}
+	return file_signalman_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ClientMessage) GetMessage() isClientMessage_Message {
@@ -1036,7 +1142,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_signalman_proto_msgTypes[6]
+	mi := &file_signalman_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1048,7 +1154,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[6]
+	mi := &file_signalman_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1061,7 +1167,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{6}
+	return file_signalman_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Ping) GetTimestampMs() int64 {
@@ -1086,7 +1192,7 @@ type ServerMessage struct {
 
 func (x *ServerMessage) Reset() {
 	*x = ServerMessage{}
-	mi := &file_signalman_proto_msgTypes[7]
+	mi := &file_signalman_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1098,7 +1204,7 @@ func (x *ServerMessage) String() string {
 func (*ServerMessage) ProtoMessage() {}
 
 func (x *ServerMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[7]
+	mi := &file_signalman_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1111,7 +1217,7 @@ func (x *ServerMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerMessage.ProtoReflect.Descriptor instead.
 func (*ServerMessage) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{7}
+	return file_signalman_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ServerMessage) GetMessage() isServerMessage_Message {
@@ -1194,7 +1300,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_signalman_proto_msgTypes[8]
+	mi := &file_signalman_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1206,7 +1312,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[8]
+	mi := &file_signalman_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1219,7 +1325,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{8}
+	return file_signalman_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Pong) GetTimestampMs() int64 {
@@ -1239,7 +1345,7 @@ type SignalmanError struct {
 
 func (x *SignalmanError) Reset() {
 	*x = SignalmanError{}
-	mi := &file_signalman_proto_msgTypes[9]
+	mi := &file_signalman_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1251,7 +1357,7 @@ func (x *SignalmanError) String() string {
 func (*SignalmanError) ProtoMessage() {}
 
 func (x *SignalmanError) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[9]
+	mi := &file_signalman_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1264,7 +1370,7 @@ func (x *SignalmanError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalmanError.ProtoReflect.Descriptor instead.
 func (*SignalmanError) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{9}
+	return file_signalman_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SignalmanError) GetCode() string {
@@ -1289,7 +1395,7 @@ type GetHubStatsRequest struct {
 
 func (x *GetHubStatsRequest) Reset() {
 	*x = GetHubStatsRequest{}
-	mi := &file_signalman_proto_msgTypes[10]
+	mi := &file_signalman_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1301,7 +1407,7 @@ func (x *GetHubStatsRequest) String() string {
 func (*GetHubStatsRequest) ProtoMessage() {}
 
 func (x *GetHubStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[10]
+	mi := &file_signalman_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1314,7 +1420,7 @@ func (x *GetHubStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHubStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetHubStatsRequest) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{10}
+	return file_signalman_proto_rawDescGZIP(), []int{11}
 }
 
 type HubStats struct {
@@ -1328,7 +1434,7 @@ type HubStats struct {
 
 func (x *HubStats) Reset() {
 	*x = HubStats{}
-	mi := &file_signalman_proto_msgTypes[11]
+	mi := &file_signalman_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1446,7 @@ func (x *HubStats) String() string {
 func (*HubStats) ProtoMessage() {}
 
 func (x *HubStats) ProtoReflect() protoreflect.Message {
-	mi := &file_signalman_proto_msgTypes[11]
+	mi := &file_signalman_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1459,7 @@ func (x *HubStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HubStats.ProtoReflect.Descriptor instead.
 func (*HubStats) Descriptor() ([]byte, []int) {
-	return file_signalman_proto_rawDescGZIP(), []int{11}
+	return file_signalman_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HubStats) GetTotalConnections() int32 {
@@ -1381,7 +1487,7 @@ var File_signalman_proto protoreflect.FileDescriptor
 
 const file_signalman_proto_rawDesc = "" +
 	"\n" +
-	"\x0fsignalman.proto\x12\tsignalman\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\tipc.proto\"\x9c\x01\n" +
+	"\x0fsignalman.proto\x12\tsignalman\x1a\x19google/protobuf/any.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\tipc.proto\"\x9c\x01\n" +
 	"\x10SubscribeRequest\x12.\n" +
 	"\bchannels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\bchannels\x12\x1c\n" +
 	"\auser_id\x18\x02 \x01(\tH\x00R\x06userId\x88\x01\x01\x12 \n" +
@@ -1393,7 +1499,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x12UnsubscribeRequest\x12.\n" +
 	"\bchannels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\bchannels\"_\n" +
 	"\x18SubscriptionConfirmation\x12C\n" +
-	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\x82\x11\n" +
+	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\xbf\x11\n" +
 	"\tEventData\x12S\n" +
 	"\x10client_lifecycle\x18\x01 \x01(\v2&.helmsmancontrol.ClientLifecycleUpdateH\x00R\x0fclientLifecycle\x12M\n" +
 	"\x0enode_lifecycle\x18\x02 \x01(\v2$.helmsmancontrol.NodeLifecycleUpdateH\x00R\rnodeLifecycle\x12H\n" +
@@ -1421,14 +1527,21 @@ const file_signalman_proto_rawDesc = "" +
 	"\x10storage_snapshot\x18\x16 \x01(\v2 .helmsmancontrol.StorageSnapshotH\x00R\x0fstorageSnapshot\x12T\n" +
 	"\x11message_lifecycle\x18\x17 \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\x10messageLifecycle\x12I\n" +
 	"\rstream_change\x18\x18 \x01(\v2\".helmsmancontrol.StreamChangeEventH\x00R\fstreamChange\x12K\n" +
-	"\x10incident_updated\x18\x19 \x01(\v2\x1e.helmsmancontrol.IncidentEventH\x00R\x0fincidentUpdated\x12#\n" +
+	"\x10incident_updated\x18\x19 \x01(\v2\x1e.helmsmancontrol.IncidentEventH\x00R\x0fincidentUpdated\x12;\n" +
+	"\ftenant_event\x18\x1a \x01(\v2\x16.signalman.TenantEventH\x00R\vtenantEvent\x12#\n" +
 	"\rsource_region\x18( \x01(\tR\fsourceRegion\x12*\n" +
 	"\x11source_cluster_id\x18) \x01(\tR\x0fsourceClusterId\x120\n" +
 	"\x14stream_origin_region\x18* \x01(\tR\x12streamOriginRegion\x127\n" +
 	"\x18stream_origin_cluster_id\x18+ \x01(\tR\x15streamOriginClusterId\x12%\n" +
 	"\x0eschema_version\x18, \x01(\x05R\rschemaVersion\x12&\n" +
 	"\x0fcontrol_cell_id\x18- \x01(\tR\rcontrolCellIdB\t\n" +
-	"\apayloadJ\x04\b\r\x10\x0eR\x10stream_bandwidth\"\x87\x02\n" +
+	"\apayloadJ\x04\b\r\x10\x0eR\x10stream_bandwidth\"\xa5\x01\n" +
+	"\vTenantEvent\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12.\n" +
+	"\x04time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12\x18\n" +
+	"\asubject\x18\x04 \x01(\tR\asubject\x12(\n" +
+	"\x04data\x18\x05 \x01(\v2\x14.google.protobuf.AnyR\x04data\"\x87\x02\n" +
 	"\x0eSignalmanEvent\x123\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\x0e2\x14.signalman.EventTypeR\teventType\x12,\n" +
@@ -1463,7 +1576,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x15channel_subscriptions\x18\x03 \x03(\v2-.signalman.HubStats.ChannelSubscriptionsEntryR\x14channelSubscriptions\x1aG\n" +
 	"\x19ChannelSubscriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\xb0\x01\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\xc4\x01\n" +
 	"\aChannel\x12\x17\n" +
 	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fCHANNEL_STREAMS\x10\x01\x12\x15\n" +
@@ -1473,7 +1586,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\x11CHANNEL_MESSAGING\x10\x05\x12\x0e\n" +
 	"\n" +
 	"CHANNEL_AI\x10\x06\x12\x14\n" +
-	"\x10CHANNEL_PLATFORM\x10\a*\x82\a\n" +
+	"\x10CHANNEL_PLATFORM\x10\a\x12\x12\n" +
+	"\x0eCHANNEL_EVENTS\x10\b*\x9f\a\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!EVENT_TYPE_SUBSCRIPTION_CONFIRMED\x10\x01\x12'\n" +
@@ -1502,7 +1616,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\x1aEVENT_TYPE_PROCESS_BILLING\x10*\x12\x1f\n" +
 	"\x1bEVENT_TYPE_STORAGE_SNAPSHOT\x10+\x12 \n" +
 	"\x1cEVENT_TYPE_MESSAGE_LIFECYCLE\x102\x12$\n" +
-	" EVENT_TYPE_SKIPPER_INVESTIGATION\x10<2\x9a\x01\n" +
+	" EVENT_TYPE_SKIPPER_INVESTIGATION\x10<\x12\x1b\n" +
+	"\x17EVENT_TYPE_TENANT_EVENT\x10F2\x9a\x01\n" +
 	"\x10SignalmanService\x12C\n" +
 	"\tSubscribe\x12\x18.signalman.ClientMessage\x1a\x18.signalman.ServerMessage(\x010\x01\x12A\n" +
 	"\vGetHubStats\x12\x1d.signalman.GetHubStatsRequest\x1a\x13.signalman.HubStatsBIZGgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman;signalmanpbb\x06proto3"
@@ -1520,7 +1635,7 @@ func file_signalman_proto_rawDescGZIP() []byte {
 }
 
 var file_signalman_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_signalman_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_signalman_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_signalman_proto_goTypes = []any{
 	(Channel)(0),                         // 0: signalman.Channel
 	(EventType)(0),                       // 1: signalman.EventType
@@ -1528,90 +1643,95 @@ var file_signalman_proto_goTypes = []any{
 	(*UnsubscribeRequest)(nil),           // 3: signalman.UnsubscribeRequest
 	(*SubscriptionConfirmation)(nil),     // 4: signalman.SubscriptionConfirmation
 	(*EventData)(nil),                    // 5: signalman.EventData
-	(*SignalmanEvent)(nil),               // 6: signalman.SignalmanEvent
-	(*ClientMessage)(nil),                // 7: signalman.ClientMessage
-	(*Ping)(nil),                         // 8: signalman.Ping
-	(*ServerMessage)(nil),                // 9: signalman.ServerMessage
-	(*Pong)(nil),                         // 10: signalman.Pong
-	(*SignalmanError)(nil),               // 11: signalman.SignalmanError
-	(*GetHubStatsRequest)(nil),           // 12: signalman.GetHubStatsRequest
-	(*HubStats)(nil),                     // 13: signalman.HubStats
-	nil,                                  // 14: signalman.HubStats.ChannelSubscriptionsEntry
-	(*ipc.ClientLifecycleUpdate)(nil),    // 15: helmsmancontrol.ClientLifecycleUpdate
-	(*ipc.NodeLifecycleUpdate)(nil),      // 16: helmsmancontrol.NodeLifecycleUpdate
-	(*ipc.StreamTrackListTrigger)(nil),   // 17: helmsmancontrol.StreamTrackListTrigger
-	(*ipc.ClipLifecycleData)(nil),        // 18: helmsmancontrol.ClipLifecycleData
-	(*ipc.DVRLifecycleData)(nil),         // 19: helmsmancontrol.DVRLifecycleData
-	(*ipc.LoadBalancingData)(nil),        // 20: helmsmancontrol.LoadBalancingData
-	(*ipc.PushRewriteTrigger)(nil),       // 21: helmsmancontrol.PushRewriteTrigger
-	(*ipc.PushOutStartTrigger)(nil),      // 22: helmsmancontrol.PushOutStartTrigger
-	(*ipc.PushEndTrigger)(nil),           // 23: helmsmancontrol.PushEndTrigger
-	(*ipc.ViewerConnectTrigger)(nil),     // 24: helmsmancontrol.ViewerConnectTrigger
-	(*ipc.ViewerDisconnectTrigger)(nil),  // 25: helmsmancontrol.ViewerDisconnectTrigger
-	(*ipc.StreamEndTrigger)(nil),         // 26: helmsmancontrol.StreamEndTrigger
-	(*ipc.RecordingCompleteTrigger)(nil), // 27: helmsmancontrol.RecordingCompleteTrigger
-	(*ipc.VodLifecycleData)(nil),         // 28: helmsmancontrol.VodLifecycleData
-	(*ipc.StreamLifecycleUpdate)(nil),    // 29: helmsmancontrol.StreamLifecycleUpdate
-	(*ipc.StreamBufferTrigger)(nil),      // 30: helmsmancontrol.StreamBufferTrigger
-	(*ipc.StorageLifecycleData)(nil),     // 31: helmsmancontrol.StorageLifecycleData
-	(*ipc.ProcessBillingEvent)(nil),      // 32: helmsmancontrol.ProcessBillingEvent
-	(*ipc.ViewerResolveTrigger)(nil),     // 33: helmsmancontrol.ViewerResolveTrigger
-	(*ipc.StreamSourceTrigger)(nil),      // 34: helmsmancontrol.StreamSourceTrigger
-	(*ipc.StorageSnapshot)(nil),          // 35: helmsmancontrol.StorageSnapshot
-	(*ipc.MessageLifecycleData)(nil),     // 36: helmsmancontrol.MessageLifecycleData
-	(*ipc.StreamChangeEvent)(nil),        // 37: helmsmancontrol.StreamChangeEvent
-	(*ipc.IncidentEvent)(nil),            // 38: helmsmancontrol.IncidentEvent
-	(*timestamppb.Timestamp)(nil),        // 39: google.protobuf.Timestamp
+	(*TenantEvent)(nil),                  // 6: signalman.TenantEvent
+	(*SignalmanEvent)(nil),               // 7: signalman.SignalmanEvent
+	(*ClientMessage)(nil),                // 8: signalman.ClientMessage
+	(*Ping)(nil),                         // 9: signalman.Ping
+	(*ServerMessage)(nil),                // 10: signalman.ServerMessage
+	(*Pong)(nil),                         // 11: signalman.Pong
+	(*SignalmanError)(nil),               // 12: signalman.SignalmanError
+	(*GetHubStatsRequest)(nil),           // 13: signalman.GetHubStatsRequest
+	(*HubStats)(nil),                     // 14: signalman.HubStats
+	nil,                                  // 15: signalman.HubStats.ChannelSubscriptionsEntry
+	(*ipc.ClientLifecycleUpdate)(nil),    // 16: helmsmancontrol.ClientLifecycleUpdate
+	(*ipc.NodeLifecycleUpdate)(nil),      // 17: helmsmancontrol.NodeLifecycleUpdate
+	(*ipc.StreamTrackListTrigger)(nil),   // 18: helmsmancontrol.StreamTrackListTrigger
+	(*ipc.ClipLifecycleData)(nil),        // 19: helmsmancontrol.ClipLifecycleData
+	(*ipc.DVRLifecycleData)(nil),         // 20: helmsmancontrol.DVRLifecycleData
+	(*ipc.LoadBalancingData)(nil),        // 21: helmsmancontrol.LoadBalancingData
+	(*ipc.PushRewriteTrigger)(nil),       // 22: helmsmancontrol.PushRewriteTrigger
+	(*ipc.PushOutStartTrigger)(nil),      // 23: helmsmancontrol.PushOutStartTrigger
+	(*ipc.PushEndTrigger)(nil),           // 24: helmsmancontrol.PushEndTrigger
+	(*ipc.ViewerConnectTrigger)(nil),     // 25: helmsmancontrol.ViewerConnectTrigger
+	(*ipc.ViewerDisconnectTrigger)(nil),  // 26: helmsmancontrol.ViewerDisconnectTrigger
+	(*ipc.StreamEndTrigger)(nil),         // 27: helmsmancontrol.StreamEndTrigger
+	(*ipc.RecordingCompleteTrigger)(nil), // 28: helmsmancontrol.RecordingCompleteTrigger
+	(*ipc.VodLifecycleData)(nil),         // 29: helmsmancontrol.VodLifecycleData
+	(*ipc.StreamLifecycleUpdate)(nil),    // 30: helmsmancontrol.StreamLifecycleUpdate
+	(*ipc.StreamBufferTrigger)(nil),      // 31: helmsmancontrol.StreamBufferTrigger
+	(*ipc.StorageLifecycleData)(nil),     // 32: helmsmancontrol.StorageLifecycleData
+	(*ipc.ProcessBillingEvent)(nil),      // 33: helmsmancontrol.ProcessBillingEvent
+	(*ipc.ViewerResolveTrigger)(nil),     // 34: helmsmancontrol.ViewerResolveTrigger
+	(*ipc.StreamSourceTrigger)(nil),      // 35: helmsmancontrol.StreamSourceTrigger
+	(*ipc.StorageSnapshot)(nil),          // 36: helmsmancontrol.StorageSnapshot
+	(*ipc.MessageLifecycleData)(nil),     // 37: helmsmancontrol.MessageLifecycleData
+	(*ipc.StreamChangeEvent)(nil),        // 38: helmsmancontrol.StreamChangeEvent
+	(*ipc.IncidentEvent)(nil),            // 39: helmsmancontrol.IncidentEvent
+	(*timestamppb.Timestamp)(nil),        // 40: google.protobuf.Timestamp
+	(*anypb.Any)(nil),                    // 41: google.protobuf.Any
 }
 var file_signalman_proto_depIdxs = []int32{
 	0,  // 0: signalman.SubscribeRequest.channels:type_name -> signalman.Channel
 	0,  // 1: signalman.UnsubscribeRequest.channels:type_name -> signalman.Channel
 	0,  // 2: signalman.SubscriptionConfirmation.subscribed_channels:type_name -> signalman.Channel
-	15, // 3: signalman.EventData.client_lifecycle:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	16, // 4: signalman.EventData.node_lifecycle:type_name -> helmsmancontrol.NodeLifecycleUpdate
-	17, // 5: signalman.EventData.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
-	18, // 6: signalman.EventData.clip_lifecycle:type_name -> helmsmancontrol.ClipLifecycleData
-	19, // 7: signalman.EventData.dvr_lifecycle:type_name -> helmsmancontrol.DVRLifecycleData
-	20, // 8: signalman.EventData.load_balancing:type_name -> helmsmancontrol.LoadBalancingData
-	21, // 9: signalman.EventData.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
-	22, // 10: signalman.EventData.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
-	23, // 11: signalman.EventData.push_end:type_name -> helmsmancontrol.PushEndTrigger
-	24, // 12: signalman.EventData.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
-	25, // 13: signalman.EventData.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
-	26, // 14: signalman.EventData.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
-	27, // 15: signalman.EventData.recording:type_name -> helmsmancontrol.RecordingCompleteTrigger
-	28, // 16: signalman.EventData.vod_lifecycle:type_name -> helmsmancontrol.VodLifecycleData
-	29, // 17: signalman.EventData.stream_lifecycle:type_name -> helmsmancontrol.StreamLifecycleUpdate
-	30, // 18: signalman.EventData.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
-	31, // 19: signalman.EventData.storage_lifecycle:type_name -> helmsmancontrol.StorageLifecycleData
-	32, // 20: signalman.EventData.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
-	33, // 21: signalman.EventData.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
-	34, // 22: signalman.EventData.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
-	35, // 23: signalman.EventData.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
-	36, // 24: signalman.EventData.message_lifecycle:type_name -> helmsmancontrol.MessageLifecycleData
-	37, // 25: signalman.EventData.stream_change:type_name -> helmsmancontrol.StreamChangeEvent
-	38, // 26: signalman.EventData.incident_updated:type_name -> helmsmancontrol.IncidentEvent
-	1,  // 27: signalman.SignalmanEvent.event_type:type_name -> signalman.EventType
-	0,  // 28: signalman.SignalmanEvent.channel:type_name -> signalman.Channel
-	5,  // 29: signalman.SignalmanEvent.data:type_name -> signalman.EventData
-	39, // 30: signalman.SignalmanEvent.timestamp:type_name -> google.protobuf.Timestamp
-	2,  // 31: signalman.ClientMessage.subscribe:type_name -> signalman.SubscribeRequest
-	3,  // 32: signalman.ClientMessage.unsubscribe:type_name -> signalman.UnsubscribeRequest
-	8,  // 33: signalman.ClientMessage.ping:type_name -> signalman.Ping
-	4,  // 34: signalman.ServerMessage.subscription_confirmed:type_name -> signalman.SubscriptionConfirmation
-	6,  // 35: signalman.ServerMessage.event:type_name -> signalman.SignalmanEvent
-	10, // 36: signalman.ServerMessage.pong:type_name -> signalman.Pong
-	11, // 37: signalman.ServerMessage.error:type_name -> signalman.SignalmanError
-	14, // 38: signalman.HubStats.channel_subscriptions:type_name -> signalman.HubStats.ChannelSubscriptionsEntry
-	7,  // 39: signalman.SignalmanService.Subscribe:input_type -> signalman.ClientMessage
-	12, // 40: signalman.SignalmanService.GetHubStats:input_type -> signalman.GetHubStatsRequest
-	9,  // 41: signalman.SignalmanService.Subscribe:output_type -> signalman.ServerMessage
-	13, // 42: signalman.SignalmanService.GetHubStats:output_type -> signalman.HubStats
-	41, // [41:43] is the sub-list for method output_type
-	39, // [39:41] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	16, // 3: signalman.EventData.client_lifecycle:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	17, // 4: signalman.EventData.node_lifecycle:type_name -> helmsmancontrol.NodeLifecycleUpdate
+	18, // 5: signalman.EventData.track_list:type_name -> helmsmancontrol.StreamTrackListTrigger
+	19, // 6: signalman.EventData.clip_lifecycle:type_name -> helmsmancontrol.ClipLifecycleData
+	20, // 7: signalman.EventData.dvr_lifecycle:type_name -> helmsmancontrol.DVRLifecycleData
+	21, // 8: signalman.EventData.load_balancing:type_name -> helmsmancontrol.LoadBalancingData
+	22, // 9: signalman.EventData.push_rewrite:type_name -> helmsmancontrol.PushRewriteTrigger
+	23, // 10: signalman.EventData.push_out_start:type_name -> helmsmancontrol.PushOutStartTrigger
+	24, // 11: signalman.EventData.push_end:type_name -> helmsmancontrol.PushEndTrigger
+	25, // 12: signalman.EventData.viewer_connect:type_name -> helmsmancontrol.ViewerConnectTrigger
+	26, // 13: signalman.EventData.viewer_disconnect:type_name -> helmsmancontrol.ViewerDisconnectTrigger
+	27, // 14: signalman.EventData.stream_end:type_name -> helmsmancontrol.StreamEndTrigger
+	28, // 15: signalman.EventData.recording:type_name -> helmsmancontrol.RecordingCompleteTrigger
+	29, // 16: signalman.EventData.vod_lifecycle:type_name -> helmsmancontrol.VodLifecycleData
+	30, // 17: signalman.EventData.stream_lifecycle:type_name -> helmsmancontrol.StreamLifecycleUpdate
+	31, // 18: signalman.EventData.stream_buffer:type_name -> helmsmancontrol.StreamBufferTrigger
+	32, // 19: signalman.EventData.storage_lifecycle:type_name -> helmsmancontrol.StorageLifecycleData
+	33, // 20: signalman.EventData.process_billing:type_name -> helmsmancontrol.ProcessBillingEvent
+	34, // 21: signalman.EventData.play_rewrite:type_name -> helmsmancontrol.ViewerResolveTrigger
+	35, // 22: signalman.EventData.stream_source:type_name -> helmsmancontrol.StreamSourceTrigger
+	36, // 23: signalman.EventData.storage_snapshot:type_name -> helmsmancontrol.StorageSnapshot
+	37, // 24: signalman.EventData.message_lifecycle:type_name -> helmsmancontrol.MessageLifecycleData
+	38, // 25: signalman.EventData.stream_change:type_name -> helmsmancontrol.StreamChangeEvent
+	39, // 26: signalman.EventData.incident_updated:type_name -> helmsmancontrol.IncidentEvent
+	6,  // 27: signalman.EventData.tenant_event:type_name -> signalman.TenantEvent
+	40, // 28: signalman.TenantEvent.time:type_name -> google.protobuf.Timestamp
+	41, // 29: signalman.TenantEvent.data:type_name -> google.protobuf.Any
+	1,  // 30: signalman.SignalmanEvent.event_type:type_name -> signalman.EventType
+	0,  // 31: signalman.SignalmanEvent.channel:type_name -> signalman.Channel
+	5,  // 32: signalman.SignalmanEvent.data:type_name -> signalman.EventData
+	40, // 33: signalman.SignalmanEvent.timestamp:type_name -> google.protobuf.Timestamp
+	2,  // 34: signalman.ClientMessage.subscribe:type_name -> signalman.SubscribeRequest
+	3,  // 35: signalman.ClientMessage.unsubscribe:type_name -> signalman.UnsubscribeRequest
+	9,  // 36: signalman.ClientMessage.ping:type_name -> signalman.Ping
+	4,  // 37: signalman.ServerMessage.subscription_confirmed:type_name -> signalman.SubscriptionConfirmation
+	7,  // 38: signalman.ServerMessage.event:type_name -> signalman.SignalmanEvent
+	11, // 39: signalman.ServerMessage.pong:type_name -> signalman.Pong
+	12, // 40: signalman.ServerMessage.error:type_name -> signalman.SignalmanError
+	15, // 41: signalman.HubStats.channel_subscriptions:type_name -> signalman.HubStats.ChannelSubscriptionsEntry
+	8,  // 42: signalman.SignalmanService.Subscribe:input_type -> signalman.ClientMessage
+	13, // 43: signalman.SignalmanService.GetHubStats:input_type -> signalman.GetHubStatsRequest
+	10, // 44: signalman.SignalmanService.Subscribe:output_type -> signalman.ServerMessage
+	14, // 45: signalman.SignalmanService.GetHubStats:output_type -> signalman.HubStats
+	44, // [44:46] is the sub-list for method output_type
+	42, // [42:44] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_signalman_proto_init() }
@@ -1645,14 +1765,15 @@ func file_signalman_proto_init() {
 		(*EventData_MessageLifecycle)(nil),
 		(*EventData_StreamChange)(nil),
 		(*EventData_IncidentUpdated)(nil),
+		(*EventData_TenantEvent)(nil),
 	}
-	file_signalman_proto_msgTypes[4].OneofWrappers = []any{}
-	file_signalman_proto_msgTypes[5].OneofWrappers = []any{
+	file_signalman_proto_msgTypes[5].OneofWrappers = []any{}
+	file_signalman_proto_msgTypes[6].OneofWrappers = []any{
 		(*ClientMessage_Subscribe)(nil),
 		(*ClientMessage_Unsubscribe)(nil),
 		(*ClientMessage_Ping)(nil),
 	}
-	file_signalman_proto_msgTypes[7].OneofWrappers = []any{
+	file_signalman_proto_msgTypes[8].OneofWrappers = []any{
 		(*ServerMessage_SubscriptionConfirmed)(nil),
 		(*ServerMessage_Event)(nil),
 		(*ServerMessage_Pong)(nil),
@@ -1664,7 +1785,7 @@ func file_signalman_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_signalman_proto_rawDesc), len(file_signalman_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

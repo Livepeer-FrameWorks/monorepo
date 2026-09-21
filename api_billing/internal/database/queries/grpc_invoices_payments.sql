@@ -15,7 +15,12 @@ SELECT invoice.id::text AS id,
        COALESCE(subscription.tier_id::text, '')::text AS tier_id,
        invoice.period_start,
        invoice.period_end,
-       invoice.gross_metered_amount::double precision AS gross_metered_amount
+       invoice.gross_metered_amount::double precision AS gross_metered_amount,
+       invoice.presentment_amount_cents,
+       COALESCE(invoice.presentment_currency, '')::text AS presentment_currency,
+       COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       invoice.presentment_reference_date,
+       invoice.finalized_at
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription
   ON invoice.tenant_id = subscription.tenant_id
@@ -40,7 +45,12 @@ SELECT id::text AS id,
        COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
        period_start,
        period_end,
-       gross_metered_amount::double precision AS gross_metered_amount
+       gross_metered_amount::double precision AS gross_metered_amount,
+       presentment_amount_cents,
+       COALESCE(presentment_currency, '')::text AS presentment_currency,
+       COALESCE(presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       presentment_reference_date,
+       finalized_at
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND (NOT sqlc.arg(filter_status)::boolean OR status = sqlc.arg(status))
@@ -70,7 +80,13 @@ SELECT payment.id::text AS id,
        payment.status,
        payment.confirmed_at,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE payment.id = sqlc.arg(payment_id)::text::uuid
@@ -97,7 +113,13 @@ SELECT payment.id::text AS id,
        payment.status,
        payment.confirmed_at,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid

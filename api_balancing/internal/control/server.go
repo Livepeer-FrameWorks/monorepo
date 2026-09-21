@@ -28,17 +28,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/domainevents"
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -49,6 +51,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
@@ -57,7 +60,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -95,7 +100,7 @@ func enrollmentRotationRequired(err error) bool {
 var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
 
 func platformRootDomain() string {
-	rootDomain := pkgdns.NormalizeDomainScope(os.Getenv("BRAND_DOMAIN"))
+	rootDomain := pkgdns.NormalizeDomainScope(appconfig.Current().PlatformRootDomain)
 	if rootDomain == "" {
 		rootDomain = "frameworks.network"
 	}
@@ -1292,7 +1297,7 @@ func LoadServedClusters() {
 // leaves the previous snapshot in place. Takes the client as an argument so it
 // is unit-testable with a stub.
 func loadServedClustersFrom(client servedClustersAPI) {
-	instanceID := strings.TrimSpace(os.Getenv("FOGHORN_INSTANCE_ID"))
+	instanceID := appconfig.Current().InstanceID
 	if instanceID == "" {
 		return
 	}
@@ -1548,6 +1553,10 @@ func acceptConfigSeedApplyResult(ctx context.Context, writer configSeedApplyAckR
 
 // SetGeoIPCache sets the GeoIP cache for cached lookup usage.
 func SetGeoIPCache(c *cache.Cache) { geoipCache = c }
+
+// SetGeoIPReader sets the GeoIP database used to locate nodes when composing
+// config seeds. Nil leaves node location unset.
+func SetGeoIPReader(r *geoip.Reader) { geoipReader = r }
 
 // Server implements HelmsmanControl
 type Server struct {
@@ -3021,29 +3030,7 @@ func SendVodDelete(nodeID string, req *ipcpb.VodDeleteRequest) error {
 	return nil
 }
 
-// CreateIngestSession durably mints — or idempotently returns — the ingest session for
-// a publisher connection identified by (tenant, node, MistServer connector PID), fenced
-// by the start trigger's UUID/time. Foghorn calls this on an ACCEPTED PUSH_REWRITE,
-// BEFORE launching any async DVR work, and binds the recording to the returned session
-// id. A same-node reconnect is a NEW connector process → a new PID → a new session, so
-// its recording is genuinely fresh.
-//
-// Idempotency + PID-reuse fencing, serialized by a (tenant,node,pid) advisory lock so the
-// identity comparison always runs against a committed predecessor (never two inserters
-// racing) and the partial-unique active-PID index is never violated: a repeat PUSH_REWRITE
-// for the same connection (same trigger UUID, same stream) returns the existing session; a
-// PID the OS reused for a NEWER connector (different UUID, later start) ends the stale
-// still-active session (its PUSH_INPUT_CLOSE was lost) AND atomically claims its orphaned
-// DVR's stop, then mints fresh; a DIFFERENT-UUID OLDER trigger is REJECTED (a stale
-// reordered trigger for a superseded connection must not borrow the replacement generation);
-// a same-UUID different-stream is rejected. Fails CLOSED (returns an error) when db is nil —
-// a push cannot be admitted without a durable generation.
-// dvrIntent is the durable DVR start intent (JSON of the StartDVR inputs) for a
-// record:true session, or nil for a non-recording session. It is written in the SAME
-// insert as the session so a record:true stream's recording obligation is durable
-// before the push is approved — DVRIntentRecovery replays it if the async StartDVR is
-// lost to a crash. On a duplicate/idempotent path the existing row's intent is kept.
-// IngestSessionOutcome is the typed lifecycle result of CreateIngestSession, so the caller can
+// IngestSessionOutcome is the typed lifecycle result of MintIngestSession, so the caller can
 // distinguish an admissible session from a trigger whose session has ALREADY ENDED (which must be
 // denied, not admitted — see the AlreadyEnded value). Only meaningful when the returned error is nil.
 type IngestSessionOutcome int
@@ -3058,6 +3045,26 @@ type IngestAuthoritySnapshot struct {
 	TenantAuthorityVersion int64
 	ProcessesJSON          string
 	CapacityMaxStreams     int32
+}
+
+// IngestSessionRequest is one accepted PUSH_REWRITE's publisher identity.
+type IngestSessionRequest struct {
+	TenantID     string
+	NodeID       string
+	InternalName string
+	// StreamID is the public stream UUID. A new generation with one emits
+	// stream.connected in the mint transaction and records it for the session's
+	// stream.live and stream.idle; without one the session emits none of them.
+	StreamID        string
+	Protocol        publicv1.IngestProtocol
+	ConnectorPID    int64
+	TriggerUUID     string
+	StartedAtMillis int64
+	// DVRIntent is the durable DVR start intent (JSON of the StartDVR inputs) for a
+	// record:true session, or nil for a non-recording session.
+	DVRIntent       []byte
+	IngestClusterID string
+	Authority       *IngestAuthoritySnapshot
 }
 
 const (
@@ -3084,7 +3091,7 @@ const (
 )
 
 // ingestStreamAdvisoryLockKey is the (tenant, stream) advisory-lock key that serializes ingest
-// admission (CreateIngestSession) and close (FinalizeIngestSessionClose) across replicas. BOTH MUST
+// admission (MintIngestSession) and close (FinalizeIngestSessionClose) across replicas. BOTH MUST
 // use this exact key so a close-before-insert fully serializes against the mint. Length-prefixed,
 // colon-joined so distinct (tenant, stream) pairs never collide; NUL is avoided because hashtext()
 // rejects 0x00.
@@ -3096,7 +3103,42 @@ func ingestTenantCapacityAdvisoryLockKey(tenantID string) string {
 	return "tenant-capacity:" + strconv.Itoa(len(tenantID)) + ":" + tenantID
 }
 
-func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID string, startedAtMillis int64, dvrIntent []byte, ingestClusterID string, logger logging.Logger, authority ...IngestAuthoritySnapshot) (string, IngestSessionOutcome, error) {
+// MintIngestSession durably mints — or idempotently returns — the ingest session for
+// a publisher connection identified by (tenant, node, MistServer connector PID), fenced
+// by the start trigger's UUID/time. Foghorn calls this on an ACCEPTED PUSH_REWRITE,
+// BEFORE launching any async DVR work, and binds the recording to the returned session
+// id. A same-node reconnect is a NEW connector process → a new PID → a new session, so
+// its recording is genuinely fresh.
+//
+// Idempotency + PID-reuse fencing, serialized by the (tenant, stream) advisory lock so the
+// identity comparison always runs against a committed predecessor (never two inserters
+// racing) and the partial-unique active-PID index is never violated: a repeat PUSH_REWRITE
+// for the same connection (same trigger UUID, same stream) returns the existing session; a
+// PID the OS reused for a NEWER connector (different UUID, later start) ends the stale
+// still-active session (its PUSH_INPUT_CLOSE was lost) AND atomically claims its orphaned
+// DVR's stop, then mints fresh; a DIFFERENT-UUID OLDER trigger is REJECTED (a stale
+// reordered trigger for a superseded connection must not borrow the replacement generation);
+// a same-UUID different-stream is rejected. Fails CLOSED (returns an error) when db is nil —
+// a push cannot be admitted without a durable generation.
+//
+// The DVR intent is written in the SAME insert as the session so a record:true stream's
+// recording obligation is durable before the push is approved — DVRIntentRecovery replays
+// it if the async StartDVR is lost to a crash. On a duplicate/idempotent path the existing
+// row's intent is kept.
+//
+// Stream lifecycle events commit in the same transaction: a fresh generation emits
+// stream.connected, and a superseded generation ended here emits stream.idle first. An
+// idempotent re-fire of the same trigger returns the existing session and emits nothing.
+func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger logging.Logger) (string, IngestSessionOutcome, error) {
+	tenantID, nodeID, internalName := req.TenantID, req.NodeID, req.InternalName
+	connectorPID, triggerUUID, startedAtMillis := req.ConnectorPID, req.TriggerUUID, req.StartedAtMillis
+	dvrIntent, ingestClusterID := req.DVRIntent, req.IngestClusterID
+	streamID := req.StreamID
+	if _, parseErr := uuid.Parse(streamID); streamID != "" && parseErr != nil {
+		// The stream ID only keys lifecycle events; a malformed one must not deny the publisher.
+		logger.WithField("stream_id", streamID).Warn("Ingest session stream ID is not a UUID; the session emits no stream lifecycle events")
+		streamID = ""
+	}
 	if db == nil {
 		// Fail CLOSED: without a DB we cannot persist the session identity the source-presence
 		// fence and DVR obligation depend on, so the caller must deny the push rather than admit
@@ -3109,12 +3151,8 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 		// request that must not mint an unidentifiable session (the schema CHECKs reject it too).
 		return "", 0, fmt.Errorf("ingest session missing required identity: tenant=%q node=%q pid=%d trigger_uuid=%q started_millis=%d", tenantID, nodeID, connectorPID, triggerUUID, startedAtMillis)
 	}
-	if len(authority) > 1 {
-		return "", 0, errors.New("ingest session accepts at most one authority snapshot")
-	}
-	var authoritySnapshot *IngestAuthoritySnapshot
-	if len(authority) == 1 {
-		authoritySnapshot = &authority[0]
+	authoritySnapshot := req.Authority
+	if authoritySnapshot != nil {
 		hasAuthority := strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != "" || authoritySnapshot.MediaAuthorityVersion != 0 || authoritySnapshot.TenantAuthorityVersion != 0
 		if hasAuthority && (strings.TrimSpace(authoritySnapshot.MediaAuthorityID) == "" || authoritySnapshot.MediaAuthorityVersion <= 0 || authoritySnapshot.TenantAuthorityVersion <= 0) {
 			return "", 0, errors.New("ingest authority snapshot requires identity and positive object/tenant versions")
@@ -3211,6 +3249,10 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 			if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
 				return "", 0, fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
 			}
+			// The superseded session published the same stream, so its idle carries this stream's ID.
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID); idleErr != nil {
+				return "", 0, idleErr
+			}
 			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
 			if claimErr != nil {
 				return "", 0, fmt.Errorf("claim stale DVR stop on PID reuse: %w", claimErr)
@@ -3301,12 +3343,14 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
 			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
 			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+			StreamID: streamID,
 		})
 	} else {
 		newID, insErr = q.InsertIngestSessionWithAuthority(ctx, foghorndb.InsertIngestSessionWithAuthorityParams{
 			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
 			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
 			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+			StreamID:               streamID,
 			MediaAuthorityID:       sql.NullString{String: strings.TrimSpace(authoritySnapshot.MediaAuthorityID), Valid: strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != ""},
 			MediaAuthorityVersion:  sql.NullInt64{Int64: authoritySnapshot.MediaAuthorityVersion, Valid: authoritySnapshot.MediaAuthorityVersion > 0},
 			TenantAuthorityVersion: sql.NullInt64{Int64: authoritySnapshot.TenantAuthorityVersion, Valid: authoritySnapshot.TenantAuthorityVersion > 0},
@@ -3316,6 +3360,11 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	}
 	if insErr != nil {
 		return "", 0, fmt.Errorf("insert ingest session: %w", insErr)
+	}
+	if streamID != "" {
+		if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.Protocol); connErr != nil {
+			return "", 0, connErr
+		}
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return "", 0, fmt.Errorf("commit ingest session: %w", commitErr)
@@ -3591,6 +3640,9 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 			return 0, fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
 		}
 		allClaims = append(allClaims, claims...)
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+			return 0, idleErr
+		}
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return 0, fmt.Errorf("commit stream-end reaper: %w", commitErr)
@@ -3634,6 +3686,9 @@ func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, interna
 	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
+	}
+	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+		return false, idleErr
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit runtime-absence reaper: %w", err)
@@ -3993,6 +4048,9 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 	if err != nil {
 		return fmt.Errorf("end pending source projection: %w", err)
 	}
+	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID); idleErr != nil {
+		return idleErr
+	}
 	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return err
@@ -4078,7 +4136,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		}
 	}()
 
-	// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
+	// Serialize against MintIngestSession on the SAME (tenant, stream) lock so a close-before-insert
 	// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
 	// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
 	q := foghorndb.New(tx)
@@ -4093,7 +4151,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	if errors.Is(endErr, sql.ErrNoRows) {
 		// No active session to end — either a duplicate / already-ended / event-time-fenced close, OR
 		// this close arrived BEFORE its own PUSH_REWRITE could mint the session (concurrent trigger
-		// dispatch + WAL redelivery). Record a durable tombstone so CreateIngestSession denies the late
+		// dispatch + WAL redelivery). Record a durable tombstone so MintIngestSession denies the late
 		// rewrite instead of resurrecting a dead publisher as an active session. Harmless when the close
 		// was merely a duplicate: a genuine reconnect starts AFTER this close's event time and so is not
 		// blocked, and the reaper sweeps the tombstone on a TTL.
@@ -4118,6 +4176,9 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		`ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.ID, tenantID)
 	if claimErr != nil {
 		return CloseFinalization{}, fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
+	}
+	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+		return CloseFinalization{}, idleErr
 	}
 	revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if revisionErr != nil {
@@ -4213,8 +4274,8 @@ func FailDVRIntent(ctx context.Context, tenantID, sessionID, reason string) erro
 // ServiceRegistrar is a function that registers additional gRPC services
 type ServiceRegistrar func(srv *grpc.Server)
 
-// GRPCServerConfig contains configuration for starting the Foghorn control gRPC
-// listeners. The control plane is split into two listeners sharing one process:
+// GRPCServerConfig contains configuration for building the Foghorn control gRPC
+// servers. The control plane is split into two listeners sharing one process:
 //
 //   - Internal: internal-CA leaf only, serves `foghorn.internal`. Audience is
 //     mesh-only service traffic: Foghorn control APIs, federation, and HA relay.
@@ -4229,66 +4290,31 @@ type GRPCServerConfig struct {
 	Logger             logging.Logger
 	ServiceToken       string
 	JWTSecret          string
+	MetadataPolicy     middleware.ServiceTokenMetadataPolicy
 	InternalRegistrars []ServiceRegistrar
 }
 
-// GRPCServers is the pair of gRPC servers returned by StartGRPCServers.
-type GRPCServers struct {
-	Internal *grpc.Server
-	External *grpc.Server
-}
-
-// StartGRPCServers starts the Foghorn internal and external control gRPC
-// listeners. The two listeners differ in cert source, audience, and registered
-// services; see GRPCServerConfig.
-func StartGRPCServers(ctx context.Context, cfg GRPCServerConfig) (*GRPCServers, error) {
-	if strings.TrimSpace(cfg.InternalBindAddr) == "" {
-		return nil, fmt.Errorf("InternalBindAddr is required")
-	}
-	if strings.TrimSpace(cfg.ExternalBindAddr) == "" {
-		return nil, fmt.Errorf("ExternalBindAddr is required")
-	}
-
-	internal, err := startInternalGRPCListener(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("start internal gRPC listener: %w", err)
-	}
-
-	external, err := startExternalGRPCListener(ctx, cfg)
-	if err != nil {
-		internal.GracefulStop()
-		return nil, fmt.Errorf("start external gRPC listener: %w", err)
-	}
-
-	return &GRPCServers{Internal: internal, External: external}, nil
-}
-
-// startInternalGRPCListener listens on the internal-CA bind addr. Serves
-// `foghorn.internal`. Registers mesh-only control services via
-// InternalRegistrars plus health + reflection. No HelmsmanControl and no
-// EdgeProvisioning; those are public edge APIs.
-func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
-	lc := net.ListenConfig{}
-	lis, err := lc.Listen(ctx, "tcp", cfg.InternalBindAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	certFile := os.Getenv("GRPC_TLS_CERT_PATH")
-	keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
+// BuildInternalGRPCServer constructs the internal-CA control gRPC server
+// without binding a port. It serves `foghorn.internal` and registers mesh-only
+// control services via InternalRegistrars plus health + reflection; no
+// HelmsmanControl and no EdgeProvisioning, which are public edge APIs. With
+// file-based TLS configured it waits up to two minutes, or until ctx ends, for
+// the certificate and key files.
+func BuildInternalGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
+	settings := appconfig.Current()
+	certFile := settings.CertPath
+	keyFile := settings.KeyPath
 
 	var opts []grpc.ServerOption
 	if certFile != "" || keyFile != "" {
 		tlsCfg := grpcutil.ServerTLSConfig{CertFile: certFile, KeyFile: keyFile}
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
-			_ = lis.Close()
 			return nil, fmt.Errorf("timed out waiting for file-based gRPC TLS: %w", err)
 		}
 		serverOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 		if err != nil {
-			_ = lis.Close()
 			return nil, fmt.Errorf("configure internal listener TLS: %w", err)
 		}
 		opts = append(opts, serverOpt)
@@ -4298,7 +4324,6 @@ func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 			"key_file":  keyFile,
 		}).Info("Foghorn internal gRPC listener TLS: file-based internal-CA leaf")
 	} else if !allowInsecureControlGRPC() {
-		_ = lis.Close()
 		return nil, fmt.Errorf("internal gRPC listener requires GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH or GRPC_ALLOW_INSECURE=true")
 	} else {
 		cfg.Logger.WithField("bind_addr", cfg.InternalBindAddr).Info("Foghorn internal gRPC listener running without TLS")
@@ -4311,30 +4336,20 @@ func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	for _, reg := range cfg.InternalRegistrars {
 		reg(srv)
 	}
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			cfg.Logger.WithError(err).Error("Foghorn internal gRPC listener exited")
-		}
-	}()
 	return srv, nil
 }
 
-// startExternalGRPCListener listens on the external bind addr. Serves cluster
-// FQDNs via Navigator-backed ACME wildcards. Registers only HelmsmanControl,
-// EdgeProvisioning, health, and reflection.
-func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
-	lc := net.ListenConfig{}
-	lis, err := lc.Listen(ctx, "tcp", cfg.ExternalBindAddr)
-	if err != nil {
-		return nil, err
-	}
-
+// BuildExternalGRPCServer constructs the external control gRPC server without
+// binding a port. It serves cluster FQDNs via Navigator-backed ACME wildcards
+// and registers only HelmsmanControl, EdgeProvisioning, health, and
+// reflection. With a Navigator client it waits up to two minutes, or until ctx
+// ends, for the served clusters' certificate bundles.
+func BuildExternalGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	rootDomain := platformRootDomain()
 	tlsBundles := []*ipcpb.TLSCertBundle{}
 
 	if navigatorClient != nil {
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		bundles, certErr := waitForServedClusterTLSBundles(waitCtx, rootDomain)
 		if certErr == nil && len(bundles) > 0 {
@@ -4351,7 +4366,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 				"domains":    domains,
 			}).Info("Foghorn external gRPC listener TLS: Navigator ACME cluster wildcards")
 		} else {
-			_ = lis.Close()
 			if certErr == nil {
 				certErr = fmt.Errorf("no served cluster TLS bundles found")
 			}
@@ -4362,7 +4376,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	var opts []grpc.ServerOption
 	if len(tlsBundles) > 0 {
 		if err := serverCert.StoreBundles(tlsBundles); err != nil {
-			_ = lis.Close()
 			return nil, fmt.Errorf("parse external listener TLS certificates: %w", err)
 		}
 		creds := credentials.NewTLS(&tls.Config{
@@ -4371,7 +4384,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 		})
 		opts = append(opts, grpc.Creds(creds))
 	} else if !allowInsecureControlGRPC() {
-		_ = lis.Close()
 		return nil, fmt.Errorf("external gRPC listener requires Navigator bundles or GRPC_ALLOW_INSECURE=true")
 	} else {
 		cfg.Logger.WithField("bind_addr", cfg.ExternalBindAddr).Info("Foghorn external gRPC listener running without TLS")
@@ -4383,12 +4395,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	ipcpb.RegisterHelmsmanControlServer(srv, &Server{})
 	RegisterEdgeProvisioningService(srv)
 	registerHealthAndReflection(srv, ipcpb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
-
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			cfg.Logger.WithError(err).Error("Foghorn external gRPC listener exited")
-		}
-	}()
 	return srv, nil
 }
 
@@ -4398,7 +4404,7 @@ func registerHealthAndReflection(srv *grpc.Server, serviceNames ...string) {
 	for _, serviceName := range serviceNames {
 		hs.SetServingStatus(serviceName, grpc_health_v1.HealthCheckResponse_SERVING)
 	}
-	grpc_health_v1.RegisterHealthServer(srv, hs)
+	fwserver.RegisterHealthServer(srv, hs)
 	reflection.Register(srv)
 }
 
@@ -4432,14 +4438,15 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 			skipMethods = append(skipMethods, nodeControlMethods...)
 		}
 		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-			ServiceToken: cfg.ServiceToken,
-			Logger:       cfg.Logger,
-			SkipMethods:  skipMethods,
+			ServiceToken:   cfg.ServiceToken,
+			MetadataPolicy: cfg.MetadataPolicy,
+			Logger:         cfg.Logger,
+			SkipMethods:    skipMethods,
 		})
 		unaryInterceptors = append([]grpc.UnaryServerInterceptor{authInterceptor}, unaryInterceptors...)
 	}
 	if cfg.ServiceToken != "" || strings.TrimSpace(cfg.JWTSecret) != "" {
-		nodeAuth := nodeControlAuthInterceptor(cfg.ServiceToken, cfg.JWTSecret, cfg.Logger)
+		nodeAuth := nodeControlAuthInterceptor(cfg.ServiceToken, cfg.JWTSecret, cfg.MetadataPolicy, cfg.Logger)
 		unaryInterceptors = append([]grpc.UnaryServerInterceptor{nodeAuth}, unaryInterceptors...)
 	}
 
@@ -4447,8 +4454,9 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 
 	if cfg.ServiceToken != "" {
 		streamAuth := middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
-			ServiceToken: cfg.ServiceToken,
-			Logger:       cfg.Logger,
+			ServiceToken:   cfg.ServiceToken,
+			MetadataPolicy: cfg.MetadataPolicy,
+			Logger:         cfg.Logger,
 			SkipMethods: []string{
 				"/grpc.health.v1.Health/Watch",
 				ipcpb.HelmsmanControl_Connect_FullMethodName,
@@ -4459,7 +4467,7 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 	return opts
 }
 
-func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.Logger) grpc.UnaryServerInterceptor {
+func nodeControlAuthInterceptor(serviceToken, jwtSecret string, metadataPolicy middleware.ServiceTokenMetadataPolicy, logger logging.Logger) grpc.UnaryServerInterceptor {
 	protected := map[string]bool{
 		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
 		foghornpb.NodeControlService_GetNodeHealth_FullMethodName:          true,
@@ -4467,9 +4475,10 @@ func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.L
 	serviceToken = strings.TrimSpace(serviceToken)
 	jwtSecret = strings.TrimSpace(jwtSecret)
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: serviceToken,
-		JWTSecret:    []byte(jwtSecret),
-		Logger:       logger,
+		ServiceToken:   serviceToken,
+		JWTSecret:      []byte(jwtSecret),
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
 	})
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if !protected[info.FullMethod] {
@@ -4483,7 +4492,7 @@ func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.L
 }
 
 func allowInsecureControlGRPC() bool {
-	return config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
+	return appconfig.Current().AllowInsecure
 }
 
 // Helpers
@@ -5369,7 +5378,6 @@ func resolveOperationalMode(nodeID string, requestedMode ipcpb.NodeOperationalMo
 }
 
 // Config seed composition and sending
-var geoOnce sync.Once
 var geoipReader *geoip.Reader
 
 const edgeTelemetryTokenTTL = 365 * 24 * time.Hour
@@ -5380,10 +5388,6 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 	var ownerTenantID string
 	ownerResolved := false
 	clusterResolved := strings.TrimSpace(clusterID) != ""
-
-	geoOnce.Do(func() {
-		geoipReader = geoip.GetSharedReader()
-	})
 
 	if geoipReader != nil {
 		if gd := geoip.LookupCached(context.Background(), geoipReader, geoipCache, peerAddr); gd != nil {
@@ -5470,7 +5474,7 @@ func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, oper
 			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
 			EdgeDomain:  pkgdns.EdgeNodeFQDN(nodeID, slug, rootDomain),
 			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
-			AcmeEmail:   os.Getenv("ACME_EMAIL"),
+			AcmeEmail:   appconfig.Current().ACMEEmail,
 		}
 
 		if bundle, found, bundleErr := fetchClusterTLSBundleByClusterID(resolvedClusterID, rootDomain); bundleErr == nil {
@@ -5833,14 +5837,15 @@ func FoghornBalancerBase(clusterID string) string {
 // their cluster-scoped Foghorn DNS name. Env overrides are fallback escape
 // hatches for non-managed deployments.
 func foghornBalancerBase(clusterID string) string {
-	if v := strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_BASE")); v != "" {
+	settings := appconfig.Current()
+	if v := settings.PublicBaseURL; v != "" {
 		return v
 	}
 	if isLocalBuildEnv() {
-		if v := strings.TrimSpace(os.Getenv("FOGHORN_URL")); v != "" {
+		if v := settings.FoghornURL; v != "" {
 			return v
 		}
-		if h := strings.TrimSpace(os.Getenv("FOGHORN_HOST")); h != "" {
+		if h := settings.AdvertiseHost; h != "" {
 			return fmt.Sprintf("http://%s:18008", h)
 		}
 	}
@@ -5853,17 +5858,17 @@ func foghornBalancerBase(clusterID string) string {
 			}
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("FOGHORN_URL")); v != "" {
+	if v := settings.FoghornURL; v != "" {
 		return v
 	}
-	if h := strings.TrimSpace(os.Getenv("FOGHORN_HOST")); h != "" {
+	if h := settings.AdvertiseHost; h != "" {
 		return fmt.Sprintf("https://%s:18008", h)
 	}
 	return "http://foghorn:18008"
 }
 
 func isLocalBuildEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
+	switch strings.ToLower(appconfig.Current().BuildEnv) {
 	case "dev", "development", "local", "test":
 		return true
 	default:
@@ -5968,7 +5973,7 @@ func mintEdgeTelemetryToken(nodeID, clusterID, tenantID string) (string, time.Ti
 }
 
 func parseEdgeTelemetryPrivateKey() (*ecdsa.PrivateKey, error) {
-	encoded := strings.TrimSpace(os.Getenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"))
+	encoded := appconfig.Current().EdgeTelemetryJWTPrivateKeyPEMB64
 	if encoded == "" {
 		return nil, fmt.Errorf("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 is not set")
 	}
@@ -7898,7 +7903,12 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 							clipData.ProcessingSpeed = sp
 							clipData.ProcessingWallMs = wallMs
 						}
-						if err := artifactoutbox.EnqueueClipLifecycleTx(ctx, completionTx, clipData); err != nil {
+						ready := &publicv1.ClipReady{
+							Artifact:   artifactoutbox.ClipArtifact(artifactHash, streamID),
+							DurationMs: max(actualDurationMs, 0),
+							SizeBytes:  max(sizeBytes, 0),
+						}
+						if err := artifactoutbox.EnqueueClipTransitionTx(ctx, completionTx, clipData, ready); err != nil {
 							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue clip lifecycle; will retry")
 							return
 						}
@@ -7925,7 +7935,13 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 							vodData.ProcessingSpeed = sp
 							vodData.ProcessingWallMs = wallMs
 						}
-						if err := artifactoutbox.EnqueueVodLifecycleTx(ctx, completionTx, vodData); err != nil {
+						// Processing jobs exist only for clips and uploads, so a 'vod' artifact here is an upload.
+						ready := &publicv1.UploadReady{
+							Artifact:   artifactoutbox.UploadArtifact(artifactHash),
+							DurationMs: max(actualDurationMs, 0),
+							SizeBytes:  max(sizeBytes, 0),
+						}
+						if err := artifactoutbox.EnqueueVodTransitionTx(ctx, completionTx, vodData, ready); err != nil {
 							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue vod lifecycle; will retry")
 							return
 						}
@@ -8068,11 +8084,16 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 			if streamInternalName != "" {
 				clipData.StreamInternalName = &streamInternalName
 			}
-			if err := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); err != nil {
+			failed := &publicv1.ClipFailed{
+				Artifact: artifactoutbox.ClipArtifact(artHash, streamID),
+				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+			}
+			if err := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); err != nil {
 				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue clip failure lifecycle; will retry")
 				return
 			}
 		} else {
+			// Processing jobs exist only for clips and uploads, so a 'vod' artifact here is an upload.
 			vodData := &ipcpb.VodLifecycleData{
 				Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
 				VodHash: artHash,
@@ -8081,7 +8102,11 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 			if tenantID != "" {
 				vodData.TenantId = &tenantID
 			}
-			if err := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); err != nil {
+			failed := &publicv1.UploadFailed{
+				Artifact: artifactoutbox.UploadArtifact(artHash),
+				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+			}
+			if err := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); err != nil {
 				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue vod failure lifecycle; will retry")
 				return
 			}
@@ -8116,11 +8141,20 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 		return
 	}
 
+	// The progress write and its lifecycle sample commit together: a sample exists exactly when the
+	// progress it reports was recorded.
+	tx, txErr := db.BeginTx(ctx, nil)
+	if txErr != nil {
+		logger.WithError(txErr).WithField("job_id", progress.GetJobId()).Warn("Failed to begin processing progress transaction")
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+
 	// Update job progress and refresh updated_at so stale recovery doesn't requeue. Bind STRICTLY to the
 	// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
 	// genuinely stuck node). processing_node_id is persisted before the node can report, so an active
 	// node-dispatched job always carries it; require an exact match (a NULL assignment is an unbound wildcard).
-	q := foghorndb.New(db)
+	q := foghorndb.New(tx)
 	var artifactType, streamID, streamInternalName string
 	updated, err := q.UpdateProcessingJobProgress(ctx, foghorndb.UpdateProcessingJobProgressParams{
 		JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
@@ -8147,17 +8181,16 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 			artifactType, streamID, streamInternalName = lifecycle.ArtifactType, lifecycle.StreamID, lifecycle.StreamInternalName
 		}
 		if typeErr != nil && !errors.Is(typeErr, sql.ErrNoRows) {
-			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type")
+			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type; the next progress report retries")
+			return
 		}
 	}
 
-	// This is a best-effort PROGRESS SAMPLE, not a state transition — the artifact's
-	// 'processing' transition already committed atomically at dispatch. A dropped sample
-	// only loses one progress tick, so it stays best-effort. Capture does not depend on a
-	// live decklog client: the Enqueue*Logged helpers write the outbox row unconditionally
-	// (a queued row is delivered once decklog reconnects) and log — rather than swallow — an
-	// enqueue failure.
+	// A progress sample is analytics only, not a domain fact: the artifact's 'processing'
+	// transition committed at dispatch. A failed write loses this tick; the next report
+	// carries a newer one.
 	if artifactHash.Valid {
+		var enqErr error
 		if artifactType == "clip" {
 			clipData := &ipcpb.ClipLifecycleData{
 				Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
@@ -8173,22 +8206,27 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 			if streamInternalName != "" {
 				clipData.StreamInternalName = &streamInternalName
 			}
-			artifactoutbox.EnqueueClipLifecycleLogged(clipData)
+			enqErr = artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData)
+		} else {
+			// DVR chapter finalization has its own path above because chapter jobs are not in
+			// foghorn.processing_jobs.
+			vodData := &ipcpb.VodLifecycleData{
+				Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
+				VodHash:     artifactHash.String,
+				ProgressPct: &progressPct,
+			}
+			if tenantID != "" {
+				vodData.TenantId = &tenantID
+			}
+			enqErr = artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
+		}
+		if enqErr != nil {
+			logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue processing progress lifecycle")
 			return
 		}
-
-		// Emit VodLifecycleData with progress for VOD processing. DVR chapter
-		// finalization has its own path above because chapter jobs are not in
-		// foghorn.processing_jobs.
-		vodData := &ipcpb.VodLifecycleData{
-			Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
-			VodHash:     artifactHash.String,
-			ProgressPct: &progressPct,
-		}
-		if tenantID != "" {
-			vodData.TenantId = &tenantID
-		}
-		artifactoutbox.EnqueueVodLifecycleLogged(vodData)
+	}
+	if err := tx.Commit(); err != nil {
+		logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to commit processing job progress")
 	}
 }
 
@@ -8197,9 +8235,16 @@ func clampProgressPct(progress int32) int32 {
 }
 
 func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, expectedAttempt, progressPct int32, logger logging.Logger) {
+	// The heartbeat and its lifecycle sample commit together.
+	tx, txErr := db.BeginTx(ctx, nil)
+	if txErr != nil {
+		logger.WithError(txErr).WithField("chapter_id", chapterID).Warn("Failed to begin chapter progress transaction")
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
 	// The node and attempt together own the lease. A report from a foreign node,
 	// a replaced attempt, or an attempt-less legacy job matches no row.
-	row, err := foghorndb.New(db).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
+	row, err := foghorndb.New(tx).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
 		ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}, ExpectedAttempt: expectedAttempt,
 	})
 	if err != nil {
@@ -8221,10 +8266,13 @@ func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID strin
 		TenantId:    &tenantID,
 		ProgressPct: &progressPct,
 	}
-	// Best-effort progress sample. EnqueueVodLifecycleLogged already writes the durable outbox row
-	// synchronously and logs (not swallows) failure, so no goroutine wrapper is needed — a bare `go`
-	// here only risks losing the write on shutdown.
-	artifactoutbox.EnqueueVodLifecycleLogged(vodData)
+	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+		logger.WithError(enqErr).WithField("chapter_id", chapterID).Warn("Failed to enqueue chapter progress lifecycle")
+		return
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		logger.WithError(commitErr).WithField("chapter_id", chapterID).Warn("Failed to commit chapter finalize progress")
+	}
 }
 
 func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
@@ -8475,8 +8523,7 @@ func RegisterDVRRecordingOrigin(ctx context.Context, artifactHash, nodeID, baseU
 // node's HELMSMAN_RELAY_BASE_URL env var. Returns "" when the node has not
 // connected or did not advertise a relay URL — callers must treat this as
 // "cannot route through relay, abort STREAM_SOURCE" rather than fabricating
-// 127.0.0.1, which is wrong wherever Mist and Helmsman do not share loopback
-// (the dev compose bridge runs them as separate containers).
+// 127.0.0.1, which is wrong wherever Mist and Helmsman do not share loopback.
 func GetRelayBaseURL(nodeID string) string {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -9494,7 +9541,8 @@ func refreshTLSBundles(log logging.Logger) {
 	// serves both internal mesh callers and public cluster-FQDN callers.
 	if serverCert.Loaded() {
 		bundles := []*ipcpb.TLSCertBundle{}
-		if certFile, keyFile := os.Getenv("GRPC_TLS_CERT_PATH"), os.Getenv("GRPC_TLS_KEY_PATH"); certFile != "" || keyFile != "" {
+		if settings := appconfig.Current(); settings.CertPath != "" || settings.KeyPath != "" {
+			certFile, keyFile := settings.CertPath, settings.KeyPath
 			if bundle, err := fileServerTLSBundle(certFile, keyFile); err == nil {
 				bundles = append(bundles, bundle)
 			} else {
@@ -9999,7 +10047,7 @@ func tlsMaterialState(bundle *ipcpb.TLSCertBundle, caBundle []byte) string {
 }
 
 func readConfiguredCABundle() []byte {
-	caPath := strings.TrimSpace(os.Getenv("GRPC_TLS_CA_PATH"))
+	caPath := appconfig.Current().CAPath
 	if caPath == "" {
 		return nil
 	}
@@ -11092,7 +11140,7 @@ func postChandlerInvalidate(req chandlerInvalidateRequest, logger logging.Logger
 	if req.AssetKey == "" || len(req.Files) == 0 {
 		return
 	}
-	serviceToken := strings.TrimSpace(os.Getenv("SERVICE_TOKEN"))
+	serviceToken := appconfig.Current().ServiceToken
 	if serviceToken == "" {
 		logger.Warn("SERVICE_TOKEN missing, skipping Chandler thumbnail cache invalidation")
 		return
@@ -11149,7 +11197,7 @@ func postChandlerInvalidate(req chandlerInvalidateRequest, logger logging.Logger
 }
 
 func getChandlerInternalBaseURLs() []string {
-	if base := strings.TrimSpace(os.Getenv("CHANDLER_INTERNAL_URL")); base != "" {
+	if base := appconfig.Current().ChandlerInternalURL; base != "" {
 		return splitChandlerBaseURLs(base)
 	}
 	return splitChandlerBaseURLs(getChandlerBaseURL())
@@ -11263,9 +11311,10 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 	return true
 }
 
-// getChandlerBaseURL returns the Chandler base URL from environment.
+// getChandlerBaseURL returns the configured, cached, or derived Chandler base URL.
 func getChandlerBaseURL() string {
-	chandlerBase := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL"))
+	settings := appconfig.Current()
+	chandlerBase := settings.ChandlerBaseURL
 	if chandlerBase != "" {
 		return chandlerBase
 	}
@@ -11277,8 +11326,8 @@ func getChandlerBaseURL() string {
 		return derived
 	}
 	if chandlerBase == "" {
-		chandlerHost := strings.TrimSpace(os.Getenv("CHANDLER_HOST"))
-		chandlerPort := strings.TrimSpace(os.Getenv("CHANDLER_PORT"))
+		chandlerHost := settings.ChandlerHost
+		chandlerPort := settings.ChandlerPort
 		if chandlerHost == "" {
 			chandlerHost = "chandler"
 		}
@@ -11296,7 +11345,7 @@ func getChandlerBaseURL() string {
 // unknown; a managed multi-cell deployment leaves it empty (per-cluster origins are derived from Quartermaster), where
 // an unresolved cluster must NOT silently resolve to this cell.
 func explicitLocalChandlerConfigured() bool {
-	return strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")) != ""
+	return appconfig.Current().ChandlerBaseURL != ""
 }
 
 // chandlerPerClusterCache caches per-cluster Chandler asset origins resolved
@@ -11325,7 +11374,7 @@ const chandlerPerClusterTTL = 5 * time.Minute
 // Returns "" if the cluster ID is empty, no cluster lookup is configured, the
 // Quartermaster lookup fails, or the cluster has no slug/base-domain.
 func getChandlerBaseURLForCluster(clusterID string) string {
-	if explicit := strings.TrimSpace(os.Getenv("CHANDLER_BASE_URL")); explicit != "" {
+	if explicit := appconfig.Current().ChandlerBaseURL; explicit != "" {
 		return strings.TrimRight(explicit, "/")
 	}
 

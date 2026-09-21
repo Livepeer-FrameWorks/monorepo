@@ -273,6 +273,25 @@ func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams
 	return items, nil
 }
 
+const lockPushTargetStatus = `-- name: LockPushTargetStatus :one
+SELECT status
+FROM commodore.push_targets
+WHERE id = $1 AND tenant_id = $2
+FOR UPDATE
+`
+
+type LockPushTargetStatusParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) LockPushTargetStatus(ctx context.Context, arg LockPushTargetStatusParams) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, lockPushTargetStatus, arg.ID, arg.TenantID)
+	var status sql.NullString
+	err := row.Scan(&status)
+	return status, err
+}
+
 const streamExistsForPushTargetManager = `-- name: StreamExistsForPushTargetManager :one
 SELECT EXISTS (
     SELECT 1 FROM commodore.streams s

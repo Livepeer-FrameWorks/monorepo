@@ -9,15 +9,14 @@ import (
 	"fmt"
 	"math/big"
 	"net"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
 )
@@ -235,8 +234,9 @@ func (cm *CryptoMonitor) loadOrCreateScanCursor(ctx context.Context, network Net
 }
 
 func cryptoScannerStartBlock(network string, safeHead int64) (int64, error) {
+	rt := appconfig.Runtime()
 	key := "CRYPTO_SCAN_START_BLOCK_" + strings.ToUpper(strings.ReplaceAll(network, "-", "_"))
-	value := strings.TrimSpace(os.Getenv(key))
+	value := rt.NetworkSetting(key)
 	if value != "" {
 		start, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || start < 0 {
@@ -244,7 +244,7 @@ func cryptoScannerStartBlock(network string, safeHead int64) (int64, error) {
 		}
 		return start, nil
 	}
-	if config.IsProduction() {
+	if rt.IsProduction() {
 		return 0, fmt.Errorf("%s is required in production", key)
 	}
 	start := safeHead - 1000
@@ -503,12 +503,12 @@ func (cm *CryptoMonitor) allocateConfirmedDepositEvents(ctx context.Context) {
 		if row.QuotedPriceUsd != "" {
 			wallet.QuotedPriceUSD, _ = decimal.NewFromString(row.QuotedPriceUsd)
 		}
-		if row.QuotedUsdToEurRate != "" {
-			value, parseErr := decimal.NewFromString(row.QuotedUsdToEurRate)
-			if parseErr == nil {
-				wallet.QuotedUSDToEURRate = &value
-			}
+		record, recordErr := storedFXRecord(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
+		if recordErr != nil {
+			cm.logger.WithError(recordErr).WithField("wallet_id", row.WalletID).Warn("Crypto wallet has unreadable FX fields")
+			continue
 		}
+		wallet.FX = record
 		wallet.QuoteSource = row.QuoteSource
 		wallet.CreditedAmountCurrency = row.CreditedAmountCurrency
 		wallet.ClientIP = row.ClientIp
@@ -553,13 +553,13 @@ func (cm *CryptoMonitor) allocateObservedDeposit(ctx context.Context, eventID, t
 		return
 	}
 	if time.Now().After(wallet.ExpiresAt) {
-		if wallet.Purpose == "invoice" {
-			cm.markDepositForReview(wallet, tx, match.txBaseUnits, "invoice payment arrived after quote expiry")
-			return
+		cm.markDepositForReview(wallet, tx, match.txBaseUnits, cryptoQuoteExpiredReviewReason)
+		if eventID != "" {
+			_ = purserdb.New(cm.db).MarkCryptoDepositAllocationReview(ctx, purserdb.MarkCryptoDepositAllocationReviewParams{
+				WalletID: wallet.ID, AllocationError: sql.NullString{String: cryptoQuoteExpiredReviewReason, Valid: true}, EventID: eventID,
+			})
 		}
-		if err := cm.refreshLatePrepaidValuation(ctx, &wallet, network); err != nil {
-			return
-		}
+		return
 	}
 	cm.confirmPayment(wallet, tx, match.txBaseUnits, match.txAmount)
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/shopspring/decimal"
@@ -66,7 +67,7 @@ func TestSweepIdentifiersAreCanonicalAndNonSecret(t *testing.T) {
 }
 
 func TestSweepNetworkAndTreasuryValidation(t *testing.T) {
-	t.Setenv("X402_INCLUDE_TESTNETS", "false")
+	appconfigtest.Set(t, "X402_INCLUDE_TESTNETS", "false")
 	mainnet, err := sweepNetwork(" BASE ")
 	if err != nil || mainnet.Name != "base" || mainnet.ChainID != 8453 {
 		t.Fatalf("mainnet = %+v, %v", mainnet, err)
@@ -80,20 +81,20 @@ func TestSweepNetworkAndTreasuryValidation(t *testing.T) {
 	if _, err := sweepNetwork("base-sepolia"); err == nil || !strings.Contains(err.Error(), "testnet") {
 		t.Fatalf("disabled testnet error = %v", err)
 	}
-	t.Setenv("X402_INCLUDE_TESTNETS", "true")
+	appconfigtest.Set(t, "X402_INCLUDE_TESTNETS", "true")
 	if network, err := sweepNetwork("base-sepolia"); err != nil || !network.IsTestnet {
 		t.Fatalf("enabled testnet = %+v, %v", network, err)
 	}
 
-	t.Setenv("CRYPTO_TREASURY_BASE", "")
+	appconfigtest.Set(t, "CRYPTO_TREASURY_BASE", "")
 	if _, err := sweepTreasury("base"); err == nil {
 		t.Fatal("empty treasury accepted")
 	}
-	t.Setenv("CRYPTO_TREASURY_BASE", "0x0000000000000000000000000000000000000000")
+	appconfigtest.Set(t, "CRYPTO_TREASURY_BASE", "0x0000000000000000000000000000000000000000")
 	if _, err := sweepTreasury("base"); err == nil {
 		t.Fatal("zero treasury accepted")
 	}
-	t.Setenv("CRYPTO_TREASURY_BASE", " 0x1111111111111111111111111111111111111111 ")
+	appconfigtest.Set(t, "CRYPTO_TREASURY_BASE", " 0x1111111111111111111111111111111111111111 ")
 	if got, err := sweepTreasury("base"); err != nil || got != "0x1111111111111111111111111111111111111111" {
 		t.Fatalf("treasury = %q, %v", got, err)
 	}
@@ -123,7 +124,7 @@ func TestSweepFeeCalculationUsesProviderTipAndBoundedFallback(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(payload)
 			}))
 			defer httpServer.Close()
-			t.Setenv("BASE_RPC_ENDPOINT", httpServer.URL)
+			appconfigtest.Set(t, "BASE_RPC_ENDPOINT", httpServer.URL)
 			server := &PurserServer{rpcClient: handlers.NewRPCClient()}
 			tip, maxFee, err := server.sweepFees(context.Background(), handlers.Networks["base"], sweepRPCBlock{BaseFeePerGas: test.baseFee})
 			if (err != nil) != test.wantErr {
@@ -140,7 +141,7 @@ func TestSweepFeeCalculationUsesProviderTipAndBoundedFallback(t *testing.T) {
 }
 
 func TestX402ResourceURLNeverForwardsArbitrarySchemes(t *testing.T) {
-	t.Setenv("GATEWAY_PUBLIC_URL", " https://gateway.example.test/ ")
+	appconfigtest.Set(t, "GATEWAY_PUBLIC_URL", " https://gateway.example.test/ ")
 	tests := map[string]string{
 		"https://merchant.example/pay": "https://merchant.example/pay",
 		"http://merchant.example/pay":  "http://merchant.example/pay",
@@ -155,7 +156,7 @@ func TestX402ResourceURLNeverForwardsArbitrarySchemes(t *testing.T) {
 			t.Errorf("x402ResourceURL(%q) = %q, want %q", resource, got, want)
 		}
 	}
-	t.Setenv("GATEWAY_PUBLIC_URL", "")
+	appconfigtest.Set(t, "GATEWAY_PUBLIC_URL", "")
 	if got := x402ResourceURL("/pay"); got != "http://localhost:18005/pay" {
 		t.Fatalf("local fallback = %q", got)
 	}

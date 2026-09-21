@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/store"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -62,7 +61,22 @@ func NewInternalCAManager(store internalCAStore, qm internalCAQuartermaster, log
 	}
 }
 
-func (m *InternalCAManager) EnsureCA(ctx context.Context) error {
+// InternalCAMaterial is the operator-managed CA material EnsureCA imports when
+// no internal CA is stored yet. The base64 values take precedence over the
+// file paths; each form requires all three parts.
+type InternalCAMaterial struct {
+	RootCertFile           string
+	IntermediateCertFile   string
+	IntermediateKeyFile    string
+	RootCertPEMB64         string
+	IntermediateCertPEMB64 string
+	IntermediateKeyPEMB64  string
+	// RequireManaged refuses to generate a CA in-process when no material is
+	// supplied.
+	RequireManaged bool
+}
+
+func (m *InternalCAManager) EnsureCA(ctx context.Context, material InternalCAMaterial) error {
 	_, rootErr := m.store.GetInternalCA(ctx, internalRootRole)
 	_, intErr := m.store.GetInternalCA(ctx, internalIntermediateRole)
 	if rootErr == nil && intErr == nil {
@@ -75,12 +89,12 @@ func (m *InternalCAManager) EnsureCA(ctx context.Context) error {
 		return fmt.Errorf("load intermediate ca: %w", intErr)
 	}
 
-	rootCertFile := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE"))
-	intermediateCertFile := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE"))
-	intermediateKeyFile := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE"))
-	rootCertB64 := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64"))
-	intermediateCertB64 := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64"))
-	intermediateKeyB64 := strings.TrimSpace(os.Getenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64"))
+	rootCertFile := strings.TrimSpace(material.RootCertFile)
+	intermediateCertFile := strings.TrimSpace(material.IntermediateCertFile)
+	intermediateKeyFile := strings.TrimSpace(material.IntermediateKeyFile)
+	rootCertB64 := strings.TrimSpace(material.RootCertPEMB64)
+	intermediateCertB64 := strings.TrimSpace(material.IntermediateCertPEMB64)
+	intermediateKeyB64 := strings.TrimSpace(material.IntermediateKeyPEMB64)
 
 	switch {
 	case rootCertB64 != "" || intermediateCertB64 != "" || intermediateKeyB64 != "":
@@ -100,7 +114,7 @@ func (m *InternalCAManager) EnsureCA(ctx context.Context) error {
 		}
 		return nil
 	default:
-		if config.IsProduction() {
+		if material.RequireManaged {
 			return fmt.Errorf("managed internal CA material is required in production")
 		}
 		if m.logger != nil {

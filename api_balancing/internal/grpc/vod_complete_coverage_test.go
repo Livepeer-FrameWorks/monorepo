@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/storage"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -176,14 +177,14 @@ func TestCompleteVodUpload_S3FailureMarksArtifactFailed(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(1024), "user-1", "uploading"))
 	// The 'uploading' row is claimed to 'completing' AND the processing spec + multipart completion
 	// descriptor are persisted ATOMICALLY in ONE tx before the external S3 call (fail-closed claim).
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'completing'`).
-		WithArgs("hash-1", "t1", "up-1").
+		WithArgs("hash-1", mockTenantUUID, "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.vod_metadata\s+SET processes_json`).
 		WithArgs("", sqlmock.AnyArg(), "hash-1", "up-1").
@@ -195,14 +196,13 @@ func TestCompleteVodUpload_S3FailureMarksArtifactFailed(t *testing.T) {
 	// and its lifecycle event commit in ONE tx.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'failed'.*WHERE artifact_hash = \$2\s+AND tenant_id = \$3::uuid\s+AND status NOT IN`).
-		WithArgs("S3 upload failed: boom", "hash-1", "t1").
+		WithArgs("S3 upload failed: boom", "hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 	})
@@ -227,14 +227,14 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "uploading"))
 	// Claim 'uploading'->'completing' AND persist the processing spec + multipart completion descriptor
 	// ATOMICALLY in ONE tx before the external S3 CompleteMultipartUpload call.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'completing'`).
-		WithArgs("hash-1", "t1", "up-1").
+		WithArgs("hash-1", mockTenantUUID, "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.vod_metadata\s+SET processes_json`).
 		WithArgs("", sqlmock.AnyArg(), "hash-1", "up-1").
@@ -246,7 +246,7 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	// atomically with the processing job AND the PROCESSING lifecycle outbox row.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID, "up-1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -255,9 +255,9 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	caller := events.Actor{AuthType: "jwt", UserID: "user-7"}
+	expectTransitionInsertBy(mock, caller, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 	// lookupCompletedUploadAsset -> getVodAssetInfo SELECT (20 columns).
 	mock.ExpectQuery(`FROM foghorn\.artifacts a\s+LEFT JOIN foghorn\.vod_metadata`).
@@ -279,12 +279,13 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts: []*sharedpb.VodCompletedPart{
 			{PartNumber: 1, Etag: "et-1"},
 			{PartNumber: 2, Etag: "et-2"},
 		},
+		Actor: events.RequestActor(caller),
 	})
 	if err != nil {
 		t.Fatalf("happy path: unexpected error: %v", err)
@@ -326,7 +327,7 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 	// The prior attempt already claimed the row to 'completing' AND persisted the spec+descriptor
 	// atomically; this retry finds it 'completing', so neither the claim nor the persist runs again.
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 	// An already-'completing' retry loads the persisted contract (no re-claim) and uses ITS parts/upload-id.
@@ -335,7 +336,7 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 	// the durable 'completing' -> 'processing' transition + processing job + PROCESSING event atomically.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
-		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", mockTenantUUID, "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -344,9 +345,8 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 	mock.ExpectExec(`INSERT INTO foghorn\.processing_jobs`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'queued'`).
-		WithArgs("hash-1", "t1").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WithArgs("hash-1", mockTenantUUID).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectTransitionInsert(mock, "upload.completed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 	mock.ExpectQuery(`FROM foghorn\.artifacts a\s+LEFT JOIN foghorn\.vod_metadata`).
 		WithArgs("hash-1").
@@ -367,7 +367,7 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 	})
@@ -394,7 +394,7 @@ func TestCompleteVodUpload_RetryAlreadyProcessingIsNoOp(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "processing"))
 	mock.ExpectQuery(`FROM foghorn\.artifacts a\s+LEFT JOIN foghorn\.vod_metadata`).
@@ -416,7 +416,7 @@ func TestCompleteVodUpload_RetryAlreadyProcessingIsNoOp(t *testing.T) {
 		))
 
 	resp, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 	})
@@ -444,7 +444,7 @@ func TestCompleteVodUpload_CompletingRetryDivergentPartsRejected(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-		WithArgs("up-1", "t1").
+		WithArgs("up-1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 	// Persisted contract has part 1 = "et-1"; the retry below claims part 1 = "DIVERGENT".
@@ -452,7 +452,7 @@ func TestCompleteVodUpload_CompletingRetryDivergentPartsRejected(t *testing.T) {
 	// No further expectations: a divergent retry must be rejected before any S3 call or state write.
 
 	_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "up-1",
 		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "DIVERGENT"}},
 	})
@@ -486,7 +486,7 @@ func TestCompleteVodUpload_BackendOwnershipFence(t *testing.T) {
 			defer cleanup()
 
 			mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
-				WithArgs("up-1", "t1").
+				WithArgs("up-1", mockTenantUUID).
 				WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
 					AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
 			mock.ExpectQuery(`SELECT COALESCE\(v.vod_completion_descriptor::text`).
@@ -496,7 +496,7 @@ func TestCompleteVodUpload_BackendOwnershipFence(t *testing.T) {
 			// No further expectations: the RPC must fail closed before any S3 completion or state write.
 
 			_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
-				TenantId: "t1",
+				TenantId: mockTenantUUID,
 				UploadId: "up-1",
 				Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
 			})

@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"net"
+	"fmt"
 	"net/http"
-	"strconv"
+	"strings"
 	"time"
 
-	lookoutconfig "frameworks/api_incidents/internal/config"
+	"frameworks/api_incidents/internal/appconfig"
 	"frameworks/api_incidents/internal/grpcserver"
 	"frameworks/api_incidents/internal/httpapi"
 	"frameworks/api_incidents/internal/incidents"
@@ -16,8 +16,9 @@ import (
 
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -25,9 +26,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	lookoutpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/lookout"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,13 +55,19 @@ func main() {
 		return
 	}
 	logger := logging.NewLoggerWithService("lookout")
-	pkgconfig.LoadEnv(logger)
+	config.LoadEnv(logger)
 	logger.Info("Starting Lookout (incidents)")
 
-	cfg, err := lookoutconfig.Load()
+	configOptions := config.Options{Service: "lookout", Logger: logger}
+	cfg, err := config.Load[appconfig.Lookout](configOptions)
 	if err != nil {
-		logger.WithError(err).Fatal("Invalid Lookout configuration")
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
+	cfg.ApplyLogLevel(logger)
+	// The Alertmanager token and the notification settings are read through
+	// liveConfig on every use, so they follow a SIGHUP env-file reload.
+	liveConfig := config.NewLive(cfg, configOptions)
+	settings := notify.SettingsSource(func() notify.Settings { return notifySettings(liveConfig.Get()) })
 
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "lookout"
@@ -75,14 +82,19 @@ func main() {
 	domainMetrics := incidents.NewMetrics(metricsCollector)
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
+	// Incidents, the delivery outboxes, and cluster ownership all live in
+	// Postgres, so readiness tracks the database.
+	readiness := monitoring.NewReadinessChecker("lookout", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
 		GRPCAddr:      cfg.QuartermasterGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: cfg.GRPCAllowInsecure,
-		CACertFile:    cfg.GRPCTLSCAPath,
-		ServerName:    pkgconfig.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
@@ -91,9 +103,9 @@ func main() {
 
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
 		Target:        cfg.DecklogGRPCAddr,
-		AllowInsecure: cfg.GRPCAllowInsecure,
-		CACertFile:    cfg.GRPCTLSCAPath,
-		ServerName:    pkgconfig.GetServiceGRPCTLSServerName("decklog"),
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "lookout",
 		ServiceToken:  cfg.ServiceToken,
@@ -105,13 +117,13 @@ func main() {
 	}
 	defer func() { _ = decklogClient.Close() }()
 
-	producer, err := kafka.NewKafkaProducer(cfg.KafkaBrokers, cfg.IncidentsTopic, cfg.KafkaClusterID, logger)
+	producer, err := kafka.NewKafkaProducer(cfg.KafkaBrokers, topology.TopicLookoutIncidents, cfg.KafkaClusterID, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka producer")
 	}
 	defer func() { _ = producer.Close() }()
 
-	router := notify.Router{}
+	router := notify.Router{Settings: settings}
 	incidentService := &incidents.Service{
 		DB: db,
 		Owners: &incidents.QuartermasterOwners{
@@ -129,10 +141,11 @@ func main() {
 	defer cancel()
 	webhookDispatcher := &notify.Dispatcher{
 		Channels: router,
+		Settings: settings,
 		HTTP:     &http.Client{Timeout: 10 * time.Second},
-		Mailer:   notify.SMTPMailer,
+		Mailer:   notify.SMTPMailer(settings),
 		Producer: producer,
-		Topic:    cfg.IncidentsTopic,
+		Topic:    topology.TopicLookoutIncidents,
 		Logger:   logger,
 		Metrics:  domainMetrics,
 	}
@@ -166,7 +179,10 @@ func main() {
 	defer func() { _ = ownershipConsumer.Close() }()
 	ownershipHandler := &ownership.Consumer{Reconciler: incidentService, Logger: logger, Metrics: domainMetrics}
 	activityHandler := &notify.ActivityConsumer{Sink: activityStore, Channels: router, Logger: logger, Metrics: domainMetrics}
-	ownershipConsumer.AddHandler(cfg.ServiceEventsTopic, func(ctx context.Context, msg kafka.Message) error {
+	// The consumer reads the aggregator's local service_events topic. Central
+	// control-plane and marketing producers publish there, so mirrored
+	// regional copies are not read.
+	ownershipConsumer.AddHandler(topology.TopicServiceEvents, func(ctx context.Context, msg kafka.Message) error {
 		if err := activityHandler.HandleUntilEnqueued(ctx, msg); err != nil {
 			return err
 		}
@@ -182,29 +198,76 @@ func main() {
 	}()
 	go ownershipHandler.ReconcileAtStartup(ctx)
 
-	go serveGRPC(cfg, logger, &grpcserver.Server{Incidents: incidentService, Logger: logger}, grpcRequests, grpcDuration)
-
 	go registerWithQuartermaster(cfg, qmClient, logger)
 
-	serverConfig := server.DefaultConfig("lookout", cfg.HTTPPort)
-	app := server.SetupServiceRouter(logger, "lookout", healthChecker, metricsCollector)
-	app.POST("/v1/alertmanager", httpapi.AlertmanagerHandler(incidentService, lookoutconfig.AlertmanagerToken, logger, domainMetrics))
+	app := server.NewServiceRouter(server.RouterSpec{
+		Service:            "lookout",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
+	alertmanagerToken := func() string { return liveConfig.Get().AlertmanagerToken }
+	app.POST("/v1/alertmanager", httpapi.AlertmanagerHandler(incidentService, alertmanagerToken, logger, domainMetrics))
 
+	incidentServer := &grpcserver.Server{Incidents: incidentService, Logger: logger}
 	server.RegisterEnvFileReload("lookout", logger)
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.WithError(err).Fatal("Lookout HTTP server failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "lookout",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: app}},
+		// The gRPC server is built after the port is bound, so HTTP health and
+		// the Alertmanager webhook serve while the TLS files are still being
+		// synced.
+		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {
+			return newGRPCServer(buildCtx, cfg, logger, incidentServer, grpcRequests, grpcDuration)
+		}}},
+		// Only settings read through liveConfig follow a reload; everything
+		// else keeps its startup value.
+		OnReload: []server.ReloadCallback{liveConfig.Reload},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 }
 
-func serveGRPC(cfg lookoutconfig.Config, logger logging.Logger, srv *grpcserver.Server, requests *prometheus.CounterVec, duration *prometheus.HistogramVec) {
-	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to listen for gRPC")
+// notifySettings maps the configuration snapshot to the notification settings
+// of one routing decision or delivery.
+func notifySettings(cfg *appconfig.Lookout) notify.Settings {
+	return notify.Settings{
+		EmailRecipients:   cfg.NotifyEmailTo,
+		SlackWebhookURL:   cfg.SlackWebhookURL,
+		DiscordWebhookURL: cfg.DiscordWebhookURL,
+		WebappURL:         strings.TrimRight(cfg.WebAppURL, "/"),
+		SMTP: email.Config{
+			Host:          cfg.SMTPHost,
+			Port:          cfg.SMTPPort,
+			User:          cfg.SMTPUser,
+			Password:      cfg.SMTPPassword,
+			From:          cfg.FromEmail,
+			FromName:      cfg.FromName,
+			AllowInsecure: cfg.SMTPAllowInsecure,
+		},
+		Branding: cfg.EmailBranding,
+	}
+}
+
+// newGRPCServer builds the Lookout gRPC server. It waits up to two minutes
+// for the TLS files, and stops waiting when ctx ends.
+func newGRPCServer(ctx context.Context, cfg *appconfig.Lookout, logger logging.Logger, srv *grpcserver.Server, requests *prometheus.CounterVec, duration *prometheus.HistogramVec) (*grpc.Server, error) {
+	metadataPolicy, policyErr := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if policyErr != nil {
+		return nil, policyErr
 	}
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: cfg.ServiceToken,
-		JWTSecret:    []byte(cfg.JWTSecret),
-		Logger:       logger,
+		ServiceToken:   cfg.ServiceToken,
+		JWTSecret:      []byte(cfg.JWTSecret),
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
@@ -213,18 +276,18 @@ func serveGRPC(cfg lookoutconfig.Config, logger logging.Logger, srv *grpcserver.
 	})
 
 	tlsCfg := grpcutil.ServerTLSConfig{
-		CertFile:      cfg.GRPCTLSCertPath,
-		KeyFile:       cfg.GRPCTLSKeyPath,
-		AllowInsecure: cfg.GRPCAllowInsecure,
+		CertFile:      cfg.CertPath,
+		KeyFile:       cfg.KeyPath,
+		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
-		logger.WithError(waitErr).Fatal("Timed out waiting for Lookout gRPC TLS files")
+	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); err != nil {
+		return nil, fmt.Errorf("wait for Lookout gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to configure Lookout gRPC TLS")
+		return nil, fmt.Errorf("configure Lookout gRPC TLS: %w", err)
 	}
 
 	serverOpts := []grpc.ServerOption{
@@ -244,36 +307,26 @@ func serveGRPC(cfg lookoutconfig.Config, logger logging.Logger, srv *grpcserver.
 	hs := health.NewServer()
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	hs.SetServingStatus(lookoutpb.LookoutService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(grpcServer, hs)
+	server.RegisterHealthServer(grpcServer, hs)
 	reflection.Register(grpcServer)
-
-	logger.WithField("port", cfg.GRPCPort).Info("Lookout gRPC server starting")
-	if err := grpcServer.Serve(lis); err != nil {
-		logger.WithError(err).Fatal("Lookout gRPC server failed")
-	}
+	return grpcServer, nil
 }
 
-func registerWithQuartermaster(cfg lookoutconfig.Config, qmClient *quartermaster.GRPCClient, logger logging.Logger) {
-	port, err := strconv.Atoi(cfg.GRPCPort)
-	if err != nil || port <= 0 || port > 65535 {
-		logger.Warn("Quartermaster bootstrap skipped: invalid gRPC port")
+// registerWithQuartermaster registers the gRPC port without a health
+// endpoint.
+func registerWithQuartermaster(cfg *appconfig.Lookout, qmClient qmbootstrap.BootstrapClient, logger logging.Logger) {
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:        "lookout",
+		Protocol:           "grpc",
+		Port:               cfg.GRPCPort,
+		AdvertiseHost:      cfg.AdvertiseHost,
+		ClusterID:          cfg.ClusterID,
+		NodeID:             cfg.NodeID,
+		OmitHealthEndpoint: true,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
 		return
-	}
-	advertiseHost := cfg.AdvertiseHost
-	req := &quartermasterpb.BootstrapServiceRequest{
-		Type:          "lookout",
-		Version:       version.Version,
-		Protocol:      "grpc",
-		Port:          int32(port),
-		AdvertiseHost: &advertiseHost,
-	}
-	if cfg.ClusterID != "" {
-		clusterID := cfg.ClusterID
-		req.ClusterId = &clusterID
-	}
-	if cfg.NodeID != "" {
-		nodeID := cfg.NodeID
-		req.NodeId = &nodeID
 	}
 	if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("lookout")); err != nil {
 		logger.WithError(err).Warn("Quartermaster bootstrap (lookout) failed")

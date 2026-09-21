@@ -36,9 +36,7 @@ func fakeMistServer(t *testing.T, body map[string]any) *mist.Client {
 		_ = json.NewEncoder(w).Encode(body)
 	}))
 	t.Cleanup(srv.Close)
-	c := mist.NewClient(logging.NewLogger())
-	c.BaseURL = srv.URL
-	return c
+	return mist.NewClient(logging.NewLogger(), mist.ClientConfig{BaseURL: srv.URL})
 }
 
 func doRequest(t *testing.T, handler gin.HandlerFunc, method, target string, params gin.Params) *httptest.ResponseRecorder {
@@ -106,7 +104,7 @@ func TestHandleEdgeHealth(t *testing.T) {
 }
 
 func TestHandleEdgeMetricsExtractsTotals(t *testing.T) {
-	client := mist.NewClient(logging.NewLogger())
+	client := mist.NewClient(logging.NewLogger(), mist.ClientConfig{})
 	pm := monitorWithMistRuntime(client)
 	pm.lastJSONData = map[string]any{
 		"totals": map[string]any{"cpu": 12.5, "mem": 2048.0, "viewers": 7.0},
@@ -181,8 +179,7 @@ func TestHandleEdgeStreamsBadGatewayOnMistError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
-	client := mist.NewClient(logging.NewLogger())
-	client.BaseURL = srv.URL
+	client := mist.NewClient(logging.NewLogger(), mist.ClientConfig{BaseURL: srv.URL})
 	setMonitor(t, monitorWithMistRuntime(client))
 
 	rec := doRequest(t, HandleEdgeStreams, http.MethodGet, "/edge/streams", nil)
@@ -225,8 +222,7 @@ func TestHandleEdgeStreamsReturnsUnavailableWhenNodeIsRemovedMidRequest(t *testi
 		<-r.Context().Done()
 	}))
 	defer server.Close()
-	client := mist.NewClient(logging.NewLogger())
-	client.BaseURL = server.URL
+	client := mist.NewClient(logging.NewLogger(), mist.ClientConfig{BaseURL: server.URL})
 	pm := monitorWithMistRuntime(client)
 	pm.nodeID = "node-test"
 	pm.baseURL = server.URL

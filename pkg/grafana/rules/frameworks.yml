@@ -574,6 +574,35 @@ groups:
           summary: "Crypto deposit reconciliation is not converging on {{ $labels.network }}"
           description: "Deposit events have remained before allocation for at least fifteen minutes."
 
+      # Every Bosun replica samples the same ledger, so max across replicas is
+      # the platform-wide backlog age.
+      - alert: BosunWebhookDeliveryBacklog
+        expr: max(bosun_oldest_due_delivery_seconds) > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook deliveries are waiting to be sent"
+          description: 'The oldest due webhook delivery has waited {{ printf "%.0f" $value }} seconds. Workers are not keeping up, the database is slow, or one endpoint at its in-flight limit has a large backlog; inspect bosun_delivery_attempts_total and bosun_internal_errors_total.'
+
+      - alert: BosunDomainEventConsumerLag
+        expr: max by (topic) (sum by (topic, instance) (bosun_kafka_consumer_lag)) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bosun is behind on {{ $labels.topic }}"
+          description: 'Bosun has {{ printf "%.0f" $value }} unconsumed records on {{ $labels.topic }}. New webhook deliveries are delayed; a stalled ledger write retries in place and holds the partition.'
+
+      - alert: BosunInternalDeliveryFailures
+        expr: sum(increase(bosun_internal_errors_total{stage!="settle_fenced"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bosun left claimed webhook deliveries unsent"
+          description: "Claims, signing-secret decryption, rendering, or settlement failed on the Bosun side. A permanent cause fails the delivery with error class internal and a transient one retries it after a backoff; a failed claim or settlement retries when the lease expires. Check Bosun logs by stage."
+
   # Multi-region release gate. Every scraped series carries region and cluster
   # external labels from the vmagent that collected it.
   - name: multiregion.rules

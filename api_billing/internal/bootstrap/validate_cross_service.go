@@ -8,8 +8,6 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // ValidatePlatformOfficialPricingCoverage is the cross-service invariant
@@ -18,37 +16,28 @@ import (
 // row. Without that row, ensureTierClusterAccess silently hands out empty
 // tenant_cluster_access and the deposit monitor goes blind.
 //
+// qm carries the same address, service token, and TLS posture
+// (GRPC_ALLOW_INSECURE, GRPC_TLS_CA_PATH, QUARTERMASTER_GRPC_TLS_SERVER_NAME)
+// as the Purser server's Quartermaster client, so the validator never
+// downgrades the in-cluster TLS posture.
+//
 // Returns the cluster IDs that are missing pricing. An empty slice = clean.
 func ValidatePlatformOfficialPricingCoverage(
 	ctx context.Context,
 	db *sql.DB,
-	qmAddr, serviceToken string,
-	logger logging.Logger,
+	qm qmclient.GRPCConfig,
 ) ([]string, error) {
 	if db == nil {
 		return nil, errors.New("ValidatePlatformOfficialPricingCoverage: nil db")
 	}
 
-	// TLS posture mirrors the runtime client config used by the Purser server
-	// (see api_billing/cmd/purser/main.go's QM client setup): same
-	// GRPC_ALLOW_INSECURE / GRPC_TLS_CA_PATH / QUARTERMASTER_GRPC_TLS_SERVER_NAME
-	// envs. Hard-coding AllowInsecure here would have made `purser bootstrap
-	// validate` silently downgrade the in-cluster TLS posture, defeating the
-	// certs the runtime gRPC chain depends on.
-	qm, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      qmAddr,
-		ServiceToken:  serviceToken,
-		Logger:        logger,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-	})
+	client, err := qmclient.NewGRPCClient(qm)
 	if err != nil {
-		return nil, fmt.Errorf("connect Quartermaster at %s: %w", qmAddr, err)
+		return nil, fmt.Errorf("connect Quartermaster at %s: %w", qm.GRPCAddr, err)
 	}
-	defer qm.Close()
+	defer client.Close()
 
-	resp, err := qm.ListClusters(ctx, nil)
+	resp, err := client.ListClusters(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ListClusters: %w", err)
 	}

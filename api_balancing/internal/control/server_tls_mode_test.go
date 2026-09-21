@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc"
@@ -23,77 +24,76 @@ var testInternalOnlyServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*testInternalOnlyService)(nil),
 }
 
-func TestStartGRPCServers_NoTLSSource_FailsClosedByDefault(t *testing.T) {
-	t.Setenv("GRPC_TLS_CERT_PATH", "")
-	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	t.Setenv("GRPC_ALLOW_INSECURE", "")
+func useInsecureControlGRPC(t *testing.T) {
+	t.Helper()
+	insecureSettings := &appconfig.Foghorn{}
+	insecureSettings.AllowInsecure = true
+	useFoghornConfig(t, insecureSettings)
+
+	prevNavigator := navigatorClient
+	navigatorClient = nil
+	t.Cleanup(func() { navigatorClient = prevNavigator })
+}
+
+func TestBuildInternalGRPCServer_NoTLSSource_FailsClosedByDefault(t *testing.T) {
+	useFoghornConfig(t, &appconfig.Foghorn{})
 
 	prevNavigator := navigatorClient
 	navigatorClient = nil
 	t.Cleanup(func() { navigatorClient = prevNavigator })
 
-	_, err := StartGRPCServers(context.Background(), GRPCServerConfig{
+	srv, err := BuildInternalGRPCServer(context.Background(), GRPCServerConfig{
 		InternalBindAddr: "127.0.0.1:0",
-		ExternalBindAddr: "127.0.0.1:0",
 		Logger:           logging.NewLogger(),
 	})
 	if err == nil {
-		t.Fatal("expected StartGRPCServers to fail without TLS source")
+		srv.Stop()
+		t.Fatal("expected the internal build to fail without a TLS source")
 	}
 	if !strings.Contains(err.Error(), "internal gRPC listener requires") {
 		t.Fatalf("expected insecure-disabled error, got: %v", err)
 	}
 }
 
-func TestStartGRPCServers_NoTLSSource_AllowsExplicitInsecureMode(t *testing.T) {
-	t.Setenv("GRPC_TLS_CERT_PATH", "")
-	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	t.Setenv("GRPC_ALLOW_INSECURE", "true")
+func TestBuildControlGRPCServers_NoTLSSource_AllowsExplicitInsecureMode(t *testing.T) {
+	useInsecureControlGRPC(t)
+	cfg := GRPCServerConfig{InternalBindAddr: "127.0.0.1:0", ExternalBindAddr: "127.0.0.1:0", Logger: logging.NewLogger()}
 
-	prevNavigator := navigatorClient
-	navigatorClient = nil
-	t.Cleanup(func() { navigatorClient = prevNavigator })
-
-	servers, err := StartGRPCServers(context.Background(), GRPCServerConfig{
-		InternalBindAddr: "127.0.0.1:0",
-		ExternalBindAddr: "127.0.0.1:0",
-		Logger:           logging.NewLogger(),
-	})
+	internal, err := BuildInternalGRPCServer(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("internal build: %v", err)
 	}
-	t.Cleanup(func() {
-		servers.Internal.Stop()
-		servers.External.Stop()
-	})
+	t.Cleanup(internal.Stop)
+	external, err := BuildExternalGRPCServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("external build: %v", err)
+	}
+	t.Cleanup(external.Stop)
 }
 
-func TestStartGRPCServers_ServiceSurfaceSplit(t *testing.T) {
-	t.Setenv("GRPC_TLS_CERT_PATH", "")
-	t.Setenv("GRPC_TLS_KEY_PATH", "")
-	t.Setenv("GRPC_ALLOW_INSECURE", "true")
-
-	prevNavigator := navigatorClient
-	navigatorClient = nil
-	t.Cleanup(func() { navigatorClient = prevNavigator })
-
-	servers, err := StartGRPCServers(context.Background(), GRPCServerConfig{
+func TestBuildControlGRPCServers_ServiceSurfaceSplit(t *testing.T) {
+	useInsecureControlGRPC(t)
+	cfg := GRPCServerConfig{
 		InternalBindAddr: "127.0.0.1:0",
 		ExternalBindAddr: "127.0.0.1:0",
 		Logger:           logging.NewLogger(),
 		InternalRegistrars: []ServiceRegistrar{func(srv *grpc.Server) {
 			srv.RegisterService(&testInternalOnlyServiceDesc, &testInternalOnlyServer{})
 		}},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
 	}
-	t.Cleanup(func() {
-		servers.Internal.Stop()
-		servers.External.Stop()
-	})
 
-	internal := servers.Internal.GetServiceInfo()
+	internalSrv, err := BuildInternalGRPCServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("internal build: %v", err)
+	}
+	t.Cleanup(internalSrv.Stop)
+	externalSrv, err := BuildExternalGRPCServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("external build: %v", err)
+	}
+	t.Cleanup(externalSrv.Stop)
+
+	internal := internalSrv.GetServiceInfo()
 	if _, ok := internal["test.InternalOnly"]; !ok {
 		t.Fatal("expected internal listener to expose internal registrars")
 	}
@@ -104,7 +104,7 @@ func TestStartGRPCServers_ServiceSurfaceSplit(t *testing.T) {
 		t.Fatal("internal listener must not expose EdgeProvisioning")
 	}
 
-	external := servers.External.GetServiceInfo()
+	external := externalSrv.GetServiceInfo()
 	if _, ok := external[ipcpb.HelmsmanControl_ServiceDesc.ServiceName]; !ok {
 		t.Fatal("expected external listener to expose HelmsmanControl")
 	}

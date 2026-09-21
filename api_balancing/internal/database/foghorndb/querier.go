@@ -47,6 +47,10 @@ type Querier interface {
 	BindAdmissionPushTargetMistID(ctx context.Context, arg BindAdmissionPushTargetMistIDParams) (int64, error)
 	BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, arg BindAdmissionPushTargetMistIDIfAbsentParams) (int64, error)
 	BindDVRDispatchOwner(ctx context.Context, arg BindDVRDispatchOwnerParams) (int64, error)
+	// Advances the artifact's domain-event revision inside the transition's
+	// transaction. The row lock is held until commit, so a concurrent transition
+	// of the same artifact reads the committed value and takes the next one.
+	BumpArtifactRevision(ctx context.Context, arg BumpArtifactRevisionParams) (int64, error)
 	CancelClipProcessingJobs(ctx context.Context, artifactHash sql.NullString) error
 	CellStorageIdentityCommitted(ctx context.Context) (bool, error)
 	ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionEffectsParams) ([]ClaimAdmissionEffectsRow, error)
@@ -144,6 +148,9 @@ type Querier interface {
 	EndSupersededPIDIngestSession(ctx context.Context, arg EndSupersededPIDIngestSessionParams) error
 	EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissionEffectParams) error
 	EnqueueArtifactEvent(ctx context.Context, arg EnqueueArtifactEventParams) error
+	// The legacy row of a transition that also publishes a domain event carries
+	// that event's ID, so both streams deliver the fact under one identity.
+	EnqueueArtifactEventWithID(ctx context.Context, arg EnqueueArtifactEventWithIDParams) error
 	EnqueueConfigSeedApplyAck(ctx context.Context, arg EnqueueConfigSeedApplyAckParams) (int64, error)
 	EnqueueManagedStreamPlacement(ctx context.Context, arg EnqueueManagedStreamPlacementParams) error
 	EnqueueOfflineEffect(ctx context.Context, arg EnqueueOfflineEffectParams) error
@@ -216,6 +223,7 @@ type Querier interface {
 	GetChapterArtifactResolution(ctx context.Context, artifactHash string) (GetChapterArtifactResolutionRow, error)
 	GetChapterArtifactRouting(ctx context.Context, artifactHash string) (GetChapterArtifactRoutingRow, error)
 	GetChapterParentDVR(ctx context.Context, artifactHash string) (GetChapterParentDVRRow, error)
+	GetChapterRecordingContext(ctx context.Context, chapterID string) (GetChapterRecordingContextRow, error)
 	GetClipForDeletion(ctx context.Context, arg GetClipForDeletionParams) (GetClipForDeletionRow, error)
 	GetClipFulfilledSourceParams(ctx context.Context, arg GetClipFulfilledSourceParamsParams) (sql.NullString, error)
 	GetCompletableVodUpload(ctx context.Context, arg GetCompletableVodUploadParams) (GetCompletableVodUploadRow, error)
@@ -434,6 +442,10 @@ type Querier interface {
 	LockArtifactNodeState(ctx context.Context, arg LockArtifactNodeStateParams) (LockArtifactNodeStateRow, error)
 	LockArtifactPlacementParent(ctx context.Context, artifactHash string) (string, error)
 	LockChapterFinalizeArtifact(ctx context.Context, chapterID string) (LockChapterFinalizeArtifactRow, error)
+	// Locks the chapter's parent recording before the chapter and its playback
+	// artifact. The chapter's domain event advances the parent's revision, and the
+	// recording-delete cascade also locks the parent before its chapter artifacts.
+	LockChapterParentRecording(ctx context.Context, chapterID string) error
 	LockDVRChapterMutation(ctx context.Context, arg LockDVRChapterMutationParams) error
 	LockDVRDispatchOwner(ctx context.Context, arg LockDVRDispatchOwnerParams) (string, error)
 	LockDVRProgressArtifact(ctx context.Context, artifactHash string) (LockDVRProgressArtifactRow, error)
@@ -479,6 +491,11 @@ type Querier interface {
 	MarkDVRStopPending(ctx context.Context, arg MarkDVRStopPendingParams) error
 	MarkExhaustedArtifactFailed(ctx context.Context, arg MarkExhaustedArtifactFailedParams) (int64, error)
 	MarkFailedArtifactsDeleted(ctx context.Context, retentionInterval string) (int64, error)
+	// First playable buffer of the active session, from the session's own node only.
+	// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+	// nothing; the start fence keeps a delayed trigger of an earlier session on the
+	// same node from marking a newer one.
+	MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error)
 	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error)
@@ -565,7 +582,7 @@ type Querier interface {
 	RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx context.Context, arg RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams) (int64, error)
 	RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (RetireIngestSessionRow, error)
 	RetireIngestSessionByClaim(ctx context.Context, arg RetireIngestSessionByClaimParams) (RetireIngestSessionByClaimRow, error)
-	RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (string, error)
+	RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (RetireNeverProjectedIngestSessionRow, error)
 	RetryConfigSeedApplyAck(ctx context.Context, arg RetryConfigSeedApplyAckParams) (int64, error)
 	RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) (int64, error)
 	RetryManagedStreamPlacement(ctx context.Context, arg RetryManagedStreamPlacementParams) (int64, error)

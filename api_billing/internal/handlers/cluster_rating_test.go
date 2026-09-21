@@ -7,11 +7,19 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+// expectNoPurserInvoicedClusters answers the monthly cluster subscription
+// lookup rating runs for every invoice.
+func expectNoPurserInvoicedClusters(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("-- name: ListPurserInvoicedClusterSubscriptionsForPeriod").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}))
+}
 
 func newTestTier(currency string) *billingpkg.EffectiveTier {
 	return &billingpkg.EffectiveTier{
@@ -24,11 +32,12 @@ func newTestTier(currency string) *billingpkg.EffectiveTier {
 }
 
 func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
-	mockDB, _, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
+	expectNoPurserInvoicedClusters(mock)
 
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
@@ -60,11 +69,12 @@ func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
 }
 
 func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
-	mockDB, _, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
+	expectNoPurserInvoicedClusters(mock)
 
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
@@ -93,12 +103,13 @@ func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
 }
 
 func TestFreeStatementPreservesUsageAtZeroDue(t *testing.T) {
-	t.Setenv("WAIVE_USAGE_CHARGES", "false")
-	mockDB, _, err := sqlmock.New()
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
+	expectNoPurserInvoicedClusters(mock)
 
 	tier := &billingpkg.EffectiveTier{
 		TierID: "free-tier", TierName: "free", Currency: "EUR",

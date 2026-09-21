@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 )
 
 func TestValidateGasRunway(t *testing.T) {
@@ -38,8 +40,8 @@ func TestValidateGasRunway(t *testing.T) {
 				_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": payload.ID, "result": result})
 			}))
 			defer server.Close()
-			t.Setenv("TEST_GAS_RPC_ENDPOINT", server.URL)
-			network := NetworkConfig{Name: "test", RPCEndpointEnv: "TEST_GAS_RPC_ENDPOINT"}
+			appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", server.URL)
+			network := NetworkConfig{Name: "test", RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT"}
 			err := ValidateGasRunway(context.Background(), NewRPCClient(), network, "0x1111111111111111111111111111111111111111", 100)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("ValidateGasRunway() error=%v wantError=%t", err, tc.wantError)

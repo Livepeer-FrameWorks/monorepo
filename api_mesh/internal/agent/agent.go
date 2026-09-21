@@ -135,6 +135,7 @@ type Agent struct {
 	syncInterval      time.Duration
 	syncTimeout       time.Duration
 	stopChan          chan struct{}
+	stopOnce          sync.Once
 	metrics           *Metrics
 	healthy           atomic.Bool
 	lastSyncSuccess   atomic.Int64 // Unix timestamp of last successful sync
@@ -442,11 +443,22 @@ func (a *Agent) IsInternalPKIHealthy() bool {
 	return a.certSyncFailures.Load() < certSyncFailureThreshold
 }
 
+// Started reports whether Start finished initializing the WireGuard
+// interface, the startup mesh, and the DNS server. It depends on no remote
+// service.
+func (a *Agent) Started() bool {
+	return a.healthy.Load()
+}
+
+// Stop ends the sync loops and shuts down the DNS server. It is safe to call
+// more than once and from concurrent goroutines; later calls wait for the
+// first to finish.
 func (a *Agent) Stop() {
-	close(a.stopChan)
-	a.logger.Info("Stopping Privateer Agent")
-	a.dnsServer.Stop()
-	// Clean up if necessary
+	a.stopOnce.Do(func() {
+		close(a.stopChan)
+		a.logger.Info("Stopping Privateer Agent")
+		a.dnsServer.Stop()
+	})
 }
 
 func (a *Agent) runLoop() {

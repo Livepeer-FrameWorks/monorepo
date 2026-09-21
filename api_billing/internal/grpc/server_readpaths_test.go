@@ -202,10 +202,12 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 		"id", "tenant_id", "amount", "base_amount", "metered_amount", "prepaid_credit_applied",
 		"currency", "status", "due_date", "paid_at", "usage_details",
 		"created_at", "updated_at", "period_start", "period_end", "gross_metered_amount",
+		"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date", "finalized_at",
 	}).AddRow(
 		"inv-1", "tenant-1", 42.5, 30.0, 12.5, 0.0,
 		"EUR", "pending", now, nil, []byte(`{"delivered_minutes":100}`),
 		now, now, now, now, 12.5,
+		nil, "", "", nil, nil,
 	)
 	mock.ExpectQuery(`FROM purser\.billing_invoices`).
 		WithArgs("tenant-1", false, "", false, false, nil, "00000000-0000-0000-0000-000000000000", int32(51)).
@@ -235,6 +237,9 @@ func TestListInvoicesMapsRowsAndLineItems(t *testing.T) {
 	}
 	if inv.Amount != 42.5 || inv.MeteredAmount != 12.5 {
 		t.Fatalf("invoice money wrong: %+v", inv)
+	}
+	if inv.PresentmentAmountCents != nil || inv.PresentmentCurrency != "" || inv.FinalizedAt != nil {
+		t.Fatalf("unfinalized invoice carries presentment fields: %+v", inv)
 	}
 	if inv.UsageDetails == nil || inv.UsageDetails.GetFields()["delivered_minutes"].GetNumberValue() != 100 {
 		t.Fatalf("usage_details JSONB not decoded: %+v", inv.UsageDetails)
@@ -274,7 +279,7 @@ func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
 	}).AddRow(
 		tierID, "pro", "Pro", "Pro plan", 29.0, "EUR", "monthly",
-		[]byte(`{"recording":true}`), "premium", "gold", true,
+		[]byte(`{"processing_customizable":true}`), "premium", "gold", true,
 		true, int32(2), false, now, now,
 		false, true,
 		[]byte(`["livepeer"]`), []byte(`[]`), []byte(`[]`), []byte(`[]`), []byte(`[]`),
@@ -306,7 +311,7 @@ func TestGetBillingTiersMapsTierWithRulesAndEntitlements(t *testing.T) {
 	if tier.Id != tierID || tier.TierName != "pro" || tier.TierLevel != 2 {
 		t.Fatalf("tier identity wrong: %+v", tier)
 	}
-	if tier.Features == nil || !tier.Features.Recording {
+	if tier.Features == nil || !tier.Features.ProcessingCustomizable {
 		t.Fatalf("features JSONB not decoded: %+v", tier.Features)
 	}
 	if tier.ProcessesLive != `["livepeer"]` {

@@ -70,7 +70,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	referenceID := uuid.NewString()
 	referenceType := "contract_topup"
 	request := &purserpb.TopupBalanceRequest{
-		TenantId: tenantID, AmountCents: 750, Currency: "EUR", Description: "replayed top-up",
+		TenantId: tenantID, AmountCents: 750, Description: "replayed top-up",
 		ReferenceId: &referenceID, ReferenceType: &referenceType,
 	}
 	start := make(chan struct{})
@@ -127,7 +127,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	}
 
 	adjusted, err := server.AdjustBalance(ctx, &purserpb.AdjustBalanceRequest{
-		TenantId: tenantID, AmountCents: 25, Currency: "EUR", Description: "contract adjustment",
+		TenantId: tenantID, AmountCents: 25, Description: "contract adjustment",
 	})
 	if err != nil {
 		t.Fatalf("unreferenced adjustment: %v", err)
@@ -136,7 +136,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 		t.Fatalf("adjustment = %+v", adjusted)
 	}
 	if _, err := server.DeductBalance(ctx, &purserpb.DeductBalanceRequest{
-		TenantId: tenantID, AmountCents: 30, Currency: "EUR", Description: "recent usage",
+		TenantId: tenantID, AmountCents: 30, Description: "recent usage",
 	}); err != nil {
 		t.Fatalf("usage deduction: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	if statusResponse.GetStoragePricing().GetIncludedGbHours() != 50 || statusResponse.GetStoragePricing().GetUnitPricePerGbHour() != 0.001 {
 		t.Fatalf("storage pricing = %+v", statusResponse.GetStoragePricing())
 	}
-	prepaidResponse, err := server.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{TenantId: tenantID, Currency: "EUR"})
+	prepaidResponse, err := server.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("get prepaid balance: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 		t.Fatal(err)
 	}
 	_, err = server.AdjustBalance(ctx, &purserpb.AdjustBalanceRequest{
-		TenantId: tenantID, AmountCents: 5, Currency: "EUR", Description: "force-ledger-failure",
+		TenantId: tenantID, AmountCents: 5, Description: "force-ledger-failure",
 	})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("forced ledger failure = %v, want Internal", err)
@@ -256,10 +256,13 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO purser.pending_topups (
 			id, tenant_id, provider, checkout_id, amount_cents, currency, status,
-			expires_at, completed_at, balance_transaction_id
+			expires_at, completed_at, balance_transaction_id,
+			original_amount_cents, original_currency, eur_amount_cents, fx_units_per_eur, fx_source, fx_reference_date
 		) VALUES
-			($1, $3, 'stripe', NULL, 500, 'EUR', 'pending', NOW() + INTERVAL '1 hour', NULL, NULL),
-			($2, $3, 'mollie', 'tr_contract', 750, 'EUR', 'completed', NOW() + INTERVAL '1 hour', NOW(), $4)
+			($1, $3, 'stripe', NULL, 500, 'EUR', 'pending', NOW() + INTERVAL '1 hour', NULL, NULL,
+			 500, 'EUR', 500, 1, 'identity', CURRENT_DATE),
+			($2, $3, 'mollie', 'tr_contract', 750, 'EUR', 'completed', NOW() + INTERVAL '1 hour', NOW(), $4,
+			 750, 'EUR', 750, 1, 'identity', CURRENT_DATE)
 	`, pendingTopupID, completedTopupID, tenantID, results[0].GetId()); err != nil {
 		t.Fatal(err)
 	}

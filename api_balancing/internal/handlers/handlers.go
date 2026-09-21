@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
@@ -28,7 +29,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -209,8 +209,12 @@ func Init(
 	geoipReader = geo
 	geoipCache = geoCache
 	// Initialize cluster ID for dual-tenant attribution
-	clusterID = config.GetEnv("CLUSTER_ID", "")
-	controlCellID = config.GetEnv("MEDIA_AUTHORITY_CELL_ID", clusterID)
+	settings := appconfig.Current()
+	clusterID = settings.ClusterID
+	controlCellID = settings.MediaAuthorityCellID
+	if controlCellID == "" {
+		controlCellID = clusterID
+	}
 
 	startIngestRateLimiterJanitor()
 	StartRoutingEventQueue()

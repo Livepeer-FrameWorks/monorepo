@@ -72,6 +72,10 @@ func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDo
 const getCryptoInvoiceDocument = `-- name: GetCryptoInvoiceDocument :one
 SELECT invoice_number, gross_amount_cents, currency, tax_validation_status,
        issued_at, retention_until, net_amount_cents, vat_amount_cents, vat_rate_bps,
+       amount_eur_cents, COALESCE(net_eur_cents, 0)::bigint AS net_eur_cents,
+       COALESCE(vat_eur_cents, 0)::bigint AS vat_eur_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_reference_date, issued_at::date)::date AS fx_reference_date,
        reference_type, reference_id, supplier_name, supplier_address,
        supplier_vat_number, supplier_registration_number, service_description,
        service_quantity, service_date, customer_email, customer_name,
@@ -98,6 +102,11 @@ type GetCryptoInvoiceDocumentRow struct {
 	NetAmountCents             int64     `db:"net_amount_cents" json:"net_amount_cents"`
 	VatAmountCents             int64     `db:"vat_amount_cents" json:"vat_amount_cents"`
 	VatRateBps                 int32     `db:"vat_rate_bps" json:"vat_rate_bps"`
+	AmountEurCents             int64     `db:"amount_eur_cents" json:"amount_eur_cents"`
+	NetEurCents                int64     `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64     `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string    `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time `db:"fx_reference_date" json:"fx_reference_date"`
 	ReferenceType              string    `db:"reference_type" json:"reference_type"`
 	ReferenceID                string    `db:"reference_id" json:"reference_id"`
 	SupplierName               string    `db:"supplier_name" json:"supplier_name"`
@@ -127,6 +136,11 @@ func (q *Queries) GetCryptoInvoiceDocument(ctx context.Context, arg GetCryptoInv
 		&i.NetAmountCents,
 		&i.VatAmountCents,
 		&i.VatRateBps,
+		&i.AmountEurCents,
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.FxUnitsPerEur,
+		&i.FxReferenceDate,
 		&i.ReferenceType,
 		&i.ReferenceID,
 		&i.SupplierName,
@@ -146,10 +160,15 @@ func (q *Queries) GetCryptoInvoiceDocument(ctx context.Context, arg GetCryptoInv
 }
 
 const getInvoiceDocument = `-- name: GetInvoiceDocument :one
-SELECT invoice.invoice_number, ROUND(invoice.amount * 100)::bigint AS amount_cents,
-       invoice.currency, invoice.status,
+SELECT invoice.invoice_number,
+       COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS amount_cents,
+       COALESCE(invoice.presentment_currency, invoice.currency)::text AS currency, invoice.status,
        COALESCE(invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
-       invoice.period_start, invoice.period_end, invoice.due_date,
+       COALESCE(invoice.period_start, invoice.base_fee_period_start) AS period_start,
+       COALESCE(invoice.period_end, invoice.base_fee_period_end) AS period_end, invoice.due_date,
+       ROUND(invoice.amount * 100)::bigint AS eur_amount_cents,
+       COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       invoice.presentment_reference_date,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -167,19 +186,22 @@ type GetInvoiceDocumentParams struct {
 }
 
 type GetInvoiceDocumentRow struct {
-	InvoiceNumber   string       `db:"invoice_number" json:"invoice_number"`
-	AmountCents     int64        `db:"amount_cents" json:"amount_cents"`
-	Currency        string       `db:"currency" json:"currency"`
-	Status          string       `db:"status" json:"status"`
-	IssuedAt        sql.NullTime `db:"issued_at" json:"issued_at"`
-	RetentionUntil  time.Time    `db:"retention_until" json:"retention_until"`
-	PeriodStart     sql.NullTime `db:"period_start" json:"period_start"`
-	PeriodEnd       sql.NullTime `db:"period_end" json:"period_end"`
-	DueDate         time.Time    `db:"due_date" json:"due_date"`
-	CustomerName    string       `db:"customer_name" json:"customer_name"`
-	CustomerCompany string       `db:"customer_company" json:"customer_company"`
-	CustomerAddress string       `db:"customer_address" json:"customer_address"`
-	CustomerVat     string       `db:"customer_vat" json:"customer_vat"`
+	InvoiceNumber            string       `db:"invoice_number" json:"invoice_number"`
+	AmountCents              int64        `db:"amount_cents" json:"amount_cents"`
+	Currency                 string       `db:"currency" json:"currency"`
+	Status                   string       `db:"status" json:"status"`
+	IssuedAt                 sql.NullTime `db:"issued_at" json:"issued_at"`
+	RetentionUntil           time.Time    `db:"retention_until" json:"retention_until"`
+	PeriodStart              sql.NullTime `db:"period_start" json:"period_start"`
+	PeriodEnd                sql.NullTime `db:"period_end" json:"period_end"`
+	DueDate                  time.Time    `db:"due_date" json:"due_date"`
+	EurAmountCents           int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
+	PresentmentUnitsPerEur   string       `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate sql.NullTime `db:"presentment_reference_date" json:"presentment_reference_date"`
+	CustomerName             string       `db:"customer_name" json:"customer_name"`
+	CustomerCompany          string       `db:"customer_company" json:"customer_company"`
+	CustomerAddress          string       `db:"customer_address" json:"customer_address"`
+	CustomerVat              string       `db:"customer_vat" json:"customer_vat"`
 }
 
 func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error) {
@@ -195,6 +217,9 @@ func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocument
 		&i.PeriodStart,
 		&i.PeriodEnd,
 		&i.DueDate,
+		&i.EurAmountCents,
+		&i.PresentmentUnitsPerEur,
+		&i.PresentmentReferenceDate,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -208,6 +233,7 @@ SELECT ('PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)))::text AS 
        ROUND(payment.amount * 100)::bigint AS amount_cents, payment.currency, payment.status,
        COALESCE(payment.confirmed_at, payment.created_at, NOW()) AS issued_at, payment.retention_until,
        payment.method, payment.tx_id,
+       payment.eur_amount_cents, payment.fx_units_per_eur::text AS fx_units_per_eur, payment.fx_reference_date,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -234,6 +260,9 @@ type GetPaymentReceiptDocumentRow struct {
 	RetentionUntil  time.Time      `db:"retention_until" json:"retention_until"`
 	Method          string         `db:"method" json:"method"`
 	TxID            sql.NullString `db:"tx_id" json:"tx_id"`
+	EurAmountCents  int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur   string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 	CustomerName    string         `db:"customer_name" json:"customer_name"`
 	CustomerCompany string         `db:"customer_company" json:"customer_company"`
 	CustomerAddress string         `db:"customer_address" json:"customer_address"`
@@ -252,6 +281,9 @@ func (q *Queries) GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentR
 		&i.RetentionUntil,
 		&i.Method,
 		&i.TxID,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxReferenceDate,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -264,6 +296,10 @@ const getSimplifiedInvoiceDocument = `-- name: GetSimplifiedInvoiceDocument :one
 SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
        invoice.tax_validation_status, invoice.issued_at, invoice.retention_until,
        invoice.net_amount_cents, invoice.vat_amount_cents, invoice.vat_rate_bps,
+       invoice.amount_eur_cents, COALESCE(invoice.net_eur_cents, 0)::bigint AS net_eur_cents,
+       COALESCE(invoice.vat_eur_cents, 0)::bigint AS vat_eur_cents,
+       COALESCE(invoice.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(invoice.fx_reference_date, invoice.issued_at::date)::date AS fx_reference_date,
        invoice.reference_type, invoice.reference_id,
        invoice.supplier_name, invoice.supplier_address, invoice.supplier_vat_number,
        COALESCE(invoice.supplier_registration_number, '')::text AS supplier_registration_number,
@@ -296,6 +332,11 @@ type GetSimplifiedInvoiceDocumentRow struct {
 	NetAmountCents             int64        `db:"net_amount_cents" json:"net_amount_cents"`
 	VatAmountCents             int64        `db:"vat_amount_cents" json:"vat_amount_cents"`
 	VatRateBps                 int32        `db:"vat_rate_bps" json:"vat_rate_bps"`
+	AmountEurCents             int64        `db:"amount_eur_cents" json:"amount_eur_cents"`
+	NetEurCents                int64        `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents                int64        `db:"vat_eur_cents" json:"vat_eur_cents"`
+	FxUnitsPerEur              string       `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time    `db:"fx_reference_date" json:"fx_reference_date"`
 	ReferenceType              string       `db:"reference_type" json:"reference_type"`
 	ReferenceID                string       `db:"reference_id" json:"reference_id"`
 	SupplierName               string       `db:"supplier_name" json:"supplier_name"`
@@ -324,6 +365,11 @@ func (q *Queries) GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimpl
 		&i.NetAmountCents,
 		&i.VatAmountCents,
 		&i.VatRateBps,
+		&i.AmountEurCents,
+		&i.NetEurCents,
+		&i.VatEurCents,
+		&i.FxUnitsPerEur,
+		&i.FxReferenceDate,
 		&i.ReferenceType,
 		&i.ReferenceID,
 		&i.SupplierName,
@@ -343,31 +389,46 @@ func (q *Queries) GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimpl
 
 const listBillingDocuments = `-- name: ListBillingDocuments :many
 SELECT id::text AS id, kind, document_number, amount_cents, currency, status,
-       COALESCE(issued_at, NOW()) AS issued_at, retention_until
+       COALESCE(issued_at, NOW()) AS issued_at, retention_until,
+       (eur_amount_cents IS NOT NULL)::boolean AS has_eur_amount,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       net_eur_cents, vat_eur_cents,
+       COALESCE(units_per_eur, '')::text AS units_per_eur,
+       COALESCE(TO_CHAR(fx_reference_date, 'YYYY-MM-DD'), '')::text AS fx_reference_date
 FROM (
     SELECT id, 'invoice'::text AS kind, invoice_number AS document_number,
-           ROUND(amount * 100)::bigint AS amount_cents, currency, status,
-           COALESCE(created_at, NOW()) AS issued_at, retention_until
+           COALESCE(presentment_amount_cents, ROUND(amount * 100)::bigint)::bigint AS amount_cents,
+           COALESCE(presentment_currency, currency)::varchar AS currency, status,
+           COALESCE(created_at, NOW()) AS issued_at, retention_until,
+           CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END AS eur_amount_cents,
+           NULL::bigint AS net_eur_cents, NULL::bigint AS vat_eur_cents,
+           presentment_units_per_eur::text AS units_per_eur,
+           presentment_reference_date::date AS fx_reference_date
     FROM purser.billing_invoices WHERE tenant_id = $1::text::uuid AND status <> 'draft'
     UNION ALL
     SELECT id, 'simplified_invoice', invoice_number, gross_amount_cents, currency,
-           tax_validation_status, issued_at, retention_until
+           tax_validation_status, issued_at, retention_until,
+           amount_eur_cents, net_eur_cents, vat_eur_cents, fx_units_per_eur::text, fx_reference_date
     FROM purser.simplified_invoices
     WHERE tenant_id = $1::text::uuid AND tax_validation_status <> 'location_review'
     UNION ALL
     SELECT id, 'crypto_invoice', invoice_number, gross_amount_cents, currency,
-           tax_validation_status, issued_at, retention_until
+           tax_validation_status, issued_at, retention_until,
+           amount_eur_cents, net_eur_cents, vat_eur_cents, fx_units_per_eur::text, fx_reference_date
     FROM purser.crypto_invoices
     WHERE tenant_id = $1::text::uuid AND tax_validation_status <> 'location_review'
     UNION ALL
     SELECT payment.id, 'payment_receipt', 'PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)),
            ROUND(payment.amount * 100)::bigint, payment.currency, payment.status,
-           COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until
+           COALESCE(payment.confirmed_at, payment.created_at, NOW()), payment.retention_until,
+           payment.eur_amount_cents, NULL::bigint, NULL::bigint,
+           payment.fx_units_per_eur::text, payment.fx_reference_date
     FROM purser.billing_payments payment
     JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
     WHERE invoice.tenant_id = $1::text::uuid AND payment.status = 'confirmed'
     UNION ALL
-    SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until
+    SELECT id, 'credit_note', credit_note_number, amount_cents, currency, 'issued', issued_at, retention_until,
+           NULL::bigint, NULL::bigint, NULL::bigint, NULL::text, NULL::date
     FROM purser.credit_notes WHERE tenant_id = $1::text::uuid
 ) documents
 ORDER BY issued_at DESC, id DESC
@@ -375,14 +436,20 @@ LIMIT 1000
 `
 
 type ListBillingDocumentsRow struct {
-	ID             string       `db:"id" json:"id"`
-	Kind           string       `db:"kind" json:"kind"`
-	DocumentNumber string       `db:"document_number" json:"document_number"`
-	AmountCents    int64        `db:"amount_cents" json:"amount_cents"`
-	Currency       string       `db:"currency" json:"currency"`
-	Status         string       `db:"status" json:"status"`
-	IssuedAt       sql.NullTime `db:"issued_at" json:"issued_at"`
-	RetentionUntil time.Time    `db:"retention_until" json:"retention_until"`
+	ID              string        `db:"id" json:"id"`
+	Kind            string        `db:"kind" json:"kind"`
+	DocumentNumber  string        `db:"document_number" json:"document_number"`
+	AmountCents     int64         `db:"amount_cents" json:"amount_cents"`
+	Currency        string        `db:"currency" json:"currency"`
+	Status          string        `db:"status" json:"status"`
+	IssuedAt        sql.NullTime  `db:"issued_at" json:"issued_at"`
+	RetentionUntil  time.Time     `db:"retention_until" json:"retention_until"`
+	HasEurAmount    bool          `db:"has_eur_amount" json:"has_eur_amount"`
+	EurAmountCents  int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	NetEurCents     sql.NullInt64 `db:"net_eur_cents" json:"net_eur_cents"`
+	VatEurCents     sql.NullInt64 `db:"vat_eur_cents" json:"vat_eur_cents"`
+	UnitsPerEur     string        `db:"units_per_eur" json:"units_per_eur"`
+	FxReferenceDate string        `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) ListBillingDocuments(ctx context.Context, tenantID string) ([]ListBillingDocumentsRow, error) {
@@ -403,6 +470,12 @@ func (q *Queries) ListBillingDocuments(ctx context.Context, tenantID string) ([]
 			&i.Status,
 			&i.IssuedAt,
 			&i.RetentionUntil,
+			&i.HasEurAmount,
+			&i.EurAmountCents,
+			&i.NetEurCents,
+			&i.VatEurCents,
+			&i.UnitsPerEur,
+			&i.FxReferenceDate,
 		); err != nil {
 			return nil, err
 		}

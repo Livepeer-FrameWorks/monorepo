@@ -426,7 +426,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	subscriptionID := "52000000-0000-4000-8000-000000000001"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
@@ -470,6 +470,12 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
 			AddRow(nil, nil))
+	mock.ExpectQuery(`-- name: BaseFeeInvoiceExistsForPeriod`).
+		WithArgs(tenantID, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"present"}).AddRow(false))
+	mock.ExpectQuery(`-- name: ListPurserInvoicedClusterSubscriptionsForPeriod`).
+		WithArgs(tenantID, periodEnd, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04").
@@ -519,7 +525,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	subscriptionID := "52000000-0000-4000-8000-000000000001"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
@@ -559,6 +565,12 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
 			AddRow(nil, nil))
+	mock.ExpectQuery(`-- name: BaseFeeInvoiceExistsForPeriod`).
+		WithArgs(tenantID, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"present"}).AddRow(false))
+	mock.ExpectQuery(`-- name: ListPurserInvoicedClusterSubscriptionsForPeriod`).
+		WithArgs(tenantID, periodEnd, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}))
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04").
@@ -663,6 +675,11 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 	mock.ExpectQuery(`SELECT bpa\.attempt_number, bpa\.status\s+FROM purser\.billing_payment_attempts bpa`).
 		WithArgs("mollie", "invoice-1").
 		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`SELECT ROUND\(invoice\.amount \* 100\)::bigint AS amount_cents`).
+		WithArgs("invoice-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"amount_cents", "currency", "presentment_amount_cents", "presentment_currency",
+			"presentment_units_per_eur", "presentment_reference_date", "paid_original_cents", "paid_eur_cents"}).
+			AddRow(int64(1234), "EUR", int64(1234), "EUR", "1.0000000000", time.Date(2026, 5, 12, 0, 0, 0, 0, time.UTC), int64(0), int64(0)))
 	mock.ExpectQuery(`INSERT INTO purser\.billing_payments`).
 		WithArgs(
 			sqlArgFunc(func(v driver.Value) bool {
@@ -677,6 +694,7 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 				intentID, _ := v.(string)
 				return intentID == "mollie-overage-intent:"+localPaymentID
 			}),
+			int64(1234), int64(1234), "1", "identity", sqlmock.AnyArg(),
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"tx_id", "status"}).AddRow("", "pending"))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).

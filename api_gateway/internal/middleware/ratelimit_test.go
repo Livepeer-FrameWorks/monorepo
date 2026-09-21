@@ -107,10 +107,7 @@ func TestEvaluateAccessPublicTenantSkipsGetLimits(t *testing.T) {
 // Public (unauthenticated) callers are throttled per client IP so key-authenticated
 // endpoints like resolveIngestEndpoint can't be used as an unmetered oracle.
 func TestEvaluateAccessPublicRateLimitedPerIP(t *testing.T) {
-	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
-	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
-
-	rl := NewRateLimiter(RateLimitConfig{})
+	rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 	defer rl.Stop()
 
 	req := AccessRequest{
@@ -151,10 +148,7 @@ func TestEvaluateAccessPublicRateLimitedPerIP(t *testing.T) {
 // can't mint a fresh bucket per request. This pins that the middleware keys on the
 // trust-aware client IP, not gin's c.ClientIP() (which trusts XFF by default).
 func TestRateLimitMiddlewareIgnoresSpoofedXFF(t *testing.T) {
-	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
-	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
-
-	rl := NewRateLimiter(RateLimitConfig{})
+	rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 	defer rl.Stop()
 
 	tp, _ := ParseTrustedProxies("") // trust no proxies → XFF is untrusted
@@ -191,9 +185,6 @@ func TestRateLimitMiddlewareIgnoresSpoofedXFF(t *testing.T) {
 // its own per-IP bucket, not the owner's tenant bucket — otherwise anonymous
 // traffic could exhaust a victim tenant's rate limit.
 func TestEvaluateAccessDecouplesRateLimitFromOwnerTenant(t *testing.T) {
-	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
-	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
-
 	// The owner would get a huge bucket; if the limiter keyed on the owner we'd
 	// never see a 429. It must key on the caller's public:<ip> bucket instead.
 	getLimits := func(string) (int, int) { return 100000, 100000 }
@@ -211,7 +202,7 @@ func TestEvaluateAccessDecouplesRateLimitFromOwnerTenant(t *testing.T) {
 	}
 
 	t.Run("anonymous caller is throttled on the IP bucket, not the owner bucket", func(t *testing.T) {
-		rl := NewRateLimiter(RateLimitConfig{})
+		rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 		defer rl.Stop()
 
 		for i := 0; i < 2; i++ { // public bucket = limit+burst = 2 tokens
@@ -225,7 +216,7 @@ func TestEvaluateAccessDecouplesRateLimitFromOwnerTenant(t *testing.T) {
 	})
 
 	t.Run("without decoupling the owner's large bucket applies (control)", func(t *testing.T) {
-		rl := NewRateLimiter(RateLimitConfig{})
+		rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 		defer rl.Stop()
 
 		// Same owner tenant, but RateLimitTenantID nil → keyed on the owner bucket,
@@ -243,10 +234,7 @@ func TestEvaluateAccessDecouplesRateLimitFromOwnerTenant(t *testing.T) {
 // throttle (bucket "public:unknown"), not fall through to the authenticated path
 // where nil limits fail open and the request goes unmetered.
 func TestEvaluateAccessPublicWithEmptyClientIP(t *testing.T) {
-	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
-	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
-
-	rl := NewRateLimiter(RateLimitConfig{})
+	rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 	defer rl.Stop()
 
 	req := AccessRequest{
@@ -910,9 +898,7 @@ func TestEvaluateAccessPublicTenantRequiresPayment(t *testing.T) {
 }
 
 func TestPublicOperationRateLimitMiddlewareNeverReturnsPaymentChallenge(t *testing.T) {
-	t.Setenv("PUBLIC_RATE_LIMIT_PER_MINUTE", "1")
-	t.Setenv("PUBLIC_RATE_LIMIT_BURST", "1")
-	rl := NewRateLimiter(RateLimitConfig{})
+	rl := NewRateLimiter(RateLimitConfig{Settings: onePublicRequestSettings})
 	defer rl.Stop()
 
 	router := gin.New()
@@ -982,11 +968,68 @@ func TestPublicOperationRateLimitMiddlewareWithLimitsUsesIsolatedOperationBucket
 	}
 }
 
+// onePublicRequestSettings allows an unauthenticated caller one request per
+// minute plus a burst of one.
+func onePublicRequestSettings() AccessSettings {
+	return AccessSettings{PublicLimitPerMinute: 1, PublicBurst: 1}
+}
+
+func TestPublicRateLimitsUseDefaultsForNonPositiveSettings(t *testing.T) {
+	tests := []struct {
+		name      string
+		settings  func() AccessSettings
+		wantLimit int
+		wantBurst int
+	}{
+		{name: "nil settings", settings: nil, wantLimit: defaultPublicRateLimitPerMinute, wantBurst: defaultPublicRateLimitBurst},
+		{name: "zero values", settings: func() AccessSettings { return AccessSettings{} }, wantLimit: defaultPublicRateLimitPerMinute, wantBurst: defaultPublicRateLimitBurst},
+		{name: "negative values", settings: func() AccessSettings { return AccessSettings{PublicLimitPerMinute: -5, PublicBurst: -1} }, wantLimit: defaultPublicRateLimitPerMinute, wantBurst: defaultPublicRateLimitBurst},
+		{name: "positive values", settings: func() AccessSettings { return AccessSettings{PublicLimitPerMinute: 7, PublicBurst: 3} }, wantLimit: 7, wantBurst: 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rl := NewRateLimiter(RateLimitConfig{Settings: tc.settings})
+			defer rl.Stop()
+			limit, burst := rl.publicRateLimits()
+			if limit != tc.wantLimit || burst != tc.wantBurst {
+				t.Fatalf("publicRateLimits() = (%d,%d), want (%d,%d)", limit, burst, tc.wantLimit, tc.wantBurst)
+			}
+		})
+	}
+}
+
+// Settings are read on every decision, so a changed value applies without
+// rebuilding the limiter.
+func TestEvaluateAccessReadsSettingsPerDecision(t *testing.T) {
+	docsURL := ""
+	rl := NewRateLimiter(RateLimitConfig{Settings: func() AccessSettings { return AccessSettings{DocsPublicURL: docsURL} }})
+	defer rl.Stop()
+	getLimits := func(string) (int, int) { return 1, 1 }
+	req := AccessRequest{TenantID: "tenant-1", ClientIP: "10.0.0.2", Path: "/graphql", OperationName: "streamsConnection"}
+
+	EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+	EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+	denied := EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+	if denied.Allowed {
+		t.Fatal("expected rate limit to deny request")
+	}
+	if _, ok := denied.Body["documentation"]; ok {
+		t.Fatalf("expected no documentation link without DocsPublicURL, got %#v", denied.Body["documentation"])
+	}
+
+	docsURL = "https://docs.example.com"
+	denied = EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+	if denied.Body["documentation"] != "https://docs.example.com/api/rate-limits" {
+		t.Fatalf("expected documentation URL after settings change, got %#v", denied.Body["documentation"])
+	}
+}
+
 func TestEvaluateAccessRateLimitAddsDocumentation(t *testing.T) {
-	rl := NewRateLimiter(RateLimitConfig{})
+	rl := NewRateLimiter(RateLimitConfig{Settings: func() AccessSettings {
+		return AccessSettings{DocsPublicURL: "https://docs.example.com"}
+	}})
 	defer rl.Stop()
 
-	t.Setenv("DOCS_PUBLIC_URL", "https://docs.example.com")
 	getLimits := func(string) (int, int) { return 1, 1 }
 
 	req := AccessRequest{

@@ -35,9 +35,11 @@ const createCryptoWallet = `-- name: CreateCryptoWallet :exec
 INSERT INTO purser.crypto_wallets (
     id, tenant_id, purpose, invoice_id, expected_amount_cents,
     asset, network, wallet_address, derivation_index, derivation_xpub, expires_at,
-    expected_amount_base_units, quoted_price_usd, quoted_usd_to_eur_rate,
+    expected_amount_base_units, quoted_price_usd,
     quoted_at, quote_source, credited_amount_currency, client_ip,
-    tax_document_kind, tax_profile_snapshot
+    tax_document_kind, tax_profile_snapshot,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid, $2::text::uuid, $3,
     $4::text::uuid, $5::bigint,
@@ -45,10 +47,12 @@ INSERT INTO purser.crypto_wallets (
     $9, $10, $11,
     $12::text::numeric,
     $13::text::numeric,
-    $14::text::numeric,
-    $15::timestamptz, $16::text,
-    $17::text, $18::text,
-    $19, $20
+    $14::timestamptz, $15::text,
+    $16::text, $17::text,
+    $18, $19,
+    $20::bigint, $21::text,
+    $22::bigint, $23::text::numeric,
+    $24::text, $25::date
 )
 `
 
@@ -66,13 +70,18 @@ type CreateCryptoWalletParams struct {
 	ExpiresAt               time.Time       `db:"expires_at" json:"expires_at"`
 	ExpectedAmountBaseUnits sql.NullString  `db:"expected_amount_base_units" json:"expected_amount_base_units"`
 	QuotedPriceUsd          sql.NullString  `db:"quoted_price_usd" json:"quoted_price_usd"`
-	QuotedUsdToEurRate      sql.NullString  `db:"quoted_usd_to_eur_rate" json:"quoted_usd_to_eur_rate"`
 	QuotedAt                sql.NullTime    `db:"quoted_at" json:"quoted_at"`
 	QuoteSource             sql.NullString  `db:"quote_source" json:"quote_source"`
 	CreditedAmountCurrency  sql.NullString  `db:"credited_amount_currency" json:"credited_amount_currency"`
 	ClientIp                sql.NullString  `db:"client_ip" json:"client_ip"`
 	TaxDocumentKind         string          `db:"tax_document_kind" json:"tax_document_kind"`
 	TaxProfileSnapshot      json.RawMessage `db:"tax_profile_snapshot" json:"tax_profile_snapshot"`
+	OriginalAmountCents     int64           `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string          `db:"original_currency" json:"original_currency"`
+	EurAmountCents          int64           `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string          `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string          `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         time.Time       `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) CreateCryptoWallet(ctx context.Context, arg CreateCryptoWalletParams) error {
@@ -90,13 +99,18 @@ func (q *Queries) CreateCryptoWallet(ctx context.Context, arg CreateCryptoWallet
 		arg.ExpiresAt,
 		arg.ExpectedAmountBaseUnits,
 		arg.QuotedPriceUsd,
-		arg.QuotedUsdToEurRate,
 		arg.QuotedAt,
 		arg.QuoteSource,
 		arg.CreditedAmountCurrency,
 		arg.ClientIp,
 		arg.TaxDocumentKind,
 		arg.TaxProfileSnapshot,
+		arg.OriginalAmountCents,
+		arg.OriginalCurrency,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	return err
 }

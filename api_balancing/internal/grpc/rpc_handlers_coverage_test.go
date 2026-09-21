@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -97,29 +98,30 @@ func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 	srv, mock := newVodRpcHandlers(t, s3)
 
 	mock.ExpectQuery(`SELECT v.artifact_hash, v.s3_key, a.user_id`).
-		WithArgs("u1", "t1").
+		WithArgs("u1", mockTenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id", "backend_id"}).
 			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}, testStubBackendID))
 	// Durable claim FIRST (tenant-scoped, 'uploading'->'aborting'), BEFORE any S3 call.
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND status = 'uploading'`).
-		WithArgs("hash-1", "t1").
+		WithArgs("hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// After winning the claim, the finalize tx transitions 'aborting'->'deleted', deletes metadata, and
-	// emits the DELETED lifecycle event.
+	// emits upload.aborted with its DELETED lifecycle row.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND status = 'aborting'`).
-		WithArgs("hash-1", "t1").
+		WithArgs("hash-1", mockTenantUUID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn\.vod_metadata`).
 		WithArgs("hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	caller := events.Actor{AuthType: "api_token", UserID: "user-7", TokenHash: 4242}
+	expectTransitionInsertBy(mock, caller, "upload.aborted", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
 	mock.ExpectCommit()
 
 	resp, err := srv.AbortVodUpload(context.Background(), &sharedpb.AbortVodUploadRequest{
-		TenantId: "t1",
+		TenantId: mockTenantUUID,
 		UploadId: "u1",
+		Actor:    events.RequestActor(caller),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -285,6 +287,10 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The requested deletion's artifact_deleted service event commits in the same tx.
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WithArgs("artifact_deleted", "t1", "", "hash-1", payloadContains(`"userId":"user-7"`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Physical cleanup runs only after the commit: fan out node-cleanup (no cached nodes here).
 	mock.ExpectQuery(`SELECT node_id FROM foghorn\.artifact_nodes`).
@@ -292,8 +298,9 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
 
 	resp, err := srv.DeleteVodAsset(context.Background(), &sharedpb.DeleteVodAssetRequest{
-		ArtifactHash: "hash-1",
-		TenantId:     "t1",
+		ArtifactHash:      "hash-1",
+		TenantId:          "t1",
+		RequestedByUserId: "user-7",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

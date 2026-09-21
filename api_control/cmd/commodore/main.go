@@ -5,12 +5,10 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"errors"
-	"fmt"
-	"net"
 	"os"
-	"strconv"
-	"strings"
+	"time"
 
+	"frameworks/api_control/internal/appconfig"
 	"frameworks/api_control/internal/clusterurls"
 	commodoremigrations "frameworks/api_control/internal/datamigrations"
 	commodoregrpc "frameworks/api_control/internal/grpc"
@@ -25,15 +23,17 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
-	"time"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -43,12 +43,25 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
 		logger := logging.NewLoggerWithService("commodore")
 		config.LoadEnv(logger)
-		commodoremigrations.Register()
+		migrationCfg, err := config.Load[appconfig.CommodoreDataMigrations](config.Options{Service: "commodore", Logger: logger})
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid data migration configuration")
+		}
+		commodoremigrations.Register(commodoremigrations.FieldEncryptionSettings{
+			ActiveKeyID:            migrationCfg.FieldEncryptionKeyID,
+			ActiveKey:              migrationCfg.FieldEncryptionKey,
+			PreviousKeys:           migrationCfg.FieldEncryptionPreviousKeys,
+			LegacySecrets:          migrationCfg.FieldEncryptionLegacySecrets,
+			JWTSecret:              migrationCfg.JWTSecret,
+			AllowQuarantine:        migrationCfg.FieldEncryptionAllowQuarantine,
+			RequeueQuarantine:      migrationCfg.FieldEncryptionRequeueQuarantine,
+			AckUnverifiedLegacyKey: migrationCfg.FieldEncryptionAckUnverifiedLegacyKey,
+		})
 		placementpolicy.RegisterPullSourcePinsToStreamRules()
 		dbConfig := database.DefaultConfig()
 		dbConfig.ServiceName = "commodore"
-		dbConfig.URL = config.RequireEnv("DATABASE_URL")
-		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+		dbConfig.URL = migrationCfg.DatabaseURL
+		err = datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
 			return database.Connect(dbConfig, logger)
 		}, os.Stdout, os.Args[1:])
 		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
@@ -72,45 +85,45 @@ func main() {
 
 	logger.Info("Starting Commodore (Control API)")
 
-	dbURL := config.RequireEnv("DATABASE_URL")
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	fieldEncryptionKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
-	fieldEncryptionKeyID := config.GetEnv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	fieldEncryptionPrevious, fieldKeysErr := fieldcrypt.ParseFieldKeySet(config.GetEnv("FIELD_ENCRYPTION_PREVIOUS_KEYS", ""))
-	if fieldKeysErr != nil {
-		logger.WithError(fieldKeysErr).Fatal("Invalid FIELD_ENCRYPTION_PREVIOUS_KEYS")
+	configOptions := config.Options{Service: "commodore", Logger: logger}
+	cfg, err := config.Load[appconfig.Commodore](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
-	fieldEncryptionLegacy, legacyKeysErr := fieldcrypt.ParseLegacyFieldSecrets(config.GetEnv("FIELD_ENCRYPTION_LEGACY_SECRETS", ""))
-	if legacyKeysErr != nil {
-		logger.WithError(legacyKeysErr).Fatal("Invalid FIELD_ENCRYPTION_LEGACY_SECRETS")
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
-	destinationPolicy, destinationPolicyErr := restream.DestinationPolicyFromEnvironment()
-	if destinationPolicyErr != nil {
-		logger.WithError(destinationPolicyErr).Fatal("Invalid restream destination policy")
+	liveConfig := config.NewLive(cfg, configOptions)
+
+	fieldEncryptionPrevious, err := fieldcrypt.ParseFieldKeySet(cfg.FieldEncryptionPreviousKeys)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid FIELD_ENCRYPTION_PREVIOUS_KEYS")
 	}
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	mediaAuthorityKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_KEY_ID"))
-	mediaAuthorityPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"))
+	fieldEncryptionLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(cfg.FieldEncryptionLegacySecrets)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid FIELD_ENCRYPTION_LEGACY_SECRETS")
+	}
+	destinationPolicy, err := restream.DestinationPolicyFromValues(cfg.RestreamAllowPrivateDestinations, cfg.RestreamAllowedPrivateCIDRs, cfg.RestreamDeniedCIDRs)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid restream destination policy")
+	}
+	// Config validation already enforced that the signer key ID and private
+	// key are set together, and that both are set outside development.
 	var mediaAuthorityPrivateKey ed25519.PrivateKey
-	var err error
-	if mediaAuthorityKeyID != "" || mediaAuthorityPrivateEncoded != "" {
-		if mediaAuthorityKeyID == "" || mediaAuthorityPrivateEncoded == "" {
-			logger.Fatal("MEDIA_AUTHORITY_SIGNING_KEY_ID and MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64 must be configured together")
-		}
-		mediaAuthorityPrivateKey, err = sharedauthority.ParseSigningPrivateKey(mediaAuthorityPrivateEncoded)
+	if cfg.MediaAuthoritySigningPrivateKeyPEMB64 != "" {
+		mediaAuthorityPrivateKey, err = sharedauthority.ParseSigningPrivateKey(cfg.MediaAuthoritySigningPrivateKeyPEMB64)
 		if err != nil {
 			logger.WithError(err).Fatal("Invalid media authority signing private key")
 		}
-		logger.WithField("signer_key_id", mediaAuthorityKeyID).Info("Signed media authority compiler enabled")
+		logger.WithField("signer_key_id", cfg.MediaAuthoritySigningKeyID).Info("Signed media authority compiler enabled")
 	} else {
-		if !config.IsDevelopment() {
-			logger.Fatal("MEDIA_AUTHORITY_SIGNING_KEY_ID and MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64 are required outside development")
-		}
 		logger.Warn("Media authority signing key is not configured in development; authority compilation is disabled")
 	}
 	var mediaAuthoritySealRecipients sharedauthority.SealRecipientSet
-	if encodedRecipients := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_RECIPIENTS")); encodedRecipients != "" {
-		mediaAuthoritySealRecipients, err = sharedauthority.ParseSealRecipients(encodedRecipients)
+	if cfg.MediaAuthoritySealRecipients != "" {
+		mediaAuthoritySealRecipients, err = sharedauthority.ParseSealRecipients(cfg.MediaAuthoritySealRecipients)
 		if err != nil {
 			logger.WithError(err).Fatal("Invalid media authority seal recipient set")
 		}
@@ -120,7 +133,7 @@ func main() {
 	// Connect to database
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "commodore"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
@@ -130,11 +143,9 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":         dbURL,
-		"JWT_SECRET":           jwtSecret,
-		"FIELD_ENCRYPTION_KEY": fieldEncryptionKey,
-	}))
+
+	readiness := monitoring.NewReadinessChecker("commodore", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
 	// Per-method counters live on commodore_grpc_requests_total{method,status}
 	// produced by middleware.GRPCMetricsInterceptor (wired into the gRPC
@@ -235,137 +246,135 @@ func main() {
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
-		ServiceToken:  serviceToken,
+		ServiceToken:  cfg.ServiceToken,
 		Timeout:       30 * time.Second,
 		Logger:        logger,
 		MaxIdleTime:   10 * time.Minute,
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.FoghornGRPCTLSServerName,
+		AllowInsecure: cfg.AllowInsecure,
 	})
 	defer foghornPool.Close()
 
 	// Create Quartermaster gRPC client for tenant creation during registration
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	quartermasterGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:           quartermasterGRPCAddr,
+		GRPCAddr:           cfg.QuartermasterGRPCAddr,
 		Timeout:            30 * time.Second,
 		Logger:             logger,
-		ServiceToken:       serviceToken,
+		ServiceToken:       cfg.ServiceToken,
 		PreferServiceToken: true,
-		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:         config.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure:      cfg.AllowInsecure,
+		CACertFile:         cfg.CAPath,
+		ServerName:         cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
 		quartermasterGRPCClient = nil
 	} else {
 		defer func() { _ = quartermasterGRPCClient.Close() }()
-		logger.WithField("addr", quartermasterGRPCAddr).Info("Connected to Quartermaster gRPC")
+		logger.WithField("addr", cfg.QuartermasterGRPCAddr).Info("Connected to Quartermaster gRPC")
 	}
 
 	// Optional Navigator gRPC client. Used for GetTenantAliasStatus when
 	// populating CreateStreamResponse.tenant_*_domain fields. Without
 	// Navigator, those fields stay unset and clients fall back to
 	// global / cluster-concrete URLs.
-	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "")
 	var navigatorGRPCClient *navigator.Client
-	if navigatorGRPCAddr != "" {
+	if cfg.NavigatorGRPCAddr != "" {
 		navigatorGRPCClient, err = navigator.NewClient(navigator.Config{
-			Addr:          navigatorGRPCAddr,
+			Addr:          cfg.NavigatorGRPCAddr,
 			Timeout:       5 * time.Second,
 			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.NavigatorGRPCTLSServerName,
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Navigator gRPC client - tenant alias status lookups disabled")
 			navigatorGRPCClient = nil
 		} else {
 			defer func() { _ = navigatorGRPCClient.Close() }()
-			logger.WithField("addr", navigatorGRPCAddr).Info("Connected to Navigator gRPC")
+			logger.WithField("addr", cfg.NavigatorGRPCAddr).Info("Connected to Navigator gRPC")
 		}
 	}
 
 	// Create Purser gRPC client for user limit checking during registration
-	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserGRPCClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:           purserGRPCAddr,
+		GRPCAddr:           cfg.PurserGRPCAddr,
 		Timeout:            30 * time.Second,
 		Logger:             logger,
-		ServiceToken:       serviceToken,
+		ServiceToken:       cfg.ServiceToken,
 		PreferServiceToken: true,
-		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+		AllowInsecure:      cfg.AllowInsecure,
+		CACertFile:         cfg.CAPath,
+		ServerName:         cfg.PurserGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
 		purserGRPCClient = nil
 	} else {
 		defer func() { _ = purserGRPCClient.Close() }()
-		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
+		logger.WithField("addr", cfg.PurserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
 	// Create Decklog gRPC client for service events
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "commodore",
-		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
 		defer func() { _ = decklogClient.Close() }()
-		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+		logger.WithField("addr", cfg.DecklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+	tokenHasher, err := events.NewTokenHasher(cfg.UsageHashSecret)
+	if err != nil {
+		logger.WithError(err).Fatal("USAGE_HASH_SECRET is required for domain event actor attribution")
 	}
 
 	// Create Listmonk client for newsletter subscription
 	var listmonkClient *listmonk.Client
-	defaultMailingListID := 1
-	if listmonkURL := os.Getenv("LISTMONK_URL"); listmonkURL != "" {
-		listmonkUser := strings.TrimSpace(os.Getenv("LISTMONK_API_USERNAME"))
-		listmonkToken := strings.TrimSpace(os.Getenv("LISTMONK_API_TOKEN"))
-		if listmonkUser == "" || listmonkToken == "" {
+	if cfg.ListmonkURL != "" {
+		if cfg.ListmonkAPIUsername == "" || cfg.ListmonkAPIToken == "" {
 			logger.Warn("LISTMONK_URL is set but LISTMONK_API_USERNAME or LISTMONK_API_TOKEN is missing; newsletter integration disabled")
 		} else {
-			listmonkClient = listmonk.NewClient(listmonkURL, listmonkUser, listmonkToken)
-			logger.WithField("url", listmonkURL).Info("Listmonk client configured")
-		}
-		if id, err := strconv.Atoi(os.Getenv("DEFAULT_MAILING_LIST_ID")); err == nil {
-			defaultMailingListID = id
+			listmonkClient = listmonk.NewClient(cfg.ListmonkURL, cfg.ListmonkAPIUsername, cfg.ListmonkAPIToken)
+			logger.WithField("url", cfg.ListmonkURL).Info("Listmonk client configured")
 		}
 	}
 
-	// Expose health and metrics over HTTP; product APIs are served over gRPC.
-	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
+	// Expose health, readiness, and metrics over HTTP; product APIs are served over gRPC.
+	app := server.NewServiceRouter(server.RouterSpec{
+		Service:            "commodore",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
 
 	// Cluster routing snapshot: read paths derive Chandler URLs from cluster_id
 	// without a per-row network call. Refreshes from Quartermaster every 60s.
-	clusterURLsResolver := clusterurls.NewResolver(quartermasterGRPCClient, logger)
+	clusterURLsResolver := clusterurls.NewResolver(quartermasterGRPCClient, logger, cfg.ChandlerBaseURL)
 	clusterURLsResolver.Start(context.Background(), 60*time.Second)
 
-	// Start gRPC server in a goroutine
-	grpcPort := config.GetEnv("GRPC_PORT", "19001")
-	go func() {
-		grpcAddr := fmt.Sprintf(":%s", grpcPort)
-		lis, err := net.Listen("tcp", grpcAddr)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
-		}
-
-		grpcServer := commodoregrpc.NewGRPCServer(commodoregrpc.CommodoreServerConfig{
+	// NewGRPCServer waits for the gRPC TLS files, so the server builds in the
+	// background while HTTP health already serves.
+	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
+		return commodoregrpc.NewGRPCServer(ctx, commodoregrpc.CommodoreServerConfig{
 			DB:                              db,
 			DBMaxIdleConns:                  dbConfig.MaxIdleConns,
 			Logger:                          logger,
@@ -375,77 +384,117 @@ func main() {
 			PurserClient:                    purserGRPCClient,
 			ListmonkClient:                  listmonkClient,
 			DecklogClient:                   decklogClient,
+			TokenHasher:                     tokenHasher,
 			ClusterURLs:                     clusterURLsResolver,
-			DefaultMailingListID:            defaultMailingListID,
+			DefaultMailingListID:            cfg.DefaultMailingListID,
 			Metrics:                         serverMetrics,
-			ServiceToken:                    serviceToken,
-			JWTSecret:                       []byte(jwtSecret),
-			FieldEncryptionKeyID:            fieldEncryptionKeyID,
-			FieldEncryptionKey:              []byte(fieldEncryptionKey),
+			ServiceToken:                    cfg.ServiceToken,
+			JWTSecret:                       []byte(cfg.JWTSecret),
+			MetadataPolicy:                  metadataPolicy,
+			FieldEncryptionKeyID:            cfg.FieldEncryptionKeyID,
+			FieldEncryptionKey:              []byte(cfg.FieldEncryptionKey),
 			FieldEncryptionPrevious:         fieldEncryptionPrevious,
 			FieldEncryptionLegacy:           fieldEncryptionLegacy,
 			DestinationPolicy:               destinationPolicy,
-			TurnstileSecretKey:              config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
-			TurnstileFailOpen:               config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
-			PasswordResetSecret:             []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
-			MediaAuthoritySigningKeyID:      mediaAuthorityKeyID,
+			TurnstileSecretKey:              cfg.TurnstileAuthSecretKey,
+			TurnstileFailOpen:               cfg.TurnstileFailOpen,
+			PasswordResetSecret:             []byte(cfg.PasswordResetSecret),
+			SystemTenantID:                  cfg.SystemTenantUUID(),
+			MediaAuthoritySigningKeyID:      cfg.MediaAuthoritySigningKeyID,
 			MediaAuthoritySigningPrivateKey: mediaAuthorityPrivateKey,
 			MediaAuthoritySealRecipients:    mediaAuthoritySealRecipients,
-			CertFile:                        config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:                         config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:                   config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CertFile:                        cfg.CertPath,
+			KeyFile:                         cfg.KeyPath,
+			AllowInsecure:                   cfg.AllowInsecure,
+			Settings:                        func() commodoregrpc.RuntimeSettings { return runtimeSettings(liveConfig.Get()) },
 		})
-		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+	}
 
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("gRPC server failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The domain event relay publishes committed commodore.domain_event_outbox
+	// rows to Decklog. It stops after the listeners, so events committed by the
+	// last in-flight requests stay in the outbox for the next process.
+	var onShutdown []func(context.Context)
+	if decklogClient != nil {
+		relay, relayErr := eventoutbox.NewRelay(db, commodoregrpc.DomainEventSchema, decklogClient, logger)
+		if relayErr != nil {
+			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
 		}
-	}()
-
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("commodore", "18001")
+		relayCtx, stopRelay := context.WithCancel(context.Background())
+		relayDone := make(chan struct{})
+		go func() {
+			defer close(relayDone)
+			relay.Run(relayCtx)
+		}()
+		onShutdown = append(onShutdown, func(shutdownCtx context.Context) {
+			stopRelay()
+			select {
+			case <-relayDone:
+			case <-shutdownCtx.Done():
+			}
+		})
+	} else {
+		logger.Warn("Domain event relay disabled: no Decklog client; domain events stay in the outbox")
+	}
 
 	// Best-effort service registration in Quartermaster (using gRPC client)
-	// Must be launched BEFORE server.Start() which blocks
 	go func() {
 		if quartermasterGRPCClient == nil {
 			logger.Warn("Quartermaster gRPC client not available, skipping bootstrap")
 			return
 		}
-		healthEndpoint := "/health"
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "commodore",
+			Port:          cfg.HTTPListen.Port,
+			AdvertiseHost: cfg.AdvertiseHost,
+			ClusterID:     cfg.ClusterID,
+			NodeID:        cfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("COMMODORE_HOST", "commodore")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "commodore",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), quartermasterGRPCClient, req, logger, qmbootstrap.DefaultRetryConfig("commodore")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, quartermasterGRPCClient, req, logger, qmbootstrap.DefaultRetryConfig("commodore")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (commodore) ok")
 		}
 	}()
 
 	server.RegisterEnvFileReload("commodore", logger)
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "commodore",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: app}},
+		GRPC:    []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+		// Only settings read through liveConfig follow a reload; everything
+		// copied from cfg above stays at its startup value.
+		OnReload:   []server.ReloadCallback{liveConfig.Reload},
+		OnShutdown: onShutdown,
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
+	}
+}
+
+// runtimeSettings projects the request-time settings from one configuration
+// snapshot.
+func runtimeSettings(c *appconfig.Commodore) commodoregrpc.RuntimeSettings {
+	return commodoregrpc.RuntimeSettings{
+		JWTSecret:             []byte(c.JWTSecret),
+		Branding:              c.EmailBranding,
+		DeviceVerificationURL: c.DeviceVerificationURL,
+		PlatformRootDomain:    c.PlatformRootDomain,
+		BrandDomain:           c.BrandDomain,
+		Development:           c.IsDevelopment(),
+		SMTPHost:              c.SMTPHost,
+		SMTPPort:              c.SMTPPort,
+		SMTPUser:              c.SMTPUser,
+		SMTPPassword:          c.SMTPPassword,
+		FromEmail:             c.FromEmail,
+		FromName:              c.FromName,
+		SMTPAllowInsecure:     c.SMTPAllowInsecure,
 	}
 }

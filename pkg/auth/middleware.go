@@ -7,6 +7,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // ServiceAuthMiddleware validates service-to-service auth tokens
@@ -46,7 +47,9 @@ type APIKeyIdentity struct {
 }
 
 type jwtMiddlewareConfig struct {
-	apiKeys map[string]APIKeyIdentity
+	apiKeys        map[string]APIKeyIdentity
+	serviceToken   string
+	systemTenantID uuid.UUID
 }
 
 // JWTOption configures optional behaviour for JWTAuthMiddleware.
@@ -76,7 +79,18 @@ func WithAPIKeys(keys map[string]APIKeyIdentity) JWTOption {
 	}
 }
 
-// JWTAuthMiddleware validates JWT tokens for web sessions and service tokens for service-to-service calls.
+// WithServiceIdentity accepts the shared service token as a Bearer token and
+// authenticates it as the service account acting for systemTenantID. Without
+// this option, or with an empty token, service tokens are rejected.
+func WithServiceIdentity(token string, systemTenantID uuid.UUID) JWTOption {
+	return func(cfg *jwtMiddlewareConfig) {
+		cfg.serviceToken = token
+		cfg.systemTenantID = systemTenantID
+	}
+}
+
+// JWTAuthMiddleware validates JWT tokens for web sessions and, with
+// WithServiceIdentity, service tokens for service-to-service calls.
 // It supports WebSocket upgrade requests by allowing them through for later authentication.
 func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 	var cfg jwtMiddlewareConfig
@@ -136,17 +150,9 @@ func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 			return
 		}
 
-		// If JWT validation fails, try service token validation
-		serviceToken := GetServiceToken()
-		if serviceToken != "" && ValidateServiceToken(token, serviceToken) == nil {
-			systemTenantID, tenantErr := tenants.RuntimeSystemTenantID()
-			if tenantErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid service identity configuration"})
-				c.Abort()
-				return
-			}
-			c.Set(string(ctxkeys.KeyUserID), "00000000-0000-0000-0000-000000000000")
-			c.Set(string(ctxkeys.KeyTenantID), systemTenantID.String())
+		if cfg.serviceToken != "" && ValidateServiceToken(token, cfg.serviceToken) == nil {
+			c.Set(string(ctxkeys.KeyUserID), tenants.ServiceAccountUserID.String())
+			c.Set(string(ctxkeys.KeyTenantID), cfg.systemTenantID.String())
 			c.Set(string(ctxkeys.KeyEmail), "service@internal")
 			c.Set(string(ctxkeys.KeyRole), "service")
 			c.Set(string(ctxkeys.KeyAuthType), "service")

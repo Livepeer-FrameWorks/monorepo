@@ -33,28 +33,41 @@ func (q *Queries) AttachCardCheckoutToPendingPayment(ctx context.Context, arg At
 
 const createPendingInvoicePayment = `-- name: CreatePendingInvoicePayment :exec
 INSERT INTO purser.billing_payments (
-    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     $1::text::uuid,
     $2::text::uuid,
     $3,
     $4::text::numeric,
-    $5,
+    $5::text,
     NULLIF($6::text, ''),
     'pending',
     $7,
-    $7
+    $7,
+    $8::bigint,
+    $5::text,
+    $9::bigint,
+    $10::text::numeric,
+    $11::text,
+    $12::date
 )
 `
 
 type CreatePendingInvoicePaymentParams struct {
-	PaymentID string       `db:"payment_id" json:"payment_id"`
-	InvoiceID string       `db:"invoice_id" json:"invoice_id"`
-	Method    string       `db:"method" json:"method"`
-	Amount    string       `db:"amount" json:"amount"`
-	Currency  string       `db:"currency" json:"currency"`
-	TxID      string       `db:"tx_id" json:"tx_id"`
-	CreatedAt sql.NullTime `db:"created_at" json:"created_at"`
+	PaymentID           string       `db:"payment_id" json:"payment_id"`
+	InvoiceID           string       `db:"invoice_id" json:"invoice_id"`
+	Method              string       `db:"method" json:"method"`
+	Amount              string       `db:"amount" json:"amount"`
+	Currency            string       `db:"currency" json:"currency"`
+	TxID                string       `db:"tx_id" json:"tx_id"`
+	CreatedAt           sql.NullTime `db:"created_at" json:"created_at"`
+	OriginalAmountCents int64        `db:"original_amount_cents" json:"original_amount_cents"`
+	EurAmountCents      int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string       `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string       `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time    `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) CreatePendingInvoicePayment(ctx context.Context, arg CreatePendingInvoicePaymentParams) error {
@@ -66,6 +79,11 @@ func (q *Queries) CreatePendingInvoicePayment(ctx context.Context, arg CreatePen
 		arg.Currency,
 		arg.TxID,
 		arg.CreatedAt,
+		arg.OriginalAmountCents,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxSource,
+		arg.FxReferenceDate,
 	)
 	return err
 }
@@ -199,7 +217,13 @@ const getActiveInvoicePayment = `-- name: GetActiveInvoicePayment :one
 SELECT payment.id::text AS id, payment.method, payment.amount::text AS amount,
        payment.currency, payment.tx_id, payment.payment_url,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COUNT(*) OVER ()::int AS active_count
+       COUNT(*) OVER ()::int AS active_count,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE payment.invoice_id = $1::text::uuid
@@ -215,14 +239,20 @@ type GetActiveInvoicePaymentParams struct {
 }
 
 type GetActiveInvoicePaymentRow struct {
-	ID          string         `db:"id" json:"id"`
-	Method      string         `db:"method" json:"method"`
-	Amount      string         `db:"amount" json:"amount"`
-	Currency    string         `db:"currency" json:"currency"`
-	TxID        sql.NullString `db:"tx_id" json:"tx_id"`
-	PaymentUrl  sql.NullString `db:"payment_url" json:"payment_url"`
-	CreatedAt   sql.NullTime   `db:"created_at" json:"created_at"`
-	ActiveCount int32          `db:"active_count" json:"active_count"`
+	ID                  string         `db:"id" json:"id"`
+	Method              string         `db:"method" json:"method"`
+	Amount              string         `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TxID                sql.NullString `db:"tx_id" json:"tx_id"`
+	PaymentUrl          sql.NullString `db:"payment_url" json:"payment_url"`
+	CreatedAt           sql.NullTime   `db:"created_at" json:"created_at"`
+	ActiveCount         int32          `db:"active_count" json:"active_count"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetActiveInvoicePayment(ctx context.Context, arg GetActiveInvoicePaymentParams) (GetActiveInvoicePaymentRow, error) {
@@ -237,6 +267,12 @@ func (q *Queries) GetActiveInvoicePayment(ctx context.Context, arg GetActiveInvo
 		&i.PaymentUrl,
 		&i.CreatedAt,
 		&i.ActiveCount,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -262,15 +298,17 @@ func (q *Queries) GetCryptoScannerReadiness(ctx context.Context, network string)
 
 const getPayableInvoiceBalance = `-- name: GetPayableInvoiceBalance :one
 SELECT invoice.tenant_id::text AS tenant_id,
-       invoice.amount::text AS total_amount,
-       invoice.currency,
+       COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS total_cents,
+       COALESCE(invoice.presentment_currency, UPPER(invoice.currency))::text AS currency,
        COALESCE((
-           SELECT SUM(payment.amount - (COALESCE(payment.reversed_amount_cents, 0)::numeric / 100))
+           SELECT SUM(COALESCE(payment.original_amount_cents, ROUND(payment.amount * 100)::bigint)
+                      - COALESCE(payment.reversed_amount_cents, 0))
            FROM purser.billing_payments payment
            WHERE payment.invoice_id = invoice.id
              AND payment.status = 'confirmed'
-             AND payment.currency = invoice.currency
-       ), 0)::text AS net_paid
+             AND COALESCE(payment.original_currency, UPPER(payment.currency))
+                 = COALESCE(invoice.presentment_currency, UPPER(invoice.currency))
+       ), 0)::bigint AS net_paid_cents
 FROM purser.billing_invoices invoice
 WHERE invoice.id = $1::text::uuid
   AND invoice.tenant_id = $2::text::uuid
@@ -284,20 +322,22 @@ type GetPayableInvoiceBalanceParams struct {
 }
 
 type GetPayableInvoiceBalanceRow struct {
-	TenantID    string `db:"tenant_id" json:"tenant_id"`
-	TotalAmount string `db:"total_amount" json:"total_amount"`
-	Currency    string `db:"currency" json:"currency"`
-	NetPaid     string `db:"net_paid" json:"net_paid"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	TotalCents   int64  `db:"total_cents" json:"total_cents"`
+	Currency     string `db:"currency" json:"currency"`
+	NetPaidCents int64  `db:"net_paid_cents" json:"net_paid_cents"`
 }
 
+// The balance is due in the currency the invoice was presented in, net of the
+// original amounts of confirmed payments in that currency.
 func (q *Queries) GetPayableInvoiceBalance(ctx context.Context, arg GetPayableInvoiceBalanceParams) (GetPayableInvoiceBalanceRow, error) {
 	row := q.db.QueryRowContext(ctx, getPayableInvoiceBalance, arg.InvoiceID, arg.TenantID)
 	var i GetPayableInvoiceBalanceRow
 	err := row.Scan(
 		&i.TenantID,
-		&i.TotalAmount,
+		&i.TotalCents,
 		&i.Currency,
-		&i.NetPaid,
+		&i.NetPaidCents,
 	)
 	return i, err
 }

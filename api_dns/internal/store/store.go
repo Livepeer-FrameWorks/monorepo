@@ -126,7 +126,7 @@ type TenantAliasRetirement struct {
 type TenantCustomDomain struct {
 	TenantID         string
 	Domain           string
-	Status           string // pending_verification | verified | pending_alias | cert_issuing | cert_issued | cert_failed | tearing_down
+	Status           string // pending_verification | verified | pending_alias | cert_issuing | cert_issued | cert_failed | verification_failed | tearing_down
 	AcmeDNSSubdomain string
 	// IssuerID and CertExpiresAt describe the tenant bundle serving the SAN.
 	IssuerID           sql.NullString
@@ -139,6 +139,12 @@ type TenantCustomDomain struct {
 	NextAttemptAt      sql.NullTime
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// VerificationStartedAt starts the verification period; see
+	// logic.CustomDomainVerificationPeriod.
+	VerificationStartedAt time.Time
+	// FailureReportedAt is set once custom_domain.failed was committed for
+	// the current failure.
+	FailureReportedAt sql.NullTime
 }
 
 // CustomDomainHasCertificateAuthority is the canonical credential-retention

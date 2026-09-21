@@ -2,8 +2,6 @@ package bunny
 
 import (
 	"strings"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 type Config struct {
@@ -11,12 +9,14 @@ type Config struct {
 	BaseURL string
 }
 
-func LoadConfig() *Config {
-	apiKey := strings.TrimSpace(config.GetEnv("BUNNY_API_KEY", ""))
+// NewConfig returns the Bunny API configuration, or nil when apiKey is empty.
+// An empty baseURL uses the public Bunny API.
+func NewConfig(apiKey, baseURL string) *Config {
+	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return nil
 	}
-	baseURL := strings.TrimSpace(config.GetEnv("BUNNY_API_BASE_URL", ""))
+	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}

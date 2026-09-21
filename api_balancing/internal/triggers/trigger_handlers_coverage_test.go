@@ -81,7 +81,7 @@ func TestHandlePushInputClose_PersistsOfflineEffect(t *testing.T) {
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions.*RETURNING id`).
 		WithArgs(int64(1), "tenant-x", "node-A", int64(4242), internal).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-pic", "trigger-uuid-x", "demo-media"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id", "stream_id"}).AddRow("gen-pic", "trigger-uuid-x", "demo-media", ""))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).
 		WithArgs("gen-pic", "tenant-x").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))

@@ -40,7 +40,7 @@ func (s *PurserServer) ListTenantBillingSnapshots(ctx context.Context, req *purs
 	if tenantIDs == nil {
 		tenantIDs = []string{}
 	}
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	var snapshots []*purserpb.TenantBillingSnapshot
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {

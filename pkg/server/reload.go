@@ -32,10 +32,7 @@ func RegisterEnvFileReload(serviceName string, logger logging.Logger) {
 	RegisterReload(func() error {
 		res, err := config.ReloadFromFile(envPath)
 		if err != nil {
-			logger.WithError(err).
-				WithField("service", serviceName).
-				WithField("env_file", envPath).
-				Warn("env-file reload failed")
+			// The reload listener logs, counts, and records the failure.
 			return err
 		}
 		if res.Empty() {

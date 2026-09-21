@@ -2,13 +2,18 @@ package grpc
 
 import (
 	"crypto/sha1"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/rating"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
@@ -34,7 +39,7 @@ func buildRatingInputForUsage(usage map[string]float64, quantities []rating.Dime
 		Rules:             rules,
 		Usage:             usageMap,
 		Quantities:        quantities,
-		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
 	}
 }
 
@@ -72,5 +77,54 @@ func lineItemToProto(li rating.LineItem) *purserpb.LineItem {
 		Currency:         li.Currency,
 		Unit:             li.Unit,
 		Dimensions:       mapToProtoStruct(dimensions),
+	}
+}
+
+// decimalText renders a stored NUMERIC rate without trailing zeros, so the
+// identity rate reads "1". Text that does not parse is returned unchanged.
+func decimalText(value string) string {
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		return value
+	}
+	return parsed.String()
+}
+
+// dateText renders an ECB reference date as YYYY-MM-DD.
+func dateText(value time.Time) string {
+	return value.UTC().Format(time.DateOnly)
+}
+
+// fxConversionProto describes one stored conversion of a money row into the
+// EUR ledger.
+func fxConversionProto(originalMinor int64, originalCurrency string, eurMinor int64, unitsPerEUR, source string, referenceDate time.Time) *purserpb.FxConversion {
+	return &purserpb.FxConversion{
+		OriginalAmountCents: originalMinor,
+		OriginalCurrency:    strings.TrimSpace(originalCurrency),
+		EurAmountCents:      eurMinor,
+		UnitsPerEur:         decimalText(unitsPerEUR),
+		Source:              source,
+		ReferenceDate:       dateText(referenceDate),
+	}
+}
+
+func fxRecordProto(record fx.Record) *purserpb.FxConversion {
+	return fxConversionProto(record.OriginalMinor, record.OriginalCurrency, record.EURMinor, record.UnitsText(), record.Source, record.ReferenceDate)
+}
+
+// invoicePresentment copies an invoice's presentment columns onto its proto.
+// Drafts and invoices held for review have none and stay unset.
+func invoicePresentment(invoice *purserpb.Invoice, amountCents sql.NullInt64, currency, unitsPerEUR string, referenceDate, finalizedAt sql.NullTime) {
+	if amountCents.Valid {
+		value := amountCents.Int64
+		invoice.PresentmentAmountCents = &value
+		invoice.PresentmentCurrency = strings.TrimSpace(currency)
+		invoice.PresentmentUnitsPerEur = decimalText(unitsPerEUR)
+	}
+	if referenceDate.Valid {
+		invoice.PresentmentReferenceDate = dateText(referenceDate.Time)
+	}
+	if finalizedAt.Valid {
+		invoice.FinalizedAt = timestamppb.New(finalizedAt.Time)
 	}
 }

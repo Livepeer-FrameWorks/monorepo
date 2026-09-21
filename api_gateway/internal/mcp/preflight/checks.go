@@ -9,7 +9,6 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -142,7 +141,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		return nil, fmt.Errorf("unknown billing model %q", billingStatus.GetBillingModel())
 	}
 
-	balance, err := c.clients.Purser.GetPrepaidBalance(ctx, tenantID, billing.DefaultCurrency())
+	balance, err := c.clients.Purser.GetPrepaidBalance(ctx, tenantID)
 	if err != nil {
 		// A prepaid balance row is created on first funding, so absence is zero.
 		balance = &purserpb.PrepaidBalance{BalanceCents: 0, AvailableBalanceCents: 0}
@@ -235,8 +234,9 @@ func IsPreflightError(err error) (*PreflightError, bool) {
 	return nil, false
 }
 
-// GetCapabilities returns what operations the tenant can perform right now.
-func (c *Checker) GetCapabilities(ctx context.Context) map[string]bool {
+// ToolAccess returns which MCP tools the tenant may call right now. It is a
+// per-tool admission map, not the platform capability gates.
+func (c *Checker) ToolAccess(ctx context.Context) map[string]bool {
 	caps := make(map[string]bool)
 	for name, class := range accesspolicy.MCPToolClasses() {
 		caps[name] = class.UnfundedAllowed()

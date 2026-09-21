@@ -86,6 +86,10 @@ type CreateVodUploadResult interface {
 	IsCreateVodUploadResult()
 }
 
+type CreateWebhookEndpointResult interface {
+	IsCreateWebhookEndpointResult()
+}
+
 type DeleteClipResult interface {
 	IsDeleteClipResult()
 }
@@ -104,6 +108,10 @@ type DeleteStreamResult interface {
 
 type DeleteVodAssetResult interface {
 	IsDeleteVodAssetResult()
+}
+
+type DeleteWebhookEndpointResult interface {
+	IsDeleteWebhookEndpointResult()
 }
 
 type Error interface {
@@ -168,6 +176,14 @@ type PromoteToPaidResult interface {
 	IsPromoteToPaidResult()
 }
 
+type ReplayWebhookDeliveriesResult interface {
+	IsReplayWebhookDeliveriesResult()
+}
+
+type ReplayWebhookDeliveryResult interface {
+	IsReplayWebhookDeliveryResult()
+}
+
 type RevokeBootstrapTokenResult interface {
 	IsRevokeBootstrapTokenResult()
 }
@@ -182,6 +198,10 @@ type RevokeDeveloperTokenResult interface {
 
 type RevokeSigningKeyResult interface {
 	IsRevokeSigningKeyResult()
+}
+
+type RotateWebhookEndpointSecretResult interface {
+	IsRotateWebhookEndpointSecretResult()
 }
 
 type SendMessageResult interface {
@@ -232,6 +252,10 @@ type TestPlaybackAccessResult interface {
 	IsTestPlaybackAccessResult()
 }
 
+type TestWebhookEndpointResult interface {
+	IsTestWebhookEndpointResult()
+}
+
 type UnlinkWalletResult interface {
 	IsUnlinkWalletResult()
 }
@@ -252,12 +276,20 @@ type UpdateTenantResult interface {
 	IsUpdateTenantResult()
 }
 
+type UpdateWebhookEndpointResult interface {
+	IsUpdateWebhookEndpointResult()
+}
+
 type VodUploadStatusResult interface {
 	IsVodUploadStatusResult()
 }
 
 type WalletLoginResult interface {
 	IsWalletLoginResult()
+}
+
+type WebhookEndpointResult interface {
+	IsWebhookEndpointResult()
 }
 
 type APIUsageConnection struct {
@@ -425,6 +457,22 @@ func (AuthError) IsCreateDeveloperTokenResult() {}
 
 func (AuthError) IsRevokeDeveloperTokenResult() {}
 
+func (AuthError) IsCreateWebhookEndpointResult() {}
+
+func (AuthError) IsUpdateWebhookEndpointResult() {}
+
+func (AuthError) IsDeleteWebhookEndpointResult() {}
+
+func (AuthError) IsWebhookEndpointResult() {}
+
+func (AuthError) IsRotateWebhookEndpointSecretResult() {}
+
+func (AuthError) IsTestWebhookEndpointResult() {}
+
+func (AuthError) IsReplayWebhookDeliveryResult() {}
+
+func (AuthError) IsReplayWebhookDeliveriesResult() {}
+
 func (AuthError) IsCreateSigningKeyResult() {}
 
 func (AuthError) IsRevokeSigningKeyResult() {}
@@ -527,16 +575,9 @@ type BillingAddressInput struct {
 	Country string `json:"country"`
 }
 
-// Feature flag configuration for custom subscriptions.
+// Support terms for a custom subscription. Processing customization follows the
+// tier, so it is not set here.
 type BillingFeaturesInput struct {
-	// DVR recording capability.
-	Recording *bool `json:"recording,omitempty"`
-	// Analytics dashboard access.
-	Analytics *bool `json:"analytics,omitempty"`
-	// Custom branding options.
-	CustomBranding *bool `json:"customBranding,omitempty"`
-	// API access for automation.
-	APIAccess *bool `json:"apiAccess,omitempty"`
 	// Support level (community, email, priority, dedicated).
 	SupportLevel *string `json:"supportLevel,omitempty"`
 	// SLA guarantees.
@@ -595,6 +636,17 @@ type BufferEventsConnection struct {
 	TotalCount int                        `json:"totalCount"`
 }
 
+// Enforced gates for the current tenant. Each section is read from the service
+// that enforces it and cached per tenant for 30 seconds. When that service is
+// unavailable, the last cached section is returned; without one the section is
+// null and the response carries an error.
+type Capabilities struct {
+	Tenant   *TenantCapabilities                        `json:"tenant,omitempty"`
+	Clusters []*quartermasterpb.TenantClusterCapability `json:"clusters,omitempty"`
+	// When the oldest returned section was read from its source.
+	ObservedAt time.Time `json:"observedAt"`
+}
+
 // Result from creating a card top-up checkout session.
 type CardTopupResult struct {
 	// Internal top-up ID for tracking.
@@ -603,6 +655,12 @@ type CardTopupResult struct {
 	CheckoutURL string `json:"checkoutUrl"`
 	// When the checkout session expires.
 	ExpiresAt time.Time `json:"expiresAt"`
+	// Amount charged, in cents of `currency`.
+	AmountCents int `json:"amountCents"`
+	// Tenant presentment currency the checkout charges in (EUR, USD, GBP).
+	Currency string `json:"currency"`
+	// EUR amount the top-up credits, locked at the ECB rate when the checkout was created.
+	Conversion *purserpb.FxConversion `json:"conversion,omitempty"`
 }
 
 // Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
@@ -825,10 +883,8 @@ type CreateBootstrapTokenInput struct {
 
 // Input for creating a card-based prepaid balance top-up.
 type CreateCardTopupInput struct {
-	// Amount to top up in cents. Minimum €5.00 (500 cents); maximum 10,000,000 cents.
+	// Amount to charge, in cents of the tenant's presentment currency. Minimum 500 cents; maximum 10,000,000 cents.
 	AmountCents int `json:"amountCents"`
-	// Currency code (default: EUR).
-	Currency *string `json:"currency,omitempty"`
 	// Payment provider to use.
 	Provider CardPaymentProvider `json:"provider"`
 	// URL to redirect after successful payment.
@@ -900,12 +956,10 @@ type CreateConversationInput struct {
 
 // Input for creating a crypto top-up deposit address.
 type CreateCryptoTopupInput struct {
-	// Target credit amount in `currency` cents. Minimum 1 cent; maximum 10,000,000 cents.
+	// Amount in cents of the tenant's presentment currency. Minimum 1 cent; maximum 10,000,000 cents.
 	AmountCents int `json:"amountCents"`
 	// Crypto asset to receive (ETH or USDC; LPT not yet supported).
 	Asset purserpb.CryptoAsset `json:"asset"`
-	// Currency the prepaid balance is denominated in. USD or EUR; defaults to EUR.
-	Currency *string `json:"currency,omitempty"`
 }
 
 // Input for creating a developer API token.
@@ -1009,6 +1063,16 @@ type CreateVodUploadInput struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type CreateWebhookEndpointInput struct {
+	// An https URL of a public host.
+	URL         string  `json:"url"`
+	Description *string `json:"description,omitempty"`
+	// Public event types to receive; "*" receives every type. See webhookEventTypes.
+	EventTypes []string `json:"eventTypes"`
+	// Public event package version; defaults to "v1".
+	APIVersion *string `json:"apiVersion,omitempty"`
+}
+
 // Result from creating a crypto top-up.
 //
 // The price is locked at this response. Send exactly `expectedAmountToken` of
@@ -1023,7 +1087,7 @@ type CryptoTopupResult struct {
 	Asset purserpb.CryptoAsset `json:"asset"`
 	// Human-readable asset symbol ("ETH" | "USDC").
 	AssetSymbol string `json:"assetSymbol"`
-	// Echo of input amountCents (USD or EUR cents per the request).
+	// Echo of input amountCents, in cents of the tenant's presentment currency.
 	ExpectedAmountCents int `json:"expectedAmountCents"`
 	// When this deposit address expires (24 hours from creation).
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -1039,6 +1103,8 @@ type CryptoTopupResult struct {
 	QuotedAt time.Time `json:"quotedAt"`
 	// Network the deposit address lives on ("ethereum" | "arbitrum" | "base").
 	Network string `json:"network"`
+	// Presentment amount and the EUR credit it converts to, locked with the quote.
+	Conversion *purserpb.FxConversion `json:"conversion,omitempty"`
 }
 
 // Status of a crypto top-up (for polling).
@@ -1063,7 +1129,7 @@ type CryptoTopupStatus struct {
 	ReceivedAmountToken *string `json:"receivedAmountToken,omitempty"`
 	// Amount credited to balance in `creditedAmountCurrency` cents.
 	CreditedAmountCents *int `json:"creditedAmountCents,omitempty"`
-	// ISO-4217 currency the credit landed in ("USD" | "EUR").
+	// Ledger currency of the credit, EUR.
 	CreditedAmountCurrency *string `json:"creditedAmountCurrency,omitempty"`
 	// Source of the locked price quote ("chainlink" | "one_to_one").
 	QuoteSource *string `json:"quoteSource,omitempty"`
@@ -1075,6 +1141,8 @@ type CryptoTopupStatus struct {
 	DetectedAt *time.Time `json:"detectedAt,omitempty"`
 	// When balance was credited.
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	// Presentment amount and the EUR credit it converts to, locked with the quote.
+	Conversion *purserpb.FxConversion `json:"conversion,omitempty"`
 }
 
 // Verification + certificate lifecycle for a tenant's BYO domain. Returned by
@@ -1084,8 +1152,10 @@ type CustomDomainStatus struct {
 	// The domain Navigator is tracking (mirrors Tenant.customDomain).
 	Domain string `json:"domain"`
 	// pending_verification | verified | pending_alias | cert_issuing | cert_issued |
-	// cert_failed | tearing_down — verbatim from Navigator. pending_alias means the
-	// CNAMEs are verified and the domain waits for the tenant alias certificate.
+	// cert_failed | verification_failed | tearing_down — verbatim from Navigator.
+	// pending_alias means the CNAMEs are verified and the domain waits for the tenant
+	// alias certificate. verification_failed means the CNAMEs were not verified
+	// within the fixed verification period.
 	State string `json:"state"`
 	// CNAME the operator points their public hostname at so the platform's TLS
 	// ingress receives traffic.
@@ -1172,6 +1242,8 @@ func (DeleteSuccess) IsAbortVodUploadResult() {}
 func (DeleteSuccess) IsDeleteVodAssetResult() {}
 
 func (DeleteSuccess) IsRevokeDeveloperTokenResult() {}
+
+func (DeleteSuccess) IsDeleteWebhookEndpointResult() {}
 
 func (DeleteSuccess) IsRevokeBootstrapTokenResult() {}
 
@@ -2015,6 +2087,20 @@ func (NotFoundError) IsMollieSubscriptionResult() {}
 
 func (NotFoundError) IsRevokeDeveloperTokenResult() {}
 
+func (NotFoundError) IsUpdateWebhookEndpointResult() {}
+
+func (NotFoundError) IsDeleteWebhookEndpointResult() {}
+
+func (NotFoundError) IsWebhookEndpointResult() {}
+
+func (NotFoundError) IsRotateWebhookEndpointSecretResult() {}
+
+func (NotFoundError) IsTestWebhookEndpointResult() {}
+
+func (NotFoundError) IsReplayWebhookDeliveryResult() {}
+
+func (NotFoundError) IsReplayWebhookDeliveriesResult() {}
+
 func (NotFoundError) IsRevokeSigningKeyResult() {}
 
 func (NotFoundError) IsSetPlaybackPolicyResult() {}
@@ -2265,6 +2351,8 @@ func (this RateLimitError) GetCode() *string   { return this.Code }
 
 func (RateLimitError) IsCreateDeveloperTokenResult() {}
 
+func (RateLimitError) IsTestWebhookEndpointResult() {}
+
 func (RateLimitError) IsCreateSigningKeyResult() {}
 
 type RebufferingEventEdge struct {
@@ -2277,6 +2365,14 @@ type RebufferingEventsConnection struct {
 	Nodes      []*periscopepb.RebufferingEvent `json:"nodes"`
 	PageInfo   *PageInfo                       `json:"pageInfo"`
 	TotalCount int                             `json:"totalCount"`
+}
+
+// Recording retention bound from the tenant's billing tier.
+type RecordingRetentionCap struct {
+	// Whether a maximum applies.
+	Capped bool `json:"capped"`
+	// Maximum retention in days when capped.
+	MaxDays *int `json:"maxDays,omitempty"`
 }
 
 type ResetMediaRetentionOverrideInput struct {
@@ -2323,6 +2419,14 @@ type SendMessageInput struct {
 	ConversationID string `json:"conversationId"`
 	// The message content.
 	Content string `json:"content"`
+}
+
+// Release and shipped feature set of this server.
+type ServerInfo struct {
+	// Platform release version, for example v0.3.11.
+	Version string `json:"version"`
+	// Sorted slugs of shipped product features in the platform feature registry.
+	Features []string `json:"features"`
 }
 
 type ServiceInstanceEdge struct {
@@ -2732,6 +2836,20 @@ type TenantAnalyticsDailyEdge struct {
 	Node   *periscopepb.TenantAnalyticsDaily `json:"node"`
 }
 
+// Tenant-wide gates.
+type TenantCapabilities struct {
+	// Whether the caller holds the platform operator grant.
+	PlatformOperator bool `json:"platformOperator"`
+	// Upper bound on recording retention the tenant can set.
+	RecordingRetention *RecordingRetentionCap `json:"recordingRetention"`
+	// Whether the tenant may override the tier's processing profiles.
+	ProcessingCustomizable bool `json:"processingCustomizable"`
+	// Whether the tenant's custom subdomain alias is published.
+	CustomSubdomain bool `json:"customSubdomain"`
+	// Whether the tenant's custom domain is published.
+	CustomDomain bool `json:"customDomain"`
+}
+
 type TenantUsage struct {
 	BillingPeriod string        `json:"billingPeriod"`
 	Usage         []*UsageEntry `json:"usage"`
@@ -2881,7 +2999,7 @@ type UpdateStreamInput struct {
 
 // Input for updating enterprise subscription custom terms.
 type UpdateSubscriptionCustomTermsInput struct {
-	// Custom feature flags.
+	// Custom support terms.
 	CustomFeatures *BillingFeaturesInput `json:"customFeatures,omitempty"`
 	// Per-subscription pricing rule overrides (wholesale replace by meter).
 	PricingOverrides []*PricingRuleInput `json:"pricingOverrides,omitempty"`
@@ -2901,6 +3019,13 @@ type UpdateTenantInput struct {
 	CustomDomain *string `json:"customDomain,omitempty"`
 	// Tenant-wide Skipper AI monitoring master switch. null leaves it unchanged.
 	MonitoringEnabled *bool `json:"monitoringEnabled,omitempty"`
+}
+
+type UpdateWebhookEndpointInput struct {
+	URL         *string `json:"url,omitempty"`
+	Description *string `json:"description,omitempty"`
+	// Replaces the subscribed event types when set.
+	EventTypes []string `json:"eventTypes,omitempty"`
 }
 
 type UsageEntry struct {
@@ -2974,6 +3099,14 @@ func (ValidationError) IsMollieSubscriptionResult() {}
 func (ValidationError) IsUpdateTenantResult() {}
 
 func (ValidationError) IsCreateDeveloperTokenResult() {}
+
+func (ValidationError) IsCreateWebhookEndpointResult() {}
+
+func (ValidationError) IsUpdateWebhookEndpointResult() {}
+
+func (ValidationError) IsReplayWebhookDeliveryResult() {}
+
+func (ValidationError) IsReplayWebhookDeliveriesResult() {}
 
 func (ValidationError) IsCreateSigningKeyResult() {}
 
@@ -3187,7 +3320,7 @@ type VodUploadSession struct {
 func (VodUploadSession) IsCreateVodUploadResult() {}
 
 // Server-authoritative state of an in-flight multipart upload. Returned as a polling
-// complement to the realtime VodLifecycle subscription, used for reload-recovery and
+// complement to the upload events of the tenantEvents subscription, used for reload-recovery and
 // agent (MCP) workflows.
 type VodUploadStatus struct {
 	// Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming.
@@ -3222,6 +3355,136 @@ type WalletLoginInput struct {
 	// EIP-191 personal_sign signature (0x-prefixed, 65 bytes hex).
 	Signature string `json:"signature"`
 }
+
+type WebhookDeliveriesConnection struct {
+	Edges      []*WebhookDeliveryEdge `json:"edges"`
+	Nodes      []*WebhookDelivery     `json:"nodes"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
+}
+
+// One delivery of one event to one endpoint, or a test delivery.
+type WebhookDelivery struct {
+	// Delivery ID. A replay keeps it.
+	ID         string `json:"id"`
+	EndpointID string `json:"endpointId"`
+	// The event ID, sent as webhook-id and as the body's id. Null for test deliveries.
+	EventID   *string               `json:"eventId,omitempty"`
+	EventType string                `json:"eventType"`
+	Kind      WebhookDeliveryKind   `json:"kind"`
+	Status    WebhookDeliveryStatus `json:"status"`
+	// Attempts since the delivery was created or last replayed.
+	Attempts int `json:"attempts"`
+	// When the next attempt is due; null unless pending.
+	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty"`
+	// HTTP status of the last attempt; 0 when no response arrived.
+	LastStatusCode int `json:"lastStatusCode"`
+	// Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+	LastErrorClass string     `json:"lastErrorClass"`
+	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+	ReplayCount    int        `json:"replayCount"`
+	LastReplayedAt *time.Time `json:"lastReplayedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	// Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+	AttemptHistory []*WebhookDeliveryAttempt `json:"attemptHistory"`
+}
+
+func (WebhookDelivery) IsReplayWebhookDeliveryResult() {}
+
+// One HTTP attempt of a delivery.
+type WebhookDeliveryAttempt struct {
+	ID            string `json:"id"`
+	AttemptNumber int    `json:"attemptNumber"`
+	// HTTP status; 0 when no response arrived.
+	StatusCode int    `json:"statusCode"`
+	ErrorClass string `json:"errorClass"`
+	LatencyMs  int    `json:"latencyMs"`
+	// At most 1 KiB of the response body.
+	ResponseExcerpt string    `json:"responseExcerpt"`
+	AttemptedAt     time.Time `json:"attemptedAt"`
+}
+
+type WebhookDeliveryEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *WebhookDelivery `json:"node"`
+}
+
+// An outbound webhook endpoint. FrameWorks POSTs the tenant's public events of
+// the subscribed types to its URL, signed with the Standard Webhooks scheme
+// (webhook-id, webhook-timestamp, webhook-signature headers).
+type WebhookEndpoint struct {
+	// Endpoint ID.
+	ID string `json:"id"`
+	// The https URL deliveries are sent to.
+	URL string `json:"url"`
+	// Free-text description.
+	Description string `json:"description"`
+	// Public event types the endpoint receives; "*" receives every type.
+	EventTypes []string `json:"eventTypes"`
+	// Public event package version the payloads are rendered with, e.g. "v1".
+	APIVersion string                `json:"apiVersion"`
+	Status     WebhookEndpointStatus `json:"status"`
+	// Why the endpoint is disabled; null while enabled.
+	DisabledReason *WebhookEndpointDisabledReason `json:"disabledReason,omitempty"`
+	// When the endpoint was disabled; null while enabled.
+	DisabledAt *time.Time `json:"disabledAt,omitempty"`
+	// Failed attempts since the last successful delivery.
+	ConsecutiveFailures int `json:"consecutiveFailures"`
+	// First failed attempt since the last successful delivery.
+	FailingSince  *time.Time `json:"failingSince,omitempty"`
+	LastSuccessAt *time.Time `json:"lastSuccessAt,omitempty"`
+	LastFailureAt *time.Time `json:"lastFailureAt,omitempty"`
+	// Until when the previous signing secret still signs deliveries; null when there is none.
+	PreviousSecretExpiresAt *time.Time `json:"previousSecretExpiresAt,omitempty"`
+	CreatedAt               time.Time  `json:"createdAt"`
+	UpdatedAt               time.Time  `json:"updatedAt"`
+}
+
+func (WebhookEndpoint) IsUpdateWebhookEndpointResult() {}
+
+func (WebhookEndpoint) IsWebhookEndpointResult() {}
+
+type WebhookEndpointEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *WebhookEndpoint `json:"node"`
+}
+
+// An endpoint with its signing secret, returned only when the secret is created
+// or rotated.
+type WebhookEndpointSecret struct {
+	Endpoint *WebhookEndpoint `json:"endpoint"`
+	// The signing secret, "whsec_" followed by base64. Store it now; it is never shown again.
+	Secret string `json:"secret"`
+}
+
+func (WebhookEndpointSecret) IsCreateWebhookEndpointResult() {}
+
+func (WebhookEndpointSecret) IsRotateWebhookEndpointSecretResult() {}
+
+type WebhookEndpointsConnection struct {
+	Edges      []*WebhookEndpointEdge `json:"edges"`
+	Nodes      []*WebhookEndpoint     `json:"nodes"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
+}
+
+// The result of a range replay.
+type WebhookReplayResult struct {
+	ReplayedCount int `json:"replayedCount"`
+	// More failed or skipped deliveries remain in the range.
+	HasMore bool `json:"hasMore"`
+}
+
+func (WebhookReplayResult) IsReplayWebhookDeliveriesResult() {}
+
+// The result of a test delivery.
+type WebhookTestResult struct {
+	Delivery *WebhookDelivery        `json:"delivery"`
+	Attempt  *WebhookDeliveryAttempt `json:"attempt"`
+}
+
+func (WebhookTestResult) IsTestWebhookEndpointResult() {}
 
 // Result from submitting an x402 payment for settlement.
 type X402PaymentResult struct {
@@ -5749,6 +6012,235 @@ func (e *VodAssetStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e VodAssetStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WebhookDeliveryKind string
+
+const (
+	WebhookDeliveryKindEvent WebhookDeliveryKind = "EVENT"
+	WebhookDeliveryKindTest  WebhookDeliveryKind = "TEST"
+)
+
+var AllWebhookDeliveryKind = []WebhookDeliveryKind{
+	WebhookDeliveryKindEvent,
+	WebhookDeliveryKindTest,
+}
+
+func (e WebhookDeliveryKind) IsValid() bool {
+	switch e {
+	case WebhookDeliveryKindEvent, WebhookDeliveryKindTest:
+		return true
+	}
+	return false
+}
+
+func (e WebhookDeliveryKind) String() string {
+	return string(e)
+}
+
+func (e *WebhookDeliveryKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WebhookDeliveryKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WebhookDeliveryKind", str)
+	}
+	return nil
+}
+
+func (e WebhookDeliveryKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WebhookDeliveryKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WebhookDeliveryKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WebhookDeliveryStatus string
+
+const (
+	// Waiting for the first attempt or a retry.
+	WebhookDeliveryStatusPending   WebhookDeliveryStatus = "PENDING"
+	WebhookDeliveryStatusSucceeded WebhookDeliveryStatus = "SUCCEEDED"
+	// Every attempt of the retry schedule (about 3 days) failed, or a test delivery failed.
+	WebhookDeliveryStatusFailed WebhookDeliveryStatus = "FAILED"
+	// The endpoint was disabled before the delivery succeeded.
+	WebhookDeliveryStatusSkipped WebhookDeliveryStatus = "SKIPPED"
+)
+
+var AllWebhookDeliveryStatus = []WebhookDeliveryStatus{
+	WebhookDeliveryStatusPending,
+	WebhookDeliveryStatusSucceeded,
+	WebhookDeliveryStatusFailed,
+	WebhookDeliveryStatusSkipped,
+}
+
+func (e WebhookDeliveryStatus) IsValid() bool {
+	switch e {
+	case WebhookDeliveryStatusPending, WebhookDeliveryStatusSucceeded, WebhookDeliveryStatusFailed, WebhookDeliveryStatusSkipped:
+		return true
+	}
+	return false
+}
+
+func (e WebhookDeliveryStatus) String() string {
+	return string(e)
+}
+
+func (e *WebhookDeliveryStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WebhookDeliveryStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WebhookDeliveryStatus", str)
+	}
+	return nil
+}
+
+func (e WebhookDeliveryStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WebhookDeliveryStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WebhookDeliveryStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WebhookEndpointDisabledReason string
+
+const (
+	// Disabled through the API or dashboard.
+	WebhookEndpointDisabledReasonUser WebhookEndpointDisabledReason = "USER"
+	// Disabled automatically after at least 20 consecutive failed attempts over at least 5 days without a success.
+	WebhookEndpointDisabledReasonFailing WebhookEndpointDisabledReason = "FAILING"
+)
+
+var AllWebhookEndpointDisabledReason = []WebhookEndpointDisabledReason{
+	WebhookEndpointDisabledReasonUser,
+	WebhookEndpointDisabledReasonFailing,
+}
+
+func (e WebhookEndpointDisabledReason) IsValid() bool {
+	switch e {
+	case WebhookEndpointDisabledReasonUser, WebhookEndpointDisabledReasonFailing:
+		return true
+	}
+	return false
+}
+
+func (e WebhookEndpointDisabledReason) String() string {
+	return string(e)
+}
+
+func (e *WebhookEndpointDisabledReason) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WebhookEndpointDisabledReason(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WebhookEndpointDisabledReason", str)
+	}
+	return nil
+}
+
+func (e WebhookEndpointDisabledReason) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WebhookEndpointDisabledReason) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WebhookEndpointDisabledReason) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WebhookEndpointStatus string
+
+const (
+	WebhookEndpointStatusEnabled  WebhookEndpointStatus = "ENABLED"
+	WebhookEndpointStatusDisabled WebhookEndpointStatus = "DISABLED"
+)
+
+var AllWebhookEndpointStatus = []WebhookEndpointStatus{
+	WebhookEndpointStatusEnabled,
+	WebhookEndpointStatusDisabled,
+}
+
+func (e WebhookEndpointStatus) IsValid() bool {
+	switch e {
+	case WebhookEndpointStatusEnabled, WebhookEndpointStatusDisabled:
+		return true
+	}
+	return false
+}
+
+func (e WebhookEndpointStatus) String() string {
+	return string(e)
+}
+
+func (e *WebhookEndpointStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WebhookEndpointStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WebhookEndpointStatus", str)
+	}
+	return nil
+}
+
+func (e WebhookEndpointStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WebhookEndpointStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WebhookEndpointStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

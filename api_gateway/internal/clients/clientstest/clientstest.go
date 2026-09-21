@@ -94,7 +94,7 @@ func SolventPurser() *FakePurser {
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
 		},
-		GetPrepaidBalanceFn: func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 			return &purserpb.PrepaidBalance{BalanceCents: 5000, AvailableBalanceCents: 5000}, nil
 		},
 	}
@@ -781,6 +781,8 @@ type FakeQuartermaster struct {
 	UpdateTenantFn               func(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
 	UpdateTenantClusterFn        func(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) error
 	ValidateBootstrapTokenFn     func(ctx context.Context, token string) (*quartermasterpb.ValidateBootstrapTokenResponse, error)
+
+	GetTenantClusterCapabilitiesFn func(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantClusterCapabilitiesResponse, error)
 }
 
 func (f *FakeQuartermaster) ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
@@ -813,6 +815,14 @@ func (f *FakeQuartermaster) GetClusterRouting(ctx context.Context, req *quarterm
 		panic("FakeQuartermaster.GetClusterRouting not stubbed")
 	}
 	return f.GetClusterRoutingFn(ctx, req)
+}
+
+func (f *FakeQuartermaster) GetTenantClusterCapabilities(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantClusterCapabilitiesResponse, error) {
+	f.Calls++
+	if f.GetTenantClusterCapabilitiesFn == nil {
+		panic("FakeQuartermaster.GetTenantClusterCapabilities not stubbed")
+	}
+	return f.GetTenantClusterCapabilitiesFn(ctx, tenantID)
 }
 
 func (f *FakeQuartermaster) ListClustersForTenant(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAccessResponse, error) {
@@ -937,7 +947,7 @@ type FakePurser struct {
 	Calls int
 
 	GetBillingDetailsFn          func(ctx context.Context, tenantID string) (*purserpb.BillingDetails, error)
-	GetPrepaidBalanceFn          func(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error)
+	GetPrepaidBalanceFn          func(ctx context.Context, tenantID string) (*purserpb.PrepaidBalance, error)
 	GetTenantBillingStatusFn     func(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
 	GetTenantAdmissionStatusFn   func(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error)
 	ClaimX402MutationResultFn    func(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
@@ -990,12 +1000,12 @@ func (f *FakePurser) GetBillingDetails(ctx context.Context, tenantID string) (*p
 	return f.GetBillingDetailsFn(ctx, tenantID)
 }
 
-func (f *FakePurser) GetPrepaidBalance(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error) {
+func (f *FakePurser) GetPrepaidBalance(ctx context.Context, tenantID string) (*purserpb.PrepaidBalance, error) {
 	f.Calls++
 	if f.GetPrepaidBalanceFn == nil {
 		panic("FakePurser.GetPrepaidBalance not stubbed")
 	}
-	return f.GetPrepaidBalanceFn(ctx, tenantID, currency)
+	return f.GetPrepaidBalanceFn(ctx, tenantID)
 }
 
 func (f *FakePurser) GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error) {

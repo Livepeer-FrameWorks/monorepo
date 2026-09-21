@@ -1,6 +1,10 @@
 package middleware
 
 import (
+	"context"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +18,8 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/vektah/gqlparser/v2/ast"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -56,6 +62,64 @@ type aggregateKey struct {
 	AuthType      string
 	OperationType string
 	OperationName string
+	// RootFields is the root-field signature: sorted, distinct names joined
+	// by commas (GraphQL field names cannot contain one).
+	RootFields string
+}
+
+// rootFieldSignature returns the sorted, distinct, non-empty root field names
+// joined by commas.
+func rootFieldSignature(rootFields []string) string {
+	if len(rootFields) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rootFields))
+	for _, name := range rootFields {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(slices.Compact(names), ",")
+}
+
+func rootFieldsFromSignature(signature string) []string {
+	if signature == "" {
+		return nil
+	}
+	return strings.Split(signature, ",")
+}
+
+// GraphQLRootFields returns the root field names (not aliases) the operation
+// in ctx selects once fragments and @skip/@include are applied. Introspection
+// fields are omitted: they are not API surface.
+func GraphQLRootFields(ctx context.Context) []string {
+	if !graphql.HasOperationContext(ctx) {
+		return nil
+	}
+	opCtx := graphql.GetOperationContext(ctx)
+	if opCtx == nil || opCtx.Operation == nil {
+		return nil
+	}
+	var rootType string
+	switch opCtx.Operation.Operation {
+	case ast.Query:
+		rootType = "Query"
+	case ast.Mutation:
+		rootType = "Mutation"
+	case ast.Subscription:
+		rootType = "Subscription"
+	default:
+		return nil
+	}
+	fields := graphql.CollectFields(opCtx, opCtx.Operation.SelectionSet, []string{rootType})
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if !strings.HasPrefix(field.Name, "__") {
+			names = append(names, field.Name)
+		}
+	}
+	return names
 }
 
 // aggregate holds the accumulated metrics for a bucket
@@ -197,6 +261,7 @@ func (ut *UsageTracker) flush() {
 			UserHashes:      userHashes,
 			TokenHashes:     tokenHashes,
 			Timestamp:       agg.FirstSeenAt,
+			RootFields:      rootFieldsFromSignature(key.RootFields),
 		}
 
 		// Reset counters after snapshotting so a failed send can be retried.
@@ -224,7 +289,10 @@ func (ut *UsageTracker) flush() {
 		Aggregates: aggregates,
 	}
 
+	// The event ID is minted here, once: a retry after a lost acknowledgement
+	// carries the same ID, and Periscope keys api_requests rows on it.
 	event := &ipcpb.ServiceEvent{
+		EventId:   newEventID(),
 		EventType: "api_request_batch",
 		Timestamp: timestamppb.New(time.Unix(batch.GetTimestamp(), 0)),
 		Source:    "bridge",
@@ -235,6 +303,16 @@ func (ut *UsageTracker) flush() {
 	if err := ut.sendServiceEvent(event, len(aggregates)); err != nil {
 		ut.enqueueFailedBatch(event, len(aggregates))
 	}
+}
+
+// newEventID returns a UUIDv7, or "" if the random source fails; the Decklog
+// client then stamps one per attempt.
+func newEventID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return ""
+	}
+	return id.String()
 }
 
 func (ut *UsageTracker) enqueueFailedBatch(event *ipcpb.ServiceEvent, aggregateCount int) {
@@ -276,9 +354,11 @@ func (ut *UsageTracker) retryFailedBatches() {
 			}
 			if ut.config.Logger != nil {
 				ut.config.Logger.WithFields(logging.Fields{
+					"event_type":      batch.event.GetEventType(),
+					"event_id":        batch.event.GetEventId(),
 					"aggregate_count": batch.aggregateCount,
 					"attempts":        batch.attempts,
-				}).Error("Dropping API usage batch after retries")
+				}).Error("Dropping service event after retries")
 			}
 		}
 	}
@@ -298,29 +378,34 @@ func (ut *UsageTracker) sendServiceEvent(event *ipcpb.ServiceEvent, aggregateCou
 	if err := ut.config.Decklog.SendServiceEvent(event); err != nil {
 		if ut.config.Logger != nil {
 			ut.config.Logger.WithFields(logging.Fields{
+				"event_type":      event.GetEventType(),
 				"aggregate_count": aggregateCount,
 				"error":           err,
-			}).Error("Failed to flush API usage batch to Decklog (service_events)")
+			}).Error("Failed to send service event to Decklog (service_events)")
 		}
 		return err
 	}
 
 	if ut.config.Logger != nil {
 		ut.config.Logger.WithFields(logging.Fields{
+			"event_type":      event.GetEventType(),
 			"aggregate_count": aggregateCount,
-		}).Debug("Flushed API usage batch to Decklog (service_events)")
+		}).Debug("Sent service event to Decklog (service_events)")
 	}
 
 	return nil
 }
 
-// Record records a single API request
-func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
+// Record records a single API request. rootFields are the GraphQL root field
+// names the request resolved; requests with different signatures aggregate
+// separately.
+func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName string, rootFields []string, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
 	key := aggregateKey{
 		TenantID:      tenantID,
 		AuthType:      authType,
 		OperationType: opType,
 		OperationName: opName,
+		RootFields:    rootFieldSignature(rootFields),
 	}
 
 	// Get or create aggregate
@@ -502,7 +587,16 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			errorCount = 1
 		}
 
+		var rootFields []string
+		if v, ok := c.Get(string(ctxkeys.KeyGraphQLRootFields)); ok {
+			if fields, isList := v.([]string); isList {
+				rootFields = fields
+			}
+		} else if graphql.HasOperationContext(c.Request.Context()) {
+			rootFields = GraphQLRootFields(c.Request.Context())
+		}
+
 		// Record the request
-		tracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(duration), complexity, errorCount)
+		tracker.Record(start, tenantID, authType, opType, opName, rootFields, userID, tokenHash, uint64(duration), complexity, errorCount)
 	}
 }

@@ -50,11 +50,8 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("FIELD_ENCRYPTION_KEY_ID", "primary")
-	t.Setenv("FIELD_ENCRYPTION_KEY", "active-field-key-material-32-bytes")
-	t.Setenv("FIELD_ENCRYPTION_PREVIOUS_KEYS", "")
-	t.Setenv("JWT_SECRET", "legacy-jwt-key-material-32-bytes")
-	armed, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2})
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
+	armed, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +63,7 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 		orphanRowID, "orphaned-ciphertext", spec.purpose); err != nil {
 		t.Fatal(err)
 	}
-	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2, Checkpoint: armed.Checkpoint})
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 2, Checkpoint: armed.Checkpoint}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +74,7 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyFieldEncryption(context.Background(), tx); err != nil {
+	if err := verifyFieldEncryption(context.Background(), tx, settings); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
@@ -125,11 +122,11 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 		if _, clearErr := db.Exec(`DELETE FROM commodore.media_authority_refresh_obligations`); clearErr != nil {
 			t.Fatal(clearErr)
 		}
-		armed, armErr := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 10})
+		armed, armErr := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 10}, settings)
 		if armErr != nil {
 			t.Fatal(armErr)
 		}
-		progress, migrateErr := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 10, Checkpoint: armed.Checkpoint})
+		progress, migrateErr := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 10, Checkpoint: armed.Checkpoint}, settings)
 		if migrateErr != nil {
 			t.Fatal(migrateErr)
 		}

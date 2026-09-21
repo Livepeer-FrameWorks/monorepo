@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
-	"os"
 	"strings"
+
+	"frameworks/api_balancing/internal/appconfig"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -49,7 +50,7 @@ func requireInternalIdentity(mutation bool) gin.HandlerFunc {
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 		if !mutation {
-			serviceToken := os.Getenv("SERVICE_TOKEN")
+			serviceToken := appconfig.Current().ServiceToken
 			if serviceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(serviceToken)) == 1 {
 				ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyAuthType, "service")
 				c.Request = c.Request.WithContext(ctx)
@@ -58,7 +59,7 @@ func requireInternalIdentity(mutation bool) gin.HandlerFunc {
 			}
 		}
 
-		claims, err := auth.ValidateInteractiveJWT(token, []byte(os.Getenv("JWT_SECRET")))
+		claims, err := auth.ValidateInteractiveJWT(token, []byte(appconfig.Current().JWTSecret))
 		if err != nil || !claims.HasRole(auth.RolePlatformOperator) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform operator authorization required"})
 			return

@@ -10,6 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
@@ -262,14 +263,16 @@ func (c *GRPCClient) CreateClip(ctx context.Context, req *sharedpb.CreateClipReq
 	return resp, trailers, err
 }
 
-// DeleteClip deletes a clip.
+// DeleteClip deletes a clip. requestedBy names the user the deletion is
+// attributed to, empty for a system-initiated deletion.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*sharedpb.DeleteClipResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string, requestedBy string) (*sharedpb.DeleteClipResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	req := &sharedpb.DeleteClipRequest{
-		ClipHash: clipHash,
+		ClipHash:          clipHash,
+		RequestedByUserId: requestedBy,
 	}
 	if tenantID != nil {
 		req.TenantId = *tenantID
@@ -373,14 +376,16 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *stri
 	return resp, trailers, err
 }
 
-// DeleteDVR deletes a DVR recording and its files.
+// DeleteDVR deletes a DVR recording and its files. requestedBy names the
+// user the deletion is attributed to, empty for a system-initiated deletion.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*sharedpb.DeleteDVRResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string, requestedBy string) (*sharedpb.DeleteDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	req := &sharedpb.DeleteDVRRequest{
-		DvrHash: dvrHash,
+		DvrHash:           dvrHash,
+		RequestedByUserId: requestedBy,
 	}
 	if tenantID != nil {
 		req.TenantId = *tenantID
@@ -457,9 +462,10 @@ func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *sharedpb.Comple
 	return resp, trailers, err
 }
 
-// AbortVodUpload cancels an in-progress multipart upload.
+// AbortVodUpload cancels an in-progress multipart upload. actor names the
+// principal upload.aborted is attributed to, nil for none.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, metadata.MD, error) {
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string, actor *commonpb.RequestActor) (*sharedpb.AbortVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -467,6 +473,7 @@ func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID stri
 	resp, err := c.vod.AbortVodUpload(ctx, &sharedpb.AbortVodUploadRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
+		Actor:    actor,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }
@@ -485,16 +492,18 @@ func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID 
 	return resp, trailers, err
 }
 
-// DeleteVodAsset deletes a VOD asset.
+// DeleteVodAsset deletes a VOD asset. requestedBy names the user the
+// deletion is attributed to, empty for a system-initiated deletion.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash, requestedBy string) (*sharedpb.DeleteVodAssetResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
 	resp, err := c.vod.DeleteVodAsset(ctx, &sharedpb.DeleteVodAssetRequest{
-		TenantId:     tenantID,
-		ArtifactHash: artifactHash,
+		TenantId:          tenantID,
+		ArtifactHash:      artifactHash,
+		RequestedByUserId: requestedBy,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }

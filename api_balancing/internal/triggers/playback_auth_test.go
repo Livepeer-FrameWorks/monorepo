@@ -7,14 +7,16 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io"
-	"net/netip"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -211,7 +213,7 @@ func mintPlaybackAuthJWT(t *testing.T, priv *ecdsa.PrivateKey, kid string) strin
 	return signed
 }
 
-func TestIsBlockedDialIP(t *testing.T) {
+func TestPlaybackWebhookDialPolicy(t *testing.T) {
 	cases := []struct {
 		name    string
 		addr    string
@@ -255,25 +257,18 @@ func TestIsBlockedDialIP(t *testing.T) {
 		{"ipv4-mapped public", "::ffff:8.8.8.8", false},
 	}
 
+	dial := restream.PublicDestinationPolicy().DialControl()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ip, err := netip.ParseAddr(tc.addr)
-			if err != nil {
-				t.Fatalf("parse %q: %v", tc.addr, err)
-			}
-			got := isBlockedDialIP(ip)
-			if got != tc.blocked {
-				t.Errorf("isBlockedDialIP(%s) = %v, want %v", tc.addr, got, tc.blocked)
+			err := dial("tcp", net.JoinHostPort(tc.addr, "443"), nil)
+			if blocked := errors.Is(err, restream.ErrDialBlocked); blocked != tc.blocked {
+				t.Errorf("dial %s: err = %v, want blocked = %v", tc.addr, err, tc.blocked)
 			}
 		})
 	}
-}
-
-func TestIsBlockedDialIP_Invalid(t *testing.T) {
-	// Zero-value Addr (uninitialized) must be treated as blocked — "we don't
-	// know what this is, so don't dial it" is the safe default.
-	var zero netip.Addr
-	if !isBlockedDialIP(zero) {
-		t.Error("invalid Addr should be blocked, not allowed")
+	// An address that is not an IP literal is refused: the hook only sees
+	// resolved addresses, so anything else is not something to connect to.
+	if err := dial("tcp", "customer.example:443", nil); !errors.Is(err, restream.ErrDialBlocked) {
+		t.Errorf("non-literal dial address: err = %v, want blocked", err)
 	}
 }

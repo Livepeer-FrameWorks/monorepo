@@ -35,12 +35,14 @@ func TestResolveInvoiceCollectionProvider(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		method  string
-		stripe  bool
-		mollie  bool
-		want    string
-		wantErr bool
+		name           string
+		method         string
+		stripe         bool
+		mollie         bool
+		stripeCustomer bool
+		mollieCustomer bool
+		want           string
+		wantErr        bool
 	}{
 		{name: "selected stripe", method: "stripe", stripe: true, mollie: true, want: "stripe"},
 		{name: "selected mollie", method: "mollie", stripe: true, mollie: true, want: "mollie"},
@@ -48,13 +50,15 @@ func TestResolveInvoiceCollectionProvider(t *testing.T) {
 		{name: "legacy mollie", method: "card", mollie: true, want: "mollie"},
 		{name: "ambiguous legacy", method: "card", stripe: true, mollie: true, wantErr: true},
 		{name: "selected id missing", method: "stripe", mollie: true, wantErr: true},
+		{name: "stripe customer without subscription", method: "stripe", stripeCustomer: true, want: "stripe"},
+		{name: "mollie customer without subscription", method: "mollie", mollieCustomer: true, want: "mollie"},
 		{name: "no provider", method: "", want: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := resolveInvoiceCollectionProvider(tt.method, tt.stripe, tt.mollie)
+			got, err := resolveInvoiceCollectionProvider(tt.method, tt.stripe, tt.mollie, tt.stripeCustomer, tt.mollieCustomer)
 			if (err != nil) != tt.wantErr || got != tt.want {
 				t.Fatalf("resolveInvoiceCollectionProvider() = (%q, %v), want (%q, err=%v)", got, err, tt.want, tt.wantErr)
 			}

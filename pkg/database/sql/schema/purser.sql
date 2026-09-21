@@ -236,7 +236,6 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     -- price the user was quoted. For USDC: 1.0 with quote_source='one_to_one'.
     expected_amount_base_units NUMERIC(78,0),  -- token base units (wei for 18-dec, 1e6 for USDC)
     quoted_price_usd           NUMERIC(28,18), -- USD per 1 whole token
-    quoted_usd_to_eur_rate     NUMERIC(12,8),  -- usd_cents * rate = eur_cents (set when currency=EUR)
     quoted_at                  TIMESTAMP WITH TIME ZONE,
     quote_source               VARCHAR(20),    -- 'chainlink' | 'one_to_one'
 
@@ -249,9 +248,8 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     completed_at               TIMESTAMP WITH TIME ZONE,
 
     -- ===== CREDIT =====
-    -- Amount credited to the tenant's prepaid balance, in that balance's
-    -- currency. For USD-denominated balances this is USD cents; for EUR,
-    -- the converted EUR cents using quoted_usd_to_eur_rate.
+    -- Amount credited to the tenant's EUR prepaid balance. The quote's FX
+    -- fields hold the EUR amount the expected receipt credits.
     credited_amount_cents      BIGINT,
     credited_amount_currency   VARCHAR(3),
     client_ip                  VARCHAR(64),       -- Trusted request-time tax-location evidence
@@ -472,7 +470,7 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     -- ===== FEATURES & SUPPORT =====
     -- Pricing rules live in purser.tier_pricing_rules; entitlements (e.g.
     -- recording_retention_days) live in purser.tier_entitlements.
-    features JSONB NOT NULL DEFAULT '{}',    -- Feature flags and capabilities
+    features JSONB NOT NULL DEFAULT '{}',    -- models.BillingFeatures: support_level, sla, processing_customizable
     support_level VARCHAR(50) DEFAULT 'community',
     sla_level VARCHAR(50) DEFAULT 'none',
 
@@ -627,7 +625,7 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     -- Per-tenant pricing/entitlement overrides live in
     -- purser.subscription_pricing_overrides and
     -- purser.subscription_entitlement_overrides.
-    custom_features JSONB DEFAULT '{}',      -- Custom feature flags
+    custom_features JSONB DEFAULT '{}',      -- models.BillingFeatures overrides for this tenant
 
     -- ===== SCHEDULED TIER CHANGE =====
     -- Set by ChangeBillingTier when a downgrade is requested; the post-commit
@@ -1526,12 +1524,43 @@ CREATE TABLE IF NOT EXISTS purser.cluster_subscriptions (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     cancelled_at TIMESTAMPTZ,
+    -- Last activation of a Purser-invoiced monthly subscription; its fee is
+    -- prorated over the active time from here. NULL means created_at.
+    activated_at TIMESTAMPTZ,
     UNIQUE(tenant_id, cluster_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_subscriptions_tenant ON purser.cluster_subscriptions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_subscriptions_cluster ON purser.cluster_subscriptions(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_purser_cluster_subscriptions_stripe_sub ON purser.cluster_subscriptions(stripe_subscription_id);
+
+-- Closed active spans remain billable after the current subscription is reactivated.
+CREATE TABLE IF NOT EXISTS purser.cluster_subscription_active_periods (
+    tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL,
+    active_from TIMESTAMPTZ NOT NULL,
+    active_until TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (tenant_id, cluster_id, active_from),
+    CHECK (active_until >= active_from)
+);
+
+CREATE OR REPLACE FUNCTION purser.preserve_cluster_subscription_active_period()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.stripe_subscription_id IS NULL AND OLD.status = 'cancelled'
+       AND NEW.status = 'active' AND OLD.cancelled_at IS NOT NULL THEN
+        INSERT INTO purser.cluster_subscription_active_periods (tenant_id, cluster_id, active_from, active_until)
+        VALUES (OLD.tenant_id, OLD.cluster_id, COALESCE(OLD.activated_at, OLD.created_at), OLD.cancelled_at)
+        ON CONFLICT (tenant_id, cluster_id, active_from) DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cluster_subscription_active_period ON purser.cluster_subscriptions;
+CREATE TRIGGER trg_cluster_subscription_active_period
+    BEFORE UPDATE OF status ON purser.cluster_subscriptions
+    FOR EACH ROW EXECUTE FUNCTION purser.preserve_cluster_subscription_active_period();
 
 -- ============================================================================
 -- WEBHOOK IDEMPOTENCY
@@ -1624,7 +1653,6 @@ CREATE TABLE IF NOT EXISTS purser.x402_payment_quotes (
     amount_atomic NUMERIC(78, 0) NOT NULL CHECK (amount_atomic > 0),
     credit_amount_cents BIGINT NOT NULL CHECK (credit_amount_cents > 0),
     credit_currency CHAR(3) NOT NULL DEFAULT 'EUR',
-    eur_per_usd_rate NUMERIC(20, 10) NOT NULL CHECK (eur_per_usd_rate > 0),
     requirements_json JSONB NOT NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'offered' CHECK (
         status IN ('offered', 'claiming', 'settling', 'unknown', 'confirmed', 'expired', 'failed')
@@ -1828,7 +1856,6 @@ CREATE TABLE IF NOT EXISTS purser.simplified_invoices (
 
     -- EUR equivalent (for threshold tracking)
     amount_eur_cents BIGINT NOT NULL,             -- Converted at ECB rate
-    ecb_rate DECIMAL(10,6),                       -- EUR/USD rate used
     fx_rate_source VARCHAR(255),
     fx_rate_observed_at TIMESTAMPTZ,
 
@@ -1876,7 +1903,6 @@ CREATE TABLE IF NOT EXISTS purser.crypto_invoices (
     tax_validation_status VARCHAR(32) NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
     amount_eur_cents BIGINT NOT NULL,
-    ecb_rate DECIMAL(10,6),
     fx_rate_source VARCHAR(255),
     fx_rate_observed_at TIMESTAMPTZ,
     evidence_ip_country VARCHAR(2),
@@ -2348,6 +2374,390 @@ CREATE INDEX IF NOT EXISTS idx_cluster_subscriptions_intent
     ON purser.cluster_subscriptions(intent_id)
     WHERE intent_id IS NOT NULL;
 
+-- ============================================================================
+-- EUR LEDGER, FX RATES & PRESENTMENT CURRENCY
+-- ============================================================================
+-- EUR is the only price list and ledger currency. Each tenant is presented
+-- and charged in its presentment currency; every money row records the
+-- original amount and currency, the EUR amount, the rate, and its source and
+-- reference date.
+
+-- ECB euro foreign exchange reference rates. units_per_eur is the ECB quote:
+-- units of the currency that one euro buys on reference_date.
+CREATE TABLE IF NOT EXISTS purser.fx_rates (
+    currency CHAR(3) NOT NULL,
+    reference_date DATE NOT NULL,
+    units_per_eur NUMERIC(20, 10) NOT NULL,
+    source VARCHAR(16) NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (currency, reference_date),
+    CONSTRAINT chk_fx_rates_currency CHECK (currency IN ('USD', 'GBP')),
+    CONSTRAINT chk_fx_rates_units_per_eur CHECK (units_per_eur > 0),
+    CONSTRAINT chk_fx_rates_source CHECK (source = 'ecb')
+);
+
+-- Tenants without a billing country present in USD; the billing country sets
+-- it through PresentmentCurrencyForCountry.
+ALTER TABLE purser.tenant_subscriptions
+    ADD COLUMN IF NOT EXISTS presentment_currency CHAR(3) NOT NULL DEFAULT 'USD';
+ALTER TABLE purser.tenant_subscriptions
+    DROP CONSTRAINT IF EXISTS chk_tenant_subscriptions_presentment_currency,
+    ADD CONSTRAINT chk_tenant_subscriptions_presentment_currency
+    CHECK (presentment_currency IN ('EUR', 'USD', 'GBP'));
+
+-- A tenant's presentment currency is fixed while a provider subscription, a
+-- finalized unpaid invoice, or an open provider subscription checkout exists: Stripe
+-- customers and subscriptions are single-currency, an open invoice was
+-- presented in the current currency, and the checkout was created in it.
+-- The one-day bound releases abandoned intents even if their expiry webhook
+-- never arrives.
+CREATE OR REPLACE FUNCTION purser.tenant_presentment_currency_locked(p_tenant_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM purser.tenant_subscriptions
+        WHERE tenant_id = p_tenant_id
+          AND (stripe_subscription_id IS NOT NULL OR mollie_subscription_id IS NOT NULL)
+    ) OR EXISTS (
+        SELECT 1
+        FROM purser.cluster_subscriptions
+        WHERE tenant_id = p_tenant_id
+          AND stripe_subscription_id IS NOT NULL
+          AND status <> 'cancelled'
+    ) OR EXISTS (
+        SELECT 1
+        FROM purser.billing_invoices
+        WHERE tenant_id = p_tenant_id
+          AND status IN ('pending', 'overdue', 'failed')
+    ) OR EXISTS (
+        SELECT 1
+        FROM purser.payment_provider_intents
+        WHERE tenant_id = p_tenant_id
+          AND ((provider = 'mollie' AND purpose = 'mollie_first_payment')
+               OR (provider = 'stripe' AND purpose IN ('tenant_subscription_checkout', 'cluster_subscription_checkout')))
+          AND status IN ('pending', 'provider_open')
+          AND updated_at > NOW() - INTERVAL '1 day'
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION purser.guard_presentment_currency_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.presentment_currency IS DISTINCT FROM OLD.presentment_currency
+       AND (OLD.stripe_subscription_id IS NOT NULL
+            OR OLD.mollie_subscription_id IS NOT NULL
+            OR NEW.stripe_subscription_id IS NOT NULL
+            OR NEW.mollie_subscription_id IS NOT NULL
+            OR purser.tenant_presentment_currency_locked(OLD.tenant_id)) THEN
+        RAISE EXCEPTION 'PRESENTMENT_CURRENCY_LOCKED: tenant % has a provider subscription, an open invoice, or a pending first payment', OLD.tenant_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tenant_subscriptions_presentment_currency_lock ON purser.tenant_subscriptions;
+CREATE TRIGGER trg_tenant_subscriptions_presentment_currency_lock
+    BEFORE UPDATE OF presentment_currency ON purser.tenant_subscriptions
+    FOR EACH ROW EXECUTE FUNCTION purser.guard_presentment_currency_change();
+
+-- FX fields: identity is an EUR amount at rate 1; ecb is an ECB reference
+-- rate; legacy_quote is a USD rate quoted before ECB reference rates were
+-- stored. fx_units_per_eur is units of the original currency per euro.
+ALTER TABLE purser.pending_topups
+    ADD COLUMN IF NOT EXISTS original_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS original_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS eur_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_source VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.pending_topups
+    DROP CONSTRAINT IF EXISTS chk_pending_topups_fx,
+    ADD CONSTRAINT chk_pending_topups_fx CHECK (
+        (original_amount_cents IS NULL AND original_currency IS NULL AND eur_amount_cents IS NULL
+            AND fx_units_per_eur IS NULL AND fx_source IS NULL AND fx_reference_date IS NULL)
+        OR (original_amount_cents IS NOT NULL AND original_currency IS NOT NULL AND eur_amount_cents IS NOT NULL
+            AND fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0
+            AND fx_source IS NOT NULL AND fx_reference_date IS NOT NULL
+            AND ((fx_source = 'identity' AND original_currency = 'EUR' AND fx_units_per_eur = 1
+                    AND eur_amount_cents = original_amount_cents)
+                 OR (fx_source = 'ecb' AND original_currency IN ('USD', 'GBP'))
+                 OR (fx_source = 'legacy_quote' AND original_currency = 'USD')))
+    );
+ALTER TABLE purser.pending_topups
+    ALTER COLUMN original_amount_cents SET NOT NULL,
+    ALTER COLUMN original_currency SET NOT NULL,
+    ALTER COLUMN eur_amount_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_source SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+ALTER TABLE purser.crypto_wallets
+    ADD COLUMN IF NOT EXISTS original_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS original_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS eur_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_source VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.crypto_wallets
+    DROP CONSTRAINT IF EXISTS chk_crypto_wallets_fx,
+    ADD CONSTRAINT chk_crypto_wallets_fx CHECK (
+        (original_amount_cents IS NULL AND original_currency IS NULL AND eur_amount_cents IS NULL
+            AND fx_units_per_eur IS NULL AND fx_source IS NULL AND fx_reference_date IS NULL)
+        OR (original_amount_cents IS NOT NULL AND original_currency IS NOT NULL AND eur_amount_cents IS NOT NULL
+            AND fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0
+            AND fx_source IS NOT NULL AND fx_reference_date IS NOT NULL
+            AND ((fx_source = 'identity' AND original_currency = 'EUR' AND fx_units_per_eur = 1
+                    AND eur_amount_cents = original_amount_cents)
+                 OR (fx_source = 'ecb' AND original_currency IN ('USD', 'GBP'))
+                 OR (fx_source = 'legacy_quote' AND original_currency = 'USD')))
+    );
+-- Invoice crypto wallets are priced by their invoice payment row; prepaid
+-- wallets carry the FX fields of the credit they quote.
+ALTER TABLE purser.crypto_wallets
+    DROP CONSTRAINT IF EXISTS chk_crypto_wallets_prepaid_fx,
+    ADD CONSTRAINT chk_crypto_wallets_prepaid_fx CHECK (purpose <> 'prepaid' OR fx_source IS NOT NULL);
+
+ALTER TABLE purser.x402_payment_quotes
+    ADD COLUMN IF NOT EXISTS original_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS original_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS eur_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_source VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.x402_payment_quotes
+    DROP CONSTRAINT IF EXISTS chk_x402_payment_quotes_fx,
+    ADD CONSTRAINT chk_x402_payment_quotes_fx CHECK (
+        (original_amount_cents IS NULL AND original_currency IS NULL AND eur_amount_cents IS NULL
+            AND fx_units_per_eur IS NULL AND fx_source IS NULL AND fx_reference_date IS NULL)
+        OR (original_amount_cents IS NOT NULL AND original_currency IS NOT NULL AND eur_amount_cents IS NOT NULL
+            AND fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0
+            AND fx_source IS NOT NULL AND fx_reference_date IS NOT NULL
+            AND ((fx_source = 'identity' AND original_currency = 'EUR' AND fx_units_per_eur = 1
+                    AND eur_amount_cents = original_amount_cents)
+                 OR (fx_source = 'ecb' AND original_currency IN ('USD', 'GBP'))
+                 OR (fx_source = 'legacy_quote' AND original_currency = 'USD')))
+    );
+ALTER TABLE purser.x402_payment_quotes
+    ALTER COLUMN original_amount_cents SET NOT NULL,
+    ALTER COLUMN original_currency SET NOT NULL,
+    ALTER COLUMN eur_amount_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_source SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+ALTER TABLE purser.payment_reversals
+    ADD COLUMN IF NOT EXISTS original_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS original_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS eur_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_source VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.payment_reversals
+    DROP CONSTRAINT IF EXISTS chk_payment_reversals_fx,
+    ADD CONSTRAINT chk_payment_reversals_fx CHECK (
+        (original_amount_cents IS NULL AND original_currency IS NULL AND eur_amount_cents IS NULL
+            AND fx_units_per_eur IS NULL AND fx_source IS NULL AND fx_reference_date IS NULL)
+        OR (original_amount_cents IS NOT NULL AND original_currency IS NOT NULL AND eur_amount_cents IS NOT NULL
+            AND fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0
+            AND fx_source IS NOT NULL AND fx_reference_date IS NOT NULL
+            AND ((fx_source = 'identity' AND original_currency = 'EUR' AND fx_units_per_eur = 1
+                    AND eur_amount_cents = original_amount_cents)
+                 OR (fx_source = 'ecb' AND original_currency IN ('USD', 'GBP'))
+                 OR (fx_source = 'legacy_quote' AND original_currency = 'USD')))
+    );
+ALTER TABLE purser.payment_reversals
+    ALTER COLUMN original_amount_cents SET NOT NULL,
+    ALTER COLUMN original_currency SET NOT NULL,
+    ALTER COLUMN eur_amount_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_source SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+ALTER TABLE purser.billing_payments
+    ADD COLUMN IF NOT EXISTS original_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS original_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS eur_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_source VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.billing_payments
+    DROP CONSTRAINT IF EXISTS chk_billing_payments_fx,
+    ADD CONSTRAINT chk_billing_payments_fx CHECK (
+        (original_amount_cents IS NULL AND original_currency IS NULL AND eur_amount_cents IS NULL
+            AND fx_units_per_eur IS NULL AND fx_source IS NULL AND fx_reference_date IS NULL)
+        OR (original_amount_cents IS NOT NULL AND original_currency IS NOT NULL AND eur_amount_cents IS NOT NULL
+            AND fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0
+            AND fx_source IS NOT NULL AND fx_reference_date IS NOT NULL
+            AND ((fx_source = 'identity' AND original_currency = 'EUR' AND fx_units_per_eur = 1
+                    AND eur_amount_cents = original_amount_cents)
+                 OR (fx_source = 'ecb' AND original_currency IN ('USD', 'GBP'))
+                 OR (fx_source = 'legacy_quote' AND original_currency = 'USD')))
+    );
+ALTER TABLE purser.billing_payments
+    ALTER COLUMN original_amount_cents SET NOT NULL,
+    ALTER COLUMN original_currency SET NOT NULL,
+    ALTER COLUMN eur_amount_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_source SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+-- Invoices are computed in EUR and presented in the tenant's presentment
+-- currency at the ECB rate of the finalization date.
+ALTER TABLE purser.billing_invoices
+    ADD COLUMN IF NOT EXISTS presentment_amount_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS presentment_currency CHAR(3),
+    ADD COLUMN IF NOT EXISTS presentment_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS presentment_reference_date DATE,
+    ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ;
+ALTER TABLE purser.billing_invoices
+    DROP CONSTRAINT IF EXISTS chk_billing_invoices_presentment,
+    ADD CONSTRAINT chk_billing_invoices_presentment CHECK (
+        (presentment_amount_cents IS NULL AND presentment_currency IS NULL
+            AND presentment_units_per_eur IS NULL AND presentment_reference_date IS NULL)
+        OR (presentment_amount_cents IS NOT NULL AND presentment_currency IS NOT NULL
+            AND presentment_units_per_eur IS NOT NULL AND presentment_units_per_eur > 0
+            AND presentment_reference_date IS NOT NULL
+            AND ((presentment_currency = 'EUR' AND presentment_units_per_eur = 1)
+                 OR presentment_currency IN ('USD', 'GBP')))
+    );
+
+-- A tenant without a provider subscription and a presentment currency other
+-- than EUR pays its tier base fee in advance on a base-fee invoice. The invoice
+-- carries the period the fee covers here instead of period_start, which stays
+-- reserved for the period's usage invoice.
+ALTER TABLE purser.billing_invoices
+    ADD COLUMN IF NOT EXISTS base_fee_period_start TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS base_fee_period_end TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_invoices_base_fee_period
+    ON purser.billing_invoices(tenant_id, base_fee_period_start)
+    WHERE base_fee_period_start IS NOT NULL;
+
+-- Tax documents state net and VAT in EUR whatever currency they were paid in,
+-- with the rate and reference date of the conversion.
+ALTER TABLE purser.simplified_invoices
+    ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT;
+ALTER TABLE purser.simplified_invoices
+    DROP CONSTRAINT IF EXISTS chk_simplified_invoices_eur_amounts,
+    ADD CONSTRAINT chk_simplified_invoices_eur_amounts CHECK (
+        (net_eur_cents IS NULL AND vat_eur_cents IS NULL)
+        OR (net_eur_cents IS NOT NULL AND vat_eur_cents IS NOT NULL
+            AND net_eur_cents >= 0 AND vat_eur_cents >= 0)
+    );
+ALTER TABLE purser.simplified_invoices
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.simplified_invoices
+    DROP CONSTRAINT IF EXISTS chk_simplified_invoices_fx,
+    ADD CONSTRAINT chk_simplified_invoices_fx CHECK (
+        (fx_units_per_eur IS NULL AND fx_reference_date IS NULL)
+        OR (fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0 AND fx_reference_date IS NOT NULL)
+    );
+ALTER TABLE purser.simplified_invoices
+    ALTER COLUMN net_eur_cents SET NOT NULL,
+    ALTER COLUMN vat_eur_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+ALTER TABLE purser.crypto_invoices
+    ADD COLUMN IF NOT EXISTS net_eur_cents BIGINT,
+    ADD COLUMN IF NOT EXISTS vat_eur_cents BIGINT;
+ALTER TABLE purser.crypto_invoices
+    DROP CONSTRAINT IF EXISTS chk_crypto_invoices_eur_amounts,
+    ADD CONSTRAINT chk_crypto_invoices_eur_amounts CHECK (
+        (net_eur_cents IS NULL AND vat_eur_cents IS NULL)
+        OR (net_eur_cents IS NOT NULL AND vat_eur_cents IS NOT NULL
+            AND net_eur_cents >= 0 AND vat_eur_cents >= 0)
+    );
+ALTER TABLE purser.crypto_invoices
+    ADD COLUMN IF NOT EXISTS fx_units_per_eur NUMERIC(20, 10),
+    ADD COLUMN IF NOT EXISTS fx_reference_date DATE;
+ALTER TABLE purser.crypto_invoices
+    DROP CONSTRAINT IF EXISTS chk_crypto_invoices_fx,
+    ADD CONSTRAINT chk_crypto_invoices_fx CHECK (
+        (fx_units_per_eur IS NULL AND fx_reference_date IS NULL)
+        OR (fx_units_per_eur IS NOT NULL AND fx_units_per_eur > 0 AND fx_reference_date IS NOT NULL)
+    );
+ALTER TABLE purser.crypto_invoices
+    ALTER COLUMN net_eur_cents SET NOT NULL,
+    ALTER COLUMN vat_eur_cents SET NOT NULL,
+    ALTER COLUMN fx_units_per_eur SET NOT NULL,
+    ALTER COLUMN fx_reference_date SET NOT NULL;
+
+-- The prepaid ledger and invoice totals are EUR only, spelled in uppercase.
+ALTER TABLE purser.prepaid_balances
+    DROP CONSTRAINT IF EXISTS chk_prepaid_balances_ledger_currency,
+    ADD CONSTRAINT chk_prepaid_balances_ledger_currency CHECK (currency = 'EUR');
+
+ALTER TABLE purser.billing_invoices
+    DROP CONSTRAINT IF EXISTS chk_billing_invoices_ledger_currency,
+    ADD CONSTRAINT chk_billing_invoices_ledger_currency CHECK (currency = 'EUR');
+
+-- What a card provider actually settled for a charge: the charge amount and
+-- currency, the EUR amount credited to the platform balance, the provider fee,
+-- the net, the provider's exchange rate, and the provider balance transaction.
+-- A pending row has no settlement figures yet.
+CREATE TABLE IF NOT EXISTS purser.provider_settlements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    provider VARCHAR(20) NOT NULL,
+    provider_payment_id VARCHAR(255) NOT NULL,
+    provider_balance_transaction_id VARCHAR(255),
+    pending_topup_id UUID REFERENCES purser.pending_topups(id) ON DELETE SET NULL,
+    payment_id UUID REFERENCES purser.billing_payments(id) ON DELETE SET NULL,
+    charge_amount_cents BIGINT NOT NULL,
+    charge_currency CHAR(3) NOT NULL,
+    settled_amount_cents BIGINT,
+    fee_cents BIGINT,
+    net_cents BIGINT,
+    settlement_currency CHAR(3),
+    exchange_rate NUMERIC(20, 10),
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    settled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (provider, provider_payment_id),
+    CONSTRAINT chk_provider_settlements_provider CHECK (provider IN ('stripe', 'mollie')),
+    CONSTRAINT chk_provider_settlements_charge CHECK (
+        charge_amount_cents > 0 AND charge_currency IN ('EUR', 'USD', 'GBP')
+    ),
+    CONSTRAINT chk_provider_settlements_state CHECK (
+        (status = 'pending'
+            AND provider_balance_transaction_id IS NULL AND settled_amount_cents IS NULL
+            AND fee_cents IS NULL AND net_cents IS NULL AND settlement_currency IS NULL
+            AND exchange_rate IS NULL AND settled_at IS NULL)
+        OR (status = 'settled'
+            AND provider_balance_transaction_id IS NOT NULL AND settled_amount_cents IS NOT NULL
+            AND fee_cents IS NOT NULL AND fee_cents >= 0
+            AND net_cents IS NOT NULL AND net_cents = settled_amount_cents - fee_cents
+            AND settlement_currency IS NOT NULL AND settlement_currency = 'EUR' AND settled_at IS NOT NULL
+            AND ((exchange_rate IS NOT NULL AND exchange_rate > 0)
+                 OR (exchange_rate IS NULL AND charge_currency = 'EUR')))
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_settlements_balance_transaction
+    ON purser.provider_settlements(provider, provider_balance_transaction_id)
+    WHERE provider_balance_transaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_pending
+    ON purser.provider_settlements(provider, updated_at)
+    WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_provider_settlements_tenant
+    ON purser.provider_settlements(tenant_id, created_at DESC);
+
+-- Position of the Mollie balance transaction reader per Mollie balance.
+CREATE TABLE IF NOT EXISTS purser.mollie_balance_cursors (
+    balance_id VARCHAR(64) PRIMARY KEY,
+    last_transaction_id VARCHAR(64),
+    last_transaction_created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Read-only reconciliation views for payment-state drift checks.
 CREATE OR REPLACE VIEW purser.payment_report_provider_objects_without_local_rows AS
 SELECT ppo.id,
@@ -2404,34 +2814,39 @@ FROM purser.payment_provider_intents
 WHERE status IN ('pending', 'provider_open', 'sca_required', 'provider_call_failed', 'terminal_failed')
   AND updated_at < NOW() - INTERVAL '15 minutes';
 
+-- Payments and reversals are compared with the amount the invoice was
+-- presented in, in the original currency the payer was charged in.
 CREATE OR REPLACE VIEW purser.payment_report_paid_invoice_amount_mismatch AS
 WITH confirmed AS (
     SELECT invoice_id,
-           currency,
-           SUM((amount * 100)::bigint) AS confirmed_payment_cents
+           COALESCE(original_currency, UPPER(currency)) AS currency,
+           SUM(COALESCE(original_amount_cents, (amount * 100)::bigint)) AS confirmed_payment_cents
     FROM purser.billing_payments
     WHERE status = 'confirmed'
-    GROUP BY invoice_id, currency
+    GROUP BY invoice_id, COALESCE(original_currency, UPPER(currency))
 ),
 reversed AS (
     SELECT invoice_id,
-           currency,
+           UPPER(currency) AS currency,
            SUM(amount_cents) AS reversed_payment_cents
     FROM purser.payment_reversals
     WHERE status = 'succeeded'
-    GROUP BY invoice_id, currency
+    GROUP BY invoice_id, UPPER(currency)
 )
 SELECT bi.id AS invoice_id,
        bi.tenant_id,
-       bi.currency,
-       (bi.amount * 100)::bigint AS invoice_amount_cents,
+       COALESCE(bi.presentment_currency, UPPER(bi.currency))::varchar(3) AS currency,
+       COALESCE(bi.presentment_amount_cents, (bi.amount * 100)::bigint) AS invoice_amount_cents,
        COALESCE(c.confirmed_payment_cents, 0) AS confirmed_payment_cents,
        COALESCE(r.reversed_payment_cents, 0) AS reversed_payment_cents
 FROM purser.billing_invoices bi
-LEFT JOIN confirmed c ON c.invoice_id = bi.id AND c.currency = bi.currency
-LEFT JOIN reversed r ON r.invoice_id = bi.id AND r.currency = bi.currency
+LEFT JOIN confirmed c
+    ON c.invoice_id = bi.id AND c.currency = COALESCE(bi.presentment_currency, UPPER(bi.currency))
+LEFT JOIN reversed r
+    ON r.invoice_id = bi.id AND r.currency = COALESCE(bi.presentment_currency, UPPER(bi.currency))
 WHERE bi.status = 'paid'
-  AND COALESCE(c.confirmed_payment_cents, 0) - COALESCE(r.reversed_payment_cents, 0) <> (bi.amount * 100)::bigint;
+  AND COALESCE(c.confirmed_payment_cents, 0) - COALESCE(r.reversed_payment_cents, 0)
+      <> COALESCE(bi.presentment_amount_cents, (bi.amount * 100)::bigint);
 
 CREATE OR REPLACE VIEW purser.payment_report_reversals_without_payment_rows AS
 SELECT pr.id,
@@ -2573,6 +2988,51 @@ CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending
 
 CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_tenant
     ON purser.billing_event_outbox(tenant_id, created_at DESC);
+
+-- ============================================================================
+-- DOMAIN EVENT OUTBOX
+-- pkg/events/outbox.TableDDL("purser"), verbatim. Billing, subscription,
+-- payment, top-up, and suspension domain events commit here in the state
+-- change's transaction; the relay delivers them to Decklog
+-- PublishDomainEvents. A billing_event_outbox row written for the same fact
+-- carries the domain event's ID as its id.
+
+CREATE TABLE IF NOT EXISTS purser.domain_event_outbox (
+    event_id          UUID PRIMARY KEY,
+    event_type        TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    aggregate_type    TEXT NOT NULL,
+    aggregate_id      TEXT NOT NULL,
+    aggregate_version BIGINT NOT NULL DEFAULT 0,
+    scope             TEXT NOT NULL,
+    tenant_id         UUID,
+    actor_auth_type   TEXT NOT NULL DEFAULT '',
+    actor_user_id     TEXT NOT NULL DEFAULT '',
+    actor_token_hash  TEXT NOT NULL DEFAULT '',
+    occurred_at       TIMESTAMPTZ NOT NULL,
+    payload           BYTEA NOT NULL,
+    enqueued_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    claimed_at        TIMESTAMPTZ,
+    lease_token       UUID,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT,
+    completed_at      TIMESTAMPTZ,
+    CONSTRAINT chk_purser_domain_event_outbox_scope CHECK (scope IN ('tenant', 'platform')),
+    CONSTRAINT chk_purser_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_pending
+    ON purser.domain_event_outbox (enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_aggregate
+    ON purser.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
+    WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_completed
+    ON purser.domain_event_outbox (completed_at)
+    WHERE completed_at IS NOT NULL;
 
 -- ============================================================================
 -- Meter validation surface

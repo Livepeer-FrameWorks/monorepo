@@ -9,16 +9,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
-// clearPaymentEnv neutralizes the env-driven branches in
-// getAvailablePaymentMethods so tests don't depend on the runner's shell.
+// clearPaymentEnv clears the provider keys that getAvailablePaymentMethods
+// reads from the runtime configuration.
 func clearPaymentEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("STRIPE_SECRET_KEY", "")
-	t.Setenv("MOLLIE_API_KEY", "")
-	t.Setenv("ARBISCAN_API_KEY", "")
+	appconfigtest.Set(t, "STRIPE_SECRET_KEY", "")
+	appconfigtest.Set(t, "MOLLIE_API_KEY", "")
 }
 
 // GetPaymentMethods is purely env + hd_wallet_state driven. With no providers
@@ -49,8 +49,8 @@ func TestGetBillingDetailsMapsRowAndComplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"10115","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-		AddRow("ops@example.com", "Erika Mustermann", "Example GmbH", "DE123456789", []byte(addr), now)
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+		AddRow("ops@example.com", "Erika Mustermann", "Example GmbH", "DE123456789", []byte(addr), now, "EUR")
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
@@ -66,6 +66,9 @@ func TestGetBillingDetailsMapsRowAndComplete(t *testing.T) {
 	if resp.Address == nil || resp.Address.City != "Berlin" || resp.Address.Country != "DE" {
 		t.Fatalf("address mapping wrong: %+v", resp.Address)
 	}
+	if resp.PresentmentCurrency != "EUR" {
+		t.Fatalf("PresentmentCurrency = %q, want EUR", resp.PresentmentCurrency)
+	}
 	// Email + full address (street/city/postal/country) → complete.
 	if !resp.IsComplete {
 		t.Fatalf("IsComplete = false, want true for fully-populated details")
@@ -79,8 +82,8 @@ func TestGetBillingDetailsNullsAndIncomplete(t *testing.T) {
 	now := time.Now()
 
 	addr := `{"street":"1 A St","city":"Berlin","state":"","postal_code":"","country":"DE"}`
-	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-		AddRow("ops@example.com", nil, nil, nil, []byte(addr), now)
+	rows := sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+		AddRow("ops@example.com", nil, nil, nil, []byte(addr), now, "EUR")
 
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
@@ -129,9 +132,12 @@ func TestListPendingTopupsMapsRowsAndNulls(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"id", "tenant_id", "provider", "checkout_id", "amount_cents", "currency",
 		"status", "expires_at", "completed_at", "balance_transaction_id", "created_at", "updated_at",
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 	}).
-		AddRow(firstID, tenantID, "stripe", "cs_1", int64(2000), "EUR", "pending", now, nil, nil, now, now).
-		AddRow(secondID, tenantID, "stripe", "cs_2", int64(500), "EUR", "completed", now, now, balanceTransactionID, now, now)
+		AddRow(firstID, tenantID, "stripe", "cs_1", int64(2000), "GBP", "pending", now, nil, nil, now, now,
+			int64(2000), "GBP", int64(2353), "0.8500000000", "ecb", now).
+		AddRow(secondID, tenantID, "stripe", "cs_2", int64(500), "EUR", "completed", now, now, balanceTransactionID, now, now,
+			int64(500), "EUR", int64(500), "1.0000000000", "identity", now)
 
 	mock.ExpectQuery(`FROM purser\.pending_topups\s+WHERE tenant_id = \$1`).
 		WithArgs(tenantID, false, "").
@@ -152,6 +158,9 @@ func TestListPendingTopupsMapsRowsAndNulls(t *testing.T) {
 	if resp.Topups[1].CompletedAt == nil || resp.Topups[1].GetBalanceTransactionId() != balanceTransactionID {
 		t.Fatalf("completed topup refs not mapped: %+v", resp.Topups[1])
 	}
+	if fx := resp.Topups[0].GetFx(); fx.GetOriginalCurrency() != "GBP" || fx.GetEurAmountCents() != 2353 || fx.GetUnitsPerEur() != "0.85" || fx.GetSource() != "ecb" {
+		t.Fatalf("GBP topup FX not mapped: %+v", fx)
+	}
 }
 
 // A non-empty status filter appends an AND clause + second arg; assert both args
@@ -165,6 +174,7 @@ func TestListPendingTopupsStatusFilterPassesArg(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "tenant_id", "provider", "checkout_id", "amount_cents", "currency",
 			"status", "expires_at", "completed_at", "balance_transaction_id", "created_at", "updated_at",
+			"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 		}))
 
 	resp, err := s.ListPendingTopups(context.Background(), &purserpb.ListPendingTopupsRequest{TenantId: tenantID, Status: &st})
@@ -243,12 +253,14 @@ func TestGetBillingStatusNoActiveSubscription(t *testing.T) {
 			"id", "tenant_id", "amount", "base_amount", "metered_amount", "prepaid_credit_applied",
 			"currency", "status", "due_date", "paid_at", "usage_details", "created_at", "updated_at",
 			"period_start", "period_end", "gross_metered_amount",
+			"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date", "finalized_at",
 		}))
 	// getRecentPayments → empty
 	mock.ExpectQuery(`FROM purser\.billing_payments bp`).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "invoice_id", "method", "amount", "currency", "tx_id", "status",
 			"confirmed_at", "created_at", "updated_at",
+			"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 		}))
 	// getAvailablePaymentMethods → hd_wallet_state
 	mock.ExpectQuery(`SELECT xpub FROM purser\.hd_wallet_state`).

@@ -10,17 +10,23 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -64,6 +70,34 @@ type StripePaymentIntentObject struct {
 		InvoiceID string `json:"invoice_id"`
 		TenantID  string `json:"tenant_id"`
 	} `json:"metadata"`
+	LastPaymentError struct {
+		Code        string `json:"code"`
+		DeclineCode string `json:"decline_code"`
+	} `json:"last_payment_error"`
+}
+
+// stripePaymentFailureReason maps a PaymentIntent's last_payment_error to the
+// coarse reason tenants see; unknown codes stay unspecified.
+func stripePaymentFailureReason(code, declineCode string) publicv1.PaymentFailureReason {
+	switch declineCode {
+	case "insufficient_funds":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_INSUFFICIENT_FUNDS
+	case "expired_card":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_EXPIRED_METHOD
+	case "authentication_required":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_AUTHENTICATION_REQUIRED
+	}
+	switch code {
+	case "expired_card":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_EXPIRED_METHOD
+	case "authentication_required", "payment_intent_authentication_failure":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_AUTHENTICATION_REQUIRED
+	case "processing_error":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_PROCESSING_ERROR
+	case "card_declined":
+		return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_DECLINED
+	}
+	return publicv1.PaymentFailureReason_PAYMENT_FAILURE_REASON_UNSPECIFIED
 }
 
 // StripeCheckoutSessionObject for checkout.session.completed events
@@ -222,20 +256,26 @@ func (s *Service) verifyStripeSignature(payload []byte, signature, secret string
 	return false
 }
 
-// sendPaymentStatusEmail sends email notification for payment status changes
-func (s *Service) sendPaymentStatusEmail(invoiceID, provider, status string) {
+// sendPaymentStatusEmail sends email notification for payment status changes.
+// The email states the amount the payment charged and, for a non-EUR payment,
+// the EUR amount it applies to the invoice at its recorded ECB rate.
+func (s *Service) sendPaymentStatusEmail(paymentID, invoiceID, provider, status string) {
 	ctx := context.Background()
-	// Get invoice and tenant subscription info (billing email is in subscription)
-	details, err := purserdb.New(s.db).GetPaymentStatusEmailDetails(ctx, invoiceID)
+	details, err := purserdb.New(s.db).GetPaymentStatusEmailDetails(ctx, purserdb.GetPaymentStatusEmailDetailsParams{
+		PaymentID: paymentID,
+		InvoiceID: invoiceID,
+	})
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"error":      err.Error(),
 			"invoice_id": invoiceID,
-		}).Error("Failed to get invoice and subscription info for payment email notification")
+			"payment_id": paymentID,
+		}).Error("Failed to get payment and subscription info for payment email notification")
 		return
 	}
-	tenantID, amount, currency := details.TenantID, details.Amount, details.Currency
+	tenantID, amount, currency := details.TenantID, float64(details.AmountCents)/100, details.Currency
+	paymentFX := NewEmailFX(currency, details.EurAmountCents, details.FxUnitsPerEur, details.FxReferenceDate)
 	billingEmail, tenantName := details.BillingEmail.String, ""
 
 	// Get tenant name from Quartermaster
@@ -258,7 +298,7 @@ func (s *Service) sendPaymentStatusEmail(invoiceID, provider, status string) {
 	// Send appropriate email based on status
 	switch status {
 	case "confirmed":
-		err = s.emailService.SendPaymentSuccessEmail(billingEmail, tenantName, invoiceID, amount, currency, provider)
+		err = s.emailService.SendPaymentSuccessEmail(billingEmail, tenantName, invoiceID, amount, currency, provider, paymentFX)
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"tenant_email": billingEmail,
@@ -267,7 +307,7 @@ func (s *Service) sendPaymentStatusEmail(invoiceID, provider, status string) {
 			}).Error("Failed to send payment success email")
 		}
 	case "failed":
-		err = s.emailService.SendPaymentFailedEmail(billingEmail, tenantName, invoiceID, amount, currency, provider)
+		err = s.emailService.SendPaymentFailedEmail(billingEmail, tenantName, invoiceID, amount, currency, provider, paymentFX)
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"tenant_email": billingEmail,
@@ -280,9 +320,21 @@ func (s *Service) sendPaymentStatusEmail(invoiceID, provider, status string) {
 
 // sendTenantActionRequiredEmail notifies the tenant that a payment needs their
 // authentication and links the relevant hosted or in-app resolution page.
-func (s *Service) sendTenantActionRequiredEmail(tenantID, invoiceRef string, amount float64, currency, actionURL string) {
+// paymentID names the Purser payment whose recorded FX is stated; Stripe
+// subscription invoices have none and are EUR only.
+func (s *Service) sendTenantActionRequiredEmail(tenantID, invoiceRef, paymentID string, amount float64, currency, actionURL string) {
 	if tenantID == "" {
 		return
+	}
+	paymentFX := EmailFX{}
+	if paymentID != "" {
+		recorded, fxErr := purserdb.New(s.db).GetPaymentEmailFX(context.Background(), paymentID)
+		if fxErr != nil {
+			s.logger.WithError(fxErr).WithField("payment_id", paymentID).Warn("Failed to load payment FX for SCA notification")
+		} else {
+			amount, currency = float64(recorded.AmountCents)/100, recorded.Currency
+			paymentFX = NewEmailFX(recorded.Currency, recorded.EurAmountCents, recorded.FxUnitsPerEur, recorded.FxReferenceDate)
+		}
 	}
 	billingEmail, err := purserdb.New(s.db).GetTenantBillingEmail(context.Background(), tenantID)
 	if err != nil {
@@ -297,11 +349,13 @@ func (s *Service) sendTenantActionRequiredEmail(tenantID, invoiceRef string, amo
 	if info, infoErr := s.getTenantInfo(tenantID); infoErr == nil && info != nil {
 		tenantName = info.Name
 	}
-	if err := s.emailService.SendPaymentActionRequiredEmail(billingEmail.String, tenantName, invoiceRef, amount, strings.ToUpper(currency), actionURL); err != nil {
+	if err := s.emailService.SendPaymentActionRequiredEmail(billingEmail.String, tenantName, invoiceRef, amount, strings.ToUpper(currency), actionURL, paymentFX); err != nil {
 		s.logger.WithError(err).WithField("invoice_id", invoiceRef).Error("Failed to send payment action-required email")
 	}
 }
 
+// sendTenantPaymentStatusEmail reports a Stripe subscription invoice payment.
+// Stripe subscriptions exist only for EUR tenants, so no conversion is stated.
 func (s *Service) sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string, amount float64, currency string) {
 	if tenantID == "" {
 		return
@@ -329,7 +383,7 @@ func (s *Service) sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, s
 	currency = strings.ToUpper(currency)
 	switch status {
 	case "confirmed":
-		err = s.emailService.SendPaymentSuccessEmail(billingEmail.String, tenantName, invoiceRef, amount, currency, provider)
+		err = s.emailService.SendPaymentSuccessEmail(billingEmail.String, tenantName, invoiceRef, amount, currency, provider, EmailFX{})
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"tenant_email": billingEmail.String,
@@ -338,7 +392,7 @@ func (s *Service) sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, s
 			}).Error("Failed to send payment success email")
 		}
 	case "failed":
-		err = s.emailService.SendPaymentFailedEmail(billingEmail.String, tenantName, invoiceRef, amount, currency, provider)
+		err = s.emailService.SendPaymentFailedEmail(billingEmail.String, tenantName, invoiceRef, amount, currency, provider, EmailFX{})
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"tenant_email": billingEmail.String,
@@ -361,7 +415,7 @@ func (s *Service) sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, s
 func (s *Service) ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, string, int) {
 	// Verify Stripe signature
 	signature := headerValue(headers, "Stripe-Signature")
-	webhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+	webhookSecret := appconfig.Runtime().StripeWebhookSecret
 
 	if webhookSecret == "" {
 		s.logger.Error("STRIPE_WEBHOOK_SECRET not configured; rejecting webhook")
@@ -427,6 +481,8 @@ func (s *Service) processStripeWebhookPayload(ctx context.Context, payload Strip
 		err = s.handleStripeInvoicePaymentActionRequired(payload)
 	case payload.Type == "charge.refunded":
 		err = s.handleStripeChargeRefunded(payload)
+	case payload.Type == "charge.updated":
+		err = s.handleStripeChargeUpdated(payload)
 	case strings.HasPrefix(payload.Type, "charge.dispute."):
 		err = s.handleStripeChargeDispute(payload)
 	default:
@@ -573,6 +629,7 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 
 	updated, err := s.updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status, stripePaymentIntentEventWriter(status), providerSettlementEvidence{
 		TenantID: obj.Metadata.TenantID, AmountCents: obj.AmountReceived, Currency: obj.Currency,
+		FailureReason: stripePaymentFailureReason(obj.LastPaymentError.Code, obj.LastPaymentError.DeclineCode),
 	})
 	if err != nil {
 		return err
@@ -646,14 +703,14 @@ func stripePaymentIntentEventWriter(status string) invoicePaymentEventWriter {
 		if status == "failed" {
 			eventType = eventPaymentFailed
 		}
-		return emitBillingEventTx(ctx, tx, eventType, payment.TenantID, "payment", payment.PaymentID, &ipcpb.BillingEvent{
+		return emitBillingEventsTx(ctx, tx, eventType, payment.TenantID, "payment", payment.PaymentID, &ipcpb.BillingEvent{
 			PaymentId: payment.PaymentID,
 			InvoiceId: payment.InvoiceID,
 			Amount:    amountFloat,
 			Currency:  payment.Currency,
 			Provider:  "stripe",
 			Status:    status,
-		})
+		}, payment.Failed)
 	}
 }
 
@@ -770,11 +827,18 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 		if subscriptionID == "" {
 			subscriptionID = obj.ID
 		}
-		return emitBillingEventTx(ctx, tx, eventType, tenantID, "subscription", subscriptionID, &ipcpb.BillingEvent{
+		updated, buildErr := billingevents.New(tenantID, subscriptionID, &internalv1.SubscriptionUpdated{
+			SubscriptionId: subscriptionID, TierId: obj.Metadata.TierID, Status: ourStatus,
+			ChangedFields: []string{"status"},
+		}, events.Actor{})
+		if buildErr != nil {
+			return buildErr
+		}
+		return emitBillingEventsTx(ctx, tx, eventType, tenantID, "subscription", subscriptionID, &ipcpb.BillingEvent{
 			SubscriptionId: subscriptionID,
 			Provider:       "stripe",
 			Status:         ourStatus,
-		})
+		}, updated)
 	})
 	if txErr != nil {
 		return txErr
@@ -925,6 +989,19 @@ func (s *Service) recordMonthlyClusterCredit(ctx context.Context, obj *StripeInv
 	return tx.Commit()
 }
 
+// stripeSubscriptionPaymentFailedEvent builds billing.payment_failed for a
+// failed charge on a Stripe-managed subscription. Stripe raised the invoice,
+// so no Purser payment or invoice exists and Purser records no EUR amount for
+// it: the event names the Stripe invoice and carries the amount Stripe tried
+// to collect, in the invoice's currency. Stripe's minor units match ISO 4217.
+func stripeSubscriptionPaymentFailedEvent(tenantID string, obj *StripeInvoiceObject) (*events.Event, error) {
+	return billingevents.New(tenantID, obj.ID, &publicv1.PaymentFailed{
+		Amount:              &publicv1.Money{AmountMinor: obj.AmountDue, Currency: strings.ToUpper(obj.Currency)},
+		Provider:            "stripe",
+		ProviderReferenceId: obj.ID,
+	}, events.Actor{})
+}
+
 // handleStripeInvoiceFailed handles invoice.payment_failed events
 func (s *Service) handleStripeInvoiceFailed(payload StripeWebhookPayload) error {
 	var obj StripeInvoiceObject
@@ -944,19 +1021,52 @@ func (s *Service) handleStripeInvoiceFailed(payload StripeWebhookPayload) error 
 		}
 	}
 
+	// Each failed charge arrives as its own Stripe event. The event's webhook
+	// row settles in the transaction that records the failure, so a
+	// redelivery, or a claim taken over after the lease, finds it settled and
+	// records nothing: the dunning increment and both events commit once per
+	// failed charge.
+	recorded := false
 	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		if incrementErr := purserdb.New(tx).IncrementTenantDunningAttempts(ctx, tenantID); incrementErr != nil {
+		recorded = false
+		queries := purserdb.New(tx)
+		settled, settleErr := queries.CompleteClaimedWebhookEvent(ctx, purserdb.CompleteClaimedWebhookEventParams{
+			Provider: "stripe", EventID: payload.ID,
+		})
+		if settleErr != nil {
+			return fmt.Errorf("settle webhook event: %w", settleErr)
+		}
+		if settled == 0 {
+			return nil
+		}
+		if incrementErr := queries.IncrementTenantDunningAttempts(ctx, tenantID); incrementErr != nil {
 			return fmt.Errorf("increment dunning attempts: %w", incrementErr)
 		}
-		return emitBillingEventTx(ctx, tx, eventInvoicePaymentFailed, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
+		domain, eventErr := stripeSubscriptionPaymentFailedEvent(tenantID, &obj)
+		if eventErr != nil {
+			return eventErr
+		}
+		if emitErr := emitBillingEventsTx(ctx, tx, eventInvoicePaymentFailed, tenantID, "invoice", obj.ID, &ipcpb.BillingEvent{
 			InvoiceId: obj.ID,
 			Amount:    float64(obj.AmountDue) / 100.0,
 			Currency:  obj.Currency,
 			Provider:  "stripe",
 			Status:    "failed",
-		})
+		}, domain); emitErr != nil {
+			return emitErr
+		}
+		recorded = true
+		return nil
 	}); err != nil {
 		return err
+	}
+	if !recorded {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"invoice_id": obj.ID,
+			"event_id":   payload.ID,
+		}).Debug("Stripe invoice payment failure already recorded by another delivery")
+		return nil
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -1027,7 +1137,7 @@ func (s *Service) handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPa
 // that expired without payment. One-time top-ups are marked expired; staged
 // subscription/cluster checkout state is cleared so an abandoned upgrade does
 // not strand a pending tier. Unpaid invoices are left payable (a new checkout
-// can be created), so only the open intent is expired.
+// can be created), but their abandoned payment must stop blocking repricing.
 func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) error {
 	var sess stripeCheckoutSessionEvent
 	if err := json.Unmarshal(payload.Data.Object, &sess); err != nil {
@@ -1038,9 +1148,11 @@ func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) erro
 		return err
 	}
 	switch CheckoutPurpose(sess.Metadata.Purpose) {
+	case PurposeInvoice:
+		return s.expireStripeInvoiceCheckout(ctx, sess)
 	case PurposePrepaid:
 		return s.markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "expired")
-	case PurposeSubscription:
+	case PurposeSubscription, PurposeSubscriptionSetup:
 		return s.clearStagedStripeCheckout(ctx, s.db, sess.Metadata.TenantID, sess.Subscription)
 	case PurposeClusterSubscription:
 		return s.clearStagedClusterSubscription(ctx, sess.ID, sess.Subscription)
@@ -1048,6 +1160,39 @@ func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) erro
 		s.logger.WithField("session_id", sess.ID).Debug("Checkout session expired; intent expired")
 		return nil
 	}
+}
+
+func (s *Service) expireStripeInvoiceCheckout(ctx context.Context, sess stripeCheckoutSessionEvent) error {
+	if sess.Metadata.ReferenceID == "" || sess.Metadata.TenantID == "" {
+		return errors.New("expired invoice checkout is missing invoice or tenant identity")
+	}
+	// Never fall back to the invoice's latest pending payment: it can belong to
+	// a newer checkout than this delayed expiry notification.
+	for _, txID := range []string{sess.ID, sess.PaymentIntent} {
+		if txID == "" {
+			continue
+		}
+		payment, err := purserdb.New(s.db).GetBillingPaymentByProviderTransaction(ctx, purserdb.GetBillingPaymentByProviderTransactionParams{
+			TransactionID: optionalSQLString(txID), Method: "card",
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if payment.InvoiceID != sess.Metadata.ReferenceID || payment.TenantID != sess.Metadata.TenantID {
+			return errors.New("expired invoice checkout payment identity mismatch")
+		}
+		if payment.Status != "pending" {
+			return nil
+		}
+		_, err = s.updateInvoicePaymentStatus("stripe", txID, payment.InvoiceID, "failed", nil, providerSettlementEvidence{
+			TenantID: payment.TenantID,
+		})
+		return err
+	}
+	return fmt.Errorf("expired checkout %s has no local payment: %w", sess.ID, errWebhookMissingLocalReference)
 }
 
 // handleStripeInvoicePaymentActionRequired notifies the customer that a
@@ -1070,7 +1215,7 @@ func (s *Service) handleStripeInvoicePaymentActionRequired(payload StripeWebhook
 		"invoice_id":         obj.ID,
 		"hosted_invoice_url": obj.HostedInvoiceURL,
 	}).Warn("Stripe invoice requires customer authentication (SCA); notifying customer")
-	go s.sendTenantActionRequiredEmail(tenantID, obj.ID, float64(obj.AmountDue)/100, obj.Currency, obj.HostedInvoiceURL)
+	go s.sendTenantActionRequiredEmail(tenantID, obj.ID, "", float64(obj.AmountDue)/100, obj.Currency, obj.HostedInvoiceURL)
 	return nil
 }
 
@@ -1295,11 +1440,21 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 	}
 
 	if paymentType == "first_payment" || string(payment.SequenceType) == "first" {
+		if tenantID == "" {
+			if newStatus != "confirmed" {
+				return eventID, nil
+			}
+			return "", fmt.Errorf("missing tenant_id for Mollie first payment")
+		}
+		if newStatus == "failed" {
+			if resolveErr := purserdb.New(s.db).ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{
+				Status: mollieFirstPaymentIntentStatus(status), TenantID: tenantID, ProviderPaymentID: optionalSQLString(payment.ID),
+			}); resolveErr != nil {
+				return "", fmt.Errorf("record Mollie first payment outcome: %w", resolveErr)
+			}
+		}
 		if newStatus != "confirmed" {
 			return eventID, nil
-		}
-		if tenantID == "" {
-			return "", fmt.Errorf("missing tenant_id for Mollie first payment")
 		}
 		if payment.CustomerID == "" || payment.MandateID == "" {
 			return "", fmt.Errorf("missing Mollie customer or mandate ID")
@@ -1318,6 +1473,25 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		info := s.mollieClient.ExtractMandateInfo(mandate, payment.CustomerID)
 		if upsertErr := s.upsertMollieMandate(tenantID, info); upsertErr != nil {
 			return "", upsertErr
+		}
+		// A first payment created outside EUR is a zero-amount mandate payment:
+		// the mandate activates the tier and Purser charges the base fee on it.
+		// One created in EUR paid the base fee ahead of a Mollie subscription.
+		// The currency it was created in decides, not the tenant's current one.
+		createdIn, currencyErr := s.mollieFirstPaymentCurrency(ctx, tenantID, payment)
+		if currencyErr != nil {
+			return "", currencyErr
+		}
+		if createdIn != billing.LedgerCurrency && info.Status == "valid" {
+			tierID := mollieMetadataString(payment.Metadata, "tier_id")
+			if activateErr := s.activateAdvanceBilledTenant(ctx, tenantID, tierID, "mollie", "", time.Now()); activateErr != nil {
+				return "", activateErr
+			}
+		}
+		if resolveErr := purserdb.New(s.db).ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{
+			Status: "succeeded", TenantID: tenantID, ProviderPaymentID: optionalSQLString(payment.ID),
+		}); resolveErr != nil {
+			return "", fmt.Errorf("record Mollie first payment outcome: %w", resolveErr)
 		}
 		return eventID, nil
 	}
@@ -1340,6 +1514,9 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		// reaching this branch, so the funds have settled.
 		if err := s.handlePrepaidCheckoutCompleted(ctx, payment.ID, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie, true); err != nil {
 			return "", err
+		}
+		if rewindErr := s.rewindMollieSettlementCursor(ctx, tenantID, payment); rewindErr != nil {
+			return "", rewindErr
 		}
 		return eventID, nil
 	}
@@ -1384,11 +1561,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		if invoiceID != "" && payment.Amount != nil {
 			amountCents, _, amtErr := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
 			if amtErr == nil {
-				amountStr := centsToDecimalString(amountCents, payment.Amount.Currency)
-				if insertErr := purserdb.New(s.db).InsertMollieSubscriptionPayment(ctx, purserdb.InsertMollieSubscriptionPaymentParams{
-					InvoiceID: invoiceID, Amount: amountStr, Currency: payment.Amount.Currency,
-					TransactionID: sql.NullString{String: payment.ID, Valid: true},
-				}); insertErr != nil {
+				if insertErr := s.insertMollieSubscriptionPayment(ctx, purserdb.New(s.db), tenantID, invoiceID, payment.ID, amountCents, payment.Amount.Currency); insertErr != nil {
 					s.logger.WithError(insertErr).WithField("mollie_payment_id", payment.ID).Warn("Failed to insert subscription-installment billing_payment")
 				}
 			}
@@ -1427,8 +1600,45 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 	if _, err := s.updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus, emitPaymentEvent, settlement); err != nil {
 		return "", err
 	}
+	if newStatus == "confirmed" && tenantID != "" {
+		if rewindErr := s.rewindMollieSettlementCursor(ctx, tenantID, payment); rewindErr != nil {
+			return "", rewindErr
+		}
+	}
 
 	return eventID, nil
+}
+
+// mollieFirstPaymentCurrency is the currency a Mollie first payment was
+// created in: the currency recorded on its intent, or, for a payment no intent
+// names, the currency Mollie reports it was charged in.
+func (s *Service) mollieFirstPaymentCurrency(ctx context.Context, tenantID string, payment *mollie.Payment) (string, error) {
+	currency, err := purserdb.New(s.db).GetMollieFirstPaymentIntentCurrency(ctx, purserdb.GetMollieFirstPaymentIntentCurrencyParams{
+		TenantID: tenantID, ProviderPaymentID: sql.NullString{String: payment.ID, Valid: true},
+	})
+	if err == nil {
+		return strings.ToUpper(strings.TrimSpace(currency)), nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("load Mollie first payment intent: %w", err)
+	}
+	if payment.Amount == nil || strings.TrimSpace(payment.Amount.Currency) == "" {
+		return "", fmt.Errorf("mollie first payment %s has no recorded or reported currency", payment.ID)
+	}
+	return strings.ToUpper(strings.TrimSpace(payment.Amount.Currency)), nil
+}
+
+// mollieFirstPaymentIntentStatus is the intent status for a Mollie first
+// payment that ended without being paid.
+func mollieFirstPaymentIntentStatus(mollieStatus string) string {
+	switch mollieStatus {
+	case "expired":
+		return "expired"
+	case "canceled", "cancelled":
+		return "cancelled"
+	default:
+		return "terminal_failed"
+	}
 }
 
 // molliePaymentEventWriter enqueues payment_succeeded/payment_failed for a
@@ -1440,14 +1650,14 @@ func molliePaymentEventWriter(molliePaymentID, newStatus string, settlement prov
 		if newStatus == "failed" {
 			eventType = eventPaymentFailed
 		}
-		return emitBillingEventTx(ctx, tx, eventType, payment.TenantID, "payment", molliePaymentID, &ipcpb.BillingEvent{
+		return emitBillingEventsTx(ctx, tx, eventType, payment.TenantID, "payment", molliePaymentID, &ipcpb.BillingEvent{
 			PaymentId: molliePaymentID,
 			InvoiceId: payment.InvoiceID,
 			Amount:    float64(settlement.AmountCents) / float64(intPow10(currencyMinorUnitExponent(settlement.Currency))),
 			Currency:  settlement.Currency,
 			Provider:  "mollie",
 			Status:    newStatus,
-		})
+		}, payment.Failed)
 	}
 }
 
@@ -1674,6 +1884,9 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 	if in.providerReversalID == "" || in.amountCents <= 0 {
 		return false, fmt.Errorf("invalid provider reversal input")
 	}
+	// Providers report ISO currency codes in either case; the reversal
+	// ledger stores the uppercase form.
+	in.currency = strings.ToUpper(strings.TrimSpace(in.currency))
 	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 
@@ -1694,11 +1907,15 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 	// we match on the PaymentIntent id; for Mollie on the payment id.
 	var paymentID, invoiceID, tenantID, paymentCurrency string
 	var pendingTopupID sql.NullString
+	var topup purserdb.GetPendingTopupForReversalRow
+	var paymentFX *fx.Record
+	var paymentAmountCents int64
 	queries := purserdb.New(tx)
 	payment, err := queries.GetInvoicePaymentForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Maybe it was a prepaid top-up rather than an invoice payment.
-		topup, topupErr := queries.GetPendingTopupForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
+		var topupErr error
+		topup, topupErr = queries.GetPendingTopupForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
 		err = topupErr
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Errorf("reversal %s references unknown provider payment %s: %w",
@@ -1708,17 +1925,50 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 			return false, fmt.Errorf("lookup topup for reversal: %w", err)
 		}
 		pendingTopupID = sql.NullString{String: topup.TopupID, Valid: true}
-		tenantID, paymentCurrency = topup.TenantID, topup.Currency
+		tenantID, paymentCurrency, paymentAmountCents = topup.TenantID, topup.Currency, topup.AmountCents
+		paymentFX, err = storedFXRecord(topup.OriginalAmountCents, topup.OriginalCurrency, topup.EurAmountCents, topup.FxUnitsPerEur, topup.FxSource, topup.FxReferenceDate)
 	} else if err != nil {
 		return false, fmt.Errorf("lookup payment for reversal: %w", err)
 	} else {
 		paymentID, invoiceID, tenantID, paymentCurrency = payment.PaymentID, payment.InvoiceID, payment.TenantID, payment.Currency
+		paymentAmountCents = payment.AmountCents
+		paymentFX, err = storedFXRecord(payment.OriginalAmountCents, payment.OriginalCurrency, payment.EurAmountCents, payment.FxUnitsPerEur, payment.FxSource, payment.FxReferenceDate)
+	}
+	if err != nil {
+		return false, fmt.Errorf("read payment FX fields for reversal: %w", err)
 	}
 
 	// Sanity: provider may report the reversal in a different currency
 	// than the original payment. Refuse to reconcile rather than mixing.
-	if paymentCurrency != "" && in.currency != "" && paymentCurrency != in.currency {
+	paymentCurrency = strings.TrimSpace(paymentCurrency)
+	if paymentCurrency != "" && in.currency != "" && !strings.EqualFold(paymentCurrency, in.currency) {
 		return false, fmt.Errorf("reversal currency %s != payment currency %s", in.currency, paymentCurrency)
+	}
+
+	// The reversal takes the reversed share of the EUR amount the payment
+	// recorded, at the payment's rate, so refunds that together return the
+	// whole payment return exactly the EUR it credited or settled, whatever
+	// the rate is today.
+	if paymentFX == nil {
+		if !strings.EqualFold(paymentCurrency, billing.LedgerCurrency) {
+			return false, fmt.Errorf("reversal %s references a %s payment without FX fields; retry after the EUR ledger conversion", in.providerReversalID, paymentCurrency)
+		}
+		identity, identityErr := fx.RecordToEUR(paymentAmountCents, fx.Identity(time.Now()))
+		if identityErr != nil {
+			return false, identityErr
+		}
+		paymentFX = &identity
+	}
+	prior, err := queries.GetPriorReversalTotals(ctx, purserdb.GetPriorReversalTotalsParams{
+		Provider: in.provider, ProviderReversalID: in.providerReversalID,
+		PaymentID: optionalSQLString(paymentID), PendingTopupID: pendingTopupID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("load earlier reversals of %s: %w", in.providerPaymentID, err)
+	}
+	reversalFX, err := paymentFX.Part(in.amountCents, prior.OriginalCents, prior.EurCents)
+	if err != nil {
+		return false, fmt.Errorf("apportion reversal %s: %w", in.providerReversalID, err)
 	}
 
 	// Idempotent reversal-ledger insert. A pending dispute observation may
@@ -1729,6 +1979,8 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 		InvoiceID: optionalSQLString(invoiceID), Provider: in.provider, ReversalType: in.reversalType,
 		ProviderReversalID: in.providerReversalID, ProviderChargeID: optionalSQLString(in.providerChargeID),
 		AmountCents: in.amountCents, Currency: in.currency, Reason: optionalSQLString(in.reason),
+		EurAmountCents: reversalFX.EURMinor, FxUnitsPerEur: reversalFX.UnitsText(),
+		FxSource: reversalFX.Source, FxReferenceDate: reversalFX.ReferenceDate,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Replay: row already existed, nothing more to do.
@@ -1752,12 +2004,12 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 		// accrual. The clawback runs in the same transaction as the
 		// invoice-side reversal so the ledger never disagrees with the
 		// invoice state.
-		if err := applyOperatorCreditClawbackTx(ctx, tx, invoiceID, reversalID, in.amountCents); err != nil {
+		if err := applyOperatorCreditClawbackTx(ctx, tx, invoiceID, reversalID, reversalFX.EURMinor); err != nil {
 			return false, err
 		}
 	}
 	if pendingTopupID.Valid && tenantID != "" {
-		if err := s.applyPrepaidTopupReversalTx(ctx, tx, tenantID, pendingTopupID.String, reversalID, in.amountCents, in.currency, in.reason); err != nil {
+		if err := s.applyPrepaidTopupReversalTx(ctx, tx, topup, reversalID, in, reversalFX.EURMinor); err != nil {
 			return false, err
 		}
 	}
@@ -1799,9 +2051,9 @@ func applyInvoicePaymentReversalTx(ctx context.Context, tx *sql.Tx, paymentID, i
 }
 
 // applyOperatorCreditClawbackTx writes one clawback per reversal/accrual pair,
-// prorated by the reversed amount over the invoice total. The link table makes
-// replay idempotent while preserving every ledger row that affects payout
-// reporting.
+// prorated by the reversed EUR amount over the EUR invoice total, a ratio of at
+// most 1. The link table makes replay idempotent while preserving every ledger
+// row that affects payout reporting.
 func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, reversalID string, reversedCents int64) error {
 	if invoiceID == "" || reversedCents <= 0 {
 		return nil
@@ -1818,6 +2070,7 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 	if invoiceCents <= 0 {
 		return nil
 	}
+	reversedCents = min(reversedCents, invoiceCents)
 	accruals, err := queries.ListOperatorAccrualsForInvoice(ctx, invoiceID)
 	if err != nil {
 		return fmt.Errorf("list operator accruals: %w", err)
@@ -1871,61 +2124,100 @@ func absCents(v int64) int64 {
 	return v
 }
 
-// applyPrepaidTopupReversalTx writes the negative balance_transactions row
-// for a refunded prepaid top-up. If the refund would drop the prepaid
-// balance below zero, operator_review_required is flipped TRUE on the
-// reversal row so ops can decide whether to recollect or write off.
-func (s *Service) applyPrepaidTopupReversalTx(ctx context.Context, tx *sql.Tx, tenantID, topupID, reversalID string, amountCents int64, currency, reason string) error {
+// applyPrepaidTopupReversalTx applies a refund or chargeback of a prepaid
+// top-up. Balance movement follows the top-up's credit transaction: an
+// uncredited top-up (held for review, awaiting settlement) records the refunded
+// amount and, once the full amount is returned, closes its review holds without
+// touching any balance. A credited top-up is debited debitEURCents, the
+// reversed share of the EUR the top-up credited, from the EUR balance; a debit
+// that would drop the balance below zero or a completed status without a
+// credit transaction flags the reversal for operator review.
+func (s *Service) applyPrepaidTopupReversalTx(ctx context.Context, tx *sql.Tx, topup purserdb.GetPendingTopupForReversalRow, reversalID string, in providerReversalInput, debitEURCents int64) error {
 	queries := purserdb.New(tx)
-	// Increment the refunded marker on pending_topups.
-	if err := queries.AddPendingTopupRefundedAmount(ctx, purserdb.AddPendingTopupRefundedAmountParams{
-		AmountCents: amountCents, TopupID: topupID,
-	}); err != nil {
-		return fmt.Errorf("credit pending_topups refunded_amount_cents: %w", err)
-	}
-
-	// Look at the current balance before debiting so we can flag negative.
-	currentBalance, err := queries.GetX402CurrentBalance(ctx, purserdb.GetX402CurrentBalanceParams{
-		TenantID: tenantID, Currency: currency,
-	})
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("read prepaid balance: %w", err)
-	}
-	willGoNegative := currentBalance < amountCents
-
-	// Negative balance transaction. Idempotent on (tenant_id, reference_type,
-	// reference_id) where reference_id is the reversal row id.
 	reversalUUID, err := uuid.Parse(reversalID)
 	if err != nil {
 		return fmt.Errorf("parse reversal id: %w", err)
 	}
-	if err := queries.InsertPrepaidTopupReversalTransaction(ctx, purserdb.InsertPrepaidTopupReversalTransactionParams{
-		TenantID: tenantID, AmountCents: amountCents, Currency: currency,
-		Description: sql.NullString{String: fmt.Sprintf("Refund/chargeback %s", reason), Valid: true},
-		ReversalID:  reversalUUID.String(), Reason: optionalSQLString(reason),
+	fields := logging.Fields{
+		"tenant_id":    topup.TenantID,
+		"topup_id":     topup.TopupID,
+		"reversal_id":  reversalID,
+		"amount_cents": in.amountCents,
+		"currency":     in.currency,
+	}
+	flagForReview := func(message string) error {
+		if markErr := queries.MarkPaymentReversalForReview(ctx, reversalUUID.String()); markErr != nil {
+			return fmt.Errorf("flag reversal for operator review: %w", markErr)
+		}
+		s.logger.WithFields(fields).Warn(message)
+		return nil
+	}
+
+	refunded, err := queries.AddPendingTopupRefundedAmount(ctx, purserdb.AddPendingTopupRefundedAmountParams{
+		AmountCents: in.amountCents, TopupID: topup.TopupID,
+	})
+	if err != nil {
+		return fmt.Errorf("credit pending_topups refunded_amount_cents: %w", err)
+	}
+
+	credited, err := queries.GetPendingTopupCreditState(ctx, purserdb.GetPendingTopupCreditStateParams{
+		TenantID: topup.TenantID, TopupID: topup.TopupID,
+	})
+	if err != nil {
+		return fmt.Errorf("read top-up credit state: %w", err)
+	}
+	if credited != (topup.Status == "completed") {
+		fields["topup_status"] = topup.Status
+		fields["credited"] = credited
+		if err = flagForReview("Top-up status disagrees with its credit transaction; reversal flagged for operator review"); err != nil {
+			return err
+		}
+	}
+
+	if !credited {
+		if refunded.RefundedAmountCents >= refunded.AmountCents {
+			if _, err = queries.ResolvePendingTopupReviewHolds(ctx, purserdb.ResolvePendingTopupReviewHoldsParams{
+				TenantID: topup.TenantID, TopupID: topup.TopupID,
+				EvidenceRef: sql.NullString{String: "payment_reversal:" + in.providerReversalID, Valid: true},
+			}); err != nil {
+				return fmt.Errorf("resolve top-up review holds: %w", err)
+			}
+		}
+		return nil
+	}
+
+	fields["debit_eur_cents"] = debitEURCents
+	currentBalance, err := queries.GetX402CurrentBalance(ctx, purserdb.GetX402CurrentBalanceParams{
+		TenantID: topup.TenantID, Currency: billing.LedgerCurrency,
+	})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read prepaid balance: %w", err)
+	}
+	willGoNegative := currentBalance < debitEURCents
+
+	// Idempotent on (tenant_id, reference_type, reference_id) where
+	// reference_id is the reversal row id.
+	if err = queries.InsertPrepaidTopupReversalTransaction(ctx, purserdb.InsertPrepaidTopupReversalTransactionParams{
+		TenantID: topup.TenantID, AmountCents: debitEURCents, Currency: billing.LedgerCurrency,
+		Description: sql.NullString{String: fmt.Sprintf("Refund/chargeback %s", in.reason), Valid: true},
+		ReversalID:  reversalUUID.String(), Reason: optionalSQLString(in.reason),
 	}); err != nil {
 		return fmt.Errorf("insert reversal balance_transaction: %w", err)
 	}
 
-	// Apply to the live balance.
-	if _, err := queries.SubtractPrepaidBalance(ctx, purserdb.SubtractPrepaidBalanceParams{
-		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
-	}); err != nil {
+	debited, err := queries.SubtractPrepaidBalance(ctx, purserdb.SubtractPrepaidBalanceParams{
+		AmountCents: debitEURCents, TenantID: topup.TenantID, Currency: billing.LedgerCurrency,
+	})
+	if err != nil {
 		return fmt.Errorf("debit prepaid balance: %w", err)
+	}
+	if debited != 1 {
+		return fmt.Errorf("debit prepaid balance: credited top-up %s has no %s balance row", topup.TopupID, billing.LedgerCurrency)
 	}
 
 	if willGoNegative {
-		if err := queries.MarkPaymentReversalForReview(ctx, reversalUUID.String()); err != nil {
-			return fmt.Errorf("flag reversal for operator review: %w", err)
-		}
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":    tenantID,
-			"reversal_id":  reversalID,
-			"amount_cents": amountCents,
-			"currency":     currency,
-		}).Warn("Prepaid balance reversal would go negative; flagged for operator review")
+		return flagForReview("Prepaid balance reversal would go negative; flagged for operator review")
 	}
-
 	return nil
 }
 
@@ -2134,11 +2426,7 @@ func (s *Service) drainMolliePaymentObservationsForInvoice(ctx context.Context, 
 			}).Warn("Mollie observation currency does not match invoice; leaving unresolved")
 			continue
 		}
-		amountStr := centsToDecimalString(observation.AmountCents, observation.Currency)
-		if insertErr := queries.InsertMollieSubscriptionPayment(ctx, purserdb.InsertMollieSubscriptionPaymentParams{
-			InvoiceID: invoiceID, Amount: amountStr, Currency: observation.Currency,
-			TransactionID: optionalSQLString(observation.MolliePaymentID),
-		}); insertErr != nil {
+		if insertErr := s.insertMollieSubscriptionPayment(ctx, queries, invoice.TenantID, invoiceID, observation.MolliePaymentID, observation.AmountCents, observation.Currency); insertErr != nil {
 			return fmt.Errorf("insert drained mollie payment %s: %w", observation.MolliePaymentID, insertErr)
 		}
 		if _, settleErr := s.updateInvoicePaymentStatus("mollie", observation.MolliePaymentID, invoiceID, mapped, nil, providerSettlementEvidence{
@@ -2153,6 +2441,22 @@ func (s *Service) drainMolliePaymentObservationsForInvoice(ctx context.Context, 
 		}
 	}
 	return nil
+}
+
+// insertMollieSubscriptionPayment records a subscription installment against
+// its invoice with its share of the invoice's EUR amount.
+func (s *Service) insertMollieSubscriptionPayment(ctx context.Context, queries *purserdb.Queries, tenantID, invoiceID, molliePaymentID string, amountCents int64, currency string) error {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	record, err := InvoicePaymentFX(ctx, s.db, tenantID, invoiceID, currency, amountCents)
+	if err != nil {
+		return err
+	}
+	return queries.InsertMollieSubscriptionPayment(ctx, purserdb.InsertMollieSubscriptionPaymentParams{
+		InvoiceID: invoiceID, Amount: centsToDecimalString(amountCents, currency), Currency: currency,
+		TransactionID:       optionalSQLString(molliePaymentID),
+		OriginalAmountCents: record.OriginalMinor, EurAmountCents: record.EURMinor,
+		FxUnitsPerEur: record.UnitsText(), FxSource: record.Source, FxReferenceDate: record.ReferenceDate,
+	})
 }
 
 // resolveMollieSubscriptionInvoice finds the local invoice that the given
@@ -2251,7 +2555,7 @@ func mapMolliePaymentStatus(status string) (string, bool) {
 	switch status {
 	case "paid":
 		return "confirmed", true
-	case "failed", "cancelled", "expired":
+	case "failed", "canceled", "cancelled", "expired":
 		return "failed", true
 	case "pending", "open":
 		return "pending", true
@@ -2264,6 +2568,22 @@ type providerSettlementEvidence struct {
 	TenantID    string
 	AmountCents int64
 	Currency    string
+	// FailureReason classifies a failed payment for billing.payment_failed.
+	FailureReason publicv1.PaymentFailureReason
+}
+
+// paymentFailedEvent builds billing.payment_failed for a payment this
+// transaction moved to failed, carrying the EUR amount the payment stored.
+func paymentFailedEvent(ctx context.Context, queries *purserdb.Queries, tenantID, paymentID, invoiceID string, reason publicv1.PaymentFailureReason) (*events.Event, error) {
+	eurCents, err := queries.GetPaymentEventAmount(ctx, purserdb.GetPaymentEventAmountParams{
+		PaymentID: paymentID, TenantID: tenantID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load payment %s amount for payment_failed: %w", paymentID, err)
+	}
+	return billingevents.New(tenantID, paymentID, &publicv1.PaymentFailed{
+		PaymentId: paymentID, InvoiceId: invoiceID, Amount: billingevents.EUR(eurCents), Reason: reason,
+	}, events.Actor{})
 }
 
 // resolvedInvoicePayment is the billing_payments row updateInvoicePaymentStatus
@@ -2274,6 +2594,10 @@ type resolvedInvoicePayment struct {
 	TenantID  string
 	Amount    string
 	Currency  string
+	// Failed is billing.payment_failed when this update moved the payment
+	// from pending to failed; the legacy payment_failed row shares its ID.
+	// It is nil on redelivered and non-failing updates.
+	Failed *events.Event
 }
 
 // invoicePaymentEventWriter enqueues the billing event for a payment status
@@ -2307,7 +2631,6 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	})
 	paymentID, foundInvoiceID := payment.PaymentID, payment.InvoiceID
 	paymentTenantID, paymentAmount, paymentCurrency := payment.TenantID, payment.Amount, payment.Currency
-	paymentStatus := payment.Status
 	if errors.Is(err, sql.ErrNoRows) {
 		if newStatus == "confirmed" {
 			return false, nil
@@ -2324,7 +2647,6 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		}
 		paymentID, foundInvoiceID = pendingPayment.PaymentID, pendingPayment.InvoiceID
 		paymentTenantID, paymentAmount, paymentCurrency = pendingPayment.TenantID, pendingPayment.Amount, pendingPayment.Currency
-		paymentStatus = pendingPayment.Status
 	}
 	if err != nil {
 		return false, fmt.Errorf("failed to lookup payment: %w", err)
@@ -2337,13 +2659,20 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
 		return false, fmt.Errorf("provider payment %s tenant mismatch", txID)
 	}
-	writeEvent := func() error {
+	writeEvent := func(transitioned bool) error {
+		var failed *events.Event
+		if transitioned && newStatus == "failed" {
+			var buildErr error
+			if failed, buildErr = paymentFailedEvent(ctx, queries, paymentTenantID, paymentID, invoiceID, evidence.FailureReason); buildErr != nil {
+				return buildErr
+			}
+		}
 		if emitEvent == nil {
-			return nil
+			return billingevents.Enqueue(ctx, tx, failed)
 		}
 		return emitEvent(ctx, tx, resolvedInvoicePayment{
 			PaymentID: paymentID, InvoiceID: invoiceID, TenantID: paymentTenantID,
-			Amount: paymentAmount, Currency: paymentCurrency,
+			Amount: paymentAmount, Currency: paymentCurrency, Failed: failed,
 		})
 	}
 	// Settlement below asks an aggregate question — do confirmed payments now
@@ -2359,6 +2688,14 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		if lockErr := queries.LockInvoicePaymentCreation(ctx, invoiceID); lockErr != nil {
 			return false, fmt.Errorf("lock invoice %s for settlement: %w", invoiceID, lockErr)
 		}
+	}
+	// A confirmation can commit while this handler waits for the invoice lock.
+	// Re-read under the payment lock before deciding a terminal transition.
+	paymentStatus, err := queries.LockBillingPaymentStatus(ctx, purserdb.LockBillingPaymentStatusParams{
+		PaymentID: paymentID, TenantID: paymentTenantID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("lock payment %s for settlement: %w", paymentID, err)
 	}
 	if newStatus == "confirmed" {
 		if evidence.AmountCents <= 0 || strings.TrimSpace(evidence.Currency) == "" {
@@ -2387,7 +2724,7 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 				return false, settleErr
 			}
 		}
-		if err = writeEvent(); err != nil {
+		if err = writeEvent(false); err != nil {
 			return false, err
 		}
 		if err = tx.Commit(); err != nil {
@@ -2425,9 +2762,18 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	}); err != nil {
 		return false, fmt.Errorf("failed to update payment attempt status: %w", err)
 	}
+	if newStatus == "confirmed" && (provider == "stripe" || provider == "mollie") {
+		if err = queries.InsertPendingProviderSettlement(ctx, purserdb.InsertPendingProviderSettlementParams{
+			TenantID: paymentTenantID, Provider: provider, ProviderPaymentID: txID,
+			PaymentID:         sql.NullString{String: paymentID, Valid: true},
+			ChargeAmountCents: evidence.AmountCents, ChargeCurrency: strings.ToUpper(evidence.Currency),
+		}); err != nil {
+			return false, fmt.Errorf("record pending provider settlement: %w", err)
+		}
+	}
 
 	if invoiceID == "" {
-		if err = writeEvent(); err != nil {
+		if err = writeEvent(true); err != nil {
 			return false, err
 		}
 		if err = tx.Commit(); err != nil {
@@ -2443,7 +2789,7 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		}
 	}
 
-	if err = writeEvent(); err != nil {
+	if err = writeEvent(true); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -2452,7 +2798,7 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	committed = true
 
 	if newStatus == "confirmed" || newStatus == "failed" {
-		s.sendPaymentStatusEmail(invoiceID, provider, newStatus)
+		s.sendPaymentStatusEmail(paymentID, invoiceID, provider, newStatus)
 	}
 
 	return true, nil
@@ -2530,21 +2876,52 @@ func (s *Service) getTenantInfo(tenantID string) (*models.Tenant, error) {
 // aggregate over sibling payment rows, and a concurrent confirmation that has
 // not committed would otherwise make it conclude the invoice is short.
 func (s *Service) settleInvoiceIfCovered(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) error {
+	if _, err := settleCoveredInvoiceTx(ctx, tx, queries, invoiceID, now); err != nil {
+		s.logger.WithError(err).WithField("invoice_id", invoiceID).Error("Failed to settle invoice")
+		return err
+	}
+	return nil
+}
+
+// settleCoveredInvoiceTx marks a pending or overdue invoice paid when its
+// confirmed payments cover its presentment amount, then persists its operator
+// credits and billing.invoice_paid. It reports whether the invoice was marked.
+func settleCoveredInvoiceTx(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) (bool, error) {
 	rowsAffected, err := queries.MarkFullySettledBillingInvoicePaid(ctx, purserdb.MarkFullySettledBillingInvoicePaidParams{
 		PaidAt: sql.NullTime{Time: now, Valid: true}, InvoiceID: invoiceID,
 	})
 	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"error":      err.Error(),
-			"invoice_id": invoiceID,
-		}).Error("Failed to update invoice status")
-		return fmt.Errorf("failed to update invoice status: %w", err)
+		return false, fmt.Errorf("failed to update invoice status: %w", err)
 	}
 	if rowsAffected == 0 {
-		return nil
+		return false, nil
 	}
 	if creditErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, "paid"); creditErr != nil {
-		return fmt.Errorf("persist operator credits: %w", creditErr)
+		return false, fmt.Errorf("persist operator credits: %w", creditErr)
 	}
-	return nil
+	return true, enqueueInvoicePaidTx(ctx, tx, invoiceID, nil)
+}
+
+// enqueueInvoicePaidTx writes billing.invoice_paid for an invoice this
+// transaction marked paid, with the invoice's ledger total. legacy, when the
+// fact also has a legacy invoice_paid row, is written with the same event ID.
+func enqueueInvoicePaidTx(ctx context.Context, tx *sql.Tx, invoiceID string, legacy *legacyBillingEvent) error {
+	invoice, err := purserdb.New(tx).GetInvoiceEventState(ctx, invoiceID)
+	if err != nil {
+		return fmt.Errorf("load invoice %s for invoice_paid: %w", invoiceID, err)
+	}
+	amount, err := billingevents.EURFromDecimal(invoice.Amount)
+	if err != nil {
+		return err
+	}
+	paid, err := billingevents.New(invoice.TenantID, invoiceID, &publicv1.InvoicePaid{
+		InvoiceId: invoiceID, AmountPaid: amount,
+	}, events.Actor{})
+	if err != nil {
+		return err
+	}
+	if legacy == nil {
+		return billingevents.Enqueue(ctx, tx, paid)
+	}
+	return emitBillingEventsTx(ctx, tx, legacy.eventType, invoice.TenantID, legacy.resourceType, legacy.resourceID, legacy.payload, paid)
 }

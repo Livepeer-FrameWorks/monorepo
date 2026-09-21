@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -66,6 +65,8 @@ type certStore interface {
 	ListTenantCustomDomainsByStatus(ctx context.Context, statuses []string) ([]store.TenantCustomDomain, error)
 	ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
 	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, expectedStatus, status, errMsg string) (bool, error)
+	MarkTenantCustomDomainVerified(ctx context.Context, tenantID, domain, expectedStatus string) (bool, error)
+	ExpireTenantCustomDomainVerifications(ctx context.Context, period time.Duration) (int, error)
 	CompleteTenantCustomDomainIssuance(ctx context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) (bool, error)
 	FailTenantCustomDomainIssuance(ctx context.Context, tenantID, domain, errMsg string, retryAfter time.Duration) (bool, error)
 	RefreshTenantCustomDomainServedCertificate(ctx context.Context, tenantID string, domains []string, issuerID string, expiresAt sql.NullTime) (int64, error)
@@ -89,6 +90,24 @@ type CertManager struct {
 	dnsProviderFactory           func() (challenge.Provider, error)
 	bunnyDNSProviderFactory      func() (challenge.Provider, error)
 	dnsProviderForDomainsFactory func(domains []string) (challenge.Provider, error)
+	settingsSource               func() IssuanceSettings
+}
+
+// SetIssuanceSettings installs the source CertManager consults on every
+// certificate order for the CA order, ACME environment, EAB credentials, and
+// issuance allowlist.
+func (m *CertManager) SetIssuanceSettings(source func() IssuanceSettings) {
+	m.settingsSource = source
+}
+
+// issuanceSettings returns the current settings; without a source every
+// setting is empty, which uses Let's Encrypt production and allows every
+// domain.
+func (m *CertManager) issuanceSettings() IssuanceSettings {
+	if m.settingsSource == nil {
+		return IssuanceSettings{}
+	}
+	return m.settingsSource()
 }
 
 // NewCertManager creates a new CertManager
@@ -239,7 +258,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		return "", "", time.Time{}, fmt.Errorf("domain and email are required")
 	}
 	domain = normalizeDomains([]string{domain})[0]
-	if !isDomainAllowed(domain) {
+	if !isDomainAllowed(domain, m.issuanceSettings()) {
 		return "", "", time.Time{}, fmt.Errorf("domain is not allowed for certificate issuance")
 	}
 
@@ -277,7 +296,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		return "", "", time.Time{}, fmt.Errorf("recheck certificate cache: %w", err)
 	}
 
-	cas := caOrder()
+	cas := caOrder(m.issuanceSettings())
 	if existingIssuer != "" {
 		// Renewal: pin to the original CA. No fallback: if the CA is
 		// down, we want to fail visibly rather than silently switching
@@ -324,7 +343,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 }
 
 func (m *CertManager) EnsureTLSBundle(ctx context.Context, bundleID string, domains []string, email string) (*store.TLSBundle, error) {
-	if strings.HasPrefix(strings.TrimSpace(bundleID), "tenant:") && hasDomainOutsidePlatformAllowlist(domains) {
+	if strings.HasPrefix(strings.TrimSpace(bundleID), "tenant:") && hasDomainOutsidePlatformAllowlist(domains, m.issuanceSettings()) {
 		return m.ensureTLSBundle(ctx, bundleID, domains, email, m.bunnyDNSProviderFactory, false)
 	}
 	return m.ensureTLSBundle(ctx, bundleID, domains, email, nil, true)
@@ -355,7 +374,7 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 
 	if enforceAllowlist {
 		for _, domain := range domains {
-			if !isDomainAllowed(domain) {
+			if !isDomainAllowed(domain, m.issuanceSettings()) {
 				return nil, fmt.Errorf("domain %q is not allowed for certificate issuance", domain)
 			}
 		}
@@ -409,14 +428,14 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 	var cas []CAProvider
 	if pinnedCA != "" {
 		cas = []CAProvider{pinnedCA}
-		for _, other := range caOrder() {
+		for _, other := range caOrder(m.issuanceSettings()) {
 			if other != pinnedCA {
 				cas = append(cas, other)
 				break
 			}
 		}
 	} else {
-		cas = caOrder()
+		cas = caOrder(m.issuanceSettings())
 	}
 	var certificatePEM, privateKeyPEM string
 	var expiry time.Time
@@ -475,9 +494,9 @@ func tenantBundleDomainsMatchAlias(domains []string, subdomain string) bool {
 	return false
 }
 
-func hasDomainOutsidePlatformAllowlist(domains []string) bool {
+func hasDomainOutsidePlatformAllowlist(domains []string, settings IssuanceSettings) bool {
 	for _, domain := range normalizeDomains(domains) {
-		if !isDomainAllowed(domain) {
+		if !isDomainAllowed(domain, settings) {
 			return true
 		}
 	}
@@ -506,7 +525,7 @@ func (m *CertManager) obtainCertificateWith(ctx context.Context, tenantID string
 	if ca == "" {
 		ca = CADefaultIssuer
 	}
-	caCfg, caErr := resolveCAConfig(ca)
+	caCfg, caErr := resolveCAConfig(ca, m.issuanceSettings())
 	if caErr != nil {
 		return "", "", time.Time{}, fmt.Errorf("resolve CA %s: %w", ca, caErr)
 	}
@@ -670,14 +689,14 @@ func (l *legoClient) Obtain(request certificate.ObtainRequest) (*certificate.Res
 	return l.client.Certificate.Obtain(request)
 }
 
-func isDomainAllowed(domain string) bool {
+func isDomainAllowed(domain string, settings IssuanceSettings) bool {
 	domain = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))
 	if domain == "" {
 		return false
 	}
 	domain = strings.TrimPrefix(domain, "*.")
 
-	env := strings.TrimSpace(os.Getenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES"))
+	env := strings.TrimSpace(settings.AllowedSuffixes)
 	var suffixes []string
 	if env != "" {
 		for _, s := range strings.Split(env, ",") {
@@ -686,7 +705,7 @@ func isDomainAllowed(domain string) bool {
 				suffixes = append(suffixes, s)
 			}
 		}
-	} else if root := strings.TrimSpace(os.Getenv("BRAND_DOMAIN")); root != "" {
+	} else if root := strings.TrimSpace(settings.RootDomain); root != "" {
 		suffixes = []string{strings.ToLower(strings.TrimSuffix(root, "."))}
 	}
 

@@ -35,13 +35,14 @@ func TestSetMediaRetentionPolicy_SetUnderCap(t *testing.T) {
 	defer done()
 	const tenant = "11111111-1111-1111-1111-111111111111"
 
-	// nil purser → cap 30; days=7 is under cap, so the write proceeds.
+	// nil purser → cap 30; days=7 is under cap, so the write proceeds and its
+	// event commits in the same transaction.
+	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO commodore\.tenant_media_retention_policies`).
 		WithArgs(tenant, false, nil, true, int32(7), false, nil, "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Best-effort outbox enqueue (RETURNING id → QueryRow).
-	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-1"))
+	expectLegacyEventInsert(mock, eventRetentionPolicyChanged)
+	mock.ExpectCommit()
 	// Final GetMediaRetentionPolicy re-read.
 	expectPolicyReadback(mock, tenant, 7)
 
@@ -66,11 +67,12 @@ func TestSetMediaRetentionPolicy_Clear(t *testing.T) {
 	const tenant = "22222222-2222-2222-2222-222222222222"
 
 	// clear=true → no entitlement lookup, NULL upsert.
+	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO commodore\.tenant_media_retention_policies`).
 		WithArgs(tenant, false, nil, true, nil, false, nil, "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-2"))
+	expectLegacyEventInsert(mock, eventRetentionPolicyChanged)
+	mock.ExpectCommit()
 	expectPolicyReadback(mock, tenant, 30)
 
 	_, err := s.SetMediaRetentionPolicy(retentionAuthCtx(tenant), &commodorepb.SetMediaRetentionPolicyRequest{
@@ -149,11 +151,12 @@ func TestSetMediaRetentionPolicy_AcceptsOwnerAPITokenWithBillingWrite(t *testing
 	ctx := context.WithValue(retentionAuthCtx(tenant), ctxkeys.KeyAuthType, "api_token")
 	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"billing:write"})
 
+	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO commodore\.tenant_media_retention_policies`).
 		WithArgs(tenant, false, nil, true, int32(7), false, nil, "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-3"))
+	expectLegacyEventInsert(mock, eventRetentionPolicyChanged)
+	mock.ExpectCommit()
 	expectPolicyReadback(mock, tenant, 7)
 
 	_, err := s.SetMediaRetentionPolicy(ctx, &commodorepb.SetMediaRetentionPolicyRequest{

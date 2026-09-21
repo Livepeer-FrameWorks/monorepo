@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -18,9 +20,9 @@ func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "certs", "cert.pem")
 	keyPath := filepath.Join(dir, "certs", "key.pem")
-	t.Setenv("HELMSMAN_TLS_CERT_PATH", certPath)
-	t.Setenv("HELMSMAN_TLS_KEY_PATH", keyPath)
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_CERT_PATH", certPath)
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_KEY_PATH", keyPath)
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 	if !m.applyTLSBundle(&ipcpb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
@@ -89,8 +91,8 @@ func fullFileMode(t *testing.T, path string) os.FileMode {
 
 func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_BUNDLE_DIR", dir)
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 	bundles := []*ipcpb.TLSCertBundle{
@@ -152,8 +154,8 @@ func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 
 func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_BUNDLE_DIR", dir)
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 
@@ -280,7 +282,7 @@ func TestRenderCaddyfileEmptyBundlesFails(t *testing.T) {
 }
 
 func TestCaddyfileAdminAddrUsesAddressNotURL(t *testing.T) {
-	t.Setenv("CADDY_ADMIN_URL", "http://localhost:2019")
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", "http://localhost:2019")
 	if got := caddyfileAdminAddr(); got != "localhost:2019" {
 		t.Fatalf("caddyfileAdminAddr() = %q, want localhost:2019", got)
 	}
@@ -289,7 +291,7 @@ func TestCaddyfileAdminAddrUsesAddressNotURL(t *testing.T) {
 func TestCaddyfileAdminAddrKeepsUnixSocketGroupAccessible(t *testing.T) {
 	// The 0660 mode keeps the re-created socket reachable by helmsman
 	// (frameworks user, caddy group) after every Caddy config load.
-	t.Setenv("CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
+	appconfigtest.Setenv(t, "CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
 	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock|0660" {
 		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock|0660", got)
 	}
@@ -297,7 +299,7 @@ func TestCaddyfileAdminAddrKeepsUnixSocketGroupAccessible(t *testing.T) {
 
 func TestPersistCaddyfileUsesConfiguredPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
-	t.Setenv("CADDY_CONFIG_PATH", path)
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", path)
 
 	m := &Manager{logger: logging.NewLogger()}
 	if err := m.persistCaddyfile([]byte("edge.example { respond ok }\n")); err != nil {
@@ -317,7 +319,7 @@ func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write Caddyfile: %v", err)
 	}
-	t.Setenv("CADDY_CONFIG_PATH", path)
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", path)
 
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +332,7 @@ func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 	m := &Manager{logger: logging.NewLogger()}
 	if !m.reloadCaddy(nil) {
 		t.Fatal("reloadCaddy returned false")
@@ -342,9 +344,9 @@ func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
 
 func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
-	t.Setenv("CADDY_CONFIG_PATH", path)
-	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", t.TempDir())
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", path)
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_BUNDLE_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	reloadCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -352,7 +354,7 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 
 	seed := &ipcpb.ConfigSeed{
 		Site: &ipcpb.SiteConfig{
@@ -383,10 +385,10 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 
 func TestActivateCaddyRepairsUnreadableKeyBeforeReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
-	t.Setenv("CADDY_CONFIG_PATH", path)
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", path)
 	bundleDir := t.TempDir()
-	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	reloadCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -394,7 +396,7 @@ func TestActivateCaddyRepairsUnreadableKeyBeforeReload(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 
 	seed := &ipcpb.ConfigSeed{
 		TlsBundles: []*ipcpb.TLSCertBundle{{
@@ -426,16 +428,16 @@ func TestActivateCaddyRepairsUnreadableKeyBeforeReload(t *testing.T) {
 
 func TestActivateCaddyRejectsMissingKeyBeforeReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
-	t.Setenv("CADDY_CONFIG_PATH", path)
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", path)
 	bundleDir := t.TempDir()
-	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
-	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+	appconfigtest.Setenv(t, "HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
+	appconfigtest.Setenv(t, "CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("reload should not be called when TLS preflight fails")
 	}))
 	defer srv.Close()
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 
 	seed := &ipcpb.ConfigSeed{
 		TlsBundles: []*ipcpb.TLSCertBundle{{
@@ -468,7 +470,7 @@ func TestReloadCaddyAcceptsEmptyOKResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 	m := &Manager{logger: logging.NewLogger()}
 	if !m.reloadCaddy([]byte("edge.example { respond ok }")) {
 		t.Fatal("reloadCaddy returned false for empty 200 response")
@@ -482,7 +484,7 @@ func TestReloadCaddyAcceptsCaddyAdapterWarningBodyOnOKResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 	m := &Manager{logger: logging.NewLogger()}
 	if !m.reloadCaddy([]byte("edge.example { respond ok }")) {
 		t.Fatal("reloadCaddy returned false for Caddy adapter warning body")
@@ -496,7 +498,7 @@ func TestReloadCaddyRejectsUnexpectedBodyOnOKResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	appconfigtest.Setenv(t, "CADDY_ADMIN_URL", srv.URL)
 	m := &Manager{logger: logging.NewLogger()}
 	if m.reloadCaddy([]byte("edge.example { respond ok }")) {
 		t.Fatal("reloadCaddy returned true for 200 response with unexpected body")

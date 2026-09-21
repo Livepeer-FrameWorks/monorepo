@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_consultant/internal/diagnostics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -79,6 +80,8 @@ type InfraMonitorConfig struct {
 	Contacts         TenantContactClient
 	Baselines        *diagnostics.BaselineEvaluator
 	SMTP             email.Config
+	Branding         config.EmailBranding
+	BrandingSource   func() config.EmailBranding
 	Logger           logging.Logger
 	DefaultRecipient string
 
@@ -95,6 +98,8 @@ type InfraMonitor struct {
 	baselines        *diagnostics.BaselineEvaluator
 	emailer          *email.Sender
 	smtp             email.Config
+	branding         config.EmailBranding
+	brandingSource   func() config.EmailBranding
 	defaultRecipient string
 	cooldown         *diagnostics.TriageCooldown
 	logger           logging.Logger
@@ -115,6 +120,8 @@ func NewInfraMonitor(cfg *InfraMonitorConfig) *InfraMonitor {
 		baselines:           cfg.Baselines,
 		emailer:             email.NewSender(cfg.SMTP),
 		smtp:                cfg.SMTP,
+		branding:            cfg.Branding,
+		brandingSource:      cfg.BrandingSource,
 		defaultRecipient:    cfg.DefaultRecipient,
 		cooldown:            diagnostics.NewTriageCooldown(infraCooldownDuration),
 		logger:              cfg.Logger,
@@ -413,7 +420,11 @@ func (m *InfraMonitor) sendAlert(ctx context.Context, alert InfraAlert, ownerTen
 	subject := fmt.Sprintf("[FrameWorks] Infrastructure Alert: %s on %s/%s",
 		alert.Severity(), alert.ClusterName, alert.NodeID)
 
-	body, err := renderInfraAlertEmail([]InfraAlert{alert})
+	branding := m.branding
+	if m.brandingSource != nil {
+		branding = m.brandingSource()
+	}
+	body, err := renderInfraAlertEmail([]InfraAlert{alert}, branding)
 	if err != nil {
 		m.logger.WithError(err).WithField("node_id", alert.NodeID).Warn("Infra monitor: email render failed")
 		return

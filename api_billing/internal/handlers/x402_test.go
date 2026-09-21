@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
 )
@@ -67,7 +68,7 @@ func TestGetNetworkConfigRespectsX402Settings(t *testing.T) {
 }
 
 func TestGetNetworkConfigAllowsTestnetsWhenEnabled(t *testing.T) {
-	t.Setenv("BUILD_ENV", "development")
+	appconfigtest.Set(t, "BUILD_ENV", "development")
 	handler := &X402Handler{logger: logrus.New(), includeTestnets: true}
 
 	if _, err := handler.getNetworkConfig("base-sepolia"); err != nil {
@@ -76,7 +77,7 @@ func TestGetNetworkConfigAllowsTestnetsWhenEnabled(t *testing.T) {
 }
 
 func TestGetNetworkConfigRejectsTestnetsInProduction(t *testing.T) {
-	t.Setenv("BUILD_ENV", "production")
+	appconfigtest.Set(t, "BUILD_ENV", "production")
 	handler := &X402Handler{logger: logrus.New(), includeTestnets: true}
 
 	if _, err := handler.getNetworkConfig("base-sepolia"); err == nil {
@@ -94,9 +95,6 @@ func TestRequiredTopupAmount(t *testing.T) {
 		handler := &X402Handler{topupUSDCents: 725}
 		if got := handler.RequiredTopupUSDCents(); got != 725 {
 			t.Fatalf("RequiredTopupUSDCents() = %d, want 725", got)
-		}
-		if got := handler.RequiredTopupBaseUnits(); got != "7250000" {
-			t.Fatalf("RequiredTopupBaseUnits() = %q, want 7250000", got)
 		}
 	})
 
@@ -130,6 +128,43 @@ func TestVerifyPaymentRejectsProtocolDowngradeBeforeDatabaseAccess(t *testing.T)
 	result, err = handler.VerifyPayment(context.Background(), "tenant-1", base, "")
 	if err != nil || result.Valid || result.Error != "unsupported x402 scheme" {
 		t.Fatalf("unexpected scheme validation result: result=%#v err=%v", result, err)
+	}
+}
+
+func TestVerifyPaymentWithoutQuoteIsInvalidBeforeAnyLookup(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	handler := &X402Handler{db: mockDB, logger: logrus.New()}
+	payload := &X402PaymentPayload{
+		X402Version: 1,
+		Scheme:      "exact",
+		Network:     "base",
+		Payload: &X402ExactPayload{
+			Signature: "0xsig",
+			Authorization: &X402Authorization{
+				From:        "0x1111111111111111111111111111111111111111",
+				To:          "0x2222222222222222222222222222222222222222",
+				Value:       "5000000",
+				ValidAfter:  "1",
+				ValidBefore: "9999999999",
+				Nonce:       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+		},
+	}
+
+	result, err := handler.VerifyPayment(context.Background(), "tenant-1", payload, "")
+	if err != nil {
+		t.Fatalf("VerifyPayment returned error: %v", err)
+	}
+	if result == nil || result.Valid || result.Error != "x402 payment quote required" {
+		t.Fatalf("expected quote-less payment to be invalid, got %#v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected database access: %v", err)
 	}
 }
 

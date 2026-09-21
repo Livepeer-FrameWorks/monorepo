@@ -423,7 +423,7 @@ func TestPlatformDemoModeShortCircuits(t *testing.T) {
 			_, err := r.DoPlatformTenantInvoices(unauthorized, "anything", nil, nil, nil, nil)
 			return err
 		}},
-		{name: "prepaid balance", call: func() error { _, err := r.DoPlatformTenantPrepaidBalance(unauthorized, "anything", nil); return err }},
+		{name: "prepaid balance", call: func() error { _, err := r.DoPlatformTenantPrepaidBalance(unauthorized, "anything"); return err }},
 		{name: "balance transactions", call: func() error {
 			_, err := r.DoPlatformTenantBalanceTransactions(unauthorized, "anything", nil, nil, nil)
 			return err
@@ -476,7 +476,7 @@ func TestPlatformDemoModeShortCircuits(t *testing.T) {
 	if err != nil || invoices == nil {
 		t.Fatalf("demo invoices = (%+v, %v)", invoices, err)
 	}
-	balance, err := r.DoPlatformTenantPrepaidBalance(ctx, "anything", nil)
+	balance, err := r.DoPlatformTenantPrepaidBalance(ctx, "anything")
 	if err != nil || balance == nil {
 		t.Fatalf("demo prepaid balance = (%+v, %v)", balance, err)
 	}

@@ -7,14 +7,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_consultant/internal/appconfig"
 	"frameworks/api_consultant/internal/chat"
-	skipperconfig "frameworks/api_consultant/internal/config"
 	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/heartbeat"
 	"frameworks/api_consultant/internal/knowledge"
@@ -43,12 +41,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -56,7 +52,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -73,13 +68,27 @@ func main() {
 
 	logger.Info("Starting Skipper (AI Video Consultant API)")
 
-	cfg := skipperconfig.LoadConfig()
+	configOptions := config.Options{Service: "skipper", Logger: logger}
+	appCfg, err := config.Load[appconfig.Skipper](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	appCfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(appCfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	liveConfig := config.NewLive(appCfg, configOptions)
+	cfg, err := appCfg.Consultant()
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
 	if len(cfg.SSRFAllowedHosts) > 0 {
 		knowledge.SetSSRFAllowedHosts(cfg.SSRFAllowedHosts)
 		logger.WithField("hosts", cfg.SSRFAllowedHosts).Info("SSRF allowlist configured")
 	}
-	jwtSecret := config.RequireEnv("JWT_SECRET")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	jwtSecret := appCfg.JWTSecret
+	serviceToken := appCfg.ServiceToken
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -94,43 +103,42 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
-	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": cfg.DatabaseURL,
-		"JWT_SECRET":   jwtSecret,
-	}))
+
+	// Conversations, knowledge, and reports all live in Postgres, so readiness
+	// requires it to answer. LLM and peer-service reachability are not gated.
+	readiness := monitoring.NewReadinessChecker("skipper", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
 	rateLimiter := metering.NewRateLimiter(cfg.ChatRateLimitHour, cfg.RateLimitOverrides)
 	rateLimiter.StartCleanup(context.Background())
 
 	// Periscope gRPC client — used by the heartbeat agent for direct diagnostics.
-	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
 	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
-		GRPCAddr:      periscopeGRPCAddr,
+		GRPCAddr:      appCfg.PeriscopeGRPCAddr,
 		Timeout:       30 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("periscope"),
+		AllowInsecure: appCfg.AllowInsecure,
+		CACertFile:    appCfg.CAPath,
+		ServerName:    appCfg.PeriscopeGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - diagnostics disabled")
 		periscopeClient = nil
 	} else {
 		defer func() { _ = periscopeClient.Close() }()
-		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
+		logger.WithField("addr", appCfg.PeriscopeGRPCAddr).Info("Connected to Periscope gRPC")
 	}
 
 	// Create Purser gRPC client for tier checks
-	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserGRPCAddr,
+		GRPCAddr:      appCfg.PurserGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
+		AllowInsecure: appCfg.AllowInsecure,
+		CACertFile:    appCfg.CAPath,
+		ServerName:    appCfg.PurserGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - tier gating unavailable")
@@ -139,15 +147,14 @@ func main() {
 		defer func() { _ = purserClient.Close() }()
 	}
 
-	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
 	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
-		GRPCAddr:      commodoreGRPCAddr,
+		GRPCAddr:      appCfg.CommodoreGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+		AllowInsecure: appCfg.AllowInsecure,
+		CACertFile:    appCfg.CAPath,
+		ServerName:    appCfg.CommodoreGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Commodore gRPC client - primary-user notification fallback unavailable")
@@ -167,17 +174,16 @@ func main() {
 	}
 
 	// Create Decklog gRPC client for usage metering
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        appCfg.DecklogGRPCAddr,
+		AllowInsecure: appCfg.AllowInsecure,
+		CACertFile:    appCfg.CAPath,
+		ServerName:    appCfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "skipper",
 		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ClusterID:     appCfg.ClusterID,
+		SourceRegion:  appCfg.Region,
 	}, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Decklog client - usage metering disabled")
@@ -201,15 +207,14 @@ func main() {
 	defer usageTracker.Stop()
 
 	// Create Quartermaster gRPC client for tenant listings
-	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      qmGRPCAddr,
+		GRPCAddr:      appCfg.QuartermasterGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure: appCfg.AllowInsecure,
+		CACertFile:    appCfg.CAPath,
+		ServerName:    appCfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - heartbeat disabled")
@@ -371,10 +376,7 @@ func main() {
 	knowledgeStore := knowledge.NewStore(db)
 	searchTool := chat.NewSearchWebTool(searchProvider)
 	searchTool.SetSearchLimit(cfg.SearchLimit)
-	systemTenantID, err := tenants.RuntimeSystemTenantID()
-	if err != nil {
-		logger.WithError(err).Fatal("Invalid system tenant identity")
-	}
+	systemTenantID := appCfg.SystemTenantUUID()
 	globalTenantID := systemTenantID.String()
 	orchestrator := chat.NewOrchestrator(chat.OrchestratorConfig{
 		LLMProvider:     llmProvider,
@@ -399,13 +401,31 @@ func main() {
 	chatHandler.LLMProvider = llmProvider
 	chatHandler.PromptTokenBudget = promptTokenBudget
 
-	heartbeatInterval := config.GetEnv("HEARTBEAT_INTERVAL", "30m")
-	heartbeatDuration, err := time.ParseDuration(heartbeatInterval)
+	heartbeatDuration, err := appCfg.HeartbeatDuration()
 	if err != nil {
-		logger.WithError(err).WithField("value", heartbeatInterval).Warn("Invalid HEARTBEAT_INTERVAL; using default")
+		logger.WithError(err).WithField("value", appCfg.HeartbeatInterval).Warn("Invalid HEARTBEAT_INTERVAL; using default")
 		heartbeatDuration = 30 * time.Minute
 	}
-	notifyConfig := notify.LoadConfig()
+	notifyConfig := notify.Config{
+		SMTP: email.Config{
+			Host:          appCfg.SMTPHost,
+			Port:          appCfg.SMTPPort,
+			User:          appCfg.SMTPUser,
+			Password:      appCfg.SMTPPassword,
+			From:          appCfg.FromEmail,
+			FromName:      appCfg.FromName,
+			AllowInsecure: appCfg.SMTPAllowInsecure,
+		},
+		Branding:       appCfg.EmailBranding,
+		BrandingSource: func() config.EmailBranding { return liveConfig.Get().EmailBranding },
+		DefaultPreferences: notify.PreferenceDefaults{
+			Email:     appCfg.NotifyEmail,
+			Websocket: appCfg.NotifyWebsocket,
+			MCP:       appCfg.NotifyMCP,
+		},
+		DefaultRecipient: appCfg.ToEmail,
+		WebAppURL:        appCfg.WebAppURL,
+	}
 	mcpManager := notify.NewTenantMCPManager(logger)
 	dispatcher := notify.NewDispatcher(notify.DispatcherConfig{
 		EmailNotifier:     notify.NewEmailNotifier(notifyConfig, logger),
@@ -450,6 +470,8 @@ func main() {
 			Contacts:         tenantContacts,
 			Baselines:        baselineEvaluator,
 			SMTP:             notifyConfig.SMTP,
+			Branding:         notifyConfig.Branding,
+			BrandingSource:   notifyConfig.BrandingSource,
 			Logger:           logger,
 			DefaultRecipient: notifyConfig.DefaultRecipient,
 			OnNetworkStats: func(stats *periscopepb.GetNetworkLiveStatsResponse) {
@@ -502,22 +524,21 @@ func main() {
 
 	// Lookout-triggered investigations need both the aggregator Kafka topic and
 	// Lookout's gRPC API to attach the resulting report to the incident.
-	lookoutGRPCAddr := strings.TrimSpace(config.GetEnv("LOOKOUT_GRPC_ADDR", ""))
-	if lookoutGRPCAddr != "" && len(cfg.KafkaBrokers) > 0 {
+	if appCfg.LookoutGRPCAddr != "" && len(appCfg.KafkaBrokers) > 0 {
 		lookoutClient, lookoutErr := lookoutclient.NewGRPCClient(lookoutclient.GRPCConfig{
-			GRPCAddr:      lookoutGRPCAddr,
+			GRPCAddr:      appCfg.LookoutGRPCAddr,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("lookout"),
+			AllowInsecure: appCfg.AllowInsecure,
+			CACertFile:    appCfg.CAPath,
+			ServerName:    appCfg.LookoutGRPCTLSServerName,
 		})
 		if lookoutErr != nil {
 			logger.WithError(lookoutErr).Warn("Failed to create Lookout gRPC client - Lookout investigations disabled")
 		} else {
 			defer func() { _ = lookoutClient.Close() }()
-			lookoutConsumer, consumerErr := kafka.NewConsumer(cfg.KafkaBrokers, "skipper-lookout", cfg.KafkaClusterID, "skipper", logger)
+			lookoutConsumer, consumerErr := kafka.NewConsumer(appCfg.KafkaBrokers, "skipper-lookout", appCfg.KafkaClusterID, "skipper", logger)
 			if consumerErr != nil {
 				logger.WithError(consumerErr).Warn("Failed to create Lookout Kafka consumer - Lookout investigations disabled")
 			} else {
@@ -562,10 +583,12 @@ func main() {
 				Logger: logger,
 			})
 			socialPublisher := social.NewEmailPublisher(social.EmailPublisherConfig{
-				Sender: email.NewSender(notifyConfig.SMTP),
-				SMTP:   notifyConfig.SMTP,
-				To:     cfg.SocialNotifyEmail,
-				Logger: logger,
+				Sender:         email.NewSender(notifyConfig.SMTP),
+				SMTP:           notifyConfig.SMTP,
+				Branding:       notifyConfig.Branding,
+				BrandingSource: notifyConfig.BrandingSource,
+				To:             cfg.SocialNotifyEmail,
+				Logger:         logger,
 			})
 			socialAgent := social.NewAgent(social.AgentConfig{
 				Interval:  cfg.SocialInterval,
@@ -595,57 +618,63 @@ func main() {
 		Reports:            &reportStoreAdapter{store: reportStore},
 	})
 	grpcAuthCfg := middleware.GRPCAuthConfig{
-		ServiceToken: serviceToken,
-		JWTSecret:    []byte(jwtSecret),
-		Logger:       logger,
-		SkipMethods:  []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
+		ServiceToken:   serviceToken,
+		JWTSecret:      []byte(jwtSecret),
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
+		SkipMethods:    []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
 	}
-	go func() {
-		grpcLis, listenErr := net.Listen("tcp", ":"+cfg.GRPCPort)
-		if listenErr != nil {
-			logger.WithError(listenErr).Fatal("Failed to listen on gRPC port")
-		}
-		serverOpts := []grpc.ServerOption{
-			grpc.ChainUnaryInterceptor(
-				grpcutil.SanitizeUnaryServerInterceptor(),
-				middleware.GRPCAuthInterceptor(grpcAuthCfg),
-			),
-			grpc.ChainStreamInterceptor(
-				middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
-			),
-		}
+	serverOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			grpcutil.SanitizeUnaryServerInterceptor(),
+			middleware.GRPCAuthInterceptor(grpcAuthCfg),
+		),
+		grpc.ChainStreamInterceptor(
+			middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
+		),
+	}
+	// The gRPC server waits up to 2 minutes for its TLS files, so it builds in
+	// the background while HTTP health already serves.
+	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
 		tlsCfg := grpcutil.ServerTLSConfig{
-			CertFile:      config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:       config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			CertFile:      appCfg.CertPath,
+			KeyFile:       appCfg.KeyPath,
+			AllowInsecure: appCfg.AllowInsecure,
 		}
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
-			logger.WithError(waitErr).Fatal("Timed out waiting for Skipper gRPC TLS files")
+		tlsWaitCtx, cancelTLSWait := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancelTLSWait()
+		if waitErr := grpcutil.WaitForServerTLSFiles(tlsWaitCtx, tlsCfg, logger); waitErr != nil {
+			return nil, waitErr
 		}
 		tlsOpt, tlsErr := grpcutil.ServerTLS(tlsCfg, logger)
 		if tlsErr != nil {
-			logger.WithError(tlsErr).Fatal("Failed to configure Skipper gRPC TLS")
+			return nil, tlsErr
 		}
+		opts := append([]grpc.ServerOption{}, serverOpts...)
 		if tlsOpt != nil {
-			serverOpts = append(serverOpts, tlsOpt)
+			opts = append(opts, tlsOpt)
 		}
-		grpcSrv := grpc.NewServer(serverOpts...)
+		grpcSrv := grpc.NewServer(opts...)
 		skipperpb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
-		hs := health.NewServer()
-		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
+		server.RegisterHealthServer(grpcSrv, health.NewServer())
 		reflection.Register(grpcSrv)
-		logger.WithField("port", cfg.GRPCPort).Info("Starting Skipper gRPC server")
-		if serveErr := grpcSrv.Serve(grpcLis); serveErr != nil {
-			logger.WithError(serveErr).Fatal("Skipper gRPC server failed")
-		}
-	}()
+		return grpcSrv, nil
+	}
 
-	// Setup router with unified monitoring (health/metrics only)
-	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "skipper",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            appCfg.HTTPRuntime,
+		DebugToken:         serviceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
 	apiGroup := router.Group("/api/skipper")
-	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
+	jwtOpts := []auth.JWTOption{auth.WithServiceIdentity(serviceToken, systemTenantID)}
+	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret), jwtOpts...))
 	apiGroup.Use(skipperContextBridge())
 	apiGroup.Use(metering.AccessMiddleware(metering.AccessMiddlewareConfig{
 		Purser:            billingClient,
@@ -713,7 +742,7 @@ func main() {
 					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
 				} else {
 					adminAPI.SetHealth(crawlHealth)
-					adminAPI.RegisterRoutes(router, []byte(jwtSecret), skipperContextBridge())
+					adminAPI.RegisterRoutes(router, []byte(jwtSecret), jwtOpts, skipperContextBridge())
 					// A crawl settles only in the goroutine running it, so a
 					// restart mid-crawl strands the row and blocks every later
 					// crawl of that sitemap. Nothing else recovers it.
@@ -733,7 +762,11 @@ func main() {
 			TenantID:    globalTenantID,
 			Sitemaps:    cfg.Sitemaps,
 			SitemapsDir: cfg.SitemapsDir,
-			Logger:      logger,
+			SourceVariables: map[string]string{
+				"DOCS_PUBLIC_URL":      appCfg.DocsPublicURL,
+				"MARKETING_PUBLIC_URL": appCfg.MarketingPublicURL,
+			},
+			Logger: logger,
 			OnPageEmbedded: func(evt knowledge.PageEmbeddedEvent) {
 				if socialCollector != nil {
 					socialCollector.Push(social.EventSignal{
@@ -797,7 +830,7 @@ func main() {
 	router.Any("/mcp/notify/*path", gin.WrapH(http.Handler(mcpHandler)))
 
 	// Embedded web UI — enabled by default, set SKIPPER_WEB_UI=false to disable.
-	if config.GetEnv("SKIPPER_WEB_UI", "true") != "false" {
+	if appCfg.WebUIEnabled {
 		adminTenantID := cfg.AdminTenantID
 		if adminTenantID == "" {
 			adminTenantID = "local"
@@ -806,7 +839,7 @@ func main() {
 		adminAPIKey := cfg.AdminAPIKey
 		enableUI := true
 		if adminAPIKey == "" {
-			if config.GetEnv("SKIPPER_WEB_UI_INSECURE", "") != "true" {
+			if !appCfg.WebUIInsecure {
 				logger.Error("WebUI disabled: set SKIPPER_API_KEY or SKIPPER_WEB_UI_INSECURE=true")
 				enableUI = false
 			} else {
@@ -817,7 +850,7 @@ func main() {
 			logger.Info("Web UI skipped (no auth configured)")
 		} else {
 			adminGroup := router.Group("/admin/api")
-			adminGroup.Use(adminAuthMiddleware(adminTenantID, []byte(jwtSecret), adminAPIKey))
+			adminGroup.Use(adminAuthMiddleware(adminTenantID, []byte(jwtSecret), adminAPIKey, func() bool { return liveConfig.Get().IsDevelopment() }))
 			adminGroup.Use(skipperContextBridge())
 			chat.RegisterRoutes(adminGroup, chatHandler)
 
@@ -827,9 +860,8 @@ func main() {
 		}
 	}
 
-	// Start HTTP server with graceful shutdown
-	serverConfig := server.DefaultConfig("skipper", cfg.Port)
-	serverConfig.WriteTimeout = 5 * time.Minute // SSE streams need time for multi-round tool calling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
@@ -837,46 +869,45 @@ func main() {
 			logger.Warn("Quartermaster bootstrap skipped: client unavailable")
 			return
 		}
-
-		healthEndpoint := "/health"
-		httpPort, _ := strconv.Atoi(serverConfig.Port)
-		if httpPort <= 0 || httpPort > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:   "skipper",
+			Port:          appCfg.HTTPListen.Port,
+			AdvertiseHost: appCfg.AdvertiseHost,
+			ClusterID:     appCfg.ClusterID,
+			NodeID:        appCfg.NodeID,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("SKIPPER_HOST", "skipper")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "skipper",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           int32(httpPort),
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (skipper) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(ctx, qmClient, req, logger, qmbootstrap.DefaultRetryConfig("skipper")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (skipper) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (skipper) ok")
 		}
 	}()
 
 	server.RegisterEnvFileReload("skipper", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	if runErr := server.Run(ctx, server.RunSpec{
+		Service: "skipper",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP: []server.HTTPListener{{
+			Name:    "http",
+			Port:    appCfg.HTTPListen.Port,
+			Handler: router,
+			// Chat responses stream over SSE across multi-round tool calls, so
+			// the write deadline is 5 minutes instead of the 30s default.
+			WriteTimeout: 5 * time.Minute,
+		}},
+		GRPC:     []server.GRPCListener{{Name: "grpc", Port: appCfg.GRPCListen.Port, Build: buildGRPCServer}},
+		OnReload: []server.ReloadCallback{liveConfig.Reload},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 }
 
-func adminAuthMiddleware(tenantID string, jwtSecret []byte, apiKey string) gin.HandlerFunc {
+func adminAuthMiddleware(tenantID string, jwtSecret []byte, apiKey string, isDevelopment func() bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if apiKey != "" {
 			// Handle login endpoint: validate key, set session cookie.
@@ -886,7 +917,7 @@ func adminAuthMiddleware(tenantID string, jwtSecret []byte, apiKey string) gin.H
 				}
 				if err := c.ShouldBindJSON(&req); err == nil &&
 					subtle.ConstantTimeCompare([]byte(req.Key), []byte(apiKey)) == 1 {
-					setAdminSessionCookie(c, apiKey)
+					setAdminSessionCookie(c, apiKey, isDevelopment())
 					c.JSON(http.StatusOK, gin.H{"ok": true})
 					c.Abort()
 					return
@@ -901,7 +932,7 @@ func adminAuthMiddleware(tenantID string, jwtSecret []byte, apiKey string) gin.H
 				// valid session
 			} else if bearer := c.GetHeader("Authorization"); strings.HasPrefix(bearer, "Bearer ") &&
 				subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(bearer, "Bearer ")), []byte(apiKey)) == 1 {
-				setAdminSessionCookie(c, apiKey)
+				setAdminSessionCookie(c, apiKey, isDevelopment())
 			} else {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 				c.Abort()
@@ -927,10 +958,9 @@ func adminSessionMAC(apiKey string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func setAdminSessionCookie(c *gin.Context, apiKey string) {
-	isDev := config.IsDevelopment()
-	secure := !isDev
-	c.SetCookie("skipper_session", adminSessionMAC(apiKey), 86400, "/", "", secure, true)
+// setAdminSessionCookie marks the session cookie Secure outside development.
+func setAdminSessionCookie(c *gin.Context, apiKey string, isDevelopment bool) {
+	c.SetCookie("skipper_session", adminSessionMAC(apiKey), 86400, "/", "", !isDevelopment, true)
 }
 
 func validAdminSession(cookie, apiKey string) bool {

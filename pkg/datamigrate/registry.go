@@ -36,6 +36,9 @@ type Migration struct {
 	RequiredBeforePhase string // postdeploy | contract
 	Description         string
 	DependsOn           []string
+	// Irreversible marks a migration whose writes a service rollback cannot
+	// undo; restoring the previous release requires restoring its data.
+	Irreversible bool
 
 	Run    func(ctx context.Context, db DB, opts RunOptions) (Progress, error)
 	Verify func(ctx context.Context, db DB) error

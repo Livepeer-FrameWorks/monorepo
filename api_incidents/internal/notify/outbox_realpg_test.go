@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/incidents"
 	"frameworks/api_incidents/internal/lookouttest"
 
@@ -240,12 +239,11 @@ func runDeliveryOutboxTokenFencing(t *testing.T, db *sql.DB) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
 	retriedID := ingestPlatformIncident(t, svc, "worker-group")
 	worker := &outbox.Worker[Delivery]{
 		Config:     outbox.Config{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, BatchSize: 10, Lease: time.Minute},
 		Store:      store,
-		Dispatcher: &Dispatcher{Channels: Router{}, HTTP: srv.Client()},
+		Dispatcher: settingsDispatcher(Settings{SlackWebhookURL: srv.URL}, srv.Client()),
 	}
 	worker.ProcessBatch(ctx)
 	time.Sleep(50 * time.Millisecond)
@@ -270,15 +268,16 @@ func runDeliveryTerminalFailure(t *testing.T, db *sql.DB) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
 
 	svc := &incidents.Service{DB: db, Router: slackOnlyRouter{}}
 	metrics := testMetrics()
 	store := &Store{DB: db, Channels: allEnabled{}, Metrics: metrics}
+	terminalFailureDispatcher := settingsDispatcher(Settings{SlackWebhookURL: srv.URL}, srv.Client())
+	terminalFailureDispatcher.Metrics = metrics
 	worker := &outbox.Worker[Delivery]{
 		Config:     outbox.Config{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, BatchSize: 10, Lease: time.Minute},
 		Store:      store,
-		Dispatcher: &Dispatcher{Channels: Router{}, HTTP: srv.Client(), Metrics: metrics},
+		Dispatcher: terminalFailureDispatcher,
 	}
 
 	exhaustedID := ingestPlatformIncident(t, svc, "exhausted-group")

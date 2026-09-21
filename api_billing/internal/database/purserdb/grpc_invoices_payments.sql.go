@@ -65,7 +65,12 @@ SELECT invoice.id::text AS id,
        COALESCE(subscription.tier_id::text, '')::text AS tier_id,
        invoice.period_start,
        invoice.period_end,
-       invoice.gross_metered_amount::double precision AS gross_metered_amount
+       invoice.gross_metered_amount::double precision AS gross_metered_amount,
+       invoice.presentment_amount_cents,
+       COALESCE(invoice.presentment_currency, '')::text AS presentment_currency,
+       COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       invoice.presentment_reference_date,
+       invoice.finalized_at
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription
   ON invoice.tenant_id = subscription.tenant_id
@@ -82,23 +87,28 @@ type GetInvoiceForCallerParams struct {
 }
 
 type GetInvoiceForCallerRow struct {
-	ID                   string          `db:"id" json:"id"`
-	TenantID             string          `db:"tenant_id" json:"tenant_id"`
-	Amount               float64         `db:"amount" json:"amount"`
-	BaseAmount           float64         `db:"base_amount" json:"base_amount"`
-	MeteredAmount        float64         `db:"metered_amount" json:"metered_amount"`
-	PrepaidCreditApplied float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
-	Currency             string          `db:"currency" json:"currency"`
-	Status               string          `db:"status" json:"status"`
-	DueDate              time.Time       `db:"due_date" json:"due_date"`
-	PaidAt               sql.NullTime    `db:"paid_at" json:"paid_at"`
-	UsageDetails         json.RawMessage `db:"usage_details" json:"usage_details"`
-	CreatedAt            sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt            sql.NullTime    `db:"updated_at" json:"updated_at"`
-	TierID               string          `db:"tier_id" json:"tier_id"`
-	PeriodStart          sql.NullTime    `db:"period_start" json:"period_start"`
-	PeriodEnd            sql.NullTime    `db:"period_end" json:"period_end"`
-	GrossMeteredAmount   float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	ID                       string          `db:"id" json:"id"`
+	TenantID                 string          `db:"tenant_id" json:"tenant_id"`
+	Amount                   float64         `db:"amount" json:"amount"`
+	BaseAmount               float64         `db:"base_amount" json:"base_amount"`
+	MeteredAmount            float64         `db:"metered_amount" json:"metered_amount"`
+	PrepaidCreditApplied     float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
+	Currency                 string          `db:"currency" json:"currency"`
+	Status                   string          `db:"status" json:"status"`
+	DueDate                  time.Time       `db:"due_date" json:"due_date"`
+	PaidAt                   sql.NullTime    `db:"paid_at" json:"paid_at"`
+	UsageDetails             json.RawMessage `db:"usage_details" json:"usage_details"`
+	CreatedAt                sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt                sql.NullTime    `db:"updated_at" json:"updated_at"`
+	TierID                   string          `db:"tier_id" json:"tier_id"`
+	PeriodStart              sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd                sql.NullTime    `db:"period_end" json:"period_end"`
+	GrossMeteredAmount       float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	PresentmentAmountCents   sql.NullInt64   `db:"presentment_amount_cents" json:"presentment_amount_cents"`
+	PresentmentCurrency      string          `db:"presentment_currency" json:"presentment_currency"`
+	PresentmentUnitsPerEur   string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate sql.NullTime    `db:"presentment_reference_date" json:"presentment_reference_date"`
+	FinalizedAt              sql.NullTime    `db:"finalized_at" json:"finalized_at"`
 }
 
 func (q *Queries) GetInvoiceForCaller(ctx context.Context, arg GetInvoiceForCallerParams) (GetInvoiceForCallerRow, error) {
@@ -122,6 +132,11 @@ func (q *Queries) GetInvoiceForCaller(ctx context.Context, arg GetInvoiceForCall
 		&i.PeriodStart,
 		&i.PeriodEnd,
 		&i.GrossMeteredAmount,
+		&i.PresentmentAmountCents,
+		&i.PresentmentCurrency,
+		&i.PresentmentUnitsPerEur,
+		&i.PresentmentReferenceDate,
+		&i.FinalizedAt,
 	)
 	return i, err
 }
@@ -136,7 +151,13 @@ SELECT payment.id::text AS id,
        payment.status,
        payment.confirmed_at,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE payment.id = $1::text::uuid
@@ -151,16 +172,22 @@ type GetInvoicePaymentForCallerParams struct {
 }
 
 type GetInvoicePaymentForCallerRow struct {
-	ID          string         `db:"id" json:"id"`
-	InvoiceID   string         `db:"invoice_id" json:"invoice_id"`
-	Method      string         `db:"method" json:"method"`
-	Amount      float64        `db:"amount" json:"amount"`
-	Currency    string         `db:"currency" json:"currency"`
-	TxID        sql.NullString `db:"tx_id" json:"tx_id"`
-	Status      string         `db:"status" json:"status"`
-	ConfirmedAt sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
-	CreatedAt   sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt   sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ID                  string         `db:"id" json:"id"`
+	InvoiceID           string         `db:"invoice_id" json:"invoice_id"`
+	Method              string         `db:"method" json:"method"`
+	Amount              float64        `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TxID                sql.NullString `db:"tx_id" json:"tx_id"`
+	Status              string         `db:"status" json:"status"`
+	ConfirmedAt         sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
+	CreatedAt           sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt           sql.NullTime   `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) GetInvoicePaymentForCaller(ctx context.Context, arg GetInvoicePaymentForCallerParams) (GetInvoicePaymentForCallerRow, error) {
@@ -177,6 +204,12 @@ func (q *Queries) GetInvoicePaymentForCaller(ctx context.Context, arg GetInvoice
 		&i.ConfirmedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }
@@ -191,7 +224,13 @@ SELECT payment.id::text AS id,
        payment.status,
        payment.confirmed_at,
        COALESCE(payment.created_at, TIMESTAMPTZ 'epoch') AS created_at,
-       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at
+       COALESCE(payment.updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
+       payment.original_amount_cents,
+       payment.original_currency::text AS original_currency,
+       payment.eur_amount_cents,
+       payment.fx_units_per_eur::text AS fx_units_per_eur,
+       payment.fx_source,
+       payment.fx_reference_date
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE invoice.tenant_id = $1::text::uuid
@@ -232,16 +271,22 @@ type ListInvoicePaymentsForTenantParams struct {
 }
 
 type ListInvoicePaymentsForTenantRow struct {
-	ID          string         `db:"id" json:"id"`
-	InvoiceID   string         `db:"invoice_id" json:"invoice_id"`
-	Method      string         `db:"method" json:"method"`
-	Amount      float64        `db:"amount" json:"amount"`
-	Currency    string         `db:"currency" json:"currency"`
-	TxID        sql.NullString `db:"tx_id" json:"tx_id"`
-	Status      string         `db:"status" json:"status"`
-	ConfirmedAt sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
-	CreatedAt   sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt   sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ID                  string         `db:"id" json:"id"`
+	InvoiceID           string         `db:"invoice_id" json:"invoice_id"`
+	Method              string         `db:"method" json:"method"`
+	Amount              float64        `db:"amount" json:"amount"`
+	Currency            string         `db:"currency" json:"currency"`
+	TxID                sql.NullString `db:"tx_id" json:"tx_id"`
+	Status              string         `db:"status" json:"status"`
+	ConfirmedAt         sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
+	CreatedAt           sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt           sql.NullTime   `db:"updated_at" json:"updated_at"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) ListInvoicePaymentsForTenant(ctx context.Context, arg ListInvoicePaymentsForTenantParams) ([]ListInvoicePaymentsForTenantRow, error) {
@@ -277,6 +322,12 @@ func (q *Queries) ListInvoicePaymentsForTenant(ctx context.Context, arg ListInvo
 			&i.ConfirmedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 		); err != nil {
 			return nil, err
 		}
@@ -307,7 +358,12 @@ SELECT id::text AS id,
        COALESCE(updated_at, TIMESTAMPTZ 'epoch') AS updated_at,
        period_start,
        period_end,
-       gross_metered_amount::double precision AS gross_metered_amount
+       gross_metered_amount::double precision AS gross_metered_amount,
+       presentment_amount_cents,
+       COALESCE(presentment_currency, '')::text AS presentment_currency,
+       COALESCE(presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       presentment_reference_date,
+       finalized_at
 FROM purser.billing_invoices
 WHERE tenant_id = $1::text::uuid
   AND (NOT $2::boolean OR status = $3)
@@ -340,22 +396,27 @@ type ListInvoicesForTenantParams struct {
 }
 
 type ListInvoicesForTenantRow struct {
-	ID                   string          `db:"id" json:"id"`
-	TenantID             string          `db:"tenant_id" json:"tenant_id"`
-	Amount               float64         `db:"amount" json:"amount"`
-	BaseAmount           float64         `db:"base_amount" json:"base_amount"`
-	MeteredAmount        float64         `db:"metered_amount" json:"metered_amount"`
-	PrepaidCreditApplied float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
-	Currency             string          `db:"currency" json:"currency"`
-	Status               string          `db:"status" json:"status"`
-	DueDate              time.Time       `db:"due_date" json:"due_date"`
-	PaidAt               sql.NullTime    `db:"paid_at" json:"paid_at"`
-	UsageDetails         json.RawMessage `db:"usage_details" json:"usage_details"`
-	CreatedAt            sql.NullTime    `db:"created_at" json:"created_at"`
-	UpdatedAt            sql.NullTime    `db:"updated_at" json:"updated_at"`
-	PeriodStart          sql.NullTime    `db:"period_start" json:"period_start"`
-	PeriodEnd            sql.NullTime    `db:"period_end" json:"period_end"`
-	GrossMeteredAmount   float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	ID                       string          `db:"id" json:"id"`
+	TenantID                 string          `db:"tenant_id" json:"tenant_id"`
+	Amount                   float64         `db:"amount" json:"amount"`
+	BaseAmount               float64         `db:"base_amount" json:"base_amount"`
+	MeteredAmount            float64         `db:"metered_amount" json:"metered_amount"`
+	PrepaidCreditApplied     float64         `db:"prepaid_credit_applied" json:"prepaid_credit_applied"`
+	Currency                 string          `db:"currency" json:"currency"`
+	Status                   string          `db:"status" json:"status"`
+	DueDate                  time.Time       `db:"due_date" json:"due_date"`
+	PaidAt                   sql.NullTime    `db:"paid_at" json:"paid_at"`
+	UsageDetails             json.RawMessage `db:"usage_details" json:"usage_details"`
+	CreatedAt                sql.NullTime    `db:"created_at" json:"created_at"`
+	UpdatedAt                sql.NullTime    `db:"updated_at" json:"updated_at"`
+	PeriodStart              sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd                sql.NullTime    `db:"period_end" json:"period_end"`
+	GrossMeteredAmount       float64         `db:"gross_metered_amount" json:"gross_metered_amount"`
+	PresentmentAmountCents   sql.NullInt64   `db:"presentment_amount_cents" json:"presentment_amount_cents"`
+	PresentmentCurrency      string          `db:"presentment_currency" json:"presentment_currency"`
+	PresentmentUnitsPerEur   string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate sql.NullTime    `db:"presentment_reference_date" json:"presentment_reference_date"`
+	FinalizedAt              sql.NullTime    `db:"finalized_at" json:"finalized_at"`
 }
 
 func (q *Queries) ListInvoicesForTenant(ctx context.Context, arg ListInvoicesForTenantParams) ([]ListInvoicesForTenantRow, error) {
@@ -393,6 +454,11 @@ func (q *Queries) ListInvoicesForTenant(ctx context.Context, arg ListInvoicesFor
 			&i.PeriodStart,
 			&i.PeriodEnd,
 			&i.GrossMeteredAmount,
+			&i.PresentmentAmountCents,
+			&i.PresentmentCurrency,
+			&i.PresentmentUnitsPerEur,
+			&i.PresentmentReferenceDate,
+			&i.FinalizedAt,
 		); err != nil {
 			return nil, err
 		}

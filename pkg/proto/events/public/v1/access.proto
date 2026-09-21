@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package frameworks.events.public.v1;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1";
+
+import "google/protobuf/timestamp.proto";
+import "events/options.proto";
+
+enum MultistreamStatus {
+  MULTISTREAM_STATUS_UNSPECIFIED = 0;
+  MULTISTREAM_STATUS_IDLE = 1;
+  MULTISTREAM_STATUS_PENDING = 2;
+  MULTISTREAM_STATUS_PUSHING = 3;
+  MULTISTREAM_STATUS_RETRYING = 4;
+  MULTISTREAM_STATUS_STOPPING = 5;
+  MULTISTREAM_STATUS_FAILED = 6;
+}
+
+// MultistreamStatusChanged reports a push target's status transition. It is
+// emitted only when the status actually changes.
+message MultistreamStatusChanged {
+  option (frameworks.events.event) = {type: "multistream.status_changed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "push_targets"};
+  string stream_id = 1;
+  string target_id = 2;
+  // target_name is the tenant's label for the target, never its URL.
+  string target_name = 3;
+  MultistreamStatus status = 4;
+  MultistreamStatus previous_status = 5;
+}
+
+message ApiTokenCreated {
+  option (frameworks.events.event) = {type: "api_token.created", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "api_tokens"};
+  string token_id = 1;
+  string name = 2;
+  repeated string permissions = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message ApiTokenRevoked {
+  option (frameworks.events.event) = {type: "api_token.revoked", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "api_tokens"};
+  string token_id = 1;
+}
+
+enum SuspensionReason {
+  SUSPENSION_REASON_UNSPECIFIED = 0;
+  SUSPENSION_REASON_BALANCE_EXHAUSTED = 1;
+  SUSPENSION_REASON_PAYMENT_OVERDUE = 2;
+  SUSPENSION_REASON_POLICY = 3;
+}
+
+message AccountSuspended {
+  option (frameworks.events.event) = {type: "account.suspended", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "tenants"};
+  SuspensionReason reason = 1;
+}
+
+message CustomDomainVerified {
+  option (frameworks.events.event) = {type: "custom_domain.verified", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "custom_domains"};
+  string domain = 1;
+}
+
+enum CustomDomainFailureReason {
+  CUSTOM_DOMAIN_FAILURE_REASON_UNSPECIFIED = 0;
+  // Verification did not succeed within the fixed verification period.
+  CUSTOM_DOMAIN_FAILURE_REASON_VERIFICATION_EXPIRED = 1;
+  CUSTOM_DOMAIN_FAILURE_REASON_CERTIFICATE_FAILED = 2;
+}
+
+message CustomDomainFailed {
+  option (frameworks.events.event) = {type: "custom_domain.failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "custom_domains"};
+  string domain = 1;
+  CustomDomainFailureReason reason = 2;
+}

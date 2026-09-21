@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -37,27 +36,13 @@ func withDefaultHTTPClient(t *testing.T, client *http.Client) {
 	t.Cleanup(func() { http.DefaultClient = old })
 }
 
-func resetECBCache() {
-	ecbRateCache.Lock()
-	ecbRateCache.rate = 0
-	ecbRateCache.fetchedAt = time.Time{}
-	ecbRateCache.Unlock()
-}
-
-func setECBCache(rate float64, fetchedAt time.Time) {
-	ecbRateCache.Lock()
-	ecbRateCache.rate = rate
-	ecbRateCache.fetchedAt = fetchedAt
-	ecbRateCache.Unlock()
-}
-
 func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
-	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	handler := &X402Handler{rpc: NewRPCClient()}
 	network := NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 	}
 
 	t.Run("malformed json response", func(t *testing.T) {
@@ -104,109 +89,6 @@ func TestRPCCall_DecodeAndErrorHandling(t *testing.T) {
 			t.Fatalf("result: got %q, want %q", result, "0xabc")
 		}
 	})
-}
-
-func TestGetEurUsdRate_InlineDecodeFallbacks(t *testing.T) {
-	t.Cleanup(resetECBCache)
-	handler := &X402Handler{logger: logging.NewLogger()}
-
-	t.Run("stale cache returned when decode fails", func(t *testing.T) {
-		setECBCache(0.91, time.Now().Add(-48*time.Hour))
-		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return newJSONResponse(http.StatusOK, `{"rates":`), nil
-			}),
-		})
-
-		rate, err := handler.getEurUsdRate()
-		if err != nil {
-			t.Fatalf("expected stale cache fallback, got error: %v", err)
-		}
-		if rate != 0.91 {
-			t.Fatalf("rate: got %v, want %v", rate, 0.91)
-		}
-	})
-
-	t.Run("decode failure without cache returns error", func(t *testing.T) {
-		resetECBCache()
-		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return newJSONResponse(http.StatusOK, `{"rates":`), nil
-			}),
-		})
-
-		_, err := handler.getEurUsdRate()
-		if err == nil || !strings.Contains(err.Error(), "failed to decode ECB rate response") {
-			t.Fatalf("expected decode error, got %v", err)
-		}
-	})
-
-	t.Run("missing EUR rate without cache returns error", func(t *testing.T) {
-		resetECBCache()
-		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return newJSONResponse(http.StatusOK, `{"rates":{"USD":1}}`), nil
-			}),
-		})
-
-		_, err := handler.getEurUsdRate()
-		if err == nil || !strings.Contains(err.Error(), "EUR rate not found in response") {
-			t.Fatalf("expected missing EUR error, got %v", err)
-		}
-	})
-
-	t.Run("successful decode updates cache", func(t *testing.T) {
-		resetECBCache()
-		withDefaultHTTPClient(t, &http.Client{
-			Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return newJSONResponse(http.StatusOK, `{"rates":{"EUR":0.93}}`), nil
-			}),
-		})
-
-		rate, err := handler.getEurUsdRate()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if rate != 0.93 {
-			t.Fatalf("rate: got %v, want %v", rate, 0.93)
-		}
-
-		ecbRateCache.RLock()
-		cachedRate := ecbRateCache.rate
-		fetchedAt := ecbRateCache.fetchedAt
-		ecbRateCache.RUnlock()
-		if cachedRate != 0.93 {
-			t.Fatalf("cached rate: got %v, want %v", cachedRate, 0.93)
-		}
-		if fetchedAt.IsZero() {
-			t.Fatal("expected fetchedAt to be set")
-		}
-	})
-}
-
-func TestGetEurUsdRate_FreshCacheSkipsFetch(t *testing.T) {
-	t.Cleanup(resetECBCache)
-	handler := &X402Handler{logger: logging.NewLogger()}
-
-	setECBCache(0.88, time.Now().Add(-1*time.Hour))
-	httpCalls := 0
-	withDefaultHTTPClient(t, &http.Client{
-		Transport: testRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			httpCalls++
-			return nil, errors.New("network should not be called for fresh cache")
-		}),
-	})
-
-	rate, err := handler.getEurUsdRate()
-	if err != nil {
-		t.Fatalf("expected cached rate without error, got %v", err)
-	}
-	if rate != 0.88 {
-		t.Fatalf("rate: got %v, want %v", rate, 0.88)
-	}
-	if httpCalls != 0 {
-		t.Fatalf("expected no HTTP calls for fresh cache, got %d", httpCalls)
-	}
 }
 
 func TestGetVATRateForTenant_MalformedBillingAddressDoesNotGuessCountry(t *testing.T) {
@@ -257,12 +139,12 @@ func TestIsBillingDetailsComplete_AddressDecode(t *testing.T) {
 }
 
 func TestRPCCall_NonOKStatus(t *testing.T) {
-	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	handler := &X402Handler{rpc: NewRPCClient()}
 	network := NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 	}
 
 	withDefaultHTTPClient(t, &http.Client{
@@ -279,12 +161,12 @@ func TestRPCCall_NonOKStatus(t *testing.T) {
 }
 
 func TestRPCCall_ErrorFieldRoundTripShape(t *testing.T) {
-	t.Setenv("TEST_RPC_ENDPOINT", "https://rpc.test")
+	appconfigtest.Set(t, "BASE_SEPOLIA_RPC_ENDPOINT", "https://rpc.test")
 
 	handler := &X402Handler{rpc: NewRPCClient()}
 	network := NetworkConfig{
 		Name:           "testnet",
-		RPCEndpointEnv: "TEST_RPC_ENDPOINT",
+		RPCEndpointEnv: "BASE_SEPOLIA_RPC_ENDPOINT",
 	}
 
 	payload := map[string]any{

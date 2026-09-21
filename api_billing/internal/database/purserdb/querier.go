@@ -15,12 +15,21 @@ import (
 type Querier interface {
 	AcquireCryptoTaxDocumentLock(ctx context.Context, lockKey string) error
 	AcquireX402RelayerNonceLock(ctx context.Context, lockKey string) error
+	// Applies the tier a payment-method setup was started for and starts the first
+	// period at activation. The base fee for that period is then charged in
+	// advance on a base-fee invoice. A replayed activation for the tier and
+	// provider the tenant already runs on keeps the current period.
+	ActivateAdvanceBilledSubscription(ctx context.Context, arg ActivateAdvanceBilledSubscriptionParams) (int64, error)
 	ActivateMollieTenantSubscription(ctx context.Context, arg ActivateMollieTenantSubscriptionParams) (int64, error)
+	// A monthly cluster fee billed on Purser invoices has no Stripe subscription.
+	// activated_at starts the time the fee is billed for; reactivating a cancelled
+	// subscription archives its closed interval before starting another one.
+	ActivatePurserInvoicedClusterSubscription(ctx context.Context, arg ActivatePurserInvoicedClusterSubscriptionParams) (string, error)
 	ActivateTenantSubscriptionFromStripe(ctx context.Context, arg ActivateTenantSubscriptionFromStripeParams) (int64, error)
 	ActiveBillingTierExists(ctx context.Context, tierID string) (bool, error)
 	AddBillingInvoiceReversedAmount(ctx context.Context, arg AddBillingInvoiceReversedAmountParams) error
 	AddBillingPaymentReversedAmount(ctx context.Context, arg AddBillingPaymentReversedAmountParams) error
-	AddPendingTopupRefundedAmount(ctx context.Context, arg AddPendingTopupRefundedAmountParams) error
+	AddPendingTopupRefundedAmount(ctx context.Context, arg AddPendingTopupRefundedAmountParams) (AddPendingTopupRefundedAmountRow, error)
 	AddPrepaidBalance(ctx context.Context, arg AddPrepaidBalanceParams) (int64, error)
 	AddX402TenantBalanceRollup(ctx context.Context, arg AddX402TenantBalanceRollupParams) error
 	AdoptLegacyUsageRecord(ctx context.Context, arg AdoptLegacyUsageRecordParams) (int64, error)
@@ -48,7 +57,9 @@ type Querier interface {
 	// the value does not change.
 	BackfillSubscriptionPeriodFromDraft(ctx context.Context, arg BackfillSubscriptionPeriodFromDraftParams) error
 	BackfillTenantBillingPeriod(ctx context.Context, arg BackfillTenantBillingPeriodParams) error
+	BaseFeeInvoiceExistsForPeriod(ctx context.Context, arg BaseFeeInvoiceExistsForPeriodParams) (bool, error)
 	CancelLocalMollieSubscription(ctx context.Context, tenantID string) error
+	CancelPurserInvoicedClusterSubscription(ctx context.Context, arg CancelPurserInvoicedClusterSubscriptionParams) (int64, error)
 	CancelTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
 	ClaimBillingEventOutboxCandidates(ctx context.Context, arg ClaimBillingEventOutboxCandidatesParams) ([]ClaimBillingEventOutboxCandidatesRow, error)
 	ClaimInvoiceEmailCandidates(ctx context.Context, arg ClaimInvoiceEmailCandidatesParams) ([]ClaimInvoiceEmailCandidatesRow, error)
@@ -66,6 +77,10 @@ type Querier interface {
 	CollectInvoiceUsage(ctx context.Context, arg CollectInvoiceUsageParams) ([]CollectInvoiceUsageRow, error)
 	CompleteBillingEventOutbox(ctx context.Context, id string) error
 	CompleteBillingEventOutboxToken(ctx context.Context, arg CompleteBillingEventOutboxTokenParams) (int64, error)
+	// Settles a claimed event inside the transaction of its effects. It matches
+	// only a row still 'claimed', so once one delivery commits, a redelivery or a
+	// claim taken over after the lease settles nothing and must record nothing.
+	CompleteClaimedWebhookEvent(ctx context.Context, arg CompleteClaimedWebhookEventParams) (int64, error)
 	CompleteCryptoWallet(ctx context.Context, arg CompleteCryptoWalletParams) (int64, error)
 	CompleteInvoiceEmail(ctx context.Context, arg CompleteInvoiceEmailParams) (int64, error)
 	CompleteInvoiceEmailWithLease(ctx context.Context, arg CompleteInvoiceEmailWithLeaseParams) (int64, error)
@@ -112,6 +127,7 @@ type Querier interface {
 	EnsureCryptoScanCursor(ctx context.Context, arg EnsureCryptoScanCursorParams) error
 	EnsureCryptoSweepRelayerNonce(ctx context.Context, arg EnsureCryptoSweepRelayerNonceParams) error
 	EnsureDefaultTenantSubscription(ctx context.Context, arg EnsureDefaultTenantSubscriptionParams) (int64, error)
+	EnsureMollieBalanceCursor(ctx context.Context, balanceID string) error
 	EnsurePrepaidBalance(ctx context.Context, arg EnsurePrepaidBalanceParams) error
 	EnsurePrepaidBalanceRow(ctx context.Context, arg EnsurePrepaidBalanceRowParams) error
 	EnsureRuntimePrepaidBalance(ctx context.Context, arg EnsureRuntimePrepaidBalanceParams) (int64, error)
@@ -130,10 +146,15 @@ type Querier interface {
 	FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAuthorityRefreshParams) (int64, error)
 	FailPendingCardTopup(ctx context.Context, topupID string) (int64, error)
 	FailProviderWebhook(ctx context.Context, arg FailProviderWebhookParams) (sql.Result, error)
+	// The base-fee invoice of the period a tier change cut short: it started
+	// before period_start and would have run past it.
+	FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error)
 	GetActiveInvoiceCryptoPaymentQuote(ctx context.Context, arg GetActiveInvoiceCryptoPaymentQuoteParams) (GetActiveInvoiceCryptoPaymentQuoteRow, error)
 	GetActiveInvoicePayment(ctx context.Context, arg GetActiveInvoicePaymentParams) (GetActiveInvoicePaymentRow, error)
 	GetActiveMeterDefinition(ctx context.Context, meter string) (GetActiveMeterDefinitionRow, error)
 	GetActiveMollieCollectionDetails(ctx context.Context, tenantID string) (GetActiveMollieCollectionDetailsRow, error)
+	// A Stripe customer is collectable through its subscription or, without a
+	// subscription, through the default payment method saved by setup checkout.
 	GetActiveStripeCollectionDetails(ctx context.Context, tenantID string) (GetActiveStripeCollectionDetailsRow, error)
 	GetActiveSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error)
 	GetActiveSubscriptionPeriod(ctx context.Context, tenantID string) (GetActiveSubscriptionPeriodRow, error)
@@ -182,14 +203,26 @@ type Querier interface {
 	GetEffectiveVATRate(ctx context.Context, arg GetEffectiveVATRateParams) (GetEffectiveVATRateRow, error)
 	GetExistingClusterPricing(ctx context.Context, clusterID string) (GetExistingClusterPricingRow, error)
 	GetExistingCryptoTaxDocumentNumber(ctx context.Context, arg GetExistingCryptoTaxDocumentNumberParams) (string, error)
+	GetFXRateOnOrBefore(ctx context.Context, arg GetFXRateOnOrBeforeParams) (GetFXRateOnOrBeforeRow, error)
+	GetFinalizedInvoicePeriodEnd(ctx context.Context, arg GetFinalizedInvoicePeriodEndParams) (time.Time, error)
 	GetFirstX402SettlementAttemptHash(ctx context.Context, settlementID string) (string, error)
 	GetHDWalletXpub(ctx context.Context) (string, error)
 	GetInitializedPostpaidAccount(ctx context.Context, tenantID string) (GetInitializedPostpaidAccountRow, error)
 	GetInitializedPrepaidAccount(ctx context.Context, arg GetInitializedPrepaidAccountParams) (GetInitializedPrepaidAccountRow, error)
 	GetInternalSubscriptionID(ctx context.Context, tenantID string) (string, error)
 	GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error)
+	// amount and currency are the EUR invoice total; the presentment fields are
+	// the total charged in the tenant's presentment currency, empty until the
+	// invoice is finalized.
 	GetInvoiceEmailHeader(ctx context.Context, arg GetInvoiceEmailHeaderParams) (GetInvoiceEmailHeaderRow, error)
+	// The ledger amount and owner of an invoice a settlement just marked paid,
+	// read in the settlement's transaction for its billing.invoice_paid event.
+	GetInvoiceEventState(ctx context.Context, invoiceID string) (GetInvoiceEventStateRow, error)
 	GetInvoiceForCaller(ctx context.Context, arg GetInvoiceForCallerParams) (GetInvoiceForCallerRow, error)
+	// The EUR amount an invoice was issued for, how it was presented, and what its
+	// confirmed payments in the presentment currency already cover net of
+	// reversals, as original and as EUR amounts.
+	GetInvoicePaymentFXBasis(ctx context.Context, arg GetInvoicePaymentFXBasisParams) (GetInvoicePaymentFXBasisRow, error)
 	GetInvoicePaymentForCaller(ctx context.Context, arg GetInvoicePaymentForCallerParams) (GetInvoicePaymentForCallerRow, error)
 	GetInvoicePaymentForReversal(ctx context.Context, providerPaymentID sql.NullString) (GetInvoicePaymentForReversalRow, error)
 	GetLatestProviderPaymentAttempt(ctx context.Context, arg GetLatestProviderPaymentAttemptParams) (GetLatestProviderPaymentAttemptRow, error)
@@ -198,21 +231,42 @@ type Querier interface {
 	GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error)
 	GetMeterUnitForAdjustment(ctx context.Context, meter string) (string, error)
 	GetMollieAppliedReversalCents(ctx context.Context, arg GetMollieAppliedReversalCentsParams) (int64, error)
+	GetMollieBalanceCursor(ctx context.Context, balanceID string) (GetMollieBalanceCursorRow, error)
 	GetMollieCustomerID(ctx context.Context, tenantID string) (string, error)
+	// The currency a Mollie first payment was created in. CreateFirstPayment
+	// creates it in the tenant's presentment currency: the EUR base fee for an EUR
+	// tenant, a zero-amount mandate payment otherwise.
+	GetMollieFirstPaymentIntentCurrency(ctx context.Context, arg GetMollieFirstPaymentIntentCurrencyParams) (string, error)
 	GetMollieObservationDrainInvoice(ctx context.Context, invoiceID string) (GetMollieObservationDrainInvoiceRow, error)
 	GetMollieTierPrice(ctx context.Context, tierID string) (GetMollieTierPriceRow, error)
 	GetNextDurableX402RelayerNonce(ctx context.Context, arg GetNextDurableX402RelayerNonceParams) (int64, error)
 	GetOpenInvoiceBillingPeriod(ctx context.Context, arg GetOpenInvoiceBillingPeriodParams) (GetOpenInvoiceBillingPeriodRow, error)
 	GetOperatorPlatformFeeBps(ctx context.Context, arg GetOperatorPlatformFeeBpsParams) (int32, error)
 	GetOperatorRevenue(ctx context.Context, arg GetOperatorRevenueParams) ([]GetOperatorRevenueRow, error)
+	// The amount due is in the currency the invoice was presented in, net of the
+	// original amounts of confirmed payments in that currency. eur_amount_cents is
+	// the EUR invoice total the presentment rate converts.
 	GetOverdueInvoiceReminder(ctx context.Context, arg GetOverdueInvoiceReminderParams) (GetOverdueInvoiceReminderRow, error)
+	// The balance is due in the currency the invoice was presented in, net of the
+	// original amounts of confirmed payments in that currency.
 	GetPayableInvoiceBalance(ctx context.Context, arg GetPayableInvoiceBalanceParams) (GetPayableInvoiceBalanceRow, error)
+	GetPaymentEmailFX(ctx context.Context, paymentID string) (GetPaymentEmailFXRow, error)
+	// The EUR amount a payment stores at creation, for its domain events.
+	GetPaymentEventAmount(ctx context.Context, arg GetPaymentEventAmountParams) (int64, error)
 	GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentReceiptDocumentParams) (GetPaymentReceiptDocumentRow, error)
-	GetPaymentStatusEmailDetails(ctx context.Context, invoiceID string) (GetPaymentStatusEmailDetailsRow, error)
+	// The payment's original amount is what the payer was charged; the FX fields
+	// state the EUR amount applied to the invoice and the rate.
+	GetPaymentStatusEmailDetails(ctx context.Context, arg GetPaymentStatusEmailDetailsParams) (GetPaymentStatusEmailDetailsRow, error)
 	GetPendingBillingPaymentForInvoice(ctx context.Context, arg GetPendingBillingPaymentForInvoiceParams) (GetPendingBillingPaymentForInvoiceRow, error)
 	GetPendingDowngrade(ctx context.Context, tenantID string) (GetPendingDowngradeRow, error)
 	GetPendingTopupByCheckout(ctx context.Context, arg GetPendingTopupByCheckoutParams) (GetPendingTopupByCheckoutRow, error)
 	GetPendingTopupByID(ctx context.Context, topupID string) (GetPendingTopupByIDRow, error)
+	// The positive balance transaction keyed by the top-up is the authority for
+	// whether the top-up was credited to a balance.
+	GetPendingTopupCreditState(ctx context.Context, arg GetPendingTopupCreditStateParams) (bool, error)
+	// Locks the top-up so a reversal and the checkout credit path serialize.
+	// Credit state is read by GetPendingTopupCreditState in a later statement,
+	// which sees a credit committed while this lock was waited on.
 	GetPendingTopupForReversal(ctx context.Context, providerPaymentID sql.NullString) (GetPendingTopupForReversalRow, error)
 	GetPersistedCryptoSweepBatch(ctx context.Context, batchID string) (GetPersistedCryptoSweepBatchRow, error)
 	GetPersistedCryptoSweepItem(ctx context.Context, arg GetPersistedCryptoSweepItemParams) (GetPersistedCryptoSweepItemRow, error)
@@ -223,20 +277,32 @@ type Querier interface {
 	GetPrepaidCryptoTopup(ctx context.Context, arg GetPrepaidCryptoTopupParams) (GetPrepaidCryptoTopupRow, error)
 	GetPrepaidDrainRate(ctx context.Context, tenantID string) (int64, error)
 	GetPreparedX402SettlementAttempt(ctx context.Context, settlementID string) (GetPreparedX402SettlementAttemptRow, error)
+	// The original and EUR amounts already reversed from one payment or top-up by
+	// succeeded reversals other than provider_reversal_id. The caller holds the
+	// payment or top-up row lock, so concurrent reversals see each other.
+	GetPriorReversalTotals(ctx context.Context, arg GetPriorReversalTotalsParams) (GetPriorReversalTotalsRow, error)
+	GetProviderSettlement(ctx context.Context, arg GetProviderSettlementParams) (GetProviderSettlementRow, error)
 	GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimplifiedInvoiceDocumentParams) (GetSimplifiedInvoiceDocumentRow, error)
 	GetStoragePricing(ctx context.Context, arg GetStoragePricingParams) (GetStoragePricingRow, error)
 	GetStripeInvoiceCardPayment(ctx context.Context, arg GetStripeInvoiceCardPaymentParams) (GetStripeInvoiceCardPaymentRow, error)
 	GetStripePaymentIntentForCharge(ctx context.Context, chargeID string) (string, error)
 	GetStripePaymentMappingByIntent(ctx context.Context, paymentIntentID sql.NullString) (GetStripePaymentMappingByIntentRow, error)
 	GetStripeTierCheckoutConfig(ctx context.Context, arg GetStripeTierCheckoutConfigParams) (GetStripeTierCheckoutConfigRow, error)
+	// The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
+	// period is closed early.
+	GetSubscriptionForInvoice(ctx context.Context, tenantID string) (GetSubscriptionForInvoiceRow, error)
 	GetSubscriptionProviderIDs(ctx context.Context, tenantID string) (GetSubscriptionProviderIDsRow, error)
 	GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error)
 	GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error)
+	// The billing details UpdateBillingDetails is about to change, read after the
+	// subscription row is locked so the changed-field list matches the write.
+	GetTenantBillingDetailsForUpdate(ctx context.Context, tenantID string) (GetTenantBillingDetailsForUpdateRow, error)
 	GetTenantBillingEmail(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error)
 	GetTenantByMollieSubscription(ctx context.Context, mollieSubscriptionID sql.NullString) (string, error)
 	GetTenantByStripeCustomer(ctx context.Context, stripeCustomerID sql.NullString) (string, error)
 	GetTenantByStripeSubscription(ctx context.Context, stripeSubscriptionID sql.NullString) (string, error)
+	GetTenantCollectionProfile(ctx context.Context, tenantID string) (GetTenantCollectionProfileRow, error)
 	GetTenantMollieSubscriptionID(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantPendingTierState(ctx context.Context, tenantID string) (GetTenantPendingTierStateRow, error)
 	GetTenantStripeCustomerID(ctx context.Context, tenantID string) (sql.NullString, error)
@@ -251,17 +317,26 @@ type Querier interface {
 	GetX402PrepaidBalanceCents(ctx context.Context, tenantID string) (int64, error)
 	GetX402SettlementByIdentity(ctx context.Context, arg GetX402SettlementByIdentityParams) (GetX402SettlementByIdentityRow, error)
 	GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshotParams) (GetX402TaxSnapshotRow, error)
+	// A settled top-up that cannot be credited stays pending with a needs_review
+	// reversal row, so an operator resolves the paid amount (refund or converted
+	// credit) instead of the ledger absorbing it.
+	HoldPendingTopupForOperatorReview(ctx context.Context, arg HoldPendingTopupForOperatorReviewParams) error
 	IncrementTenantDunningAttempts(ctx context.Context, tenantID string) error
 	InitializeHDWalletState(ctx context.Context, xpub string) error
 	InitializePrepaidBalanceRow(ctx context.Context, arg InitializePrepaidBalanceRowParams) (int64, error)
 	InitializeRotatedHDWalletState(ctx context.Context, arg InitializeRotatedHDWalletStateParams) error
 	InsertBalanceTransaction(ctx context.Context, arg InsertBalanceTransactionParams) error
+	// amount is what the invoice collects: the base fee less any credit for the
+	// unused share of the previous period's base fee, never below zero.
+	InsertBaseFeeInvoice(ctx context.Context, arg InsertBaseFeeInvoiceParams) (string, error)
 	InsertBillingCollectionDecision(ctx context.Context, arg InsertBillingCollectionDecisionParams) error
 	InsertBillingCollectionLineItem(ctx context.Context, arg InsertBillingCollectionLineItemParams) error
 	InsertBootstrapBillingTier(ctx context.Context, arg InsertBootstrapBillingTierParams) (uuid.UUID, error)
 	InsertBootstrapClusterPricing(ctx context.Context, arg InsertBootstrapClusterPricingParams) error
 	InsertBootstrapEntitlementOverride(ctx context.Context, arg InsertBootstrapEntitlementOverrideParams) error
 	InsertBootstrapTenantSubscription(ctx context.Context, arg InsertBootstrapTenantSubscriptionParams) error
+	// A reorg reverses the whole payment, so the reversal carries the payment's FX
+	// fields unchanged.
 	InsertCryptoReorgPaymentReversal(ctx context.Context, arg InsertCryptoReorgPaymentReversalParams) (string, error)
 	InsertCryptoReversalBalanceTransaction(ctx context.Context, arg InsertCryptoReversalBalanceTransactionParams) error
 	InsertCryptoSweepBatch(ctx context.Context, arg InsertCryptoSweepBatchParams) error
@@ -275,6 +350,9 @@ type Querier interface {
 	InsertMarketplaceOperatorCredit(ctx context.Context, arg InsertMarketplaceOperatorCreditParams) error
 	InsertMollieSubscriptionPayment(ctx context.Context, arg InsertMollieSubscriptionPaymentParams) error
 	InsertPendingCardTopup(ctx context.Context, arg InsertPendingCardTopupParams) error
+	InsertPendingProviderSettlement(ctx context.Context, arg InsertPendingProviderSettlementParams) error
+	// The pending row takes the disputed share of the payment's EUR amount at the
+	// payment's rate, so the later funds_withdrawn transition moves the same EUR.
 	InsertPendingStripeDispute(ctx context.Context, arg InsertPendingStripeDisputeParams) error
 	InsertPrepaidTopupReversalTransaction(ctx context.Context, arg InsertPrepaidTopupReversalTransactionParams) error
 	InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) (int64, error)
@@ -301,6 +379,10 @@ type Querier interface {
 	LinkStripeIntentSubscription(ctx context.Context, arg LinkStripeIntentSubscriptionParams) error
 	ListActiveMeterDefinitions(ctx context.Context) ([]ListActiveMeterDefinitionsRow, error)
 	ListActivePaidBillingTiersForStripe(ctx context.Context) ([]ListActivePaidBillingTiersForStripeRow, error)
+	// Tenants whose base fee Purser charges in advance: active postpaid tenants
+	// without a provider subscription, presented outside EUR, with a card
+	// provider on file, whose current period has no base-fee invoice yet.
+	ListAdvanceBaseFeeCandidates(ctx context.Context, now time.Time) ([]ListAdvanceBaseFeeCandidatesRow, error)
 	ListAllocatedDepositsForCanonicalityCheck(ctx context.Context, arg ListAllocatedDepositsForCanonicalityCheckParams) ([]ListAllocatedDepositsForCanonicalityCheckRow, error)
 	ListBalanceTransactions(ctx context.Context, arg ListBalanceTransactionsParams) ([]ListBalanceTransactionsRow, error)
 	ListBillingDocuments(ctx context.Context, tenantID string) ([]ListBillingDocumentsRow, error)
@@ -330,6 +412,7 @@ type Querier interface {
 	ListInvoicePaymentsForTenant(ctx context.Context, arg ListInvoicePaymentsForTenantParams) ([]ListInvoicePaymentsForTenantRow, error)
 	ListInvoicesForTenant(ctx context.Context, arg ListInvoicesForTenantParams) ([]ListInvoicesForTenantRow, error)
 	ListKnownCryptoDepositAddresses(ctx context.Context, network string) ([]string, error)
+	ListLatestFXRateReferenceDates(ctx context.Context) ([]ListLatestFXRateReferenceDatesRow, error)
 	ListMarketplaceClusterPricingPage(ctx context.Context, arg ListMarketplaceClusterPricingPageParams) ([]ListMarketplaceClusterPricingPageRow, error)
 	ListMarketplaceCreditLines(ctx context.Context, invoiceID string) ([]ListMarketplaceCreditLinesRow, error)
 	ListMollieObservationDrainInvoiceIDs(ctx context.Context) ([]string, error)
@@ -339,12 +422,16 @@ type Querier interface {
 	ListOperatorPayouts(ctx context.Context, arg ListOperatorPayoutsParams) ([]ListOperatorPayoutsRow, error)
 	ListPayableInvoices(ctx context.Context, tenantID string) ([]ListPayableInvoicesRow, error)
 	ListPendingCryptoWallets(ctx context.Context) ([]ListPendingCryptoWalletsRow, error)
+	ListPendingProviderSettlements(ctx context.Context, arg ListPendingProviderSettlementsParams) ([]ListPendingProviderSettlementsRow, error)
 	ListPendingStripeMeterEvents(ctx context.Context, arg ListPendingStripeMeterEventsParams) ([]ListPendingStripeMeterEventsRow, error)
 	ListPendingTopups(ctx context.Context, arg ListPendingTopupsParams) ([]ListPendingTopupsRow, error)
 	ListPendingX402Settlements(ctx context.Context) ([]ListPendingX402SettlementsRow, error)
 	ListPlacementAllowanceUsage(ctx context.Context, arg ListPlacementAllowanceUsageParams) ([]ListPlacementAllowanceUsageRow, error)
 	ListPlacementPricingBoundaries(ctx context.Context, arg ListPlacementPricingBoundariesParams) ([]ListPlacementPricingBoundariesRow, error)
 	ListProviderPaymentAttemptsForRetry(ctx context.Context, maxAttempts int32) ([]ListProviderPaymentAttemptsForRetryRow, error)
+	// Monthly clusters billed on Purser invoices that were active at any point of
+	// the period, with the time they were active from and their cancellation.
+	ListPurserInvoicedClusterSubscriptionsForPeriod(ctx context.Context, arg ListPurserInvoicedClusterSubscriptionsForPeriodParams) ([]ListPurserInvoicedClusterSubscriptionsForPeriodRow, error)
 	ListRecentPayments(ctx context.Context, arg ListRecentPaymentsParams) ([]ListRecentPaymentsRow, error)
 	ListRecoverableFailedX402Settlements(ctx context.Context, recoveryWindowHours interface{}) ([]ListRecoverableFailedX402SettlementsRow, error)
 	ListStorageProviderCreditAllocations(ctx context.Context, invoiceID string) ([]ListStorageProviderCreditAllocationsRow, error)
@@ -366,17 +453,26 @@ type Querier interface {
 	LoadEffectiveDNSEntitlements(ctx context.Context, tenantID string) (LoadEffectiveDNSEntitlementsRow, error)
 	LockAllocatedDepositReversal(ctx context.Context, eventID string) (LockAllocatedDepositReversalRow, error)
 	LockBillingCollectionBalance(ctx context.Context, arg LockBillingCollectionBalanceParams) (int64, error)
+	LockBillingPaymentStatus(ctx context.Context, arg LockBillingPaymentStatusParams) (string, error)
 	LockConfirmedCryptoInvoicePayment(ctx context.Context, arg LockConfirmedCryptoInvoicePaymentParams) (LockConfirmedCryptoInvoicePaymentRow, error)
 	LockCryptoSweepRelayItem(ctx context.Context, itemID string) (LockCryptoSweepRelayItemRow, error)
 	LockCryptoSweepReleaseItem(ctx context.Context, itemID string) (LockCryptoSweepReleaseItemRow, error)
 	LockCryptoTopupBalanceTransaction(ctx context.Context, arg LockCryptoTopupBalanceTransactionParams) (LockCryptoTopupBalanceTransactionRow, error)
 	LockHDWalletState(ctx context.Context) (LockHDWalletStateRow, error)
 	LockInvoicePaymentCreation(ctx context.Context, invoiceID string) error
+	// Locks the base-fee invoice FindOverlappedBaseFeeInvoice found.
+	LockOverlappedBaseFeeInvoice(ctx context.Context, arg LockOverlappedBaseFeeInvoiceParams) (LockOverlappedBaseFeeInvoiceRow, error)
 	LockPendingTopupForCheckout(ctx context.Context, topupID string) (LockPendingTopupForCheckoutRow, error)
 	LockPrepaidBalance(ctx context.Context, arg LockPrepaidBalanceParams) (LockPrepaidBalanceRow, error)
 	LockPrepaidBalanceCents(ctx context.Context, arg LockPrepaidBalanceCentsParams) (int64, error)
+	// Locks the intent row and returns the provider payment it already names.
+	LockProviderIntentPaymentID(ctx context.Context, intentID string) (string, error)
+	LockTenantPresentmentCurrency(ctx context.Context, tenantID string) (LockTenantPresentmentCurrencyRow, error)
 	LockTenantSubscriptionForPromotion(ctx context.Context, tenantID string) (LockTenantSubscriptionForPromotionRow, error)
 	LockTenantSubscriptionForTierChange(ctx context.Context, tenantID string) (LockTenantSubscriptionForTierChangeRow, error)
+	// Locks the tenant's subscription row and returns the Mollie subscription it
+	// already names.
+	LockTenantSubscriptionMollieID(ctx context.Context, tenantID string) (LockTenantSubscriptionMollieIDRow, error)
 	LockTenantX402Address(ctx context.Context, tenantID string) (LockTenantX402AddressRow, error)
 	LockX402SettlementForConfirmation(ctx context.Context, nonceID string) (LockX402SettlementForConfirmationRow, error)
 	LockX402SettlementRollup(ctx context.Context, nonceID string) (LockX402SettlementRollupRow, error)
@@ -392,6 +488,8 @@ type Querier interface {
 	MarkCryptoWalletConfirming(ctx context.Context, arg MarkCryptoWalletConfirmingParams) (int64, error)
 	MarkCryptoWalletForReview(ctx context.Context, arg MarkCryptoWalletForReviewParams) (int64, error)
 	MarkETHCryptoSweepItemBroadcast(ctx context.Context, arg MarkETHCryptoSweepItemBroadcastParams) error
+	// Coverage is measured in the currency the invoice was presented in: the
+	// original amounts of confirmed payments in that currency, net of reversals.
 	MarkFullySettledBillingInvoicePaid(ctx context.Context, arg MarkFullySettledBillingInvoicePaidParams) (int64, error)
 	MarkOperatorAccrualClawedBack(ctx context.Context, accrualLedgerID string) error
 	MarkPaymentReversalForReview(ctx context.Context, reversalID string) error
@@ -443,9 +541,17 @@ type Querier interface {
 	RecordCryptoSweepReleaseCompleted(ctx context.Context, arg RecordCryptoSweepReleaseCompletedParams) error
 	RecordStripeMeterEventFailure(ctx context.Context, arg RecordStripeMeterEventFailureParams) error
 	RecordX402EmbeddedBroadcastOutcome(ctx context.Context, arg RecordX402EmbeddedBroadcastOutcomeParams) error
+	// The settlement keeps the amount fixed by its quote; confirming it after the
+	// quote expired is recorded for accounting review instead of re-pricing.
+	RecordX402SettlementConfirmedAfterQuoteExpiry(ctx context.Context, nonceID string) error
+	// Lowers a payable base-fee invoice to the share of its period that was used,
+	// presented at the rate it was issued at.
+	ReduceUnpaidBaseFeeInvoice(ctx context.Context, arg ReduceUnpaidBaseFeeInvoiceParams) (int64, error)
 	RegisterDirectDepositCustodyAddress(ctx context.Context, arg RegisterDirectDepositCustodyAddressParams) error
 	ReleaseCryptoSweepSources(ctx context.Context, arg ReleaseCryptoSweepSourcesParams) (int64, error)
 	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)
+	// Coverage is measured in the currency the invoice was presented in: the
+	// original amounts of confirmed payments in that currency, net of reversals.
 	ReopenUnderpaidBillingInvoice(ctx context.Context, arg ReopenUnderpaidBillingInvoiceParams) (int64, error)
 	ReserveCryptoSweepRelayerNonce(ctx context.Context, arg ReserveCryptoSweepRelayerNonceParams) (int32, error)
 	ResetClaimingX402Quote(ctx context.Context, quoteID string) error
@@ -453,17 +559,29 @@ type Querier interface {
 	ResolveActiveStripeCustomer(ctx context.Context, tenantID uuid.UUID) (sql.NullString, error)
 	ResolveClusterSubscriptionByStripeID(ctx context.Context, subscriptionID string) (ResolveClusterSubscriptionByStripeIDRow, error)
 	ResolveCryptoAccountingAnomaly(ctx context.Context, arg ResolveCryptoAccountingAnomalyParams) (int64, error)
+	// Records the outcome of a Mollie first payment on its intent, which ends the
+	// presentment-currency lock the open intent holds.
+	ResolveMollieFirstPaymentIntent(ctx context.Context, arg ResolveMollieFirstPaymentIntentParams) error
 	ResolveMolliePaymentObservation(ctx context.Context, arg ResolveMolliePaymentObservationParams) error
 	ResolveMollieSubscriptionInvoice(ctx context.Context, arg ResolveMollieSubscriptionInvoiceParams) (string, error)
+	// Closes the operator review holds of an uncredited top-up whose paid amount
+	// the provider has fully returned; evidence_ref names the closing reversal.
+	ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error)
 	ReviewX402MutationResult(ctx context.Context, arg ReviewX402MutationResultParams) (int64, error)
 	RevokeValidMollieMandates(ctx context.Context, tenantID string) error
 	RewindCryptoScanCursor(ctx context.Context, arg RewindCryptoScanCursorParams) error
+	// Moves every Mollie balance cursor back to a payment's creation time while
+	// that payment's settlement is still pending, so the next read reaches the
+	// payment's balance transaction even though its local row was written after
+	// the cursor passed it.
+	RewindMollieBalanceCursorForPendingSettlement(ctx context.Context, arg RewindMollieBalanceCursorForPendingSettlementParams) (int64, error)
 	RotateHDWalletState(ctx context.Context, arg RotateHDWalletStateParams) error
 	ScheduleTenantTierDowngrade(ctx context.Context, arg ScheduleTenantTierDowngradeParams) error
 	SetBalanceTransactionResult(ctx context.Context, arg SetBalanceTransactionResultParams) (int64, error)
 	SetClusterCheckoutIntentCustomer(ctx context.Context, arg SetClusterCheckoutIntentCustomerParams) error
 	SetClusterCheckoutIntentSessionOpen(ctx context.Context, arg SetClusterCheckoutIntentSessionOpenParams) error
 	SetCryptoWalletCreditedAmount(ctx context.Context, arg SetCryptoWalletCreditedAmountParams) (int64, error)
+	SetInvoicePresentment(ctx context.Context, arg SetInvoicePresentmentParams) (int64, error)
 	SetProviderBillingPaymentAttemptFailure(ctx context.Context, arg SetProviderBillingPaymentAttemptFailureParams) error
 	SetProviderIntentCustomer(ctx context.Context, arg SetProviderIntentCustomerParams) error
 	SetProviderIntentPaymentOpen(ctx context.Context, arg SetProviderIntentPaymentOpenParams) error
@@ -471,7 +589,9 @@ type Querier interface {
 	SetProviderIntentSubscriptionOpen(ctx context.Context, arg SetProviderIntentSubscriptionOpenParams) error
 	SetProviderPaymentIntentFailure(ctx context.Context, arg SetProviderPaymentIntentFailureParams) error
 	SetProviderPaymentIntentStatus(ctx context.Context, arg SetProviderPaymentIntentStatusParams) error
+	SetTenantPresentmentCurrency(ctx context.Context, arg SetTenantPresentmentCurrencyParams) (int64, error)
 	SetX402SettlementPrecomputedHash(ctx context.Context, arg SetX402SettlementPrecomputedHashParams) (int64, error)
+	SettleProviderSettlement(ctx context.Context, arg SettleProviderSettlementParams) (int64, error)
 	StageOverdueInvoiceReminders(ctx context.Context) (int64, error)
 	StageStripeCheckoutTier(ctx context.Context, arg StageStripeCheckoutTierParams) (int64, error)
 	StageTenantSubscriptionPendingStripe(ctx context.Context, arg StageTenantSubscriptionPendingStripeParams) error
@@ -484,6 +604,7 @@ type Querier interface {
 	SuspendActiveTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
 	TenantSubscriptionExists(ctx context.Context, tenantID string) (bool, error)
 	TouchAllocatedDepositCanonicality(ctx context.Context, arg TouchAllocatedDepositCanonicalityParams) error
+	TouchPendingProviderSettlement(ctx context.Context, arg TouchPendingProviderSettlementParams) error
 	UpdateBillingCollectionBalance(ctx context.Context, arg UpdateBillingCollectionBalanceParams) (int64, error)
 	UpdateBillingPaymentAttemptProviderStatus(ctx context.Context, arg UpdateBillingPaymentAttemptProviderStatusParams) error
 	UpdateBillingPaymentProviderStatus(ctx context.Context, arg UpdateBillingPaymentProviderStatusParams) error
@@ -510,6 +631,7 @@ type Querier interface {
 	UpsertCanonicalUsageRecord(ctx context.Context, arg UpsertCanonicalUsageRecordParams) error
 	UpsertClusterPricingConfig(ctx context.Context, arg UpsertClusterPricingConfigParams) (string, error)
 	UpsertCompletedMeteringWindow(ctx context.Context, arg UpsertCompletedMeteringWindowParams) error
+	UpsertFXRate(ctx context.Context, arg UpsertFXRateParams) error
 	UpsertHDWalletState(ctx context.Context, arg UpsertHDWalletStateParams) error
 	UpsertInvoiceDraft(ctx context.Context, arg UpsertInvoiceDraftParams) (string, error)
 	UpsertInvoiceForPeriod(ctx context.Context, arg UpsertInvoiceForPeriodParams) (string, error)
@@ -517,6 +639,7 @@ type Querier interface {
 	UpsertLegacyProviderUsageRecord(ctx context.Context, arg UpsertLegacyProviderUsageRecordParams) error
 	UpsertManualReviewInvoice(ctx context.Context, arg UpsertManualReviewInvoiceParams) (uuid.UUID, error)
 	UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSourceParams) (string, error)
+	UpsertMollieBalanceCursor(ctx context.Context, arg UpsertMollieBalanceCursorParams) error
 	UpsertMollieCustomer(ctx context.Context, arg UpsertMollieCustomerParams) error
 	UpsertMollieFirstPaymentIntent(ctx context.Context, arg UpsertMollieFirstPaymentIntentParams) (string, error)
 	UpsertMollieMandate(ctx context.Context, arg UpsertMollieMandateParams) error

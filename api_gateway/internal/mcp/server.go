@@ -53,6 +53,7 @@ type Server struct {
 	trustedProxies *middleware.TrustedProxies
 	skipperClient  tools.SkipperCaller
 	originAllowed  func(string) bool
+	graphqlURL     string
 }
 
 type skipperToolAvailability interface {
@@ -71,6 +72,9 @@ type Config struct {
 	TrustedProxies *middleware.TrustedProxies
 	SkipperClient  tools.SkipperCaller
 	OriginAllowed  func(string) bool
+	// GatewayGraphQLURL is the GraphQL endpoint the schema tools and the API
+	// catalog introspect.
+	GatewayGraphQLURL string
 }
 
 // NewServer creates a new MCP server with all resources, tools, and prompts registered.
@@ -102,6 +106,7 @@ func NewServer(cfg Config) (*Server, error) {
 		trustedProxies: cfg.TrustedProxies,
 		skipperClient:  cfg.SkipperClient,
 		originAllowed:  cfg.OriginAllowed,
+		graphqlURL:     cfg.GatewayGraphQLURL,
 	}
 
 	// Register resources
@@ -149,7 +154,7 @@ func (s *Server) registerResources() {
 	resources.RegisterSupportResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
 
 	// API schema resources (catalog of curated examples)
-	resources.RegisterAPISchemaResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
+	resources.RegisterAPISchemaResources(s.mcpServer, s.serviceClients, s.resolver, s.logger, s.graphqlURL)
 }
 
 // registerTools registers all MCP tools.
@@ -204,6 +209,9 @@ func (s *Server) registerTools() {
 	// Incident tools (Lookout incidents on owned clusters)
 	tools.RegisterIncidentTools(s.mcpServer, s.resolver)
 
+	// Outbound webhook tools (Bosun endpoints, delivery log, replay)
+	tools.RegisterWebhookTools(s.mcpServer, s.resolver)
+
 	// QoE diagnostic tools (for video consultant)
 	tools.RegisterQoETools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
@@ -211,7 +219,7 @@ func (s *Server) registerTools() {
 	tools.RegisterSupportTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
 	// API integration assistant tools (schema introspection, query generation)
-	tools.RegisterAPIAssistantTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+	tools.RegisterAPIAssistantTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger, s.graphqlURL)
 
 	// Skipper proxy tools (knowledge search, web search — forwarded to Skipper spoke)
 	tools.RegisterSkipperTools(s.mcpServer, s.skipperClient, s.logger)
@@ -512,7 +520,7 @@ func (s *Server) registerAccessMiddleware() {
 				} else if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
 					errorCount = 1
 				}
-				s.usageTracker.Record(start, tenantID, authType, "mcp", opName, userID, getContextTokenHash(ctx), durationMs, 0, errorCount)
+				s.usageTracker.Record(start, tenantID, authType, "mcp", opName, nil, userID, getContextTokenHash(ctx), durationMs, 0, errorCount)
 			}
 
 			return result, err
@@ -1070,6 +1078,34 @@ func mcpToolGraphQLOp(toolName string) string {
 		return "resolveIncident"
 	case "add_incident_note":
 		return "addIncidentNote"
+	case "list_webhook_endpoints":
+		return "webhookEndpointsConnection"
+	case "get_webhook_endpoint":
+		return "webhookEndpoint"
+	case "list_webhook_deliveries":
+		return "webhookDeliveriesConnection"
+	case "get_webhook_delivery":
+		return "webhookDelivery"
+	case "list_webhook_event_types":
+		return "webhookEventTypes"
+	case "create_webhook_endpoint":
+		return "createWebhookEndpoint"
+	case "update_webhook_endpoint":
+		return "updateWebhookEndpoint"
+	case "delete_webhook_endpoint":
+		return "deleteWebhookEndpoint"
+	case "enable_webhook_endpoint":
+		return "enableWebhookEndpoint"
+	case "disable_webhook_endpoint":
+		return "disableWebhookEndpoint"
+	case "rotate_webhook_secret":
+		return "rotateWebhookEndpointSecret"
+	case "test_webhook_endpoint":
+		return "testWebhookEndpoint"
+	case "replay_webhook_delivery":
+		return "replayWebhookDelivery"
+	case "replay_webhook_deliveries":
+		return "replayWebhookDeliveries"
 	default:
 		return ""
 	}

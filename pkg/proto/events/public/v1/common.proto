@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package frameworks.events.public.v1;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1;publicv1";
+
+// Messages in this package are the public tenant event contract. Their field
+// names are the webhook JSON, so they carry only identifiers and values a
+// tenant already sees through the API: no internal stream names, node IDs,
+// storage paths, URLs, IP addresses, or raw error text.
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_CLIP = 1;
+  ARTIFACT_KIND_RECORDING = 2;
+  ARTIFACT_KIND_UPLOAD = 3;
+}
+
+// Artifact identifies a clip, recording, or upload by its public identifiers.
+message Artifact {
+  // artifact_id is the public artifact hash used by the API.
+  string artifact_id = 1;
+  ArtifactKind kind = 2;
+  // stream_id is the public stream UUID; empty for uploads.
+  string stream_id = 3;
+  string playback_id = 4;
+}
+
+// Money is an amount in the minor unit of an ISO 4217 currency.
+message Money {
+  int64 amount_minor = 1;
+  string currency = 2;
+}
+
+// MediaFailureReason is the coarse failure class shown to tenants. Detailed
+// causes stay in internal logs and events.
+enum MediaFailureReason {
+  MEDIA_FAILURE_REASON_UNSPECIFIED = 0;
+  MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE = 1;
+  MEDIA_FAILURE_REASON_PROCESSING_FAILED = 2;
+  MEDIA_FAILURE_REASON_STORAGE_FAILED = 3;
+  MEDIA_FAILURE_REASON_INVALID_INPUT = 4;
+  MEDIA_FAILURE_REASON_QUOTA_EXCEEDED = 5;
+  MEDIA_FAILURE_REASON_TIMED_OUT = 6;
+}

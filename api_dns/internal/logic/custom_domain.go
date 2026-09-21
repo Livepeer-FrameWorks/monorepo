@@ -22,10 +22,17 @@ import (
 // during the DNS-01 challenge.
 const AcmeDNSZoneLabel = "acme-dns"
 
+// CustomDomainVerificationPeriod is how long a custom domain may stay in
+// pending_verification. A domain whose CNAMEs have not verified by then is
+// marked verification_failed and custom_domain.failed is emitted; requesting
+// the domain again restarts verification.
+const CustomDomainVerificationPeriod = 7 * 24 * time.Hour
+
 // EnsureCustomDomain creates or refreshes a tenant_custom_domains row.
 // Generates a stable random `acme_dns_subdomain` slug on first insert; the
 // slug is reused on subsequent calls so the customer's CNAME never has to
-// change. Status defaults to pending_verification.
+// change. Status defaults to pending_verification, and a tearing_down or
+// verification_failed row restarts verification.
 func (m *CertManager) EnsureCustomDomain(ctx context.Context, tenantID, domain string) (*store.TenantCustomDomain, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	domain = strings.TrimSpace(strings.ToLower(domain))
@@ -33,7 +40,7 @@ func (m *CertManager) EnsureCustomDomain(ctx context.Context, tenantID, domain s
 		return nil, fmt.Errorf("tenantID and domain are required")
 	}
 	if existing, err := m.store.GetTenantCustomDomain(ctx, tenantID, domain); err == nil {
-		if existing.Status != "tearing_down" {
+		if existing.Status != "tearing_down" && existing.Status != "verification_failed" {
 			return existing, nil
 		}
 		return m.store.EnsureTenantCustomDomain(ctx, tenantID, domain, existing.AcmeDNSSubdomain)
@@ -82,9 +89,10 @@ func (m *CertManager) RemoveCustomDomain(ctx context.Context, tenantID, domain s
 //   - `_acme-challenge.{domain}` → `{acme_dns_subdomain}.acme-dns.{root}`
 //     (ACME-DNS-01 delegation)
 //
-// On success transitions pending_verification → verified. Verification
-// errors leave the row in pending_verification with last_error set so the
-// next worker tick retries.
+// On success transitions pending_verification → verified, committing
+// custom_domain.verified with it (re-verifying a cert_failed domain emits
+// nothing). Verification errors leave the row in its status with last_error
+// set so the next worker tick retries.
 func (m *CertManager) VerifyCustomDomain(ctx context.Context, row store.TenantCustomDomain, tenantSubdomain, rootDomain string) error {
 	rootDomain = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(rootDomain, ".")))
 	tenantSubdomain = strings.TrimSpace(strings.ToLower(tenantSubdomain))
@@ -119,7 +127,7 @@ func (m *CertManager) VerifyCustomDomain(ctx context.Context, row store.TenantCu
 		return setVerifyFailure(ctx, m.store, row,
 			fmt.Sprintf("acme-challenge CNAME mismatch: got %q, expected %q", acmeCNAME, expectedAcme))
 	}
-	_, err = m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, row.Status, "verified", "")
+	_, err = m.store.MarkTenantCustomDomainVerified(ctx, row.TenantID, row.Domain, row.Status)
 	return err
 }
 
@@ -221,6 +229,7 @@ type customDomainStore interface {
 // Returns the number of rows whose status transitioned.
 //
 // pending_verification → verified:      both CNAMEs resolve to the platform.
+// pending_verification → verification_failed: CustomDomainVerificationPeriod passed.
 // verified             → pending_alias: the tenant alias bundle is not issued yet.
 // pending_alias        → verified:      the tenant alias bundle is issued.
 // verified             → cert_issued:   the tenant bundle now includes the SAN.
@@ -237,12 +246,16 @@ func (m *CertManager) ProcessPendingCustomDomains(ctx context.Context, rootDomai
 	if rootDomain == "" {
 		return 0, fmt.Errorf("rootDomain is required")
 	}
+	expired, err := m.store.ExpireTenantCustomDomainVerifications(ctx, CustomDomainVerificationPeriod)
+	if err != nil {
+		return 0, fmt.Errorf("expire custom domain verifications: %w", err)
+	}
 	rows, err := m.store.ListTenantCustomDomainsByStatus(ctx, []string{"pending_verification", "verified", "pending_alias", "cert_failed", "tearing_down"})
 	if err != nil {
 		return 0, fmt.Errorf("list custom domains: %w", err)
 	}
 	now := time.Now()
-	processed := 0
+	processed := expired
 	for _, row := range rows {
 		switch row.Status {
 		case "pending_alias":

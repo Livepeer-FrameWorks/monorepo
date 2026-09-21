@@ -1,0 +1,17 @@
+fragment WebhookDeliveryFields on WebhookDelivery {
+  id
+  endpointId
+  eventId
+  eventType
+  kind
+  status
+  attempts
+  nextAttemptAt
+  lastStatusCode
+  lastErrorClass
+  deliveredAt
+  replayCount
+  lastReplayedAt
+  createdAt
+  updatedAt
+}

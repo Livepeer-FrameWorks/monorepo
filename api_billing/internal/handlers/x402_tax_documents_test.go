@@ -135,14 +135,18 @@ func TestLoadCryptoTaxSnapshotUsesLockedQuoteRate(t *testing.T) {
 	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("SELECT quote.tax_document_kind, quote.tax_profile_snapshot").
 		WithArgs("tenant-1", "0xtx").
-		WillReturnRows(sqlmock.NewRows([]string{"tax_document_kind", "tax_profile_snapshot", "eur_per_usd_rate", "created_at"}).
-			AddRow("simplified", []byte(`{}`), "0.9123456789", observedAt))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"tax_document_kind", "tax_profile_snapshot", "created_at",
+			"original_amount_cents", "original_currency", "eur_amount_cents",
+			"fx_units_per_eur", "fx_source", "fx_reference_date",
+		}).AddRow("simplified", []byte(`{}`), observedAt, int64(1096), "USD", int64(1000), "1.0960000000", "ecb", observedAt))
 
 	snapshot, err := (&X402Handler{db: db}).loadCryptoTaxSnapshot(context.Background(), "tenant-1", "x402_payment", "0xtx")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.DocumentKind != "simplified" || snapshot.EURPerUSDRate != 0.9123456789 || !snapshot.FXRateObservedAt.Equal(observedAt) {
+	if snapshot.DocumentKind != "simplified" || snapshot.FX.OriginalMinor != 1096 || snapshot.FX.OriginalCurrency != "USD" ||
+		snapshot.FX.EURMinor != 1000 || snapshot.FX.UnitsPerEUR.String() != "1.096" || !snapshot.FXRateObservedAt.Equal(observedAt) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

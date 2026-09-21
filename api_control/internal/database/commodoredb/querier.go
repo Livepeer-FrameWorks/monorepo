@@ -67,7 +67,7 @@ type Querier interface {
 	ClearManagedStreamActiveCluster(ctx context.Context, arg ClearManagedStreamActiveClusterParams) (int64, error)
 	CompleteInvalidation(ctx context.Context, id string) error
 	CompleteMediaAuthorityObligation(ctx context.Context, arg CompleteMediaAuthorityObligationParams) (int64, error)
-	CompleteServiceEventOutbox(ctx context.Context, id string) error
+	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
 	ConsumeAuthorizationCode(ctx context.Context, id string) error
 	ConsumeWalletChallenge(ctx context.Context, arg ConsumeWalletChallengeParams) (string, error)
 	CountAPITokensForUser(ctx context.Context, arg CountAPITokensForUserParams) (int32, error)
@@ -388,6 +388,7 @@ type Querier interface {
 	LockMediaPlacementPolicy(ctx context.Context, arg LockMediaPlacementPolicyParams) (CommodoreMediaPlacementPolicy, error)
 	LockMediaPlacementStream(ctx context.Context, arg LockMediaPlacementStreamParams) (string, error)
 	LockPolicyBundleStream(ctx context.Context, arg LockPolicyBundleStreamParams) error
+	LockPushTargetStatus(ctx context.Context, arg LockPushTargetStatusParams) (sql.NullString, error)
 	LockRefreshTokenByHash(ctx context.Context, tokenHash string) (LockRefreshTokenByHashRow, error)
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
 	LockStreamMistSourcePins(ctx context.Context, arg LockStreamMistSourcePinsParams) ([]string, error)
@@ -409,7 +410,7 @@ type Querier interface {
 	MarkMediaAuthorityVersionTombstone(ctx context.Context, arg MarkMediaAuthorityVersionTombstoneParams) (int64, error)
 	MarkMediaCellPlacementActivated(ctx context.Context, arg MarkMediaCellPlacementActivatedParams) error
 	MarkMediaPlacementChangesEffective(ctx context.Context, arg MarkMediaPlacementChangesEffectiveParams) (int64, error)
-	MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error
+	MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkServiceEventOutboxClaimedParams) error
 	MarkStreamThumbnailCleanupAcked(ctx context.Context, arg MarkStreamThumbnailCleanupAckedParams) error
 	MediaAuthorityRecoveryTime(ctx context.Context) (time.Time, error)
 	MediaPlacementStreamExists(ctx context.Context, arg MediaPlacementStreamExistsParams) (bool, error)
@@ -484,7 +485,9 @@ type Querier interface {
 	// lease is kept so it is not compiled twice at once. The lane doing the compile
 	// that recorded the use is left alone, or it would fold itself on every run.
 	ReviveDormantMediaAuthorityRenewal(ctx context.Context, arg ReviveDormantMediaAuthorityRenewalParams) (int64, error)
-	RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (string, error)
+	// was_active is the state before this update, so a repeated revoke is
+	// recognisable as no change.
+	RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (RevokeAPITokenRow, error)
 	RevokeRefreshTokenByID(ctx context.Context, id string) error
 	RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)

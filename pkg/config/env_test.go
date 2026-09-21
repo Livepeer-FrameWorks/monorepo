@@ -17,32 +17,6 @@ func TestGetEnvWithDefault(t *testing.T) {
 	}
 }
 
-func TestGetEnvInt(t *testing.T) {
-	t.Setenv("NUM", "")
-	if got := GetEnvInt("NUM", 42); got != 42 {
-		t.Fatalf("expected 42, got %d", got)
-	}
-	t.Setenv("NUM", "100")
-	if got := GetEnvInt("NUM", 42); got != 100 {
-		t.Fatalf("expected 100, got %d", got)
-	}
-	t.Setenv("NUM", "notint")
-	if got := GetEnvInt("NUM", 7); got != 7 {
-		t.Fatalf("expected 7 on parse error, got %d", got)
-	}
-}
-
-func TestGetEnvBool(t *testing.T) {
-	t.Setenv("FLAG", "")
-	if got := GetEnvBool("FLAG", true); got != true {
-		t.Fatalf("expected true default, got %v", got)
-	}
-	t.Setenv("FLAG", "false")
-	if got := GetEnvBool("FLAG", true); got != false {
-		t.Fatalf("expected false, got %v", got)
-	}
-}
-
 func TestGetLogLevel(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 	if GetLogLevel() != logrus.DebugLevel {
@@ -84,67 +58,10 @@ func TestIsProductionUsesBuildEnvOnly(t *testing.T) {
 	}
 }
 
-func TestIsDevelopmentUsesBuildEnvOnly(t *testing.T) {
-	t.Setenv("BUILD_ENV", "")
-	if !IsDevelopment() {
-		t.Fatalf("expected empty BUILD_ENV to default to development")
-	}
-
-	t.Setenv("BUILD_ENV", "development")
-	if !IsDevelopment() {
-		t.Fatalf("expected BUILD_ENV=development to report development")
-	}
-
-	t.Setenv("BUILD_ENV", "production")
-	if IsDevelopment() {
-		t.Fatalf("expected BUILD_ENV=production to report non-development")
-	}
-}
-
-func TestGetCookieDomainNormalizesLeadingDot(t *testing.T) {
-	t.Setenv("COOKIE_DOMAIN", ".example.com")
-	if got := GetCookieDomain(); got != "example.com" {
-		t.Fatalf("expected example.com, got %q", got)
-	}
-}
-
-func TestGetGatewayPublicURLTrimsTrailingSlash(t *testing.T) {
-	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com/")
-	if got := GetGatewayPublicURL(); got != "https://api.example.com" {
-		t.Fatalf("expected trimmed gateway URL, got %q", got)
-	}
-}
-
-func TestGetGatewayGraphQLURLUsesGatewayPublicURL(t *testing.T) {
-	t.Setenv("GATEWAY_PUBLIC_URL", "https://api.example.com")
-	if got := GetGatewayGraphQLURL(); got != "https://api.example.com/graphql/" {
-		t.Fatalf("expected derived GraphQL URL, got %q", got)
-	}
-}
-
-func TestX402IncludeTestnetsEnabled(t *testing.T) {
-	t.Setenv("X402_INCLUDE_TESTNETS", "true")
-	if !X402IncludeTestnetsEnabled() {
-		t.Fatal("expected X402_INCLUDE_TESTNETS=true to enable testnets")
-	}
-}
-
-func TestCryptoPaymentBreakersDefaultEnabled(t *testing.T) {
-	t.Setenv("CRYPTO_DEPOSITS_ENABLED", "")
-	t.Setenv("X402_PAYMENTS_ENABLED", "")
-	if !CryptoDepositsEnabled() {
-		t.Fatal("expected direct crypto deposits to default enabled")
-	}
-	if !X402PaymentsEnabled() {
-		t.Fatal("expected x402 payments to default enabled")
-	}
-
-	t.Setenv("CRYPTO_DEPOSITS_ENABLED", "false")
-	t.Setenv("X402_PAYMENTS_ENABLED", "false")
-	if CryptoDepositsEnabled() {
-		t.Fatal("expected direct crypto deposit breaker to disable creation")
-	}
-	if X402PaymentsEnabled() {
-		t.Fatal("expected x402 breaker to disable new payments")
+func TestBuildEnvironmentIsDevelopment(t *testing.T) {
+	for value, want := range map[string]bool{"": true, "dev": true, " Development ": true, "production": false, "staging": false} {
+		if got := (BuildEnvironment{BuildEnv: value}).IsDevelopment(); got != want {
+			t.Fatalf("BuildEnvironment{%q}.IsDevelopment() = %v, want %v", value, got, want)
+		}
 	}
 }

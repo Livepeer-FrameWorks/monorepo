@@ -411,7 +411,47 @@ func (q *Queries) ListTenantEntitledClusterIDs(ctx context.Context, tenantID str
 	return items, nil
 }
 
-const materializeTenantClusterAccess = `-- name: MaterializeTenantClusterAccess :execrows
+const lockTenantClusterAccessActive = `-- name: LockTenantClusterAccessActive :one
+SELECT COALESCE(is_active AND subscription_status = 'active'
+                AND (expires_at IS NULL OR expires_at > NOW()), false)::boolean AS active
+FROM quartermaster.tenant_cluster_access
+WHERE tenant_id = $1::uuid
+  AND cluster_id = $2::text
+FOR UPDATE
+`
+
+type LockTenantClusterAccessActiveParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	ClusterID string `db:"cluster_id" json:"cluster_id"`
+}
+
+// Locks the tenant's access row for the cluster and reports whether it grants
+// access: active, subscribed, and unexpired.
+func (q *Queries) LockTenantClusterAccessActive(ctx context.Context, arg LockTenantClusterAccessActiveParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantClusterAccessActive, arg.TenantID, arg.ClusterID)
+	var active bool
+	err := row.Scan(&active)
+	return active, err
+}
+
+const lockTenantClusterAccessKey = `-- name: LockTenantClusterAccessKey :exec
+SELECT pg_advisory_xact_lock(hashtextextended('tenant_cluster_access:' || $1::text || ':' || $2::text, 0))
+`
+
+type LockTenantClusterAccessKeyParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	ClusterID string `db:"cluster_id" json:"cluster_id"`
+}
+
+// Serializes the writers that grant a tenant access to a cluster, so each one
+// reads the access state the previous one committed, including when no row
+// exists yet for FOR UPDATE to lock.
+func (q *Queries) LockTenantClusterAccessKey(ctx context.Context, arg LockTenantClusterAccessKeyParams) error {
+	_, err := q.db.ExecContext(ctx, lockTenantClusterAccessKey, arg.TenantID, arg.ClusterID)
+	return err
+}
+
+const materializeTenantClusterAccess = `-- name: MaterializeTenantClusterAccess :many
 INSERT INTO quartermaster.tenant_cluster_access (
     tenant_id, cluster_id, access_level, access_source, subscription_status,
     is_active, granted_at, requested_at, created_at, updated_at
@@ -456,6 +496,7 @@ WHERE EXCLUDED.access_source = 'owner'
                AND quartermaster.tenant_cluster_access.expires_at <= NOW())
        )
    )
+RETURNING id::text
 `
 
 type MaterializeTenantClusterAccessParams struct {
@@ -465,17 +506,34 @@ type MaterializeTenantClusterAccessParams struct {
 	SubscriptionStatus string `db:"subscription_status" json:"subscription_status"`
 }
 
-func (q *Queries) MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, materializeTenantClusterAccess,
+// Returns the access row's ID when the insert or update applied, and no row
+// when the conflict guard kept the existing access.
+func (q *Queries) MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, materializeTenantClusterAccess,
 		arg.TenantID,
 		arg.ClusterID,
 		arg.AccessSource,
 		arg.SubscriptionStatus,
 	)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const revokeMaterializedTenantClusterAccess = `-- name: RevokeMaterializedTenantClusterAccess :execrows

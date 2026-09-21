@@ -4,7 +4,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 )
@@ -277,52 +276,27 @@ func TestReaderInfoChangedDetectsInPlaceRewrite(t *testing.T) {
 	}
 }
 
-func TestGetSharedReader_EmptyEnvReturnsNil(t *testing.T) {
-	oldReader := sharedGeo.reader
-	t.Cleanup(func() {
-		sharedGeo = struct {
-			once   sync.Once
-			reader *Reader
-		}{reader: oldReader}
-		sharedGeo.once.Do(func() {})
-	})
-
-	sharedGeo = struct {
-		once   sync.Once
-		reader *Reader
-	}{}
-	t.Setenv("GEOIP_MMDB_PATH", "")
-
-	if got := GetSharedReader(); got != nil {
-		t.Fatalf("expected nil shared reader, got %+v", got)
+func TestOpenEmptyPathDisablesGeoIP(t *testing.T) {
+	reader, err := Open("")
+	if err != nil || reader != nil {
+		t.Fatalf("Open(\"\") = %v, %v; want nil, nil", reader, err)
 	}
 }
 
-func TestGetSharedReader_UsesExistingSingletonWhenInitialized(t *testing.T) {
-	oldReader := sharedGeo.reader
-	t.Cleanup(func() {
-		sharedGeo = struct {
-			once   sync.Once
-			reader *Reader
-		}{reader: oldReader}
-		sharedGeo.once.Do(func() {})
-	})
-
-	want := &Reader{provider: "manual", dbPath: "/tmp/manual.mmdb"}
-	sharedGeo = struct {
-		once   sync.Once
-		reader *Reader
-	}{
-		reader: want,
+func TestOpenFailsForUnreadablePath(t *testing.T) {
+	corrupt := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
+	if err := os.WriteFile(corrupt, []byte("not an mmdb"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	sharedGeo.once.Do(func() {})
-	t.Setenv("GEOIP_MMDB_PATH", "/does/not/matter.mmdb")
-
-	got := GetSharedReader()
-	if got != want {
-		t.Fatalf("expected existing singleton pointer, got %+v", got)
-	}
-	if got.GetProvider() != "manual" {
-		t.Fatalf("provider: got %q, want %q", got.GetProvider(), "manual")
+	for name, path := range map[string]string{
+		"missing file": filepath.Join(t.TempDir(), "missing.mmdb"),
+		"corrupt file": corrupt,
+	} {
+		t.Run(name, func(t *testing.T) {
+			reader, err := Open(path)
+			if err == nil || reader != nil {
+				t.Fatalf("Open(%q) = %v, %v; want an error", path, reader, err)
+			}
+		})
 	}
 }

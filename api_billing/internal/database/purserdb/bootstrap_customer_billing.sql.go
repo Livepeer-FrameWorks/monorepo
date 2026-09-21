@@ -111,18 +111,19 @@ func (q *Queries) InsertBootstrapEntitlementOverride(ctx context.Context, arg In
 
 const insertBootstrapTenantSubscription = `-- name: InsertBootstrapTenantSubscription :exec
 INSERT INTO purser.tenant_subscriptions (
-    id, tenant_id, tier_id, billing_model, status, started_at, created_at, updated_at
+    id, tenant_id, tier_id, billing_model, presentment_currency, status, started_at, created_at, updated_at
 ) VALUES (
     $1, $2::text::uuid, $3,
-    $4, 'active', NOW(), NOW(), NOW()
+    $4, $5::text, 'active', NOW(), NOW(), NOW()
 )
 `
 
 type InsertBootstrapTenantSubscriptionParams struct {
-	ID           uuid.UUID `db:"id" json:"id"`
-	TenantID     string    `db:"tenant_id" json:"tenant_id"`
-	TierID       uuid.UUID `db:"tier_id" json:"tier_id"`
-	BillingModel string    `db:"billing_model" json:"billing_model"`
+	ID                  uuid.UUID `db:"id" json:"id"`
+	TenantID            string    `db:"tenant_id" json:"tenant_id"`
+	TierID              uuid.UUID `db:"tier_id" json:"tier_id"`
+	BillingModel        string    `db:"billing_model" json:"billing_model"`
+	PresentmentCurrency string    `db:"presentment_currency" json:"presentment_currency"`
 }
 
 func (q *Queries) InsertBootstrapTenantSubscription(ctx context.Context, arg InsertBootstrapTenantSubscriptionParams) error {
@@ -131,6 +132,7 @@ func (q *Queries) InsertBootstrapTenantSubscription(ctx context.Context, arg Ins
 		arg.TenantID,
 		arg.TierID,
 		arg.BillingModel,
+		arg.PresentmentCurrency,
 	)
 	return err
 }

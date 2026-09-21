@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/dtsh"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -616,8 +617,9 @@ func reconcileProcessingOverridePersistence(mistServerURL string, logger logging
 	if !hasExpired || strings.TrimSpace(mistServerURL) == "" {
 		return
 	}
-	client := mist.NewClient(logger)
-	client.BaseURL = mistServerURL
+	clientConfig := appconfig.MistClient()
+	clientConfig.BaseURL = mistServerURL
+	client := mist.NewClient(logger, clientConfig)
 	response, err := client.GetActiveStreams()
 	if err != nil {
 		logger.WithError(err).Warn("Could not reconcile expired processing policies with Mist; preserving local authority")
@@ -978,7 +980,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	livepeerSegmentCh := RegisterLivepeerSegmentCompleteListener(streamName)
 	defer UnregisterLivepeerSegmentCompleteListener(streamName)
 
-	mistClient := mist.NewClient(h.logger)
+	mistClient := mist.NewClient(h.logger, appconfig.MistClient())
 	if h.mistServerURL != "" {
 		mistClient.BaseURL = h.mistServerURL
 	}

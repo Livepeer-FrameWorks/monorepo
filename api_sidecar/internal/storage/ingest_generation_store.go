@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 )
 
@@ -51,10 +52,10 @@ type IngestGenerationStore struct {
 }
 
 func DefaultIngestGenerationStorePath() string {
-	if path := strings.TrimSpace(os.Getenv("FRAMEWORKS_INGEST_GENERATION_STORE_PATH")); path != "" {
+	if path := strings.TrimSpace(appconfig.Runtime().IngestGenerationStorePath); path != "" {
 		return path
 	}
-	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+	if stateDir := strings.TrimSpace(appconfig.StateDir()); stateDir != "" {
 		return filepath.Join(stateDir, "ingest-generation-fences")
 	}
 	return ""

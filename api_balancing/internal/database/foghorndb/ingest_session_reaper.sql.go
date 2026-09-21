@@ -117,7 +117,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
     ended_reason = $1::text
 WHERE id = $2::text::uuid AND tenant_id = $3::text::uuid
   AND stream_internal_name = $4 AND ended_at IS NULL
-RETURNING node_id, start_trigger_uuid
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type RetireIngestSessionParams struct {
@@ -130,6 +130,7 @@ type RetireIngestSessionParams struct {
 type RetireIngestSessionRow struct {
 	NodeID           string `db:"node_id" json:"node_id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (RetireIngestSessionRow, error) {
@@ -140,7 +141,7 @@ func (q *Queries) RetireIngestSession(ctx context.Context, arg RetireIngestSessi
 		arg.StreamInternalName,
 	)
 	var i RetireIngestSessionRow
-	err := row.Scan(&i.NodeID, &i.StartTriggerUuid)
+	err := row.Scan(&i.NodeID, &i.StartTriggerUuid, &i.StreamID)
 	return i, err
 }
 
@@ -151,7 +152,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE tenant_id = $1::text::uuid
   AND stream_internal_name = $2
   AND start_trigger_uuid = $3 AND ended_at IS NULL
-RETURNING id::text AS session_id, node_id
+RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type RetireIngestSessionByClaimParams struct {
@@ -163,12 +164,13 @@ type RetireIngestSessionByClaimParams struct {
 type RetireIngestSessionByClaimRow struct {
 	SessionID string `db:"session_id" json:"session_id"`
 	NodeID    string `db:"node_id" json:"node_id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) RetireIngestSessionByClaim(ctx context.Context, arg RetireIngestSessionByClaimParams) (RetireIngestSessionByClaimRow, error) {
 	row := q.db.QueryRowContext(ctx, retireIngestSessionByClaim, arg.TenantID, arg.StreamInternalName, arg.ClaimToken)
 	var i RetireIngestSessionByClaimRow
-	err := row.Scan(&i.SessionID, &i.NodeID)
+	err := row.Scan(&i.SessionID, &i.NodeID, &i.StreamID)
 	return i, err
 }
 
@@ -179,7 +181,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
 WHERE id = $1::text::uuid AND tenant_id = $2::text::uuid
   AND ended_at IS NULL AND projection_state = 'pending'
   AND started_at < NOW() - ($3::bigint * INTERVAL '1 millisecond')
-RETURNING node_id
+RETURNING node_id, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type RetireNeverProjectedIngestSessionParams struct {
@@ -188,9 +190,14 @@ type RetireNeverProjectedIngestSessionParams struct {
 	OlderThanMs int64  `db:"older_than_ms" json:"older_than_ms"`
 }
 
-func (q *Queries) RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (string, error) {
+type RetireNeverProjectedIngestSessionRow struct {
+	NodeID   string `db:"node_id" json:"node_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (RetireNeverProjectedIngestSessionRow, error) {
 	row := q.db.QueryRowContext(ctx, retireNeverProjectedIngestSession, arg.SessionID, arg.TenantID, arg.OlderThanMs)
-	var node_id string
-	err := row.Scan(&node_id)
-	return node_id, err
+	var i RetireNeverProjectedIngestSessionRow
+	err := row.Scan(&i.NodeID, &i.StreamID)
+	return i, err
 }

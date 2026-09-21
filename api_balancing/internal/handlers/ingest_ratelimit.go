@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"frameworks/api_balancing/internal/appconfig"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	sharedmw "github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 
@@ -35,9 +36,9 @@ type ingestRateLimiter struct {
 	burst      float64
 	maxBuckets int
 
-	// Raw env values the current settings were derived from, so a SIGHUP
-	// env reload is actually picked up: Foghorn advertises reload, and
-	// settings frozen at construction would make it silently untrue.
+	// Raw configured values the current settings were derived from, so a
+	// SIGHUP env reload is picked up: Foghorn advertises reload, and settings
+	// frozen at construction would make it silently untrue.
 	rawRate    string
 	rawBurst   string
 	rawBuckets string
@@ -45,10 +46,22 @@ type ingestRateLimiter struct {
 
 var ingestLimiter = newIngestRateLimiter()
 
-func ingestLimiterEnv() (rawRate, rawBurst, rawBuckets string) {
-	return config.GetEnv("INGEST_RESOLVE_RATE_PER_MIN", ""),
-		config.GetEnv("INGEST_RESOLVE_BURST", ""),
-		config.GetEnv("INGEST_RESOLVE_MAX_BUCKETS", "")
+func ingestLimiterSettings() (rawRate, rawBurst, rawBuckets string) {
+	settings := appconfig.Current()
+	return settings.IngestResolveRatePerMinute, settings.IngestResolveBurst, settings.IngestResolveMaxBuckets
+}
+
+// parseIngestLimit returns raw as an integer, or fallback when raw is empty or
+// not an integer.
+func parseIngestLimit(raw string, fallback int) int {
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func newIngestRateLimiter() *ingestRateLimiter {
@@ -60,22 +73,22 @@ func newIngestRateLimiter() *ingestRateLimiter {
 	return l
 }
 
-// applySettings re-reads the limits from the environment. Buckets are kept:
-// only the refill rate and ceilings change, so a reload does not hand every
-// caller a fresh allowance.
+// applySettings re-reads the limits from the current configuration. Buckets
+// are kept: only the refill rate and ceilings change, so a reload does not
+// hand every caller a fresh allowance.
 func (l *ingestRateLimiter) applySettings() {
-	rawRate, rawBurst, rawBuckets := ingestLimiterEnv()
-	l.ratePerSec = float64(max(config.GetEnvInt("INGEST_RESOLVE_RATE_PER_MIN", 60), 1)) / 60.0
-	l.burst = float64(max(config.GetEnvInt("INGEST_RESOLVE_BURST", 10), 1))
-	l.maxBuckets = max(config.GetEnvInt("INGEST_RESOLVE_MAX_BUCKETS", 50000), 1)
+	rawRate, rawBurst, rawBuckets := ingestLimiterSettings()
+	l.ratePerSec = float64(max(parseIngestLimit(rawRate, 60), 1)) / 60.0
+	l.burst = float64(max(parseIngestLimit(rawBurst, 10), 1))
+	l.maxBuckets = max(parseIngestLimit(rawBuckets, 50000), 1)
 	l.rawRate, l.rawBurst, l.rawBuckets = rawRate, rawBurst, rawBuckets
 }
 
-// refreshSettingsLocked reapplies limits when the environment has changed
+// refreshSettingsLocked reapplies limits when the configuration has changed
 // underneath a running process (SIGHUP env-file reload), reporting whether
 // anything changed.
 func (l *ingestRateLimiter) refreshSettingsLocked() bool {
-	rawRate, rawBurst, rawBuckets := ingestLimiterEnv()
+	rawRate, rawBurst, rawBuckets := ingestLimiterSettings()
 	if rawRate == l.rawRate && rawBurst == l.rawBurst && rawBuckets == l.rawBuckets {
 		return false
 	}
@@ -211,9 +224,9 @@ func runIngestRateLimiterJanitor() {
 	}()
 }
 
-// Proxy trust comes from the shared env-backed set in pkg/middleware, so it
-// re-reads on a SIGHUP env reload and cannot drift from Gateway's view of who
-// a caller is.
+// Proxy trust comes from the shared set in pkg/middleware, which re-reads
+// TRUSTED_PROXY_CIDRS from the current configuration, so it follows a SIGHUP
+// env reload and cannot drift from Gateway's view of who a caller is.
 var trustedProxiesOnce sync.Once
 var trustedProxies *sharedmw.TrustedProxies
 
@@ -221,7 +234,7 @@ func currentTrustedProxies() *sharedmw.TrustedProxies {
 	trustedProxiesOnce.Do(func() {
 		trustedProxies = sharedmw.TrustedProxiesFromEnv(
 			"TRUSTED_PROXY_CIDRS",
-			func(key string) string { return config.GetEnv(key, "") },
+			func(string) string { return appconfig.Current().TrustedProxyCIDRs },
 			func(invalid []string) {
 				if logger != nil {
 					logger.WithField("entries", strings.Join(invalid, ",")).

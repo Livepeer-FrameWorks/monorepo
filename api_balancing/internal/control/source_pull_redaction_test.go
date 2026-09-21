@@ -3,6 +3,8 @@ package control
 import (
 	"strings"
 	"testing"
+
+	"frameworks/api_balancing/internal/appconfig"
 )
 
 // RedactSourcePullCredential guards the one-way boundary where a connection's
@@ -10,7 +12,7 @@ import (
 // and leave everything else byte-identical, because tenants see these URLs and
 // a re-encoded query would change what they receive for no reason.
 func TestRedactSourcePullCredentialStripsOnlyPlatformSourceCredentials(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "redaction-test-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "redaction-test-secret"})
 	const base = "dtsc://origin.example:4200/live+demo"
 	credentialed, err := SourcePullURL(base, "live+demo", OutboundPull{
 		AttemptID: "attempt-1", TenantID: "tenant-a", SourceNodeID: "origin-1",

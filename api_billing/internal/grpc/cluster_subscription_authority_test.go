@@ -5,12 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTenantAdmissionQueryTimeoutLeavesMediaCallerHeadroom(t *testing.T) {
@@ -24,9 +27,10 @@ func TestTenantAdmissionQueryTimeoutLeavesMediaCallerHeadroom(t *testing.T) {
 }
 
 type commercialQuartermasterStub struct {
-	cluster      *quartermasterpb.InfrastructureCluster
-	materialized *quartermasterpb.MaterializeClusterAccessRequest
-	bootstrapped bool
+	cluster        *quartermasterpb.InfrastructureCluster
+	materialized   *quartermasterpb.MaterializeClusterAccessRequest
+	bootstrapped   bool
+	bootstrapActor *commonpb.RequestActor
 }
 
 func (*commercialQuartermasterStub) GetTenantEntitlement(context.Context, string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
@@ -45,8 +49,9 @@ func (*commercialQuartermasterStub) ListClustersByOwner(context.Context, string,
 	return &quartermasterpb.ListClustersResponse{}, nil
 }
 
-func (s *commercialQuartermasterStub) BootstrapClusterAccess(context.Context, string, string, *tenantlimitspb.TenantResourceLimits) error {
+func (s *commercialQuartermasterStub) BootstrapClusterAccess(_ context.Context, _, _ string, _ *tenantlimitspb.TenantResourceLimits, actor *commonpb.RequestActor) error {
 	s.bootstrapped = true
+	s.bootstrapActor = actor
 	return nil
 }
 
@@ -57,6 +62,14 @@ func (s *commercialQuartermasterStub) MaterializeClusterAccess(_ context.Context
 
 func (*commercialQuartermasterStub) RevokeMaterializedClusterAccess(context.Context, *quartermasterpb.RevokeMaterializedClusterAccessRequest) error {
 	return nil
+}
+
+// apiTokenCallerCtx is the context the gRPC auth interceptor builds for a
+// caller authenticated with an API token.
+func apiTokenCallerCtx(userID, tokenID string) context.Context {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userID)
+	return context.WithValue(ctx, ctxkeys.KeyAPITokenID, tokenID)
 }
 
 func TestCreateClusterSubscriptionOwnerBypassesMarketplaceBilling(t *testing.T) {
@@ -96,10 +109,15 @@ func TestGrantClusterAccessForKindUsesDistinctAuthorities(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &commercialQuartermasterStub{}
-			server := &PurserServer{quartermasterClient: stub}
-			if err := server.grantClusterAccessForKind(context.Background(), "tenant", "cluster", tc.kind); err != nil {
+			hasher, err := events.NewTokenHasher("usage-secret")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &PurserServer{quartermasterClient: stub, tokenHasher: hasher}
+			if err := server.grantClusterAccessForKind(apiTokenCallerCtx("user-7", "token-9"), "tenant", "cluster", tc.kind); err != nil {
 				t.Fatalf("grantClusterAccessForKind: %v", err)
 			}
+			wantActor := &commonpb.RequestActor{AuthType: "api_token", UserId: "user-7", TokenHash: events.HashIdentifier([]byte("usage-secret"), "token-9")}
 			if stub.bootstrapped != tc.bootstrap {
 				t.Fatalf("bootstrapped = %v, want %v", stub.bootstrapped, tc.bootstrap)
 			}
@@ -107,10 +125,16 @@ func TestGrantClusterAccessForKindUsesDistinctAuthorities(t *testing.T) {
 				if stub.materialized != nil {
 					t.Fatalf("platform tier unexpectedly materialized: %+v", stub.materialized)
 				}
+				if !proto.Equal(stub.bootstrapActor, wantActor) {
+					t.Fatalf("bootstrap actor = %v, want %v", stub.bootstrapActor, wantActor)
+				}
 				return
 			}
 			if stub.materialized == nil || stub.materialized.GetAccessSource() != tc.source {
 				t.Fatalf("materialized source = %v, want %v", stub.materialized.GetAccessSource(), tc.source)
+			}
+			if !proto.Equal(stub.materialized.GetActor(), wantActor) {
+				t.Fatalf("materialize actor = %v, want %v", stub.materialized.GetActor(), wantActor)
 			}
 		})
 	}

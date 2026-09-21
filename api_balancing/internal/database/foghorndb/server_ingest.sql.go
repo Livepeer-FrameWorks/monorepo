@@ -13,7 +13,7 @@ import (
 const abortPendingSourceProjection = `-- name: AbortPendingSourceProjection :one
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint, ended_reason  =  'projection_failed'
 WHERE id  =  $1::uuid AND tenant_id  =  $2::uuid AND stream_internal_name  =  $3 AND ended_at IS NULL AND projection_state  =  'pending'
-RETURNING node_id, start_trigger_uuid
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type AbortPendingSourceProjectionParams struct {
@@ -25,12 +25,13 @@ type AbortPendingSourceProjectionParams struct {
 type AbortPendingSourceProjectionRow struct {
 	NodeID           string `db:"node_id" json:"node_id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) AbortPendingSourceProjection(ctx context.Context, arg AbortPendingSourceProjectionParams) (AbortPendingSourceProjectionRow, error) {
 	row := q.db.QueryRowContext(ctx, abortPendingSourceProjection, arg.Generation, arg.TenantID, arg.StreamInternalName)
 	var i AbortPendingSourceProjectionRow
-	err := row.Scan(&i.NodeID, &i.StartTriggerUuid)
+	err := row.Scan(&i.NodeID, &i.StartTriggerUuid, &i.StreamID)
 	return i, err
 }
 
@@ -287,7 +288,7 @@ func (q *Queries) ClaimUnstartedDVRIntents(ctx context.Context, arg ClaimUnstart
 const closeIngestSession = `-- name: CloseIngestSession :one
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  $1, ended_reason  =  'push_input_close'
 WHERE tenant_id  =  $2::uuid AND node_id  =  $3 AND connector_pid  =  $4 AND ended_at IS NULL AND stream_internal_name  =  $5 AND started_at_unix_millis <= $1
-RETURNING id::text AS id, start_trigger_uuid, COALESCE(ingest_cluster_id, '')::text AS cluster_id
+RETURNING id::text AS id, start_trigger_uuid, COALESCE(ingest_cluster_id, '')::text AS cluster_id, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type CloseIngestSessionParams struct {
@@ -302,6 +303,7 @@ type CloseIngestSessionRow struct {
 	ID               string `db:"id" json:"id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
 	ClusterID        string `db:"cluster_id" json:"cluster_id"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) CloseIngestSession(ctx context.Context, arg CloseIngestSessionParams) (CloseIngestSessionRow, error) {
@@ -313,7 +315,12 @@ func (q *Queries) CloseIngestSession(ctx context.Context, arg CloseIngestSession
 		arg.StreamInternalName,
 	)
 	var i CloseIngestSessionRow
-	err := row.Scan(&i.ID, &i.StartTriggerUuid, &i.ClusterID)
+	err := row.Scan(
+		&i.ID,
+		&i.StartTriggerUuid,
+		&i.ClusterID,
+		&i.StreamID,
+	)
 	return i, err
 }
 
@@ -495,8 +502,8 @@ func (q *Queries) InsertIngestCloseTombstone(ctx context.Context, arg InsertInge
 }
 
 const insertIngestSession = `-- name: InsertIngestSession :one
-INSERT INTO foghorn.ingest_sessions (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state)
-VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, NULLIF($8::text, ''), 'pending') RETURNING id::text
+INSERT INTO foghorn.ingest_sessions (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state, stream_id)
+VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, NULLIF($8::text, ''), 'pending', NULLIF($9::text, '')::uuid) RETURNING id::text
 `
 
 type InsertIngestSessionParams struct {
@@ -508,6 +515,7 @@ type InsertIngestSessionParams struct {
 	StartedAtUnixMillis int64          `db:"started_at_unix_millis" json:"started_at_unix_millis"`
 	DvrIntent           sql.NullString `db:"dvr_intent" json:"dvr_intent"`
 	IngestClusterID     string         `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	StreamID            string         `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) InsertIngestSession(ctx context.Context, arg InsertIngestSessionParams) (string, error) {
@@ -520,6 +528,7 @@ func (q *Queries) InsertIngestSession(ctx context.Context, arg InsertIngestSessi
 		arg.StartedAtUnixMillis,
 		arg.DvrIntent,
 		arg.IngestClusterID,
+		arg.StreamID,
 	)
 	var id string
 	err := row.Scan(&id)
@@ -531,13 +540,14 @@ INSERT INTO foghorn.ingest_sessions
     (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid,
      started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state,
      media_authority_id, media_authority_version, tenant_authority_version, processes_json,
-     capacity_max_streams)
+     capacity_max_streams, stream_id)
 VALUES
     ($1::uuid, $2, $3,
      $4, $5, $6,
      $7::jsonb, NULLIF($8::text, ''), 'pending',
      $9, $10,
-     $11, $12, $13)
+     $11, $12, $13,
+     NULLIF($14::text, '')::uuid)
 RETURNING id::text
 `
 
@@ -555,6 +565,7 @@ type InsertIngestSessionWithAuthorityParams struct {
 	TenantAuthorityVersion sql.NullInt64  `db:"tenant_authority_version" json:"tenant_authority_version"`
 	ProcessesJson          string         `db:"processes_json" json:"processes_json"`
 	CapacityMaxStreams     int32          `db:"capacity_max_streams" json:"capacity_max_streams"`
+	StreamID               string         `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) InsertIngestSessionWithAuthority(ctx context.Context, arg InsertIngestSessionWithAuthorityParams) (string, error) {
@@ -572,6 +583,7 @@ func (q *Queries) InsertIngestSessionWithAuthority(ctx context.Context, arg Inse
 		arg.TenantAuthorityVersion,
 		arg.ProcessesJson,
 		arg.CapacityMaxStreams,
+		arg.StreamID,
 	)
 	var id string
 	err := row.Scan(&id)
@@ -680,6 +692,47 @@ func (q *Queries) LockIngestStream(ctx context.Context, hashtext string) error {
 	return err
 }
 
+const markIngestSessionPlayable = `-- name: MarkIngestSessionPlayable :one
+UPDATE foghorn.ingest_sessions
+SET playable_at = NOW()
+WHERE tenant_id = $1::uuid
+  AND stream_internal_name = $2
+  AND node_id = $3
+  AND ended_at IS NULL
+  AND playable_at IS NULL
+  AND stream_id IS NOT NULL
+  AND ($4::bigint <= 0 OR started_at_unix_millis <= $4::bigint)
+RETURNING id::text AS session_id, stream_id::text AS stream_id
+`
+
+type MarkIngestSessionPlayableParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	EventUnixMillis    int64  `db:"event_unix_millis" json:"event_unix_millis"`
+}
+
+type MarkIngestSessionPlayableRow struct {
+	SessionID string `db:"session_id" json:"session_id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
+}
+
+// First playable buffer of the active session, from the session's own node only.
+// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+// nothing; the start fence keeps a delayed trigger of an earlier session on the
+// same node from marking a newer one.
+func (q *Queries) MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error) {
+	row := q.db.QueryRowContext(ctx, markIngestSessionPlayable,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+		arg.EventUnixMillis,
+	)
+	var i MarkIngestSessionPlayableRow
+	err := row.Scan(&i.SessionID, &i.StreamID)
+	return i, err
+}
+
 const nextSourceProjectionRevision = `-- name: NextSourceProjectionRevision :one
 INSERT INTO foghorn.source_projection_revision_counter (tenant_id, stream_internal_name, value)
 VALUES ($1::uuid, $2, 4503599627370497)
@@ -753,7 +806,7 @@ WHERE tenant_id = $2::uuid
   AND id = $5::uuid
   AND connector_pid = $6
   AND ended_at IS NULL
-RETURNING id::text AS session_id, start_trigger_uuid
+RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type ReapExactMissingIngestSessionParams struct {
@@ -768,6 +821,7 @@ type ReapExactMissingIngestSessionParams struct {
 type ReapExactMissingIngestSessionRow struct {
 	SessionID        string `db:"session_id" json:"session_id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) ReapExactMissingIngestSession(ctx context.Context, arg ReapExactMissingIngestSessionParams) (ReapExactMissingIngestSessionRow, error) {
@@ -780,14 +834,14 @@ func (q *Queries) ReapExactMissingIngestSession(ctx context.Context, arg ReapExa
 		arg.ConnectorPid,
 	)
 	var i ReapExactMissingIngestSessionRow
-	err := row.Scan(&i.SessionID, &i.StartTriggerUuid)
+	err := row.Scan(&i.SessionID, &i.StartTriggerUuid, &i.StreamID)
 	return i, err
 }
 
 const reapStreamEndIngestSessions = `-- name: ReapStreamEndIngestSessions :many
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  $1, ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  $2::uuid AND node_id  =  $3 AND stream_internal_name  =  $4 AND ended_at IS NULL AND started_at_unix_millis <= $1
-RETURNING id::text AS session_id, start_trigger_uuid
+RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type ReapStreamEndIngestSessionsParams struct {
@@ -800,6 +854,7 @@ type ReapStreamEndIngestSessionsParams struct {
 type ReapStreamEndIngestSessionsRow struct {
 	SessionID        string `db:"session_id" json:"session_id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
 func (q *Queries) ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error) {
@@ -816,7 +871,7 @@ func (q *Queries) ReapStreamEndIngestSessions(ctx context.Context, arg ReapStrea
 	items := []ReapStreamEndIngestSessionsRow{}
 	for rows.Next() {
 		var i ReapStreamEndIngestSessionsRow
-		if err := rows.Scan(&i.SessionID, &i.StartTriggerUuid); err != nil {
+		if err := rows.Scan(&i.SessionID, &i.StartTriggerUuid, &i.StreamID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

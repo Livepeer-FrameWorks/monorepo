@@ -74,8 +74,8 @@ func TestStripeMeterEventRepository_RealPG(t *testing.T) {
 		{`INSERT INTO purser.billing_tiers (id, tier_name, display_name)
 		  VALUES ($1, 'meter-contract', 'Meter Contract')`, []any{tierID}},
 		{`INSERT INTO purser.tenant_subscriptions
-			(id, tenant_id, tier_id, status, stripe_customer_id)
-		  VALUES (gen_random_uuid(), $1, $2, 'active', 'cus_contract')`, []any{tenantID, tierID}},
+			(id, tenant_id, tier_id, status, stripe_customer_id, stripe_subscription_id)
+		  VALUES (gen_random_uuid(), $1, $2, 'active', 'cus_contract', 'sub_contract')`, []any{tenantID, tierID}},
 		{`INSERT INTO purser.cluster_pricing
 			(id, cluster_id, pricing_model, metered_rates)
 		  VALUES (gen_random_uuid(), 'operator-contract', 'metered',
@@ -158,5 +158,49 @@ func TestStripeMeterEventRepository_RealPG(t *testing.T) {
 	}
 	if marked != 2 {
 		t.Fatalf("marked rows = %d, want 2", marked)
+	}
+
+	// A tenant billed only on Purser invoices has no Stripe subscription for
+	// meter events to feed, so its priced lines enqueue nothing.
+	unsubscribedTenant := uuid.MustParse("31000000-0000-4000-8000-000000000002")
+	unsubscribedInvoice := uuid.MustParse("33000000-0000-4000-8000-000000000002")
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO purser.tenant_subscriptions
+			(id, tenant_id, tier_id, status, stripe_customer_id, payment_method, presentment_currency)
+		  VALUES (gen_random_uuid(), $1, $2, 'active', 'cus_setup', 'stripe', 'USD')`, []any{unsubscribedTenant, tierID}},
+		{`INSERT INTO purser.billing_invoices
+			(id, tenant_id, status, period_start, period_end, due_date)
+		  VALUES ($1, $2, 'pending', $3, $4, $4)`, []any{unsubscribedInvoice, unsubscribedTenant, periodStart, periodEnd}},
+		{`INSERT INTO purser.invoice_line_items
+			(id, invoice_id, tenant_id, line_key, meter, unit, dimensions, description,
+			 quantity, billable_quantity, unit_price, amount, currency, cluster_id, pricing_source)
+		  VALUES (gen_random_uuid(), $1, $2, 'transcode-h264', 'transcode_rendition_seconds', 'second',
+			 '{"output_codec":"h264"}', 'H.264 transcode', 3600, 3600, 0.01, 36, 'EUR',
+			 'operator-contract', 'cluster_metered')`, []any{unsubscribedInvoice, unsubscribedTenant}},
+	} {
+		if _, err := db.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("seed unsubscribed tenant: %v", err)
+		}
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnqueueMeterEvents(ctx, tx, unsubscribedInvoice.String(), unsubscribedTenant.String(), "pending"); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("enqueue unsubscribed tenant: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var unsubscribedQueued int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.stripe_meter_events_outbox WHERE tenant_id = $1`, unsubscribedTenant).Scan(&unsubscribedQueued); err != nil {
+		t.Fatal(err)
+	}
+	if unsubscribedQueued != 0 {
+		t.Fatalf("tenant without a Stripe subscription queued %d meter events, want 0", unsubscribedQueued)
 	}
 }

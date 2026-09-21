@@ -10,10 +10,10 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: InsertBootstrapTenantSubscription :exec
 INSERT INTO purser.tenant_subscriptions (
-    id, tenant_id, tier_id, billing_model, status, started_at, created_at, updated_at
+    id, tenant_id, tier_id, billing_model, presentment_currency, status, started_at, created_at, updated_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id)::text::uuid, sqlc.arg(tier_id),
-    sqlc.arg(billing_model), 'active', NOW(), NOW(), NOW()
+    sqlc.arg(billing_model), sqlc.arg(presentment_currency)::text, 'active', NOW(), NOW(), NOW()
 );
 
 -- name: UpdateBootstrapTenantSubscription :execrows

@@ -19,7 +19,7 @@ import (
 
 func TestAPITokenRepository_RealPG(t *testing.T) {
 	db := startCommodoreRealPG(t)
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	ctx := context.Background()
 	const (
 		tenantID = "10000000-0000-4000-8000-000000000031"

@@ -131,10 +131,13 @@ func verifyNavigatorAutomaticMigrationPhasesConverge(t *testing.T, db *sql.DB) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	seedNavigatorCredentialCleanupProof(t, ctx, db)
-	for _, version := range []string{"v0.3.0", "v0.3.8"} {
+	for _, version := range []string{"v0.3.0", "v0.3.8", "v0.3.11"} {
 		for _, phase := range []string{"expand", "postdeploy"} {
 			dir := "migrations/navigator/" + version + "/" + phase
 			entries, err := fs.ReadDir(dbsql.Content, dir)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1129,8 +1132,8 @@ func assertNoTenantEdgeRows(t *testing.T, ctx context.Context, db *sql.DB, tenan
 func prepareNavigatorQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := navigatorGeneratedQueries(t)
-	if len(queries) != 58 {
-		t.Fatalf("found %d generated Navigator queries, want 58", len(queries))
+	if len(queries) != 59 {
+		t.Fatalf("found %d generated Navigator queries, want 59", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)

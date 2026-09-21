@@ -9,7 +9,10 @@ import (
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"frameworks/api_tenants/internal/serviceeventoutbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
@@ -40,21 +43,82 @@ func qmOutboxConfig() outbox.Config {
 
 type qmOutboxRow struct {
 	id         string
+	eventID    string
 	payload    []byte
 	attempts   int
 	createdAt  time.Time
 	leaseToken string
 }
 
-// EnqueueServiceEventTx writes the outbox row inside the caller's
-// transaction, so the event becomes durable exactly when the state mutation
-// that justifies it commits. A failed INSERT rolls back with the caller's tx.
+// EnqueueServiceEventTx writes the service event, and the domain event its
+// type maps to, inside the caller's transaction, so both become durable
+// exactly when the state mutation that justifies them commits. A failed
+// INSERT rolls back with the caller's tx.
 func (s *QuartermasterServer) EnqueueServiceEventTx(
 	ctx context.Context,
 	exec quartermasterdb.DBTX,
 	event *ipcpb.ServiceEvent,
 ) (string, error) {
-	return serviceeventoutbox.Enqueue(ctx, exec, event)
+	if event == nil {
+		return "", errors.New("nil service event")
+	}
+	domain, err := serviceeventoutbox.DomainFor(event)
+	if err != nil {
+		return "", err
+	}
+	return s.enqueueServiceEventWithDomainTx(ctx, exec, event, domain)
+}
+
+// enqueueServiceEventWithDomainTx writes the service event and domain (nil
+// for none) inside the caller's transaction, attributed to the gRPC caller.
+func (s *QuartermasterServer) enqueueServiceEventWithDomainTx(
+	ctx context.Context,
+	exec quartermasterdb.DBTX,
+	event *ipcpb.ServiceEvent,
+	domain *serviceeventoutbox.Domain,
+) (string, error) {
+	var actor events.Actor
+	if domain != nil {
+		if s.eventTokenHasher == nil {
+			return "", errors.New("domain event actor attribution needs the usage hash secret")
+		}
+		actor = events.ActorFromContext(ctx, s.eventTokenHasher)
+	}
+	return serviceeventoutbox.EnqueueWithDomain(ctx, exec, event, domain, actor)
+}
+
+// requestActor is the principal a service caller named on its request, or,
+// when it named none, the gRPC caller itself.
+func (s *QuartermasterServer) requestActor(ctx context.Context, named *commonpb.RequestActor) (events.Actor, error) {
+	if actor, ok := events.ActorFromRequest(named); ok {
+		return actor, nil
+	}
+	if s.eventTokenHasher == nil {
+		return events.Actor{}, errors.New("domain event actor attribution needs the usage hash secret")
+	}
+	return events.ActorFromContext(ctx, s.eventTokenHasher), nil
+}
+
+// emitClusterEventAsTx writes a cluster service event and its domain event
+// (derived from the service event when domain is nil) inside the caller's
+// transaction, both attributed to actor.
+func (s *QuartermasterServer) emitClusterEventAsTx(ctx context.Context, tx *sql.Tx, actor events.Actor, event *ipcpb.ServiceEvent, domain *serviceeventoutbox.Domain) error {
+	if ctxkeys.IsDemoMode(ctx) {
+		return nil
+	}
+	if tx == nil {
+		return errors.New("cluster event requires the mutation's transaction")
+	}
+	if domain == nil {
+		derived, err := serviceeventoutbox.DomainFor(event)
+		if err != nil {
+			return err
+		}
+		domain = derived
+	}
+	event.UserId = actor.UserID
+	_, err := serviceeventoutbox.EnqueueWithDomain(ctx, tx, event, domain, actor)
+	return err
 }
 
 func serviceEventScope(event *ipcpb.ServiceEvent) (string, error) {
@@ -146,7 +210,7 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 		batch := make([]qmOutboxRow, 0, qmOutboxBatchSize)
 		for _, row := range rows {
 			batch = append(batch, qmOutboxRow{
-				id: row.ID, payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt, leaseToken: leaseToken,
+				id: row.ID, eventID: row.EventID, payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt, leaseToken: leaseToken,
 			})
 		}
 		if len(batch) > 0 {
@@ -195,13 +259,32 @@ func (s *QuartermasterServer) recordQMOutboxFailure(ctx context.Context, id stri
 	}
 }
 
+// serviceEventForDispatch decodes row's event with the ID every dispatch of
+// the row sends: the stored event_id, else the ID in the payload, else the
+// row ID for rows written before event_id existed. The ID never changes
+// between attempts, so consumers can drop a redelivery after a lost
+// acknowledgement.
+func serviceEventForDispatch(row qmOutboxRow) (*ipcpb.ServiceEvent, error) {
+	event := &ipcpb.ServiceEvent{}
+	if err := protojson.Unmarshal(row.payload, event); err != nil {
+		return nil, fmt.Errorf("unmarshal service event payload: %w", err)
+	}
+	switch {
+	case row.eventID != "":
+		event.EventId = row.eventID
+	case event.GetEventId() == "":
+		event.EventId = row.id
+	}
+	return event, nil
+}
+
 func (s *QuartermasterServer) dispatchQMOutboxRow(ctx context.Context, row qmOutboxRow) ([]string, error) {
 	if s.decklogClient == nil {
 		return nil, errors.New("decklog client not configured")
 	}
-	event := &ipcpb.ServiceEvent{}
-	if err := protojson.Unmarshal(row.payload, event); err != nil {
-		return nil, fmt.Errorf("unmarshal service event payload: %w", err)
+	event, err := serviceEventForDispatch(row)
+	if err != nil {
+		return nil, err
 	}
 	_ = ctx // decklog client manages its own context
 	if err := s.decklogClient.SendServiceEvent(event); err != nil {

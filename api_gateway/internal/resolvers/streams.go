@@ -14,7 +14,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -196,31 +195,6 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 		return nil, fmt.Errorf("failed to get stream after creation: %w", err)
 	}
 
-	changedFields := []string{"title"}
-	if input.Description != nil {
-		changedFields = append(changedFields, "description")
-	}
-	if input.Record != nil {
-		changedFields = append(changedFields, "is_recording")
-	}
-	if input.IngestMode != nil {
-		changedFields = append(changedFields, "ingest_mode")
-	}
-	if input.PullSource != nil {
-		changedFields = append(changedFields, "pull_source")
-	}
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventStreamCreated,
-		ResourceType: "stream",
-		ResourceId:   stream.StreamId,
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId:      stream.StreamId,
-				ChangedFields: changedFields,
-			},
-		},
-	})
-
 	return stream, nil
 }
 
@@ -251,21 +225,8 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 	}
 
 	// The two-phase deletion saga returns "deleted" only once the serving cell acked the cleanup tombstone;
-	// otherwise it is deletion_pending and converges asynchronously via the outbox worker. Emit the TERMINAL
-	// stream_deleted event ONLY on actual finalization — a pending deletion must not be broadcast as done.
+	// otherwise it is deletion_pending and converges asynchronously via the outbox worker.
 	finalized := resp.GetDeletionStatus() == "deleted"
-	if finalized {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventStreamDeleted,
-			ResourceType: "stream",
-			ResourceId:   id,
-			Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-				StreamChangeEvent: &ipcpb.StreamChangeEvent{
-					StreamId: id,
-				},
-			},
-		})
-	}
 
 	// Surface the saga state truthfully: the delete was ACCEPTED (success), but pending=true until the serving cell
 	// acks the tombstone (the outbox worker converges it). The client must not treat a pending delete as final.
@@ -303,18 +264,6 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodor
 	if err != nil {
 		return nil, err
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventStreamKeyRotated,
-		ResourceType: "stream",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &ipcpb.StreamChangeEvent{
-				StreamId:      id,
-				ChangedFields: []string{"stream_key"},
-			},
-		},
-	})
 
 	return stream, nil
 }
@@ -582,20 +531,6 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		ClipMode:    &modeStr,
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventClipCreated,
-		ResourceType: "clip",
-		ResourceId:   clipResp.RequestId,
-		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &ipcpb.ArtifactEvent{
-				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
-				ArtifactId:   clipResp.RequestId,
-				StreamId:     streamID,
-				Status:       "requested",
-			},
-		},
-	})
-
 	return clipInfo, nil
 }
 
@@ -808,20 +743,6 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 		return nil, fmt.Errorf("failed to create stream key: %w", err)
 	}
 
-	if keyResp.StreamKey != nil {
-		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-			EventType:    apiEventStreamKeyCreated,
-			ResourceType: "stream_key",
-			ResourceId:   keyResp.StreamKey.Id,
-			Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
-				StreamKeyEvent: &ipcpb.StreamKeyEvent{
-					StreamId: streamID,
-					KeyId:    keyResp.StreamKey.Id,
-				},
-			},
-		})
-	}
-
 	return keyResp.StreamKey, nil
 }
 
@@ -855,18 +776,6 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 		}
 		return nil, fmt.Errorf("failed to deactivate stream key: %w", err)
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventStreamKeyDeleted,
-		ResourceType: "stream_key",
-		ResourceId:   keyID,
-		Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
-			StreamKeyEvent: &ipcpb.StreamKeyEvent{
-				StreamId: streamID,
-				KeyId:    keyID,
-			},
-		},
-	})
 
 	return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
 }
@@ -952,19 +861,6 @@ func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteCli
 		return nil, fmt.Errorf("failed to delete clip: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventClipDeleted,
-		ResourceType: "clip",
-		ResourceId:   id,
-		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &ipcpb.ArtifactEvent{
-				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
-				ArtifactId:   id,
-				Status:       "deleted",
-			},
-		},
-	})
-
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
 
@@ -1043,7 +939,7 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
-	deleted, err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash)
+	_, err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to delete DVR")
 		if strings.Contains(err.Error(), "not found") {
@@ -1056,25 +952,6 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 		}
 		return nil, fmt.Errorf("failed to delete DVR: %w", err)
 	}
-
-	// Only emit the delete event on a REAL deletion. An already-deleted DVR (idempotent no-op)
-	// must not fire a duplicate DVR-deleted event.
-	if !deleted {
-		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
-	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventDVRDeleted,
-		ResourceType: "dvr",
-		ResourceId:   dvrHash,
-		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &ipcpb.ArtifactEvent{
-				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
-				ArtifactId:   dvrHash,
-				Status:       "deleted",
-			},
-		},
-	})
 
 	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 }

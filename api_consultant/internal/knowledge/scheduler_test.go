@@ -22,6 +22,22 @@ var pageCacheSelectColumns = []string{
 	"sitemap_changefreq", "consecutive_unchanged", "consecutive_failures", "source_type",
 }
 
+func TestSitemapExpansionUsesExplicitConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOCS_PUBLIC_URL", "https://unconfigured.invalid")
+	if err := os.WriteFile(filepath.Join(dir, "sources.txt"), []byte("${DOCS_PUBLIC_URL}/sitemap.xml\n${UNKNOWN}/sitemap.xml\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewCrawlScheduler(SchedulerConfig{
+		SitemapsDir: dir, Logger: logging.NewLogger(),
+		SourceVariables: map[string]string{"DOCS_PUBLIC_URL": "https://docs.example.test"},
+	})
+	sources := scheduler.loadSources()
+	if len(sources) != 1 || sources[0].url != "https://docs.example.test/sitemap.xml" {
+		t.Fatalf("sources = %+v", sources)
+	}
+}
+
 func TestSchedulerProcessesNewPage(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,15 +287,15 @@ func TestSchedulerLoadSourcesMissingDir(t *testing.T) {
 }
 
 func TestSchedulerLoadSourcesEnvExpansion(t *testing.T) {
-	t.Setenv("TEST_SITEMAP_HOST", "https://docs.example.com")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("${TEST_SITEMAP_HOST}/sitemap.xml\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	s := &CrawlScheduler{
-		sitemapsDir: dir,
-		logger:      logging.NewLoggerWithService("test"),
+		sourceVariables: map[string]string{"TEST_SITEMAP_HOST": "https://docs.example.com"},
+		sitemapsDir:     dir,
+		logger:          logging.NewLoggerWithService("test"),
 	}
 	result := s.loadSources()
 	if len(result) != 1 {
@@ -337,15 +353,15 @@ func TestSchedulerLoadSourcesPageDedup(t *testing.T) {
 }
 
 func TestSchedulerLoadSourcesPagePrefixEnvExpansion(t *testing.T) {
-	t.Setenv("TEST_PAGE_HOST", "https://docs.example.com")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("page:${TEST_PAGE_HOST}/guide\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	s := &CrawlScheduler{
-		sitemapsDir: dir,
-		logger:      logging.NewLoggerWithService("test"),
+		sourceVariables: map[string]string{"TEST_PAGE_HOST": "https://docs.example.com"},
+		sitemapsDir:     dir,
+		logger:          logging.NewLoggerWithService("test"),
 	}
 	result := s.loadSources()
 	if len(result) != 1 {

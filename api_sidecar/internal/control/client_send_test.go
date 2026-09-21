@@ -5,13 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // --- SendSyncComplete ---
 
 func TestSendSyncComplete_Connected(t *testing.T) {
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
@@ -40,7 +41,7 @@ func TestSendSyncComplete_Connected(t *testing.T) {
 }
 
 func TestSendSyncComplete_DtshFalse(t *testing.T) {
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
@@ -123,7 +124,7 @@ func TestSendFreezeProgress_Connected(t *testing.T) {
 // --- SendArtifactDeleted ---
 
 func TestSendArtifactDeleted_Connected(t *testing.T) {
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)

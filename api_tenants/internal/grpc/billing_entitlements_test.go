@@ -17,8 +17,8 @@ import (
 
 func TestApplyTenantBillingEntitlementsRejectsUserBeforeStorage(t *testing.T) {
 	server, _, mock := newMockQuartermasterServer(t)
-	_, err := server.ApplyTenantBillingEntitlements(tenantCtx("tenant-1", "owner"), &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
-		TenantId: "tenant-1", DeploymentTier: "production", ObservedAt: timestamppb.Now(),
+	_, err := server.ApplyTenantBillingEntitlements(tenantCtx("11111111-1111-4111-8111-111111111111", "owner"), &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
+		TenantId: "11111111-1111-4111-8111-111111111111", DeploymentTier: "production", ObservedAt: timestamppb.Now(),
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("status = %v, want PermissionDenied", status.Code(err))
@@ -30,7 +30,7 @@ func TestApplyTenantBillingEntitlementsRejectsUserBeforeStorage(t *testing.T) {
 
 func TestCompleteTenantDNSEntitlementHandoffRequiresServiceAuthentication(t *testing.T) {
 	server, _, mock := newMockQuartermasterServer(t)
-	_, err := server.CompleteTenantDNSEntitlementHandoff(tenantCtx("tenant-1", "owner"), &quartermasterpb.CompleteTenantDNSEntitlementHandoffRequest{SubscriptionCount: 3})
+	_, err := server.CompleteTenantDNSEntitlementHandoff(tenantCtx("11111111-1111-4111-8111-111111111111", "owner"), &quartermasterpb.CompleteTenantDNSEntitlementHandoffRequest{SubscriptionCount: 3})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("status = %v, want PermissionDenied", status.Code(err))
 	}
@@ -139,14 +139,14 @@ func TestApplyTenantBillingEntitlementsRejectsStaleObservation(t *testing.T) {
 	observedAt := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT deployment_tier, custom_subdomain_enabled, custom_domain_enabled,`).
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled", "billing_entitlements_observed_at",
 		}).AddRow("production", true, true, observedAt.Add(time.Minute)))
 	mock.ExpectRollback()
 
 	resp, err := server.ApplyTenantBillingEntitlements(serviceCtx(), &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
-		TenantId: "tenant-1", DeploymentTier: "free", ObservedAt: timestamppb.New(observedAt),
+		TenantId: "11111111-1111-4111-8111-111111111111", DeploymentTier: "free", ObservedAt: timestamppb.New(observedAt),
 	})
 	if err != nil {
 		t.Fatalf("ApplyTenantBillingEntitlements: %v", err)
@@ -164,17 +164,17 @@ func TestApplyTenantBillingEntitlementsDoesNotMisclassifyMissingLockedUpdateAsNe
 	observedAt := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT deployment_tier, custom_subdomain_enabled, custom_domain_enabled,`).
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled", "billing_entitlements_observed_at",
 		}).AddRow("free", false, false, time.Unix(0, 0).UTC()))
 	mock.ExpectExec(`UPDATE quartermaster\.tenants`).
-		WithArgs(sql.NullString{String: "production", Valid: true}, true, true, observedAt, "tenant-1").
+		WithArgs(sql.NullString{String: "production", Valid: true}, true, true, observedAt, "11111111-1111-4111-8111-111111111111").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
 	_, err := server.ApplyTenantBillingEntitlements(serviceCtx(), &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
-		TenantId: "tenant-1", DeploymentTier: "production", CustomSubdomainEnabled: true, CustomDomainEnabled: true,
+		TenantId: "11111111-1111-4111-8111-111111111111", DeploymentTier: "production", CustomSubdomainEnabled: true, CustomDomainEnabled: true,
 		ObservedAt: timestamppb.New(observedAt),
 	})
 	if status.Code(err) != codes.Internal {
@@ -190,33 +190,33 @@ func TestApplyTenantBillingEntitlementsEnsuresAliasBeforeCustomDomain(t *testing
 	observedAt := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT deployment_tier, custom_subdomain_enabled, custom_domain_enabled,`).
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled", "billing_entitlements_observed_at",
 		}).AddRow("free", false, false, time.Unix(0, 0).UTC()))
 	mock.ExpectExec(`UPDATE quartermaster\.tenants`).
-		WithArgs(sql.NullString{String: "production", Valid: true}, true, true, observedAt, "tenant-1").
+		WithArgs(sql.NullString{String: "production", Valid: true}, true, true, observedAt, "11111111-1111-4111-8111-111111111111").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active.*FOR UPDATE`).
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 			AddRow("Acme", "acme", true, true, observedAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
-		WithArgs("tenant-1", "acme", "", "", "ensure").
+		WithArgs("11111111-1111-4111-8111-111111111111", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("alias-1"))
 	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
-		WithArgs("tenant-1").
+		WithArgs("11111111-1111-4111-8111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
 			AddRow("video.acme.example", true, true, true, observedAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_custom_domain_outbox`).
-		WithArgs("tenant-1", "video.acme.example", "ensure").
+		WithArgs("11111111-1111-4111-8111-111111111111", "video.acme.example", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("domain-1"))
-	expectServiceEventOutbox(mock, eventTenantUpdated, "tenant-1")
+	expectServiceEventOutbox(mock, eventTenantUpdated, "11111111-1111-4111-8111-111111111111")
 	mock.ExpectCommit()
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	resp, err := server.ApplyTenantBillingEntitlements(ctx, &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
-		TenantId: "tenant-1", DeploymentTier: "production",
+		TenantId: "11111111-1111-4111-8111-111111111111", DeploymentTier: "production",
 		CustomSubdomainEnabled: true, CustomDomainEnabled: true, ObservedAt: timestamppb.New(observedAt),
 	})
 	if err != nil {

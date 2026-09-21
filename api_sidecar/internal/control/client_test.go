@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -288,7 +289,8 @@ func waitForError(t *testing.T, ch <-chan error, reason string) error {
 
 func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	resetTestOutbox(t)
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	outboxDir := t.TempDir()
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
 
 	msg := &ipcpb.ControlMessage{
 		RequestId: "self-update-1",
@@ -302,7 +304,7 @@ func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	if !shouldRestart {
 		t.Fatal("expected self-restart after durable outbox write")
 	}
-	files, err := filepath.Glob(filepath.Join(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR"), "*.pb"))
+	files, err := filepath.Glob(filepath.Join(outboxDir, "*.pb"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +325,7 @@ func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	if len(stream.sent) != 1 {
 		t.Fatalf("expected durable outbox drain to send one message, got %d", len(stream.sent))
 	}
-	files, err = filepath.Glob(filepath.Join(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR"), "*.pb.sent.test"))
+	files, err = filepath.Glob(filepath.Join(outboxDir, "*.pb.sent.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +335,7 @@ func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	if confirmErr := confirmDurableOutboxSends(); confirmErr != nil {
 		t.Fatal(confirmErr)
 	}
-	files, err = filepath.Glob(filepath.Join(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR"), "*.pb.sent.test"))
+	files, err = filepath.Glob(filepath.Join(outboxDir, "*.pb.sent.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +348,7 @@ func TestDurableOutboxReplaysUnconfirmedSendAfterReconnect(t *testing.T) {
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	msg := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_SyncComplete{
 		SyncComplete: &ipcpb.SyncComplete{RequestId: "uncertain-sync", Status: "synced"},
 	}}
@@ -379,7 +381,7 @@ func TestDurableOutboxReplaysUnconfirmedSendAfterReconnect(t *testing.T) {
 func TestDurableOutboxConfirmationIsScopedToConnectionEpoch(t *testing.T) {
 	resetControlState(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	msg := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_SyncComplete{
 		SyncComplete: &ipcpb.SyncComplete{RequestId: "epoch-sync", Status: "synced"},
 	}}
@@ -421,7 +423,7 @@ func TestDurableOutboxConfirmationIsScopedToConnectionEpoch(t *testing.T) {
 
 func TestDurableOutboxRejectsDrainCapturedFromSupersededConnection(t *testing.T) {
 	resetControlState(t)
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	msg := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DvrStopped{
 		DvrStopped: &ipcpb.DVRStopped{DvrHash: "stale-connection", Status: "completed"},
 	}}
@@ -452,7 +454,7 @@ func TestDurableOutboxRejectsDrainCapturedFromSupersededConnection(t *testing.T)
 func TestDurableOutboxReconnectPreparationNeverOverwritesPendingRow(t *testing.T) {
 	resetControlState(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	pending := filepath.Join(dir, "same.pb")
 	inflight := pending + ".sent.old"
 	if err := os.WriteFile(pending, []byte("pending"), 0o600); err != nil {
@@ -474,7 +476,7 @@ func TestDurableOutboxReconnectPreparationNeverOverwritesPendingRow(t *testing.T
 func TestDurableOutboxStartupPreparationDoesNotWaitForControlPlane(t *testing.T) {
 	resetControlState(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	pending := filepath.Join(dir, "completion.pb")
 	inflight := pending + ".sent.old-epoch"
 	temporary := filepath.Join(dir, "interrupted.pb.tmp")
@@ -502,7 +504,7 @@ func TestDurableOutboxStartupPreparationDoesNotWaitForControlPlane(t *testing.T)
 func TestControlRegistrationWaitsForDurableOutboxPreparation(t *testing.T) {
 	resetControlState(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	pending := filepath.Join(dir, "same.pb")
 	if err := os.WriteFile(pending, []byte("pending"), 0o600); err != nil {
 		t.Fatal(err)
@@ -522,9 +524,9 @@ func TestControlRegistrationWaitsForDurableOutboxPreparation(t *testing.T) {
 }
 
 func TestDurableOutboxDefaultsToPersistentHelmsmanState(t *testing.T) {
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", "")
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", "")
 	stateDir := t.TempDir()
-	t.Setenv("HELMSMAN_STATE_DIR", stateDir)
+	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", stateDir)
 	if got, want := durableOutboxDir(), filepath.Join(stateDir, "control-outbox"); got != want {
 		t.Fatalf("durable outbox dir = %q, want %q", got, want)
 	}
@@ -536,7 +538,7 @@ func TestSendDesiredStateResultDoesNotRestartWithoutDurableOutbox(t *testing.T) 
 	if err := os.WriteFile(outboxFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
 
 	msg := &ipcpb.ControlMessage{
 		RequestId: "self-update-2",
@@ -565,7 +567,7 @@ func TestSendDesiredStateResultDoesNotDuplicateClassifierFallback(t *testing.T) 
 	if err := os.WriteFile(outboxFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
 	msg := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_UpdateApplyResult{
 		UpdateApplyResult: &ipcpb.UpdateApplyResult{NodeId: "node-1", TargetRelease: "v0.3.0"},
 	}}
@@ -583,7 +585,7 @@ func TestProcessingProgressDropsAndTerminalResultSurvivesDisconnect(t *testing.T
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 
 	progress := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ProcessingJobProgress{
 		ProcessingJobProgress: &ipcpb.ProcessingJobProgress{JobId: "chapter-finalize-v2-3-c", ProgressPct: 42},
@@ -641,7 +643,7 @@ func TestControlDeliveryClassifierSeparatesSamplesFromTerminalTransitions(t *tes
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 
 	ephemeral := []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_DvrProgress{DvrProgress: &ipcpb.DVRProgress{DvrHash: "dvr-live"}}},
@@ -708,7 +710,7 @@ func TestControlDeliveryClassifierSeparatesSamplesFromTerminalTransitions(t *tes
 func TestArtifactDeletionFenceSurvivesDurableReplay(t *testing.T) {
 	resetControlState(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	if err := SendArtifactDeleted("artifact-replay", "/data/artifact", "cleanup", "vod", 42); err == nil || !durableControlWasPersisted(err) {
 		t.Fatalf("disconnected deletion error = %v, want durable persistence", err)
 	}
@@ -744,7 +746,7 @@ func TestDurableReplayPreservesOriginalEnvelopeTimeForLegacyDeletionFence(t *tes
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	original := time.UnixMilli(1234)
 	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.New(original),
@@ -770,7 +772,7 @@ func TestConfigSeedAckSenderAcceptsDisconnectedDurablePersistence(t *testing.T) 
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	before := testutil.ToFloat64(ControlDeliveryOutcomes.WithLabelValues("durable", "persisted"))
 	msg := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ConfigSeedApplyResult{
 		ConfigSeedApplyResult: &ipcpb.ConfigSeedApplyResult{NodeId: "edge-1", SeedVersion: 12},
@@ -791,7 +793,7 @@ func TestDurableOutboxTransientReadFailureRemainsPending(t *testing.T) {
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	blockedPath := filepath.Join(dir, "000-unreadable.pb")
 	blocked := &ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_SyncComplete{
 		SyncComplete: &ipcpb.SyncComplete{RequestId: "transient", Status: "synced"},
@@ -847,7 +849,7 @@ func TestDurableOutboxPermanentReadFailureIsQuarantinedWithoutHeadOfLineBlock(t 
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	blockedPath := filepath.Join(dir, "000-unreadable.pb")
 	if err := os.Mkdir(blockedPath, 0o700); err != nil {
 		t.Fatal(err)
@@ -883,7 +885,7 @@ func TestDurableOutboxReadFailureStateDropsRemovedRows(t *testing.T) {
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	removedPath := filepath.Join(dir, "removed.pb")
 	durableOutboxReadFailures[removedPath] = 2
 
@@ -901,7 +903,7 @@ func TestDurableOutboxCorruptMessageIsQuarantinedWithoutHeadOfLineBlock(t *testi
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	corruptPath := filepath.Join(dir, "000-corrupt.pb")
 	if err := os.WriteFile(corruptPath, []byte("not protobuf"), 0o600); err != nil {
 		t.Fatal(err)
@@ -939,7 +941,7 @@ func TestDurableOutboxQuarantineRenameFailureRetainsHeadOfLine(t *testing.T) {
 	resetControlState(t)
 	resetTestOutbox(t)
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	corruptPath := filepath.Join(dir, "000-corrupt.pb")
 	if err := os.WriteFile(corruptPath, []byte("not protobuf"), 0o600); err != nil {
 		t.Fatal(err)
@@ -984,7 +986,7 @@ func TestDurableOutboxQuarantineRenameFailureRetainsHeadOfLine(t *testing.T) {
 
 func TestDurableOutboxQuarantineIsReapedAfterRetention(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", dir)
 	dead := filepath.Join(dir, "corrupt.pb.dead")
 	if err := os.WriteFile(dead, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)

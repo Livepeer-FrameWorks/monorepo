@@ -361,11 +361,9 @@ message ListMeterDefinitionsResponse {
 }
 
 message BillingFeatures {
-  bool recording = 1;                   // json:"recording"
-  bool analytics = 2;                   // json:"analytics"
-  bool custom_branding = 3;             // json:"custom_branding,omitempty"
-  bool api_access = 4;                  // json:"api_access,omitempty"
-  string support_level = 5;             // json:"support_level"
+  reserved 1, 2, 3, 4;
+  reserved "recording", "analytics", "custom_branding", "api_access";
+  string support_level = 5;            // json:"support_level"
   bool sla = 6;                         // json:"sla,omitempty"
   bool processing_customizable = 7;     // json:"processing_customizable,omitempty" - tenant can override tier process config
 }
@@ -449,6 +447,18 @@ message BillingDetails {
   bool is_complete = 6;                 // True if all required fields present (email + address)
   google.protobuf.Timestamp updated_at = 7;
   string name = 8;                      // Customer legal/person name for full invoices
+  string presentment_currency = 9;      // EUR, USD, or GBP, derived from the billing country
+}
+
+// Conversion of one money amount into the EUR ledger. units_per_eur is the ECB
+// quote: units of original_currency that one euro buys on reference_date.
+message FxConversion {
+  int64 original_amount_cents = 1;      // Amount charged, in original_currency minor units
+  string original_currency = 2;         // EUR, USD, or GBP
+  int64 eur_amount_cents = 3;           // EUR amount that reached the ledger
+  string units_per_eur = 4;             // Decimal string; "1" for EUR
+  string source = 5;                    // identity, ecb, or legacy_quote
+  string reference_date = 6;            // ECB reference date, YYYY-MM-DD
 }
 
 message TenantSubscription {
@@ -499,6 +509,10 @@ message TenantSubscription {
   optional string pending_tier_id = 32;
   optional google.protobuf.Timestamp pending_effective_at = 33;
   optional string pending_reason = 34;
+
+  // Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived
+  // from the billing country. The prepaid ledger is always EUR.
+  string presentment_currency = 35;
 }
 
 message BillingAddress {
@@ -671,6 +685,15 @@ message Invoice {
   reserved "usage_summary";
   repeated LineItem line_items = 17;          // Generated invoice line items
   double gross_metered_amount = 18;           // json:"gross_metered_amount" - unwaived metered total (would-have-cost; equals metered_amount when usage not waived)
+
+  // Amounts above are EUR. A finalized invoice is presented and charged in
+  // the tenant's presentment currency at the ECB rate of its finalization
+  // date; drafts and invoices held for review carry no presentment fields.
+  optional int64 presentment_amount_cents = 19;
+  string presentment_currency = 20;
+  string presentment_units_per_eur = 21;       // Decimal string; units of presentment_currency per euro
+  string presentment_reference_date = 22;      // ECB reference date, YYYY-MM-DD
+  optional google.protobuf.Timestamp finalized_at = 23;
 }
 
 message ListInvoicesRequest {
@@ -694,6 +717,15 @@ message BillingDocument {
   google.protobuf.Timestamp issued_at = 7;
   google.protobuf.Timestamp retention_until = 8;
   string download_filename = 9;
+
+  // amount_cents and currency are what the customer was charged. The EUR
+  // amounts and the ECB rate they were converted at are set when the
+  // document states them; payment receipts and credit notes carry no VAT.
+  optional int64 eur_amount_cents = 10;
+  optional int64 net_eur_cents = 11;
+  optional int64 vat_eur_cents = 12;
+  string units_per_eur = 13;            // Decimal string; units of currency per euro
+  string fx_reference_date = 14;       // ECB reference date, YYYY-MM-DD
 }
 
 message ListBillingDocumentsRequest {
@@ -747,6 +779,7 @@ message PaymentResponse {
   string asset_symbol = 15;             // ETH, USDC
   string network = 16;                  // ethereum, arbitrum, base, etc.
   optional google.protobuf.Timestamp quoted_at = 17; // when the quote was locked
+  FxConversion fx = 18;                 // amount/currency converted to EUR at payment creation
 }
 
 message GetPaymentMethodsRequest {
@@ -792,6 +825,7 @@ message Payment {
   optional google.protobuf.Timestamp confirmed_at = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  FxConversion fx = 11;                  // amount/currency converted to EUR at payment creation
 }
 
 message GetPaymentRequest {
@@ -1148,7 +1182,7 @@ message PrepaidBalance {
   string id = 1;
   string tenant_id = 2;
   int64 balance_cents = 3;              // Current balance in cents
-  string currency = 4;                  // ISO 4217 (USD, EUR)
+  string currency = 4;                  // Ledger currency, always EUR
   int64 low_balance_threshold_cents = 5; // Alert threshold
   bool is_low_balance = 6;              // True if balance < threshold
   google.protobuf.Timestamp created_at = 7;
@@ -1171,15 +1205,18 @@ message BalanceTransaction {
   google.protobuf.Timestamp created_at = 9;
 }
 
+// Ledger requests carry no currency: every prepaid balance is EUR.
 message GetPrepaidBalanceRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to EUR
+  reserved 2;
+  reserved "currency";
 }
 
 message TopupBalanceRequest {
   string tenant_id = 1;
-  int64 amount_cents = 2;               // Amount to add (must be positive)
-  string currency = 3;                  // Optional, defaults to EUR
+  int64 amount_cents = 2;               // EUR cents to add (must be positive)
+  reserved 3;
+  reserved "currency";
   string description = 4;               // e.g., "Crypto top-up: 0.1 ETH"
   optional string reference_id = 5;     // e.g., crypto_wallet_id
   optional string reference_type = 6;   // e.g., "crypto_payment"
@@ -1187,8 +1224,9 @@ message TopupBalanceRequest {
 
 message DeductBalanceRequest {
   string tenant_id = 1;
-  int64 amount_cents = 2;               // Amount to deduct (must be positive, will be stored as negative)
-  string currency = 3;                  // Optional, defaults to EUR
+  int64 amount_cents = 2;               // EUR cents to deduct (must be positive, will be stored as negative)
+  reserved 3;
+  reserved "currency";
   string description = 4;               // e.g., "Usage: 2.5 viewer-hours @ EUR 0.01/hr"
   optional string reference_id = 5;     // e.g., usage_record_id
   optional string reference_type = 6;   // e.g., "usage_record"
@@ -1196,8 +1234,9 @@ message DeductBalanceRequest {
 
 message AdjustBalanceRequest {
   string tenant_id = 1;
-  int64 amount_cents = 2;               // Can be positive (credit) or negative (debit)
-  string currency = 3;                  // Optional, defaults to EUR
+  int64 amount_cents = 2;               // EUR cents; positive (credit) or negative (debit)
+  reserved 3;
+  reserved "currency";
   string description = 4;               // Required - reason for adjustment
   optional string reference_id = 5;
   optional string reference_type = 6;
@@ -1217,8 +1256,9 @@ message ListBalanceTransactionsResponse {
 
 message InitializePrepaidBalanceRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to EUR
-  int64 initial_balance_cents = 3;      // Usually 0 for new wallet accounts
+  reserved 2;
+  reserved "currency";
+  int64 initial_balance_cents = 3;      // EUR cents; usually 0 for new wallet accounts
   int64 low_balance_threshold_cents = 4; // Optional, defaults to 500 (EUR 5)
 }
 
@@ -1226,7 +1266,8 @@ message InitializePrepaidBalanceRequest {
 // Creates subscription (billing_model=prepaid) + prepaid balance in one call.
 message InitializePrepaidAccountRequest {
   string tenant_id = 1;
-  string currency = 2;                  // Optional, defaults to EUR
+  reserved 2;
+  reserved "currency";
 }
 
 message InitializePrepaidAccountResponse {
@@ -1257,8 +1298,10 @@ message InitializePostpaidAccountResponse {
 // Request to create a card checkout session for prepaid top-up
 message CreateCardTopupRequest {
   string tenant_id = 1;
-  int64 amount_cents = 2;               // Provider/currency-aware minimum; currently 500 cents for Stripe/Mollie EUR/USD; max 10,000,000
-  string currency = 3;                  // Optional, defaults to EUR
+  int64 amount_cents = 2;               // Presentment-currency cents; provider-aware minimum; max 10,000,000
+  // The top-up is charged in the tenant's presentment currency.
+  reserved 3;
+  reserved "currency";
   string provider = 4;                  // "stripe" or "mollie"
   string success_url = 5;               // Redirect after successful payment
   string cancel_url = 6;                // Redirect if user cancels
@@ -1277,9 +1320,10 @@ message CreateCardTopupResponse {
   string checkout_url = 2;              // Stripe/Mollie checkout URL
   string checkout_id = 3;               // Provider's checkout/payment ID
   string provider = 4;                  // "stripe" or "mollie"
-  int64 amount_cents = 5;               // Amount that will be credited
-  string currency = 6;
+  int64 amount_cents = 5;               // Amount charged, in currency cents
+  string currency = 6;                  // Tenant presentment currency
   google.protobuf.Timestamp expires_at = 7;  // When checkout expires
+  FxConversion fx = 8;                  // EUR credit locked at checkout creation
 }
 
 // Pending top-up record (maps to purser.pending_topups table)
@@ -1296,6 +1340,7 @@ message PendingTopup {
   optional string balance_transaction_id = 10; // Set when completed
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+  FxConversion fx = 13;                 // EUR credit locked at checkout creation
 }
 
 message GetPendingTopupRequest {
@@ -1334,9 +1379,11 @@ enum CryptoAsset {
 
 message CreateCryptoTopupRequest {
   string tenant_id = 1;
-  int64 expected_amount_cents = 2;     // Target credit amount in `currency` cents (minimum 1; max 10,000,000)
+  int64 expected_amount_cents = 2;     // Amount in presentment-currency cents (minimum 1; max 10,000,000)
   CryptoAsset asset = 3;               // ETH or USDC; LPT is reserved
-  string currency = 4;                 // Target currency for balance (EUR, USD) - defaults to EUR
+  // The amount is denominated in the tenant's presentment currency.
+  reserved 4;
+  reserved "currency";
   // Field 5 reserved for future per-call network override.
   reserved 5;
   reserved "network";
@@ -1359,6 +1406,7 @@ message CreateCryptoTopupResponse {
   string quote_source                = 11; // "chainlink" | "one_to_one"
   google.protobuf.Timestamp quoted_at = 12;
   string network                      = 13; // "ethereum" | "arbitrum" | "base"
+  FxConversion fx                     = 14; // EUR credit locked with the quote
 }
 
 message GetCryptoTopupRequest {
@@ -1384,9 +1432,10 @@ message CryptoTopup {
   google.protobuf.Timestamp completed_at = 15;
   google.protobuf.Timestamp created_at = 16;
   string received_amount_token = 17;            // Human-friendly decimal of received_amount_base_units
-  string credited_amount_currency = 18;         // ISO-4217 of the credit ("USD" | "EUR")
+  string credited_amount_currency = 18;         // Ledger currency of the credit, EUR
   string quote_source = 19;                     // "chainlink" | "one_to_one"
   string network = 20;
+  FxConversion fx = 21;                         // EUR credit locked with the quote
 }
 
 // ============================================================================

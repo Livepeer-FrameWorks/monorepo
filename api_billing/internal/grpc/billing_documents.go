@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -34,6 +34,12 @@ type billingDocumentRow struct {
 	status         string
 	issuedAt       time.Time
 	retentionUntil time.Time
+	// EUR statement of the document; unset fields are not stated by its kind.
+	eurAmountCents  sql.NullInt64
+	netEURCents     sql.NullInt64
+	vatEURCents     sql.NullInt64
+	unitsPerEUR     string
+	fxReferenceDate string
 }
 
 type billingDocumentHTMLData struct {
@@ -89,12 +95,24 @@ func resolveBillingDocumentTenant(ctx context.Context, requested string) (string
 }
 
 func billingDocumentProto(row billingDocumentRow) *purserpb.BillingDocument {
-	return &purserpb.BillingDocument{
+	document := &purserpb.BillingDocument{
 		Id: row.id, Kind: row.kind, DocumentNumber: row.number,
 		AmountCents: row.amountCents, Currency: row.currency, Status: row.status,
 		IssuedAt: timestamppb.New(row.issuedAt), RetentionUntil: timestamppb.New(row.retentionUntil),
 		DownloadFilename: row.number + ".html",
+		UnitsPerEur:      decimalText(row.unitsPerEUR),
+		FxReferenceDate:  row.fxReferenceDate,
 	}
+	if row.eurAmountCents.Valid {
+		document.EurAmountCents = &row.eurAmountCents.Int64
+	}
+	if row.netEURCents.Valid {
+		document.NetEurCents = &row.netEURCents.Int64
+	}
+	if row.vatEURCents.Valid {
+		document.VatEurCents = &row.vatEURCents.Int64
+	}
+	return document
 }
 
 // ListBillingDocuments lists immutable customer-facing documents for one tenant.
@@ -113,10 +131,22 @@ func (s *PurserServer) ListBillingDocuments(ctx context.Context, req *purserpb.L
 			id: item.ID, kind: item.Kind, number: item.DocumentNumber,
 			amountCents: item.AmountCents, currency: item.Currency, status: item.Status,
 			issuedAt: item.IssuedAt.Time, retentionUntil: item.RetentionUntil,
+			eurAmountCents: sql.NullInt64{Int64: item.EurAmountCents, Valid: item.HasEurAmount},
+			netEURCents:    item.NetEurCents, vatEURCents: item.VatEurCents,
+			unitsPerEUR: item.UnitsPerEur, fxReferenceDate: item.FxReferenceDate,
 		}
 		response.Documents = append(response.Documents, billingDocumentProto(row))
 	}
 	return response, nil
+}
+
+// setEUR records the EUR total, net, VAT, and conversion rate a tax document
+// states.
+func (row *billingDocumentRow) setEUR(totalCents, netCents, vatCents int64, unitsPerEUR string, referenceDate time.Time) {
+	row.eurAmountCents = sql.NullInt64{Int64: totalCents, Valid: true}
+	row.netEURCents = sql.NullInt64{Int64: netCents, Valid: true}
+	row.vatEURCents = sql.NullInt64{Int64: vatCents, Valid: true}
+	row.unitsPerEUR, row.fxReferenceDate = unitsPerEUR, dateText(referenceDate)
 }
 
 func moneyString(cents int64) string {
@@ -149,8 +179,18 @@ func renderBillingDocument(row billingDocumentRow, data billingDocumentHTMLData)
 	}, nil
 }
 
+// exchangeRateFields states the ECB rate a document's EUR amounts were
+// converted at, as units of the document currency per euro.
+func exchangeRateFields(currency, unitsPerEUR string, referenceDate time.Time) []billingDocumentHTMLField {
+	return []billingDocumentHTMLField{
+		{Label: "Exchange rate", Value: fmt.Sprintf("1 EUR = %s %s", unitsPerEUR, currency)},
+		{Label: "Rate reference date", Value: referenceDate.UTC().Format(time.DateOnly)},
+	}
+}
+
 func supplierDocumentFields() (string, string, string, string) {
-	return config.GetEnv("SUPPLIER_NAME", ""), config.GetEnv("SUPPLIER_ADDRESS", ""), config.GetEnv("SUPPLIER_VAT_NUMBER", ""), config.GetEnv("SUPPLIER_REGISTRATION_NUMBER", "")
+	rt := appconfig.Runtime()
+	return rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber
 }
 
 func scanCustomer(name, company, address, vat *sql.NullString) (string, string, string, string) {
@@ -196,6 +236,12 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period end", Value: document.PeriodEnd.Time.UTC().Format(time.RFC3339)})
 		}
 		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Due", Value: document.DueDate.UTC().Format(time.RFC3339)})
+		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.EurAmountCents)})
+		if document.PresentmentUnitsPerEur != "" && document.PresentmentReferenceDate.Valid {
+			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.PresentmentUnitsPerEur, document.PresentmentReferenceDate.Time)...)
+			row.eurAmountCents = sql.NullInt64{Int64: document.EurAmountCents, Valid: true}
+			row.unitsPerEUR, row.fxReferenceDate = document.PresentmentUnitsPerEur, dateText(document.PresentmentReferenceDate.Time)
+		}
 	case "simplified_invoice":
 		var document purserdb.GetSimplifiedInvoiceDocumentRow
 		document, err = queries.GetSimplifiedInvoiceDocument(ctx, purserdb.GetSimplifiedInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
@@ -208,6 +254,15 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		base.Fields = append(base.Fields,
 			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
 			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
+			billingDocumentHTMLField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
+			billingDocumentHTMLField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+		)
+		if document.FxUnitsPerEur != "" {
+			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
+		}
+		row.setEUR(document.AmountEurCents, document.NetEurCents, document.VatEurCents, document.FxUnitsPerEur, document.FxReferenceDate)
+		base.Fields = append(base.Fields,
 			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
 			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
 			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Time.Format("2006-01-02")},
@@ -229,6 +284,15 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			billingDocumentHTMLField{Label: "Billing email", Value: document.CustomerEmail},
 			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
 			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
+			billingDocumentHTMLField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
+			billingDocumentHTMLField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+		)
+		if document.FxUnitsPerEur != "" {
+			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
+		}
+		row.setEUR(document.AmountEurCents, document.NetEurCents, document.VatEurCents, document.FxUnitsPerEur, document.FxReferenceDate)
+		base.Fields = append(base.Fields,
 			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
 			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
 			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Format("2006-01-02")},
@@ -248,6 +312,8 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		if document.TxID.Valid {
 			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Settlement reference", Value: document.TxID.String})
 		}
+		row.eurAmountCents = sql.NullInt64{Int64: document.EurAmountCents, Valid: true}
+		row.unitsPerEUR, row.fxReferenceDate = document.FxUnitsPerEur, dateText(document.FxReferenceDate)
 	case "credit_note":
 		var document purserdb.GetCreditNoteDocumentRow
 		document, err = queries.GetCreditNoteDocument(ctx, purserdb.GetCreditNoteDocumentParams{DocumentID: documentID, TenantID: tenantID})

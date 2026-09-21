@@ -180,8 +180,9 @@ func newBufConnClient(t *testing.T, server *SignalmanServer, serviceToken string
 	grpcServer := grpc.NewServer(
 		grpc.ChainStreamInterceptor(
 			middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
-				ServiceToken: serviceToken,
-				Logger:       logging.NewLogger(),
+				ServiceToken:   serviceToken,
+				MetadataPolicy: middleware.MetadataPolicyAllow,
+				Logger:         logging.NewLogger(),
 			}),
 		),
 	)

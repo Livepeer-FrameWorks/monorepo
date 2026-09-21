@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 )
 
 func TestIsConfigured_AllSet(t *testing.T) {
@@ -66,6 +68,40 @@ func TestRenderTemplate_InvoiceCreated(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}
+	}
+}
+
+func TestRenderTemplates_StateEURTotalRateAndDateForNonEURAmounts(t *testing.T) {
+	es := &EmailService{}
+	paidAt := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	usd := EmailData{
+		TenantName: "Acme", InvoiceID: "INV-USD", Amount: 292.18, Currency: "USD",
+		DueDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC), PaidAt: &paidAt, PaymentMethod: "card",
+		FX: NewEmailFX("USD", 24946, "1.1712000000", "2026-09-01"),
+	}
+	want := "249.46 EUR at 1.1712 USD per EUR (ECB reference rate of 2026-09-01)"
+	for _, name := range []string{"invoice_created", "payment_success", "payment_failed", "payment_action_required", "overdue_reminder"} {
+		body, err := es.renderTemplate(name, usd)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.Contains(body, "292.18 USD") || !strings.Contains(body, want) {
+			t.Errorf("%s does not state the charged amount with its EUR amount, rate and date:\n%s", name, body)
+		}
+	}
+
+	eur := usd
+	eur.Currency = "EUR"
+	eur.FX = NewEmailFX("EUR", 29218, "1", "2026-09-01")
+	if eur.FX != (EmailFX{}) {
+		t.Fatalf("EUR amounts must carry no FX statement, got %+v", eur.FX)
+	}
+	body, err := es.renderTemplate("invoice_created", eur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "per EUR") {
+		t.Errorf("EUR invoice must not state a conversion:\n%s", body)
 	}
 }
 
@@ -199,6 +235,39 @@ func TestRenderTemplate_PaymentSuccess(t *testing.T) {
 	for _, want := range expects {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestRenderBillingTemplateUsesEmailBranding(t *testing.T) {
+	es := &EmailService{}
+	data := EmailData{TenantName: "Acme", Balance: -1, Currency: "EUR", LoginURL: "https://app.example.test/account/billing"}
+
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.test")
+	body, err := es.renderBillingTemplate("account_suspended", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"https://app.example.test/", "frameworks-light-logomark.png", "support@frameworks.network"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("default branding missing %q", want)
+		}
+	}
+
+	appconfigtest.Set(t, "EMAIL_LOGO_URL", "https://cdn.example.test/logo.png")
+	appconfigtest.Set(t, "SUPPORT_EMAIL", " help@example.test ")
+	body, err = es.renderBillingTemplate("account_suspended", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"https://cdn.example.test/logo.png", "help@example.test"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("configured branding missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"frameworks-light-logomark.png", "support@frameworks.network"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("configured branding still renders default %q", unwanted)
 		}
 	}
 }

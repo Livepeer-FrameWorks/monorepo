@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"frameworks/api_gateway/internal/loaders"
@@ -201,59 +202,61 @@ func TestFetch_CacheLoadUsesOperationDeadline(t *testing.T) {
 }
 
 func TestFetch_DistinctCanceledKeysReleaseBoundedLoads(t *testing.T) {
-	df := New(Config{
-		Caches:      map[Service]*cache.Cache{ServicePeriscope: newTestCache()},
-		LoadTimeout: 25 * time.Millisecond,
-	})
-	const keys = 40
-	done := make(chan struct{}, keys)
-	for i := range keys {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-		go func(key int) {
-			defer cancel()
-			_, _ = df.Fetch(ctx, FetchRequest{
-				Service:   ServicePeriscope,
-				Operation: "outage",
-				KeyParts:  []string{fmt.Sprintf("key-%d", key)},
-				Loader: func(loadCtx context.Context) (any, error) {
-					<-loadCtx.Done()
-					return nil, loadCtx.Err()
-				},
-			})
-			done <- struct{}{}
-		}(i)
-	}
-	for range keys {
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("request waiter did not honor its own deadline")
+	synctest.Test(t, func(t *testing.T) {
+		df := New(Config{
+			Caches:      map[Service]*cache.Cache{ServicePeriscope: newTestCache()},
+			LoadTimeout: 25 * time.Millisecond,
+		})
+		const keys = 40
+		done := make(chan struct{}, keys)
+		for i := range keys {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+			go func(key int) {
+				defer cancel()
+				_, _ = df.Fetch(ctx, FetchRequest{
+					Service:   ServicePeriscope,
+					Operation: "outage",
+					KeyParts:  []string{fmt.Sprintf("key-%d", key)},
+					Loader: func(loadCtx context.Context) (any, error) {
+						<-loadCtx.Done()
+						return nil, loadCtx.Err()
+					},
+				})
+				done <- struct{}{}
+			}(i)
 		}
-	}
-	// The waiters have returned, but shared work is deliberately detached. A
-	// second round after its operation deadline must start new loads rather than
-	// joining permanently stuck singleflight calls.
-	time.Sleep(30 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	started := make(chan struct{}, 1)
-	_, err := df.Fetch(ctx, FetchRequest{
-		Service:   ServicePeriscope,
-		Operation: "outage",
-		KeyParts:  []string{"key-0"},
-		Loader: func(context.Context) (any, error) {
-			started <- struct{}{}
-			return "recovered", nil
-		},
+		for range keys {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("request waiter did not honor its own deadline")
+			}
+		}
+		// The waiters have returned, but shared work is deliberately detached. A
+		// second round after its operation deadline must start new loads rather than
+		// joining permanently stuck singleflight calls.
+		time.Sleep(30 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		started := make(chan struct{}, 1)
+		_, err := df.Fetch(ctx, FetchRequest{
+			Service:   ServicePeriscope,
+			Operation: "outage",
+			KeyParts:  []string{"key-0"},
+			Loader: func(context.Context) (any, error) {
+				started <- struct{}{}
+				return "recovered", nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("recovery fetch: %v", err)
+		}
+		select {
+		case <-started:
+		default:
+			t.Fatal("recovery fetch joined a stale active load")
+		}
 	})
-	if err != nil {
-		t.Fatalf("recovery fetch: %v", err)
-	}
-	select {
-	case <-started:
-	default:
-		t.Fatal("recovery fetch joined a stale active load")
-	}
 }
 
 func TestFetch_MemoDedupesWithinRequest(t *testing.T) {

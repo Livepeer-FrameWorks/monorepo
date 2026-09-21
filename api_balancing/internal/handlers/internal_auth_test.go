@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -14,8 +15,7 @@ import (
 func TestInternalOperatorIngressRejectsDelegatedAPIToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	secret := []byte("foghorn-internal-auth-secret")
-	t.Setenv("JWT_SECRET", string(secret))
-	t.Setenv("SERVICE_TOKEN", "service-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{JWTSecret: string(secret), ServiceToken: "service-secret"})
 	delegated, err := auth.GenerateDelegatedAPITokenJWT(
 		"user-1", "tenant-1", "owner@example.com", "owner", "token-1",
 		[]string{"infrastructure:write"}, "foghorn", secret,

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -32,13 +33,13 @@ const (
 
 func configureCardOnlyPayments(t *testing.T) {
 	t.Helper()
-	t.Setenv("CRYPTO_DEPOSITS_ENABLED", "false")
-	t.Setenv("PAYMENT_CARD_PROVIDER", "stripe")
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.test")
-	t.Setenv("STRIPE_SECRET_KEY", "sk_test")
-	t.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
-	t.Setenv("MOLLIE_API_KEY", "")
-	t.Setenv("GATEWAY_PUBLIC_URL", "")
+	appconfigtest.Set(t, "CRYPTO_DEPOSITS_ENABLED", "false")
+	appconfigtest.Set(t, "PAYMENT_CARD_PROVIDER", "stripe")
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.test")
+	appconfigtest.Set(t, "STRIPE_SECRET_KEY", "sk_test")
+	appconfigtest.Set(t, "STRIPE_WEBHOOK_SECRET", "whsec_test")
+	appconfigtest.Set(t, "MOLLIE_API_KEY", "")
+	appconfigtest.Set(t, "GATEWAY_PUBLIC_URL", "")
 }
 
 func paymentTenantContext() context.Context {
@@ -69,12 +70,16 @@ func expectInvoicePaymentLockAndBalance(mock sqlmock.Sqlmock, total, paid string
 	mock.ExpectBegin()
 	mock.ExpectExec("-- name: LockInvoicePaymentCreation").WithArgs(paymentInvoiceID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("-- name: GetPayableInvoiceBalance").WithArgs(paymentInvoiceID, paymentTenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "total_amount", "currency", "net_paid"}).AddRow(paymentTenantID, total, "EUR", paid))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "total_cents", "currency", "net_paid_cents"}).AddRow(
+			paymentTenantID, decimal.RequireFromString(total).Shift(2).IntPart(), "EUR", decimal.RequireFromString(paid).Shift(2).IntPart()))
 }
 
 func activeInvoicePaymentRows(method, amount string, paymentURL any, count int32) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"id", "method", "amount", "currency", "tx_id", "payment_url", "created_at", "active_count"}).
-		AddRow(paymentID, method, amount, "EUR", nil, paymentURL, time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC), count)
+	amountCents := decimal.RequireFromString(amount).Shift(2).IntPart()
+	return sqlmock.NewRows([]string{"id", "method", "amount", "currency", "tx_id", "payment_url", "created_at", "active_count",
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date"}).
+		AddRow(paymentID, method, amount, "EUR", nil, paymentURL, time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC), count,
+			amountCents, "EUR", amountCents, "1.0000000000", "identity", time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC))
 }
 
 func TestCreatePaymentReplaysExistingCardIntentWithoutDuplicatingMoneyMovement(t *testing.T) {
@@ -106,13 +111,25 @@ func TestCreatePaymentReplaysExistingCardIntentWithoutDuplicatingMoneyMovement(t
 	}
 }
 
+// expectInvoicePaymentFXBasis serves the EUR invoice of expectInvoicePaymentLockAndBalance
+// with its 5.00 already paid.
+func expectInvoicePaymentFXBasis(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("-- name: GetInvoicePaymentFXBasis").WithArgs(paymentInvoiceID, paymentTenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"amount_cents", "currency", "presentment_amount_cents", "presentment_currency",
+			"presentment_units_per_eur", "presentment_reference_date", "paid_original_cents", "paid_eur_cents"}).
+			AddRow(int64(2000), "EUR", int64(2000), "EUR", "1.0000000000", time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), int64(500), int64(500)))
+}
+
 func expectNewPendingCardPayment(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("-- name: GetActiveInvoicePayment").WithArgs(paymentInvoiceID, paymentTenantID).WillReturnError(sql.ErrNoRows)
+	expectInvoicePaymentFXBasis(mock)
 	mock.ExpectExec("-- name: CreatePendingInvoicePayment").
-		WithArgs(sqlmock.AnyArg(), paymentInvoiceID, "card", "15.00", "EUR", "", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), paymentInvoiceID, "card", "15.00", "EUR", "", sqlmock.AnyArg(),
+			int64(1500), int64(1500), "1", "identity", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	created := expectDomainEvent(mock, "billing.payment_created", paymentTenantID)
 	mock.ExpectQuery("-- name: EnqueueBillingEventOutbox").
-		WithArgs(sqlmock.AnyArg(), "payment_created", paymentTenantID, "user-1", "payment", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sameEventID{created}, "payment_created", paymentTenantID, "user-1", "payment", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("84000000-0000-4000-8000-000000000001"))
 	mock.ExpectCommit()
 }

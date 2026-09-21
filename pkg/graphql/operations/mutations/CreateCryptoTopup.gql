@@ -12,5 +12,13 @@ mutation CreateCryptoTopup($input: CreateCryptoTopupInput!) {
     quoteSource
     quotedAt
     network
+    conversion {
+      originalAmountCents
+      originalCurrency
+      eurAmountCents
+      unitsPerEur
+      source
+      referenceDate
+    }
   }
 }

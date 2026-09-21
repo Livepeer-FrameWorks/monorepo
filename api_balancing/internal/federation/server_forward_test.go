@@ -24,10 +24,12 @@ type artifactCommandSpy struct {
 	noForwardSeen    bool
 	returnNotFound   bool
 	returnErr        error
+	requestedBy      []string
 }
 
-func (s *artifactCommandSpy) DeleteClip(_ context.Context, _ *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
+func (s *artifactCommandSpy) DeleteClip(_ context.Context, req *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	s.deleteClipCalled = true
+	s.requestedBy = append(s.requestedBy, req.GetRequestedByUserId())
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
 	}
@@ -52,8 +54,9 @@ func (s *artifactCommandSpy) StopDVR(ctx context.Context, req *sharedpb.StopDVRR
 	return &sharedpb.StopDVRResponse{Success: true}, nil
 }
 
-func (s *artifactCommandSpy) DeleteDVR(_ context.Context, _ *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
+func (s *artifactCommandSpy) DeleteDVR(_ context.Context, req *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
 	s.deleteDVRCalled = true
+	s.requestedBy = append(s.requestedBy, req.GetRequestedByUserId())
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
 	}
@@ -63,8 +66,9 @@ func (s *artifactCommandSpy) DeleteDVR(_ context.Context, _ *sharedpb.DeleteDVRR
 	return &sharedpb.DeleteDVRResponse{Success: true}, nil
 }
 
-func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, _ *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error) {
+func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, req *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error) {
 	s.deleteVodCalled = true
+	s.requestedBy = append(s.requestedBy, req.GetRequestedByUserId())
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
 	}
@@ -148,6 +152,31 @@ func TestForwardArtifactCommand_DeleteClip_Handled(t *testing.T) {
 	}
 	if !spy.deleteClipCalled {
 		t.Fatal("DeleteClip should have been called")
+	}
+}
+
+// The owning peer attributes its artifact_deleted to the requester the
+// forwarding cell received.
+func TestForwardArtifactCommand_DeletionsCarryRequester(t *testing.T) {
+	spy := &artifactCommandSpy{}
+	srv := NewFederationServer(FederationServerConfig{
+		Logger:                   logging.NewLogger(),
+		ArtifactHandler:          spy,
+		AllowFederationMutations: true,
+	})
+	for _, command := range []string{"delete_clip", "delete_dvr", "delete_vod"} {
+		resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
+			Command:           command,
+			ArtifactHash:      "hash-1",
+			TenantId:          "tenant-a",
+			RequestedByUserId: "user-7",
+		})
+		if err != nil || !resp.GetHandled() {
+			t.Fatalf("%s handled=%v err=%v", command, resp.GetHandled(), err)
+		}
+	}
+	if strings.Join(spy.requestedBy, ",") != "user-7,user-7,user-7" {
+		t.Fatalf("forwarded deletions carried requesters %q", spy.requestedBy)
 	}
 }
 

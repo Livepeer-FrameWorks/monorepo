@@ -10,12 +10,9 @@ query GetBillingTiers {
     currency
     billingPeriod
     features {
-      recording
-      analytics
-      customBranding
-      apiAccess
       supportLevel
       sla
+      processingCustomizable
     }
     pricingRules {
       meter

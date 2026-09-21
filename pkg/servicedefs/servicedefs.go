@@ -1,5 +1,15 @@
 package servicedefs
 
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// sharedRouterReadySince is the release whose Go service binaries first serve
+// /ready from pkg/server.NewServiceRouter.
+const sharedRouterReadySince = "v0.3.11"
+
 // Service defines the canonical (brand) ID for a service.
 // Canonical IDs are what the CLI expects in manifests and commands.
 type Service struct {
@@ -9,15 +19,24 @@ type Service struct {
 	HealthProtocol string // http|grpc
 	Role           string // control|data|analytics|media|mesh|interface|infra|support|observability
 
-	// ReadyPath is the DEPLOYMENT-READINESS endpoint: what the rollout gate,
-	// doctor probe, and Quartermaster registration advertise. It answers "can
-	// this instance actually serve?" — distinct from HealthPath (process
-	// liveness, e.g. the container HEALTHCHECK). Empty means readiness is
-	// indistinguishable from liveness and ReadinessPath() falls back to
-	// HealthPath. Chandler sets it to /ready because /health is up before its
-	// immutable S3 backend is proven reachable — gating rollout on /health
-	// would deploy an instance that returns 503 for every asset.
+	// ReadyPath is the readiness endpoint: it answers "can this instance
+	// serve?", as distinct from HealthPath (process liveness, used by container
+	// HEALTHCHECKs and ingress probes). Empty means the service has no separate
+	// readiness endpoint. Chandler's /ready stays 503 until its immutable S3
+	// backend is proven reachable; the shared router's /ready reports the
+	// service's own dependency checks and gRPC listener state, and 503 while
+	// draining.
 	ReadyPath string
+
+	// ReadySince is the first release whose binaries serve ReadyPath. Empty
+	// means every supported release serves it. While it is set, a binary from
+	// an older release may still be running (an upgrade in progress, or an
+	// automatic rollback), so consumers that cannot see the probed binary's
+	// version stay on HealthPath (ReadinessPath) and consumers that can see it
+	// choose per binary (ReadinessPathFor). It is removed once the release
+	// catalog's min_source_version reaches it; a test in cli/internal/releases
+	// fails until that happens.
+	ReadySince string
 
 	// SupportsSIGHUPReload is set on services whose main package has
 	// registered a ReloadCallback via pkg/server.RegisterReload. When
@@ -31,44 +50,47 @@ type Service struct {
 // Services is the canonical registry keyed by CLI service ID (brand name).
 var Services = map[string]Service{
 	// Core control plane
-	"bridge":        {ID: "bridge", DefaultPort: 18000, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
-	"commodore":     {ID: "commodore", DefaultPort: 18001, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
-	"quartermaster": {ID: "quartermaster", DefaultPort: 18002, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
-	"purser":        {ID: "purser", DefaultPort: 18003, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"bridge":        {ID: "bridge", DefaultPort: 18000, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"commodore":     {ID: "commodore", DefaultPort: 18001, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"quartermaster": {ID: "quartermaster", DefaultPort: 18002, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"purser":        {ID: "purser", DefaultPort: 18003, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
 
 	// Analytics (Periscope)
-	"periscope-query":    {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
-	"periscope-ingest":   {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
-	"periscope-metering": {ID: "periscope-metering", DefaultPort: 18021, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-query":    {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-ingest":   {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-metering": {ID: "periscope-metering", DefaultPort: 18021, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
 
 	// Data plane
-	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "data", SupportsSIGHUPReload: true},
-	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", HealthProtocol: "http", Role: "data", SupportsSIGHUPReload: true},
+	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "grpc", Role: "data", SupportsSIGHUPReload: true},
+	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "data", SupportsSIGHUPReload: true},
 
 	// Media plane
-	"foghorn":          {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
-	"helmsman":         {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
+	"foghorn":          {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
+	"helmsman":         {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
 	"livepeer-gateway": {ID: "livepeer-gateway", DefaultPort: 8935, HealthPath: "/healthz", HealthProtocol: "http", Role: "media"},
 	"livepeer-signer":  {ID: "livepeer-signer", DefaultPort: 18016, HealthPath: "/status", HealthProtocol: "http", Role: "control"},
 	"mistserver":       {ID: "mistserver", DefaultPort: 8080, HealthPath: "/metrics", HealthProtocol: "http", Role: "media"},
 
 	// Infra services
-	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
-	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
-	"lookout":   {ID: "lookout", DefaultPort: 18022, HealthPath: "/health", HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
+	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
+	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "mesh"},
+	"lookout":   {ID: "lookout", DefaultPort: 18022, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
+
+	// Tenant integrations
+	"bosun": {ID: "bosun", DefaultPort: 18013, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
 
 	// Assets
 	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", ReadyPath: "/ready", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
 
 	// AI / support
-	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
-	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
+	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
+	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "support"},
 	"chatwoot": {ID: "chatwoot", DefaultPort: 18092, HealthPath: "/api", HealthProtocol: "http", Role: "support"},
 
 	// Surfaces (interfaces)
 	"chartroom": {ID: "chartroom", DefaultPort: 18030, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
 	"foredeck":  {ID: "foredeck", DefaultPort: 18031, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
-	"steward":   {ID: "steward", DefaultPort: 18032, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
+	"steward":   {ID: "steward", DefaultPort: 18032, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
 	"logbook":   {ID: "logbook", DefaultPort: 18033, HealthPath: "/", HealthProtocol: "http", Role: "interface"},
 
 	// Infra dependencies
@@ -128,15 +150,81 @@ func DeliveryClassFor(deployName string) DeliveryClass {
 	return DeliveryPlatformArtifact
 }
 
-// ReadinessPath is the endpoint that gates deployment and is advertised for
-// serving: ReadyPath when set, otherwise HealthPath. Rollout gate, doctor
-// probe, and Quartermaster registration use this; the container liveness
-// HEALTHCHECK stays on HealthPath.
+// ReadinessPath is the fleet-wide readiness endpoint for consumers that do not
+// know which release the probed binary runs: Quartermaster's health poller and
+// registration, Navigator's load-balancer monitors, the rendered bootstrap
+// registry, the doctor, and the orchestrator's rolling-apply gate. It is
+// ReadyPath only when every supported release serves it (ReadySince empty),
+// otherwise HealthPath. Container liveness HEALTHCHECKs always use HealthPath.
 func (s Service) ReadinessPath() string {
-	if s.ReadyPath != "" {
+	if s.ReadyPath != "" && s.ReadySince == "" {
 		return s.ReadyPath
 	}
 	return s.HealthPath
+}
+
+// ReadinessPolled reports whether readiness pollers route by this service's
+// readiness endpoint: Quartermaster's health poller and Navigator's load
+// balancer monitors probe ReadinessPath(), so a draining instance's 503 is
+// visible to them only when that is ReadyPath. Edge Helmsman is probed by
+// neither (Foghorn tracks edges over the control stream and edge pools probe
+// /health), so it is never polled.
+func (s Service) ReadinessPolled() bool {
+	return s.ReadyPath != "" && s.ReadinessPath() == s.ReadyPath && s.ID != "helmsman"
+}
+
+// ReadinessPathFor is the readiness endpoint of a binary at a known release
+// version, for consumers that deploy or restore a specific version: the native
+// and Compose rollout gates, including the automatic rollback's gate. The
+// version's vX.Y.Z core is compared with ReadySince, so a release candidate or
+// a `git describe` build of the introducing release serves ReadyPath. A
+// version without a parseable core (empty, "dev", a channel name, a digest) is
+// treated as older and gets HealthPath.
+func (s Service) ReadinessPathFor(version string) string {
+	if s.ReadyPath == "" {
+		return s.HealthPath
+	}
+	if s.ReadySince == "" {
+		return s.ReadyPath
+	}
+	have, ok := releaseCore(version)
+	if !ok {
+		return s.HealthPath
+	}
+	since, ok := releaseCore(s.ReadySince)
+	if !ok {
+		return s.HealthPath
+	}
+	for i := range have {
+		if have[i] != since[i] {
+			if have[i] > since[i] {
+				return s.ReadyPath
+			}
+			return s.HealthPath
+		}
+	}
+	return s.ReadyPath
+}
+
+var releaseCorePattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
+// releaseCore parses the major, minor, and patch numbers at the start of a
+// version string. Anything after the core (prerelease, build metadata, a
+// `git describe` suffix) is ignored.
+func releaseCore(version string) ([3]int, bool) {
+	var core [3]int
+	m := releaseCorePattern.FindStringSubmatch(strings.TrimSpace(version))
+	if m == nil {
+		return core, false
+	}
+	for i := range core {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
+			return core, false
+		}
+		core[i] = n
+	}
+	return core, true
 }
 
 // DeployName resolves the deploy slug for a canonical ID with an optional override.
@@ -253,6 +341,7 @@ var grpcServices = []GRPCService{
 	{ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
 	{ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
 	{ServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Port: 19008},
+	{ServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Port: 19009},
 }
 
 // DefaultGRPCPort returns the default gRPC port for a canonical ID, if defined.
@@ -287,6 +376,12 @@ type RequiredEnvVar struct {
 	SetupGuide string
 }
 
+// requiredExternalEnv lists the operator inputs a service may be installed
+// without. The CLI's schema contract leaves these keys out, and provision
+// with --ignore-validation installs the service without starting it until
+// they are set. A key the operator generates locally (for example Bosun's
+// field-encryption key) is not listed: nothing blocks setting it before the
+// deploy, so the contract refuses a deploy without it.
 var requiredExternalEnv = map[string][]RequiredEnvVar{
 	"alertmanager": {
 		{Key: "LOOKOUT_ALERTMANAGER_TOKEN", SetupGuide: "Set the same bearer token Lookout uses: gitops/scripts/sops-env.sh set secrets/production.env LOOKOUT_ALERTMANAGER_TOKEN"},

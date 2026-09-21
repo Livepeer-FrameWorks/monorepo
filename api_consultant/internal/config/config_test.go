@@ -14,19 +14,32 @@ func TestGatewayMCPEndpointUsesExplicitInternalURL(t *testing.T) {
 }
 
 func TestParseOriginRewritesNormalizesOrigins(t *testing.T) {
-	got := mustParseOriginRewrites(`{"HTTP://LOCALHOST:18090/":"http://NGINX/"}`)
+	got, err := ParseOriginRewrites(`{"HTTP://LOCALHOST:18090/":"http://NGINX/"}`)
+	if err != nil {
+		t.Fatalf("ParseOriginRewrites: %v", err)
+	}
 	if got["http://localhost:18090"] != "http://nginx" {
 		t.Fatalf("unexpected rewrites: %v", got)
 	}
 }
 
 func TestParseOriginRewritesRejectsPaths(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected invalid origin to panic")
-		}
-	}()
-	_ = mustParseOriginRewrites(`{"http://localhost:18090/docs":"http://nginx"}`)
+	if _, err := ParseOriginRewrites(`{"http://localhost:18090/docs":"http://nginx"}`); err == nil {
+		t.Fatal("expected an origin with a path to be rejected")
+	}
+}
+
+func TestParseOriginRewritesRejectsMalformedJSON(t *testing.T) {
+	if _, err := ParseOriginRewrites(`{"http://localhost:18090"`); err == nil {
+		t.Fatal("expected malformed JSON to be rejected")
+	}
+}
+
+func TestParseOriginRewritesEmptyIsNil(t *testing.T) {
+	got, err := ParseOriginRewrites("  ")
+	if err != nil || got != nil {
+		t.Fatalf("ParseOriginRewrites(blank) = %v, %v; want nil, nil", got, err)
+	}
 }
 
 func TestGatewayMCPEndpointsPreferExplicitInternalURLList(t *testing.T) {

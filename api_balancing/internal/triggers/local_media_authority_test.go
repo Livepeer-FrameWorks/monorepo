@@ -476,7 +476,7 @@ func TestReadyLocalIngestContextDoesNotChooseOutageOwnerBeforeFrontDoorFallback(
 }
 
 func TestPushRewriteUsesReadyLocalAuthorityOnlyOnSignedOutageOwner(t *testing.T) {
-	installIngestSessionMintMock(t)
+	installIngestSessionMintMockWithStream(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	sm.SetNodeInfo("edge-node-1", "http://edge.example/view", true, nil, nil, "", "", nil)

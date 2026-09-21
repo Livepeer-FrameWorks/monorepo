@@ -10,11 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
@@ -74,7 +74,7 @@ func buildRatingInputFromSummary(summary models.UsageSummary, currency string, r
 		Rules:             rules,
 		Usage:             usage,
 		Quantities:        quantities,
-		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
 	}
 }
 
@@ -104,7 +104,7 @@ func buildRatingInputFromCanonicalUsage(rows []canonicalUsageDelta, currency str
 		Rules:             rules,
 		Usage:             usage,
 		Quantities:        quantities,
-		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
 	}
 }
 

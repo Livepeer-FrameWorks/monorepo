@@ -683,10 +683,7 @@ func TestStreamObservationRejectsOlderFullPollResponse(t *testing.T) {
 		return &control.MistTriggerResult{}, nil
 	}
 
-	fullClient := mist.NewClient(monitorLogger)
-	fullClient.BaseURL = full.server.URL
-	fullClient.Username = "mist-user"
-	fullClient.Password = "mist-password"
+	fullClient := mist.NewClient(monitorLogger, mist.ClientConfig{BaseURL: full.server.URL, Username: "mist-user", Password: "mist-password"})
 	var fullMu sync.Mutex
 	fullDone := make(chan struct{})
 	go func() {

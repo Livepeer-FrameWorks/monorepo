@@ -1,0 +1,15 @@
+# Disable a webhook endpoint and skip its pending deliveries
+mutation DisableWebhookEndpoint($id: ID!) {
+  disableWebhookEndpoint(id: $id) {
+    __typename
+    ... on WebhookEndpoint {
+      ...WebhookEndpointFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

@@ -136,7 +136,9 @@ SELECT ic.cluster_id,
        tca.resource_limits::text AS resource_limits,
        ic.allow_private_pull_sources,
        foghorn.advertise_host AS foghorn_advertise_host,
-       foghorn.port AS foghorn_port
+       foghorn.port AS foghorn_port,
+       ic.media_allow_ingest,
+       ic.media_allow_serve
 FROM quartermaster.tenant_cluster_access tca
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 LEFT JOIN LATERAL (
@@ -170,3 +172,20 @@ WHERE tca.tenant_id = sqlc.arg(tenant_id)::uuid
   AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND ic.is_active = true
 ORDER BY ic.cluster_id ASC;
+
+-- name: ListFreshEdgeCapabilityServices :many
+-- Edge capability service types (edge-ingest, edge-egress, edge-storage,
+-- edge-processing) that at least one active edge node in each cluster reported
+-- healthy within the freshness window. ReportAliveNodes maintains these rows.
+SELECT DISTINCT n.cluster_id, s.type::text AS service_type
+FROM quartermaster.infrastructure_nodes n
+JOIN quartermaster.service_instances si
+  ON si.node_id = n.node_id AND si.cluster_id = n.cluster_id
+JOIN quartermaster.services s ON s.service_id = si.service_id
+WHERE n.cluster_id = ANY(sqlc.arg(cluster_ids)::text[])
+  AND n.node_type = 'edge'
+  AND n.status = 'active'
+  AND s.type IN ('edge-ingest', 'edge-egress', 'edge-storage', 'edge-processing')
+  AND si.health_status = 'healthy'
+  AND si.last_health_check > NOW() - (sqlc.arg(stale_threshold_seconds)::int * INTERVAL '1 second')
+ORDER BY n.cluster_id, service_type;

@@ -3,14 +3,14 @@ package heartbeat
 import (
 	"fmt"
 	"html/template"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
-func renderInfraAlertEmail(alerts []InfraAlert) (string, error) {
+func renderInfraAlertEmail(alerts []InfraAlert, branding config.EmailBranding) (string, error) {
 	if len(alerts) == 0 {
 		return "", fmt.Errorf("no alerts to render")
 	}
@@ -63,11 +63,11 @@ func renderInfraAlertEmail(alerts []InfraAlert) (string, error) {
 		title = "Critical infrastructure alert"
 	}
 	return emailpkg.RenderLayout(emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      branding.Logo(),
 		Preheader:    fmt.Sprintf("%s infrastructure alert for %s/%s.", severity, data.ClusterName, data.NodeID),
 		Eyebrow:      "Infrastructure",
 		Title:        title,
-		SupportEmail: infraSupportEmail(),
+		SupportEmail: branding.Support(),
 		Content:      data,
 	}, infraAlertTemplate, funcs)
 }
@@ -141,13 +141,6 @@ func infraAlertSubject(alerts []InfraAlert) string {
 	}
 	return fmt.Sprintf("[FrameWorks] Infrastructure Alert: %s on %s/%s - %s",
 		severity, a.ClusterName, a.NodeID, strings.Join(issues, ", "))
-}
-
-func infraSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }
 
 const infraAlertTemplate = `

@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"database/sql/driver"
+	"strings"
 	"testing"
 
 	"frameworks/api_balancing/internal/control"
@@ -16,6 +18,20 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+// payloadContains matches a JSON outbox payload containing the given text.
+type payloadContains string
+
+func (want payloadContains) Match(value driver.Value) bool {
+	switch typed := value.(type) {
+	case []byte:
+		return strings.Contains(string(typed), string(want))
+	case string:
+		return strings.Contains(typed, string(want))
+	default:
+		return false
+	}
+}
 
 // newLifecycleServer wires a FoghornGRPCServer over a fresh sqlmock with every
 // optional client left nil (federation/purser/cleaner). The nil federation
@@ -93,6 +109,11 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// The requested deletion's artifact_deleted service event commits in the same tx.
+	// It is attributed to the requester Commodore named on the request.
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WithArgs("artifact_deleted", "tenant-a", sqlmock.AnyArg(), "clip-h", payloadContains(`"userId":"user-7"`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Processing-job cancellation runs after the delete tx (best-effort).
 	mock.ExpectExec(`UPDATE foghorn.processing_jobs`).
@@ -100,8 +121,9 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	resp, err := srv.DeleteClip(context.Background(), &sharedpb.DeleteClipRequest{
-		ClipHash: "clip-h",
-		TenantId: "tenant-a",
+		ClipHash:          "clip-h",
+		TenantId:          "tenant-a",
+		RequestedByUserId: "user-7",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

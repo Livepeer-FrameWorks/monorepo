@@ -118,6 +118,33 @@ func (q *Queries) GetChapterArtifactRouting(ctx context.Context, artifactHash st
 	return i, err
 }
 
+const getChapterRecordingContext = `-- name: GetChapterRecordingContext :one
+SELECT c.artifact_hash AS recording_hash, COALESCE(p.stream_id::text, '')::text AS stream_id,
+       c.start_ms, c.end_ms
+FROM foghorn.dvr_chapters c
+JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash
+WHERE c.chapter_id = $1
+`
+
+type GetChapterRecordingContextRow struct {
+	RecordingHash string `db:"recording_hash" json:"recording_hash"`
+	StreamID      string `db:"stream_id" json:"stream_id"`
+	StartMs       int64  `db:"start_ms" json:"start_ms"`
+	EndMs         int64  `db:"end_ms" json:"end_ms"`
+}
+
+func (q *Queries) GetChapterRecordingContext(ctx context.Context, chapterID string) (GetChapterRecordingContextRow, error) {
+	row := q.db.QueryRowContext(ctx, getChapterRecordingContext, chapterID)
+	var i GetChapterRecordingContextRow
+	err := row.Scan(
+		&i.RecordingHash,
+		&i.StreamID,
+		&i.StartMs,
+		&i.EndMs,
+	)
+	return i, err
+}
+
 const getPlayableChapterArtifactResolution = `-- name: GetPlayableChapterArtifactResolution :one
 SELECT origin_type, origin_id, tenant_id::text AS tenant_id,
        COALESCE(internal_name, '')::text AS internal_name
@@ -180,6 +207,22 @@ func (q *Queries) LockChapterFinalizeArtifact(ctx context.Context, chapterID str
 		&i.FinalizeAttempts,
 	)
 	return i, err
+}
+
+const lockChapterParentRecording = `-- name: LockChapterParentRecording :exec
+SELECT p.artifact_hash
+FROM foghorn.artifacts p
+JOIN foghorn.dvr_chapters c ON c.artifact_hash = p.artifact_hash
+WHERE c.chapter_id = $1
+FOR UPDATE OF p
+`
+
+// Locks the chapter's parent recording before the chapter and its playback
+// artifact. The chapter's domain event advances the parent's revision, and the
+// recording-delete cascade also locks the parent before its chapter artifacts.
+func (q *Queries) LockChapterParentRecording(ctx context.Context, chapterID string) error {
+	_, err := q.db.ExecContext(ctx, lockChapterParentRecording, chapterID)
+	return err
 }
 
 const upsertChapterVodMetadata = `-- name: UpsertChapterVodMetadata :exec

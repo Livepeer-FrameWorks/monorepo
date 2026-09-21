@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/bootstrap"
 	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -82,10 +83,14 @@ func runBootstrapApply(args []string) int {
 	}
 
 	config.LoadEnv(logger)
-	dbURL := config.RequireEnv("DATABASE_URL")
+	cfg, err := config.Load[appconfig.PurserBootstrap](config.Options{Service: "purser", Logger: logger})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "purser bootstrap: %v\n", err)
+		return 1
+	}
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "purser"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
@@ -97,7 +102,19 @@ func runBootstrapApply(args []string) int {
 
 	var qm *grpcQMClient
 	if len(desired.Purser.CustomerBilling) > 0 {
-		qm, err = newGRPCQMClient(logger)
+		if cfg.ServiceToken == "" {
+			fmt.Fprintln(os.Stderr, "purser bootstrap: SERVICE_TOKEN is required when the desired state declares customer_billing")
+			return 1
+		}
+		qm, err = newGRPCQMClient(qmclient.GRPCConfig{
+			GRPCAddr:      cfg.QuartermasterGRPCAddr,
+			Timeout:       10 * time.Second,
+			Logger:        logger,
+			ServiceToken:  cfg.ServiceToken,
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.QuartermasterGRPCTLSServerName,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "purser bootstrap: QM client: %v\n", err)
 			return 1
@@ -174,7 +191,7 @@ func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCCli
 		// caps come from Purser tier entitlements during admission, not from
 		// tenant_cluster_access. Passing nil keeps that access row empty unless
 		// an operator later adds a tenant/cluster-specific override.
-		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil)
+		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil, nil)
 	case bootstrap.PostCommitSetPrimaryCluster:
 		clusterID := op.ClusterID
 		return client.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
@@ -216,18 +233,27 @@ func runBootstrapValidate(args []string) int {
 
 	logger := logging.NewLoggerWithService("purser-bootstrap-validate")
 	config.LoadEnv(logger)
-	dbURL := config.RequireEnv("DATABASE_URL")
-	qmAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	cfg, err := config.Load[appconfig.PurserBootstrapValidate](config.Options{Service: "purser", Logger: logger})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "purser bootstrap validate: %v\n", err)
+		return 1
+	}
 
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "purser"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	missing, err := bootstrap.ValidatePlatformOfficialPricingCoverage(ctx, db, qmAddr, serviceToken, logger)
+	missing, err := bootstrap.ValidatePlatformOfficialPricingCoverage(ctx, db, qmclient.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		ServiceToken:  cfg.ServiceToken,
+		Logger:        logger,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "purser bootstrap validate: %v\n", err)
 		return 1
@@ -248,18 +274,8 @@ type grpcQMClient struct {
 	client *qmclient.GRPCClient
 }
 
-func newGRPCQMClient(logger logging.Logger) (*grpcQMClient, error) {
-	addr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      addr,
-		Timeout:       10 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-	})
+func newGRPCQMClient(cfg qmclient.GRPCConfig) (*grpcQMClient, error) {
+	client, err := qmclient.NewGRPCClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("dial quartermaster: %w", err)
 	}

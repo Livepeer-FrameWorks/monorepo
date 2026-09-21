@@ -63,7 +63,7 @@ func TestHandleCreateClip_Validation(t *testing.T) {
 func TestHandleCreateClip_BlockedByBalance(t *testing.T) {
 	commo := &clientstest.FakeCommodore{} // never reached — balance blocks first
 	purser := clientstest.SolventPurser()
-	purser.GetPrepaidBalanceFn = func(context.Context, string, string) (*purserpb.PrepaidBalance, error) {
+	purser.GetPrepaidBalanceFn = func(context.Context, string) (*purserpb.PrepaidBalance, error) {
 		return &purserpb.PrepaidBalance{BalanceCents: 0}, nil
 	}
 	purser.GetPaymentRequirementsFn = func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {

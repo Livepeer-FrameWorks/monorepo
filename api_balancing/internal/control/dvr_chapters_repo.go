@@ -663,8 +663,9 @@ func propagateChapterRetention(ctx context.Context, dbtx foghorndb.DBTX, tenantI
 // touches another tenant's row; artifact_hash is a randomly-minted, globally-unique id). Returns the
 // child hashes transitioned and whether THIS call performed
 // the parent soft-delete (parentTransitioned) so the caller can suppress a duplicate deletion
-// event on a concurrent/repeat delete.
-func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID string) ([]string, bool, error) {
+// event on a concurrent/repeat delete. A performed parent soft-delete also records the
+// artifact_deleted service event, attributed to requestedBy, in the same transaction.
+func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID, requestedBy string) ([]string, bool, error) {
 	if db == nil {
 		return nil, false, sql.ErrConnDone
 	}
@@ -706,6 +707,14 @@ func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID string) ([]
 		dvrData := &ipcpb.DVRLifecycleData{Status: ipcpb.DVRLifecycleData_STATUS_DELETED, DvrHash: dvrHash, TenantId: &tenantID}
 		if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
 			return nil, false, fmt.Errorf("delete dvr: enqueue dvr lifecycle: %w", enqErr)
+		}
+		recording, ctxErr := q.GetDVRLifecycleContext(ctx, dvrHash)
+		if ctxErr != nil {
+			return nil, false, fmt.Errorf("delete dvr: read recording context: %w", ctxErr)
+		}
+		if enqErr := artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, tenantID, requestedBy,
+			ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, recording.StreamID); enqErr != nil {
+			return nil, false, fmt.Errorf("delete dvr: enqueue artifact_deleted: %w", enqErr)
 		}
 	}
 

@@ -73,9 +73,8 @@ type Server struct {
 	authorizer RelayPullAuthorizer
 	// trustedCIDRs are RemoteAddr ranges that bypass the authorize gate like
 	// loopback does (still AND-gated by no proxy-forward markers). Only for
-	// the local Mist→Helmsman hop when Mist dials a non-loopback service
-	// address (the dev compose bridge). Empty in production — native hosts
-	// and the single edge container are loopback-only.
+	// the local Mist→Helmsman hop when Mist dials a non-loopback address.
+	// Empty on native hosts and in the edge container, which are loopback-only.
 	trustedCIDRs []*net.IPNet
 	// authzCache memoizes recent ALLOW decisions per (grant_id, path) so a
 	// multi-block pull session makes one authorize round-trip, not one per

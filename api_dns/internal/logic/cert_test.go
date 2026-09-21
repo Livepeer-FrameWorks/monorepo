@@ -126,7 +126,6 @@ func TestIssuanceLeaseMustStillBeOwnedBeforePublish(t *testing.T) {
 }
 
 func TestSuccessfulACMEOrderCannotPublishAfterIssuanceLeaseExpires(t *testing.T) {
-	t.Setenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES", "example.com")
 	certPEM, keyPEM := buildTestCert(t, time.Now().Add(48*time.Hour))
 	fakeStore := &fakeStore{
 		getTLSBundleFunc: func(context.Context, string) (*store.TLSBundle, error) { return nil, store.ErrNotFound },
@@ -141,6 +140,7 @@ func TestSuccessfulACMEOrderCannotPublishAfterIssuanceLeaseExpires(t *testing.T)
 		renewIssuanceLeaseFunc: func() (bool, error) { return false, nil },
 	}
 	manager := NewCertManager(fakeStore)
+	manager.SetIssuanceSettings(func() IssuanceSettings { return IssuanceSettings{AllowedSuffixes: "example.com"} })
 	manager.acmeClientFactory = func(*lego.Config) (acmeClient, error) {
 		return &fakeACMEClient{resource: &certificate.Resource{Certificate: certPEM, PrivateKey: keyPEM}}, nil
 	}
@@ -314,6 +314,21 @@ func (f *fakeStore) SetTenantCustomDomainStatus(_ context.Context, tenantID, dom
 		row.NextAttemptAt = sql.NullTime{}
 	}
 	return true, nil
+}
+
+func (f *fakeStore) MarkTenantCustomDomainVerified(ctx context.Context, tenantID, domain, expectedStatus string) (bool, error) {
+	return f.SetTenantCustomDomainStatus(ctx, tenantID, domain, expectedStatus, "verified", "")
+}
+
+func (f *fakeStore) ExpireTenantCustomDomainVerifications(_ context.Context, period time.Duration) (int, error) {
+	expired := 0
+	for _, row := range f.customDomains {
+		if row.Status == "pending_verification" && !row.VerificationStartedAt.IsZero() && time.Since(row.VerificationStartedAt) > period {
+			row.Status = "verification_failed"
+			expired++
+		}
+	}
+	return expired, nil
 }
 
 func (f *fakeStore) CompleteTenantCustomDomainIssuance(_ context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) (bool, error) {
@@ -793,7 +808,6 @@ func TestEnsureTenantTLSBundleDoesNotDuplicateCrossReplicaIssuance(t *testing.T)
 
 func TestEnsureTLSBundleRenewsTenantCustomDomainBundleWithBunnyProvider(t *testing.T) {
 	ctx := context.Background()
-	t.Setenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES", "frameworks.network")
 	notAfter := time.Now().Add(48 * time.Hour)
 	certPEM, keyPEM := buildTestCert(t, notAfter)
 
@@ -832,6 +846,7 @@ func TestEnsureTLSBundleRenewsTenantCustomDomainBundleWithBunnyProvider(t *testi
 	}
 
 	manager := NewCertManager(fakeStore)
+	manager.SetIssuanceSettings(func() IssuanceSettings { return IssuanceSettings{AllowedSuffixes: "frameworks.network"} })
 	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
 		return acme, nil
 	}
@@ -928,6 +943,25 @@ func (h *customDomainHarness) reconcile(t *testing.T, lookup func(context.Contex
 	processed, err := h.manager.ProcessPendingCustomDomains(context.Background(), customDomainTestRoot, customDomainTestEmail, lookup)
 	require.NoError(t, err)
 	return processed
+}
+
+// A reconcile pass fails a domain still pending after the verification period
+// before it tries to verify anything, so the expired domain is not verified.
+func TestProcessPendingCustomDomainsExpiresStaleVerification(t *testing.T) {
+	h := newCustomDomainHarness(t, "cert_issued",
+		store.TenantCustomDomain{Domain: "stale.example.com", Status: "pending_verification", VerificationStartedAt: time.Now().Add(-CustomDomainVerificationPeriod - time.Hour)},
+		store.TenantCustomDomain{Domain: "fresh.example.com", Status: "pending_verification", VerificationStartedAt: time.Now()},
+	)
+	lookups := 0
+	processed := h.reconcile(t, func(context.Context, string) (string, error) {
+		lookups++
+		return "", nil
+	})
+
+	require.Equal(t, 1, processed)
+	require.Equal(t, "verification_failed", h.row("stale.example.com").Status)
+	require.Equal(t, "pending_verification", h.row("fresh.example.com").Status)
+	require.Equal(t, 1, lookups, "only the domain still inside its period is verified")
 }
 
 func TestIssueCustomDomainCertificateServesThroughTenantBundleOnly(t *testing.T) {
@@ -1114,7 +1148,6 @@ func TestCertificateNeedsBunnyProvider(t *testing.T) {
 
 func TestUseBunnyForClusterZonesSelectsProviderByDelegatedZone(t *testing.T) {
 	ctx := context.Background()
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 	notAfter := time.Now().Add(10 * time.Hour)
 	certPEM, keyPEM := buildTestCert(t, notAfter)
 
@@ -1157,6 +1190,7 @@ func TestUseBunnyForClusterZonesSelectsProviderByDelegatedZone(t *testing.T) {
 	manager.bunnyDNSProviderFactory = func() (challenge.Provider, error) {
 		return bunnyProvider, nil
 	}
+	manager.SetIssuanceSettings(func() IssuanceSettings { return IssuanceSettings{RootDomain: "frameworks.network"} })
 	manager.UseBunnyForClusterZones("frameworks.network")
 
 	_, _, _, err := manager.IssueCertificate(ctx, "", "livepeer.media-eu.frameworks.network", "ops@frameworks.network")

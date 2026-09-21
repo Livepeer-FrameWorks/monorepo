@@ -69,6 +69,21 @@ message SignupAttribution {
 }
 
 // ============================================================================
+// Request Actor
+// ============================================================================
+
+// RequestActor names the principal a service acted for when it calls another
+// service with its own credentials, in the terms of events.ActorFromContext,
+// so the callee attributes its domain events to that principal. The calling
+// service computes token_hash with the shared usage hash secret; the raw API
+// token ID never crosses the call.
+message RequestActor {
+  string auth_type = 1;   // "jwt", "api_token", "wallet", "service", ...
+  string user_id = 2;
+  uint64 token_hash = 3;  // Zero unless auth_type is "api_token"
+}
+
+// ============================================================================
 // Sort Order
 // ============================================================================
 

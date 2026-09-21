@@ -8,10 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"frameworks/api_balancing/internal/appconfig"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
@@ -62,8 +63,8 @@ func MintTranscodeJobToken(secret string, claims TranscodeJobClaims) (string, er
 	return "v1." + encoded + "." + sig, nil
 }
 
-func MintTranscodeJobTokenFromEnvironment(claims TranscodeJobClaims) (string, error) {
-	return MintTranscodeJobToken(os.Getenv("FOGHORN_BALANCER_CAPABILITY_SECRET"), claims)
+func MintTranscodeJobTokenWithConfiguredSecret(claims TranscodeJobClaims) (string, error) {
+	return MintTranscodeJobToken(appconfig.Current().BalancerCapabilitySecret, claims)
 }
 
 // StampTranscodeJobConfig attaches a job/generation-bound delivery capability to the
@@ -92,8 +93,8 @@ func StampTranscodeJobConfig(processesJSON, secret string, claims TranscodeJobCl
 	return mist.SetLivepeerJobToken(authoritative, token), nil
 }
 
-func StampTranscodeJobConfigFromEnvironment(processesJSON string, claims TranscodeJobClaims, now time.Time) (string, error) {
-	return StampTranscodeJobConfig(processesJSON, os.Getenv("FOGHORN_BALANCER_CAPABILITY_SECRET"), claims, now)
+func StampTranscodeJobConfigWithConfiguredSecret(processesJSON string, claims TranscodeJobClaims, now time.Time) (string, error) {
+	return StampTranscodeJobConfig(processesJSON, appconfig.Current().BalancerCapabilitySecret, claims, now)
 }
 
 func VerifyTranscodeJobToken(secret, token string, now time.Time) (TranscodeJobClaims, error) {
@@ -135,8 +136,8 @@ func VerifyTranscodeJobToken(secret, token string, now time.Time) (TranscodeJobC
 	return canonical, nil
 }
 
-func VerifyTranscodeJobTokenFromEnvironment(token string, now time.Time) (TranscodeJobClaims, error) {
-	return VerifyTranscodeJobToken(os.Getenv("FOGHORN_BALANCER_CAPABILITY_SECRET"), token, now)
+func VerifyTranscodeJobTokenWithConfiguredSecret(token string, now time.Time) (TranscodeJobClaims, error) {
+	return VerifyTranscodeJobToken(appconfig.Current().BalancerCapabilitySecret, token, now)
 }
 
 func canonicalTranscodeJobClaims(claims TranscodeJobClaims) TranscodeJobClaims {

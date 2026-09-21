@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -955,7 +956,7 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 }
 
 func TestConvertNodeAPI_MissingFields(t *testing.T) {
-	t.Setenv("MIST_ONNX_PROFILE", "cuda")
+	appconfigtest.Setenv(t, "MIST_ONNX_PROFILE", "cuda")
 	pm := &PrometheusMonitor{
 		baseURL: "http://mist:4242",
 	}
@@ -990,7 +991,7 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 }
 
 func TestConvertNodeAPI_ConfiguredBandwidthLimitOverridesMist(t *testing.T) {
-	t.Setenv("HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "250000000")
+	appconfigtest.Setenv(t, "HELMSMAN_BW_LIMIT_BYTES_PER_SEC", "250000000")
 	pm := &PrometheusMonitor{baseURL: "http://mist:4242"}
 	jsonData := map[string]interface{}{
 		"cpu":     float64(10),

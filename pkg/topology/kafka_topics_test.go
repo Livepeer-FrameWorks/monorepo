@@ -14,6 +14,7 @@ func TestRegionalToAggregatorTopicsCarryDurableJournal(t *testing.T) {
 		TopicRawMistTriggers,
 		TopicBillingUsageReports,
 		TopicDecklogDLQ,
+		TopicDomainEvents,
 	} {
 		if !slices.Contains(topics, want) {
 			t.Fatalf("RegionalToAggregatorTopics() = %v, missing %q", topics, want)
@@ -28,7 +29,7 @@ func TestRegionalToAggregatorTopicsCarryDurableJournal(t *testing.T) {
 
 func TestAggregatorToRegionalTopicsAreRealtimeOnly(t *testing.T) {
 	got := AggregatorToRegionalTopics()
-	want := []string{TopicAnalyticsEvents, TopicServiceEvents}
+	want := []string{TopicAnalyticsEvents, TopicServiceEvents, TopicDomainEvents}
 	if !slices.Equal(got, want) {
 		t.Fatalf("AggregatorToRegionalTopics() = %v, want %v", got, want)
 	}

@@ -1,11 +1,10 @@
 package middleware
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
 	"sync"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 )
 
 var (
@@ -27,17 +26,13 @@ func InitHasher(secret string) {
 	}
 }
 
+// hashIdentifier uses the same function domain events use for actor token
+// hashes (events.HashIdentifier), so an event's actor joins its usage rows.
 func hashIdentifier(value string) uint64 {
-	if value == "" {
-		return 0
-	}
 	hashSecretMu.RLock()
 	secret := hashSecret
 	hashSecretMu.RUnlock()
-
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(value))
-	return binary.BigEndian.Uint64(mac.Sum(nil)[:8])
+	return events.HashIdentifier(secret, value)
 }
 
 // HashIdentifier exposes the internal hash for other middleware consumers.

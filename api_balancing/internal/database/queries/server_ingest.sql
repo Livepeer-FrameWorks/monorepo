@@ -18,21 +18,37 @@ UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  
 -- name: IngestCloseTombstoneExists :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_close_tombstones WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND connector_pid  =  sqlc.arg(connector_pid) AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND close_unix_millis >= sqlc.arg(close_unix_millis));
 -- name: InsertIngestSession :one
-INSERT INTO foghorn.ingest_sessions (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state)
-VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(stream_internal_name), sqlc.arg(connector_pid), sqlc.arg(start_trigger_uuid), sqlc.arg(started_at_unix_millis), sqlc.narg(dvr_intent)::jsonb, NULLIF(sqlc.arg(ingest_cluster_id)::text, ''), 'pending') RETURNING id::text;
+INSERT INTO foghorn.ingest_sessions (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state, stream_id)
+VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(stream_internal_name), sqlc.arg(connector_pid), sqlc.arg(start_trigger_uuid), sqlc.arg(started_at_unix_millis), sqlc.narg(dvr_intent)::jsonb, NULLIF(sqlc.arg(ingest_cluster_id)::text, ''), 'pending', NULLIF(sqlc.arg(stream_id)::text, '')::uuid) RETURNING id::text;
 -- name: InsertIngestSessionWithAuthority :one
 INSERT INTO foghorn.ingest_sessions
     (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid,
      started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state,
      media_authority_id, media_authority_version, tenant_authority_version, processes_json,
-     capacity_max_streams)
+     capacity_max_streams, stream_id)
 VALUES
     (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(stream_internal_name),
      sqlc.arg(connector_pid), sqlc.arg(start_trigger_uuid), sqlc.arg(started_at_unix_millis),
      sqlc.narg(dvr_intent)::jsonb, NULLIF(sqlc.arg(ingest_cluster_id)::text, ''), 'pending',
      sqlc.arg(media_authority_id), sqlc.arg(media_authority_version),
-     sqlc.arg(tenant_authority_version), sqlc.arg(processes_json), sqlc.arg(capacity_max_streams))
+     sqlc.arg(tenant_authority_version), sqlc.arg(processes_json), sqlc.arg(capacity_max_streams),
+     NULLIF(sqlc.arg(stream_id)::text, '')::uuid)
 RETURNING id::text;
+-- name: MarkIngestSessionPlayable :one
+-- First playable buffer of the active session, from the session's own node only.
+-- The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
+-- nothing; the start fence keeps a delayed trigger of an earlier session on the
+-- same node from marking a newer one.
+UPDATE foghorn.ingest_sessions
+SET playable_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND node_id = sqlc.arg(node_id)
+  AND ended_at IS NULL
+  AND playable_at IS NULL
+  AND stream_id IS NOT NULL
+  AND (sqlc.arg(event_unix_millis)::bigint <= 0 OR started_at_unix_millis <= sqlc.arg(event_unix_millis)::bigint)
+RETURNING id::text AS session_id, stream_id::text AS stream_id;
 -- name: GetIngestSessionAuthoritySnapshot :one
 SELECT COALESCE(media_authority_id, '')::text AS media_authority_id,
        COALESCE(media_authority_version, 0)::bigint AS media_authority_version,
@@ -72,7 +88,7 @@ SELECT COALESCE(ingest_cluster_id, '')::text FROM foghorn.ingest_sessions WHERE 
 -- name: ReapStreamEndIngestSessions :many
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  sqlc.narg(ended_at_unix_millis), ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND started_at_unix_millis <= sqlc.narg(ended_at_unix_millis)
-RETURNING id::text AS session_id, start_trigger_uuid;
+RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: ReapExactMissingIngestSession :one
 UPDATE foghorn.ingest_sessions
 SET ended_at = NOW(),
@@ -84,7 +100,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND id = sqlc.arg(generation)::uuid
   AND connector_pid = sqlc.arg(connector_pid)
   AND ended_at IS NULL
-RETURNING id::text AS session_id, start_trigger_uuid;
+RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: HasActiveStreamIngestSession :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_sessions WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL);
 -- name: ProbeCurrentSourceProjection :one
@@ -115,7 +131,7 @@ WHERE id  =  sqlc.arg(generation)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::u
 -- name: AbortPendingSourceProjection :one
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint, ended_reason  =  'projection_failed'
 WHERE id  =  sqlc.arg(generation)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND projection_state  =  'pending'
-RETURNING node_id, start_trigger_uuid;
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: NextSourceProjectionRevision :one
 -- The database counter includes tenant_id because that is the durable ownership domain.
 -- Commodore guarantees stream_internal_name is globally unique, which is why the corresponding
@@ -128,7 +144,7 @@ RETURNING value AS revision;
 -- name: CloseIngestSession :one
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  sqlc.narg(close_unix_millis), ended_reason  =  'push_input_close'
 WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND connector_pid  =  sqlc.arg(connector_pid) AND ended_at IS NULL AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND started_at_unix_millis <= sqlc.narg(close_unix_millis)
-RETURNING id::text AS id, start_trigger_uuid, COALESCE(ingest_cluster_id, '')::text AS cluster_id;
+RETURNING id::text AS id, start_trigger_uuid, COALESCE(ingest_cluster_id, '')::text AS cluster_id, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: InsertIngestCloseTombstone :exec
 INSERT INTO foghorn.ingest_close_tombstones (tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis) VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(connector_pid), sqlc.arg(stream_internal_name), sqlc.arg(close_unix_millis));
 -- name: ClaimUnstartedDVRIntents :many

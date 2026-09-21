@@ -3,12 +3,13 @@ package grpc
 import (
 	"strings"
 	"testing"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 func TestRenderVerificationEmailUsesBrandLayoutAndEscapedToken(t *testing.T) {
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.test")
-	t.Setenv("SUPPORT_EMAIL", "help@example.test")
-	message, err := renderVerificationEmail("https://app.example.test/", "token with + symbols")
+	settings := RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://app.example.test", SupportEmail: "help@example.test"}}
+	message, err := settings.renderVerificationEmail("https://app.example.test/", "token with + symbols")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,8 +29,8 @@ func TestRenderVerificationEmailUsesBrandLayoutAndEscapedToken(t *testing.T) {
 }
 
 func TestRenderPasswordResetEmailIncludesSecurityCopy(t *testing.T) {
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.test")
-	message, err := renderPasswordResetEmail("https://app.example.test", "reset-token")
+	settings := RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://app.example.test"}}
+	message, err := settings.renderPasswordResetEmail("https://app.example.test", "reset-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestValidatedAccountEmailBaseURL(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := validatedAccountEmailBaseURL(test.value)
+			got, err := validatedAccountEmailBaseURL(test.value, false)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
 			}

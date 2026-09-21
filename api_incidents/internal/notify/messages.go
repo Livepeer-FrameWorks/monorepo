@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"frameworks/api_incidents/internal/incidents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 )
 
@@ -165,7 +165,7 @@ func discordBody(m message) ([]byte, error) {
 	})
 }
 
-func emailContent(m message) (subject, body string, err error) {
+func emailContent(m message, branding config.EmailBranding) (subject, body string, err error) {
 	subject = truncate("[Lookout] "+m.Headline, 200)
 	status := "Incident update"
 	if strings.HasPrefix(m.Headline, "[RESOLVED]") {
@@ -174,11 +174,11 @@ func emailContent(m message) (subject, body string, err error) {
 		status = "Critical incident"
 	}
 	body, err = emailpkg.RenderLayout(emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      branding.Logo(),
 		Preheader:    m.Headline,
 		Eyebrow:      "Lookout · " + status,
 		Title:        m.Headline,
-		SupportEmail: incidentSupportEmail(),
+		SupportEmail: branding.Support(),
 		Content:      m,
 	}, incidentEmailTemplate, template.FuncMap{
 		"action": func() emailpkg.Action {
@@ -186,13 +186,6 @@ func emailContent(m message) (subject, body string, err error) {
 		},
 	})
 	return subject, body, err
-}
-
-func incidentSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }
 
 const incidentEmailTemplate = `{{if .Summary}}<p style="margin:0 0 20px; color:#24283b; font-size:15px; line-height:23px;">{{.Summary}}</p>{{end}}

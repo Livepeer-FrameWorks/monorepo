@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,32 +74,35 @@ func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	reconciler := &recordingTierReconciler{}
 	s.tierReconciler = reconciler
+	const tenantID = "90000000-0000-4000-8000-000000000001"
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT id\s+FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid AND status != 'cancelled'`).
-		WithArgs("tenant-1").
+		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("91000000-0000-4000-8000-000000000001"))
 	mock.ExpectExec(`INSERT INTO purser\.billing_collection_writeoffs`).
-		WithArgs("tenant-1").
+		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_collection_balances`).
-		WithArgs("tenant-1").
+		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
-		WithArgs("tenant-1").
+		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	cancelled := expectDomainEvent(mock, "billing.subscription_updated", tenantID)
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(sameEventID{cancelled}, "subscription_canceled", tenantID, sqlmock.AnyArg(), "subscription", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("93000000-0000-4000-8000-000000000001"))
 	mock.ExpectCommit()
 
-	_, err := s.CancelSubscription(context.Background(), &purserpb.CancelSubscriptionRequest{TenantId: "tenant-1"})
+	_, err := s.CancelSubscription(context.Background(), &purserpb.CancelSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("CancelSubscription: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet: %v", err)
 	}
-	if len(reconciler.revoked) != 1 || reconciler.revoked[0] != "tenant-1" {
+	if len(reconciler.revoked) != 1 || reconciler.revoked[0] != tenantID {
 		t.Fatalf("DNS entitlement revocations = %v", reconciler.revoked)
 	}
 }
@@ -287,8 +292,8 @@ func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *t
 func expectCompleteBillingDetails(mock sqlmock.Sqlmock, tenantID string) {
 	mock.ExpectQuery(`SELECT billing_email, billing_name, billing_company, tax_id, billing_address, updated_at`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
 }
 
 func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
@@ -350,22 +355,56 @@ func TestPromoteToPaidEmptyTenantGuard(t *testing.T) {
 func TestUpdateBillingDetailsAppliesAndRereads(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	now := time.Now()
+	const tenantID = "90000000-0000-4000-8000-000000000002"
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"presentment_currency", "presentment_locked"}).AddRow("USD", false))
+	expectBillingDetailsBeforeUpdate(mock, tenantID, "old@example.com")
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectDomainEvent(mock, "billing.details_updated", tenantID)
+	mock.ExpectCommit()
 	// trailing GetBillingDetails read
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
-		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("new@example.com", nil, nil, nil, []byte(`{}`), now))
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("new@example.com", nil, nil, nil, []byte(`{}`), now, "USD"))
 
 	email := "new@example.com"
-	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1", Email: &email})
+	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: tenantID, Email: &email})
 	if err != nil {
 		t.Fatalf("UpdateBillingDetails: %v", err)
 	}
 	if resp.Email != "new@example.com" {
 		t.Fatalf("echoed email = %q", resp.Email)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet: %v", err)
+	}
+}
+
+// Re-sending the stored value changes nothing, so no billing.details_updated
+// event is written.
+func TestUpdateBillingDetailsUnchangedWritesNoEvent(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	const tenantID = "90000000-0000-4000-8000-000000000003"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"presentment_currency", "presentment_locked"}).AddRow("USD", false))
+	expectBillingDetailsBeforeUpdate(mock, tenantID, "same@example.com")
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("same@example.com", nil, nil, nil, []byte(`{}`), time.Now(), "USD"))
+
+	email := "same@example.com"
+	if _, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: tenantID, Email: &email}); err != nil {
+		t.Fatalf("UpdateBillingDetails: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet: %v", err)
@@ -390,8 +429,8 @@ func TestUpdateBillingDetailsNoFieldsDelegatesToRead(t *testing.T) {
 	now := time.Now()
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at"}).
-			AddRow("a@b.com", nil, nil, nil, []byte(`{}`), now))
+		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
+			AddRow("a@b.com", nil, nil, nil, []byte(`{}`), now, "USD"))
 
 	resp, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1"})
 	if err != nil {
@@ -405,11 +444,33 @@ func TestUpdateBillingDetailsNoFieldsDelegatesToRead(t *testing.T) {
 func TestUpdateBillingDetailsNotFound(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	email := "x@y.com"
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WithArgs("tenant-1").WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 	_, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{TenantId: "tenant-1", Email: &email})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("err = %v, want NotFound", err)
+	}
+}
+
+// A billing country that would change a locked presentment currency refuses
+// the whole update before any write.
+func TestUpdateBillingDetailsRefusesLockedPresentmentCurrency(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FOR UPDATE`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"presentment_currency", "presentment_locked"}).AddRow("EUR", true))
+	expectBillingDetailsBeforeUpdate(mock, "tenant-1", "billing@example.com")
+	mock.ExpectRollback()
+	_, err := s.UpdateBillingDetails(context.Background(), &purserpb.UpdateBillingDetailsRequest{
+		TenantId: "tenant-1",
+		Address:  &purserpb.BillingAddress{Street: "1 Main St", City: "Austin", PostalCode: "78701", Country: "US"},
+	})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "PRESENTMENT_CURRENCY_LOCKED") {
+		t.Fatalf("err = %v, want FailedPrecondition PRESENTMENT_CURRENCY_LOCKED", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet: %v", err)
 	}
 }
 
@@ -584,7 +645,7 @@ func TestUpdateSubscriptionBindsTenantAndProtectsCustomTerms(t *testing.T) {
 		t.Fatalf("cross-tenant update error = %v, want PermissionDenied", err)
 	}
 	if _, err := s.UpdateSubscription(tenantCtx, &purserpb.UpdateSubscriptionRequest{
-		TenantId: "tenant-1", CustomFeatures: &purserpb.BillingFeatures{Recording: true},
+		TenantId: "tenant-1", CustomFeatures: &purserpb.BillingFeatures{ProcessingCustomizable: true},
 	}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("custom terms error = %v, want PermissionDenied", err)
 	}
@@ -592,7 +653,7 @@ func TestUpdateSubscriptionBindsTenantAndProtectsCustomTerms(t *testing.T) {
 	// An operator passes the authorization checks; the guard server has no
 	// storage, so reaching the repository proves it was not denied here.
 	if _, err := s.UpdateSubscription(operatorCtx, &purserpb.UpdateSubscriptionRequest{
-		TenantId: "tenant-2", CustomFeatures: &purserpb.BillingFeatures{Recording: true},
+		TenantId: "tenant-2", CustomFeatures: &purserpb.BillingFeatures{ProcessingCustomizable: true},
 	}); status.Code(err) == codes.PermissionDenied {
 		t.Fatalf("platform operator was denied: %v", err)
 	}

@@ -17,7 +17,6 @@ import (
 	"frameworks/api_analytics_query/internal/database/meteringdb"
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -25,6 +24,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 )
@@ -91,52 +91,65 @@ type usageProducer interface {
 	ProduceMessage(topic string, key, value []byte, headers map[string]string) error
 }
 
-// NewBillingSummarizer creates a new billing summarizer instance
-func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string, optionalMetrics ...*BillingMetrics) *BillingSummarizer {
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+// BillingConfig is the startup configuration of a BillingSummarizer.
+type BillingConfig struct {
+	// SourceID and SourceRegion must already be normalized with
+	// scheduler.NormalizeSourceIdentity.
+	SourceID     string
+	SourceRegion string
 
-	// Initialize Kafka producer
-	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
-	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
+	KafkaBrokers []string
+	BillingTopic string
+
+	QuartermasterGRPCAddr          string
+	QuartermasterGRPCTLSServerName string
+	ServiceToken                   string
+	GRPCTLSCAPath                  string
+	GRPCAllowInsecure              bool
+
+	// SystemTenantID is excluded from billed tenants and carries window
+	// completion markers. It must not be uuid.Nil.
+	SystemTenantID uuid.UUID
+
+	// Metrics is optional.
+	Metrics *BillingMetrics
+}
+
+// NewBillingSummarizer creates a new billing summarizer instance
+func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, cfg BillingConfig) *BillingSummarizer {
 	kLogger := logrus.New()
 
-	kafkaProducer, err := kafka.NewKafkaProducer(brokers, billingTopic, "periscope-metering", kLogger)
+	kafkaProducer, err := kafka.NewKafkaProducer(cfg.KafkaBrokers, cfg.BillingTopic, "periscope-metering", kLogger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka producer for billing")
 	}
 
 	quartermasterClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      quartermasterGRPCAddr,
-		ServiceToken:  serviceToken,
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		ServiceToken:  cfg.ServiceToken,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure: cfg.GRPCAllowInsecure,
+		CACertFile:    cfg.GRPCTLSCAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client for billing")
 	}
-	systemTenantID, err := tenants.RuntimeSystemTenantID()
-	if err != nil {
-		logger.WithError(err).Fatal("Invalid system tenant identity")
-	}
-	var billingMetrics *BillingMetrics
-	if len(optionalMetrics) > 0 {
-		billingMetrics = optionalMetrics[0]
+	if cfg.SystemTenantID == uuid.Nil {
+		logger.Fatal("Billing summarizer requires a system tenant identity")
 	}
 	bs := &BillingSummarizer{
 		postgresQueries:            meteringdb.New(yugaDB),
 		clickhouse:                 clickhouse,
 		logger:                     logger,
 		usageProducer:              kafkaProducer,
-		billingTopic:               billingTopic,
-		sourceID:                   sourceID,
-		sourceRegion:               sourceRegion,
-		systemTenantID:             systemTenantID.String(),
+		billingTopic:               cfg.BillingTopic,
+		sourceID:                   cfg.SourceID,
+		sourceRegion:               cfg.SourceRegion,
+		systemTenantID:             cfg.SystemTenantID.String(),
 		restreamBillingEffectiveMS: restreamBillingEffectiveAtUnixMS,
-		metrics:                    billingMetrics,
+		metrics:                    cfg.Metrics,
 	}
 	bs.resolvePrimaryCluster = func(tenantID string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

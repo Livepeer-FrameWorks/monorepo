@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package frameworks.events;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events;eventspb";
+
+import "google/protobuf/descriptor.proto";
+
+// Visibility says who may receive an event type. PUBLIC types are the tenant
+// contract (webhooks and GraphQL subscriptions serialize them unchanged);
+// INTERNAL types are only read by platform services.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_PUBLIC = 1;
+  VISIBILITY_INTERNAL = 2;
+}
+
+// Scope says whether an event belongs to a tenant. TENANT events carry the
+// owning tenant in the envelope; PLATFORM events never carry one.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  SCOPE_TENANT = 1;
+  SCOPE_PLATFORM = 2;
+}
+
+// EventSpec is attached to every domain event message. It is the single source
+// for the event's type string, audience, tenant scope, and the aggregate whose
+// ID keys the Kafka record.
+message EventSpec {
+  // type is the CloudEvents ce_type and the public webhook type, for example
+  // "stream.created". It is unique across the registry.
+  string type = 1;
+  Visibility visibility = 2;
+  Scope scope = 3;
+  // aggregate is the plural resource name that prefixes the record key, for
+  // example "streams" in "streams/<id>".
+  string aggregate = 4;
+}
+
+extend google.protobuf.MessageOptions {
+  EventSpec event = 51000;
+}

@@ -244,7 +244,7 @@ func TestPeerAuthMiddleware_CaddyProxiedLoopbackRequiresAuthorize(t *testing.T) 
 }
 
 // Trusted-CIDR bypass: the local Mist→Helmsman hop where Mist dials a
-// non-loopback service address (the dev compose bridge: helmsman:18007).
+// non-loopback service address such as helmsman:18007.
 // In the CIDR without proxy markers → bypass (no authorize); with a marker
 // (Caddy proxying peer traffic on the same bridge) → authorize path.
 func TestPeerAuthMiddleware_TrustedCIDRBypass(t *testing.T) {

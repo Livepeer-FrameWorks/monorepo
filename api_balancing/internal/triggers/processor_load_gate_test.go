@@ -46,35 +46,30 @@ func TestApplyLoadGate(t *testing.T) {
 	}
 }
 
-// TestEnvFloatInRange verifies the env override parser used by the load
-// thresholds. Out-of-range and unparseable values must fall back so a fat-finger
+// TestFloatInRange verifies the override parser used by the load thresholds.
+// Out-of-range and unparseable values must fall back so a fat-finger
 // FOGHORN_INGEST_REJECT_*_LOAD can never produce a nonsensical gate (e.g. a
 // negative or >1 fraction).
-func TestEnvFloatInRange(t *testing.T) {
-	const key = "FOGHORN_TEST_ENV_FLOAT"
+func TestFloatInRange(t *testing.T) {
 	cases := []struct {
 		name string
-		set  bool
 		raw  string
 		want float64
 	}{
-		{"unset uses fallback", false, "", 0.5},
-		{"empty uses fallback", true, "   ", 0.5},
-		{"unparseable uses fallback", true, "abc", 0.5},
-		{"at-min boundary rejected", true, "0", 0.5},
-		{"below-min rejected", true, "-0.2", 0.5},
-		{"at-max boundary rejected", true, "1", 0.5},
-		{"above-max rejected", true, "1.5", 0.5},
-		{"valid in range", true, "0.7", 0.7},
+		{"unset uses fallback", "", 0.5},
+		{"blank uses fallback", "   ", 0.5},
+		{"unparseable uses fallback", "abc", 0.5},
+		{"at-min boundary rejected", "0", 0.5},
+		{"below-min rejected", "-0.2", 0.5},
+		{"at-max boundary rejected", "1", 0.5},
+		{"above-max rejected", "1.5", 0.5},
+		{"valid in range", "0.7", 0.7},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if c.set {
-				t.Setenv(key, c.raw)
-			}
-			got := envFloatInRange(key, 0.5, 0, 1)
+			got := floatInRange(c.raw, 0.5, 0, 1)
 			if got != c.want {
-				t.Errorf("envFloatInRange(%q=%q) = %v, want %v", key, c.raw, got, c.want)
+				t.Errorf("floatInRange(%q) = %v, want %v", c.raw, got, c.want)
 			}
 		})
 	}
@@ -206,19 +201,19 @@ func TestLivepeerVODEnvOverrides(t *testing.T) {
 		}
 	})
 	t.Run("deadline invalid falls back", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_DEADLINE_MS", "nope")
+		useFoghornConfig(t, livepeerVODSettings("nope", ""))
 		if got := livepeerVODDeadlineMs(); got != mist.LivepeerVODSegmentDeadlineMs {
 			t.Errorf("deadline invalid = %d, want default %d", got, mist.LivepeerVODSegmentDeadlineMs)
 		}
 	})
 	t.Run("deadline non-positive falls back", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_DEADLINE_MS", "0")
+		useFoghornConfig(t, livepeerVODSettings("0", ""))
 		if got := livepeerVODDeadlineMs(); got != mist.LivepeerVODSegmentDeadlineMs {
 			t.Errorf("deadline 0 = %d, want default %d", got, mist.LivepeerVODSegmentDeadlineMs)
 		}
 	})
 	t.Run("deadline valid override", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_DEADLINE_MS", "12345")
+		useFoghornConfig(t, livepeerVODSettings("12345", ""))
 		if got := livepeerVODDeadlineMs(); got != 12345 {
 			t.Errorf("deadline override = %d, want 12345", got)
 		}
@@ -229,13 +224,13 @@ func TestLivepeerVODEnvOverrides(t *testing.T) {
 		}
 	})
 	t.Run("min speed invalid falls back", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_MIN_SPEED", "x")
+		useFoghornConfig(t, livepeerVODSettings("", "x"))
 		if got := livepeerVODMinSpeed(); got != mist.LivepeerVODMinSpeed {
 			t.Errorf("min speed invalid = %v, want default %v", got, mist.LivepeerVODMinSpeed)
 		}
 	})
 	t.Run("min speed valid override", func(t *testing.T) {
-		t.Setenv("LIVEPEER_VOD_MIN_SPEED", "0.25")
+		useFoghornConfig(t, livepeerVODSettings("", "0.25"))
 		if got := livepeerVODMinSpeed(); got != 0.25 {
 			t.Errorf("min speed override = %v, want 0.25", got)
 		}

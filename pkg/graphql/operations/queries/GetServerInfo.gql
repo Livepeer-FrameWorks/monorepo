@@ -1,0 +1,7 @@
+# Fetch the platform release and shipped feature slugs; readable without a token
+query GetServerInfo {
+  serverInfo {
+    version
+    features
+  }
+}

@@ -21,8 +21,17 @@ type Querier interface {
 	// Fenced on the tombstone so a replayed delete cannot outrun a newer grant.
 	DeleteTenantEdgeApplyStateForRevokedCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForRevokedClusterParams) (int64, error)
 	EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (EnsureTenantAliasRow, error)
+	// A tearing_down or verification_failed row is reactivated: verification
+	// restarts with a fresh period and the stale certificate, error, retry, and
+	// failure-report state is cleared. Any other row keeps its worker-driven state.
 	EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenantCustomDomainParams) (NavigatorTenantCustomDomain, error)
-	FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (int64, error)
+	// Fails every pending domain whose verification period has passed and returns
+	// them for their custom_domain.failed events.
+	ExpireTenantCustomDomainVerifications(ctx context.Context, periodSeconds int64) ([]ExpireTenantCustomDomainVerificationsRow, error)
+	// Moves a cert_issuing domain to cert_failed. first_failure is true only when
+	// no failure of this domain was reported since its last successful issuance
+	// or reactivation, so retry cycles through cert_failed report nothing new.
+	FailTenantCustomDomainIssuance(ctx context.Context, arg FailTenantCustomDomainIssuanceParams) (bool, error)
 	FinalizeTenantCustomDomainRemoval(ctx context.Context, arg FinalizeTenantCustomDomainRemovalParams) (int64, error)
 	GetInternalCA(ctx context.Context, role string) (NavigatorInternalCa, error)
 	GetInternalCertificate(ctx context.Context, arg GetInternalCertificateParams) (NavigatorInternalCertificate, error)

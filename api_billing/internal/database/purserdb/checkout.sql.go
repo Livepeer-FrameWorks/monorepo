@@ -8,6 +8,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 const activateTenantSubscriptionFromStripe = `-- name: ActivateTenantSubscriptionFromStripe :execrows
@@ -256,6 +257,65 @@ func (q *Queries) GetClusterSubscriptionStatus(ctx context.Context, arg GetClust
 	return status, err
 }
 
+const holdPendingTopupForOperatorReview = `-- name: HoldPendingTopupForOperatorReview :exec
+INSERT INTO purser.payment_reversals (
+    tenant_id, pending_topup_id, provider, reversal_type, provider_reversal_id,
+    provider_charge_id, amount_cents, currency, status, reason,
+    operator_review_required, actor_kind, evidence_ref,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
+) VALUES (
+    $1::text::uuid, $2::text::uuid, $3,
+    'manual', $4, NULLIF($5::text, ''),
+    $6::bigint, $7::text, 'needs_review', $8,
+    TRUE, 'webhook', $9,
+    CASE WHEN $10::text IS NULL THEN NULL ELSE $6::bigint END,
+    CASE WHEN $10::text IS NULL THEN NULL ELSE $7::text END,
+    $11::bigint,
+    $12::text::numeric, $10::text,
+    $13::date
+)
+ON CONFLICT (provider, provider_reversal_id) DO NOTHING
+`
+
+type HoldPendingTopupForOperatorReviewParams struct {
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	TopupID           string         `db:"topup_id" json:"topup_id"`
+	Provider          string         `db:"provider" json:"provider"`
+	ReviewKey         string         `db:"review_key" json:"review_key"`
+	ProviderPaymentID string         `db:"provider_payment_id" json:"provider_payment_id"`
+	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
+	Currency          string         `db:"currency" json:"currency"`
+	Reason            sql.NullString `db:"reason" json:"reason"`
+	EvidenceRef       sql.NullString `db:"evidence_ref" json:"evidence_ref"`
+	FxSource          sql.NullString `db:"fx_source" json:"fx_source"`
+	EurAmountCents    sql.NullInt64  `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur     sql.NullString `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate   sql.NullTime   `db:"fx_reference_date" json:"fx_reference_date"`
+}
+
+// A settled top-up that cannot be credited stays pending with a needs_review
+// reversal row, so an operator resolves the paid amount (refund or converted
+// credit) instead of the ledger absorbing it.
+func (q *Queries) HoldPendingTopupForOperatorReview(ctx context.Context, arg HoldPendingTopupForOperatorReviewParams) error {
+	_, err := q.db.ExecContext(ctx, holdPendingTopupForOperatorReview,
+		arg.TenantID,
+		arg.TopupID,
+		arg.Provider,
+		arg.ReviewKey,
+		arg.ProviderPaymentID,
+		arg.AmountCents,
+		arg.Currency,
+		arg.Reason,
+		arg.EvidenceRef,
+		arg.FxSource,
+		arg.EurAmountCents,
+		arg.FxUnitsPerEur,
+		arg.FxReferenceDate,
+	)
+	return err
+}
+
 const linkStripeIntentSubscription = `-- name: LinkStripeIntentSubscription :exec
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, $1::text), updated_at = NOW()
@@ -274,20 +334,33 @@ func (q *Queries) LinkStripeIntentSubscription(ctx context.Context, arg LinkStri
 
 const lockPendingTopupForCheckout = `-- name: LockPendingTopupForCheckout :one
 SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
-       checkout_id, provider_payment_id
+       checkout_id, provider_payment_id, refunded_amount_cents,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.pending_topups
 WHERE id = $1::text::uuid
 FOR UPDATE
 `
 
 type LockPendingTopupForCheckoutRow struct {
-	Status            string         `db:"status" json:"status"`
-	TenantID          string         `db:"tenant_id" json:"tenant_id"`
-	Provider          string         `db:"provider" json:"provider"`
-	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
-	Currency          string         `db:"currency" json:"currency"`
-	CheckoutID        sql.NullString `db:"checkout_id" json:"checkout_id"`
-	ProviderPaymentID sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
+	Status              string         `db:"status" json:"status"`
+	TenantID            string         `db:"tenant_id" json:"tenant_id"`
+	Provider            string         `db:"provider" json:"provider"`
+	AmountCents         int64          `db:"amount_cents" json:"amount_cents"`
+	Currency            string         `db:"currency" json:"currency"`
+	CheckoutID          sql.NullString `db:"checkout_id" json:"checkout_id"`
+	ProviderPaymentID   sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
+	RefundedAmountCents int64          `db:"refunded_amount_cents" json:"refunded_amount_cents"`
+	OriginalAmountCents int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency    string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents      int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur       string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource            string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate     time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 }
 
 func (q *Queries) LockPendingTopupForCheckout(ctx context.Context, topupID string) (LockPendingTopupForCheckoutRow, error) {
@@ -301,6 +374,13 @@ func (q *Queries) LockPendingTopupForCheckout(ctx context.Context, topupID strin
 		&i.Currency,
 		&i.CheckoutID,
 		&i.ProviderPaymentID,
+		&i.RefundedAmountCents,
+		&i.OriginalAmountCents,
+		&i.OriginalCurrency,
+		&i.EurAmountCents,
+		&i.FxUnitsPerEur,
+		&i.FxSource,
+		&i.FxReferenceDate,
 	)
 	return i, err
 }

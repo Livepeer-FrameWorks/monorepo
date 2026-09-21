@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -63,17 +64,56 @@ func TestParseMetadataPolicy(t *testing.T) {
 		in   string
 		want ServiceTokenMetadataPolicy
 	}{
-		{"audit", MetadataPolicyAudit},
-		{"  Audit ", MetadataPolicyAudit},
-		{"deny", MetadataPolicyDeny},
-		{"allow", MetadataPolicyAllow},
-		{"", MetadataPolicyAllow},
-		{"garbage", MetadataPolicyAllow},
+		{config.MetadataPolicyAudit, MetadataPolicyAudit},
+		{config.MetadataPolicyDeny, MetadataPolicyDeny},
+		{config.MetadataPolicyAllow, MetadataPolicyAllow},
+		{"Audit", MetadataPolicyAudit},
+		{" deny ", MetadataPolicyDeny},
 	}
 	for _, tc := range cases {
-		if got := parseMetadataPolicy(tc.in); got != tc.want {
-			t.Fatalf("parseMetadataPolicy(%q) = %v, want %v", tc.in, got, tc.want)
+		got, err := ParseMetadataPolicy(tc.in)
+		if err != nil || got != tc.want {
+			t.Fatalf("ParseMetadataPolicy(%q) = %v, %v; want %v", tc.in, got, err, tc.want)
 		}
+		if validateErr := config.ValidateMetadataPolicy(tc.in); validateErr != nil {
+			t.Fatalf("config rejects policy %q that middleware accepts: %v", tc.in, validateErr)
+		}
+	}
+	for _, invalid := range []string{"", "garbage"} {
+		if got, err := ParseMetadataPolicy(invalid); err == nil {
+			t.Fatalf("ParseMetadataPolicy(%q) = %v, want error", invalid, got)
+		}
+		if config.ValidateMetadataPolicy(invalid) == nil {
+			t.Fatalf("config accepts policy %q that middleware rejects", invalid)
+		}
+	}
+}
+
+func TestGRPCAuthInterceptorUnsetPolicyDeniesMetadataIdentity(t *testing.T) {
+	t.Setenv("GRPC_METADATA_POLICY", config.MetadataPolicyAllow)
+	unary := GRPCAuthInterceptor(GRPCAuthConfig{ServiceToken: "svc"})
+	stream := GRPCStreamAuthInterceptor(GRPCAuthConfig{ServiceToken: "svc"})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{
+		"authorization": "Bearer svc",
+		"x-user-id":     "user-forged",
+		"x-tenant-id":   "tenant-forged",
+	}))
+	assertNoIdentity := func(ctx context.Context) {
+		if ctxkeys.GetTenantID(ctx) != "" || ctxkeys.GetUserID(ctx) != "" {
+			t.Fatalf("unset policy applied metadata identity: tenant=%q user=%q", ctxkeys.GetTenantID(ctx), ctxkeys.GetUserID(ctx))
+		}
+	}
+	if _, err := unary(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/svc.S/M"}, func(ctx context.Context, _ any) (any, error) {
+		assertNoIdentity(ctx)
+		return struct{}{}, nil
+	}); err != nil {
+		t.Fatalf("unary: %v", err)
+	}
+	if err := stream(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/svc.S/M"}, func(_ any, ss grpc.ServerStream) error {
+		assertNoIdentity(ss.Context())
+		return nil
+	}); err != nil {
+		t.Fatalf("stream: %v", err)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -70,10 +71,10 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 // Honors FRAMEWORKS_TRIGGER_WAL_DIR, falling back only to Helmsman's explicit
 // durable state directory. Media storage and /tmp are not durability bounds.
 func DefaultTriggerWALDir() string {
-	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_TRIGGER_WAL_DIR")); dir != "" {
+	if dir := strings.TrimSpace(appconfig.Runtime().TriggerWALDir); dir != "" {
 		return dir
 	}
-	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+	if stateDir := strings.TrimSpace(appconfig.StateDir()); stateDir != "" {
 		return filepath.Join(stateDir, "trigger-wal")
 	}
 	return ""

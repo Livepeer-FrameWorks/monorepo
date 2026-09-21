@@ -401,6 +401,71 @@ func (x *SignupAttribution) GetMetadataJson() string {
 	return ""
 }
 
+// RequestActor names the principal a service acted for when it calls another
+// service with its own credentials, in the terms of events.ActorFromContext,
+// so the callee attributes its domain events to that principal. The calling
+// service computes token_hash with the shared usage hash secret; the raw API
+// token ID never crosses the call.
+type RequestActor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AuthType      string                 `protobuf:"bytes,1,opt,name=auth_type,json=authType,proto3" json:"auth_type,omitempty"` // "jwt", "api_token", "wallet", "service", ...
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	TokenHash     uint64                 `protobuf:"varint,3,opt,name=token_hash,json=tokenHash,proto3" json:"token_hash,omitempty"` // Zero unless auth_type is "api_token"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RequestActor) Reset() {
+	*x = RequestActor{}
+	mi := &file_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestActor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestActor) ProtoMessage() {}
+
+func (x *RequestActor) ProtoReflect() protoreflect.Message {
+	mi := &file_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestActor.ProtoReflect.Descriptor instead.
+func (*RequestActor) Descriptor() ([]byte, []int) {
+	return file_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RequestActor) GetAuthType() string {
+	if x != nil {
+		return x.AuthType
+	}
+	return ""
+}
+
+func (x *RequestActor) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *RequestActor) GetTokenHash() uint64 {
+	if x != nil {
+		return x.TokenHash
+	}
+	return 0
+}
+
 // EdgeTelemetryConfig carries control-plane-managed remote_write settings for
 // per-edge vmagent processes.
 type EdgeTelemetryConfig struct {
@@ -415,7 +480,7 @@ type EdgeTelemetryConfig struct {
 
 func (x *EdgeTelemetryConfig) Reset() {
 	*x = EdgeTelemetryConfig{}
-	mi := &file_common_proto_msgTypes[4]
+	mi := &file_common_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +492,7 @@ func (x *EdgeTelemetryConfig) String() string {
 func (*EdgeTelemetryConfig) ProtoMessage() {}
 
 func (x *EdgeTelemetryConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_common_proto_msgTypes[4]
+	mi := &file_common_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +505,7 @@ func (x *EdgeTelemetryConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EdgeTelemetryConfig.ProtoReflect.Descriptor instead.
 func (*EdgeTelemetryConfig) Descriptor() ([]byte, []int) {
-	return file_common_proto_rawDescGZIP(), []int{4}
+	return file_common_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *EdgeTelemetryConfig) GetEnabled() bool {
@@ -512,7 +577,12 @@ const file_common_proto_rawDesc = "" +
 	"\rreferral_code\x18\n" +
 	" \x01(\tR\freferralCode\x12\x19\n" +
 	"\bis_agent\x18\v \x01(\bR\aisAgent\x12#\n" +
-	"\rmetadata_json\x18\f \x01(\tR\fmetadataJson\"\x8e\x01\n" +
+	"\rmetadata_json\x18\f \x01(\tR\fmetadataJson\"c\n" +
+	"\fRequestActor\x12\x1b\n" +
+	"\tauth_type\x18\x01 \x01(\tR\bauthType\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1d\n" +
+	"\n" +
+	"token_hash\x18\x03 \x01(\x04R\ttokenHash\"\x8e\x01\n" +
 	"\x13EdgeTelemetryConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1b\n" +
 	"\twrite_url\x18\x02 \x01(\tR\bwriteUrl\x12!\n" +
@@ -537,19 +607,20 @@ func file_common_proto_rawDescGZIP() []byte {
 }
 
 var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_common_proto_goTypes = []any{
 	(SortOrder)(0),                   // 0: common.SortOrder
 	(*CursorPaginationRequest)(nil),  // 1: common.CursorPaginationRequest
 	(*CursorPaginationResponse)(nil), // 2: common.CursorPaginationResponse
 	(*TimeRange)(nil),                // 3: common.TimeRange
 	(*SignupAttribution)(nil),        // 4: common.SignupAttribution
-	(*EdgeTelemetryConfig)(nil),      // 5: common.EdgeTelemetryConfig
-	(*timestamppb.Timestamp)(nil),    // 6: google.protobuf.Timestamp
+	(*RequestActor)(nil),             // 5: common.RequestActor
+	(*EdgeTelemetryConfig)(nil),      // 6: common.EdgeTelemetryConfig
+	(*timestamppb.Timestamp)(nil),    // 7: google.protobuf.Timestamp
 }
 var file_common_proto_depIdxs = []int32{
-	6, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
-	6, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
+	7, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
+	7, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -570,7 +641,7 @@ func file_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_proto_rawDesc), len(file_common_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

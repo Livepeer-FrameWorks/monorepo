@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -36,7 +35,9 @@ func LoadEnv(logger *logrus.Logger) {
 	}
 }
 
-// GetEnv gets an environment variable with a default value
+// GetEnv gets an environment variable with a default value. Service startup
+// configuration uses Load instead; this serves shared packages that read a
+// process-wide variable at use time.
 func GetEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -44,93 +45,11 @@ func GetEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// GetEnvInt gets an integer environment variable with a default value
-func GetEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
-// GetEnvBool gets a boolean environment variable with a default value
-func GetEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := strconv.ParseBool(value); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
-// GetServiceGRPCTLSServerName returns a service-scoped TLS authority override.
-// Internal service clients should leave this empty unless they need to override
-// the canonical <service>.internal name owned by the client package.
-func GetServiceGRPCTLSServerName(serviceID string) string {
-	key := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(serviceID)))
-	if key == "" {
-		return ""
-	}
-	return GetEnv(key+"_GRPC_TLS_SERVER_NAME", "")
-}
-
-func GetCookieDomain() string {
-	return strings.TrimPrefix(strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")), ".")
-}
-
-func GetGatewayPublicURL() string {
-	return strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL")), "/")
-}
-
-func GetGatewayGraphQLURL() string {
-	if gatewayURL := GetGatewayPublicURL(); gatewayURL != "" {
-		return gatewayURL + "/graphql/"
-	}
-	return "http://localhost:8080/graphql/"
-}
-
-func X402IncludeTestnetsEnabled() bool {
-	return GetEnvBool("X402_INCLUDE_TESTNETS", false)
-}
-
-// CryptoDepositsEnabled is the default-on emergency breaker for creating new
-// direct crypto invoice/top-up payment intents. Observation, reconciliation,
-// and access to already-received funds must continue when it is disabled.
-func CryptoDepositsEnabled() bool {
-	return GetEnvBool("CRYPTO_DEPOSITS_ENABLED", true)
-}
-
-// X402PaymentsEnabled is the default-on emergency breaker for advertising,
-// verifying, and settling new x402 payments. Background reconciliation of
-// already-submitted settlements is intentionally unaffected.
-func X402PaymentsEnabled() bool {
-	return GetEnvBool("X402_PAYMENTS_ENABLED", true)
-}
-
-// WaiveUsageChargesEnabled reports whether metered usage should rate to €0 while
-// the monthly subscription still charges. Real prices stay in the DB; flipping
-// this off resumes normal billing with no migration. Beta safety lever.
-func WaiveUsageChargesEnabled() bool {
-	return GetEnvBool("WAIVE_USAGE_CHARGES", false)
-}
-
 // IsProduction reports whether the current process is running with production
 // runtime settings. BUILD_ENV is the repo-wide runtime selector.
 func IsProduction() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
 	case "production", "prod":
-		return true
-	default:
-		return false
-	}
-}
-
-// IsDevelopment reports whether the current process should use development
-// runtime behavior. An empty BUILD_ENV is treated as development.
-func IsDevelopment() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUILD_ENV"))) {
-	case "", "development", "dev":
 		return true
 	default:
 		return false
@@ -149,13 +68,4 @@ func GetLogLevel() logrus.Level {
 	default:
 		return logrus.InfoLevel
 	}
-}
-
-// RequireEnv fetches a variable and exits the process if it is empty.
-func RequireEnv(key string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		logrus.Fatalf("environment variable %s is required but not set", key)
-	}
-	return value
 }

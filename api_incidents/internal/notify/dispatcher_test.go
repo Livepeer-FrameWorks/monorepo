@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/incidents"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
 
@@ -49,29 +49,40 @@ func testPayload(t *testing.T, event, severity, summary string) json.RawMessage 
 	return raw
 }
 
-func clearChannelEnv(t *testing.T) {
-	t.Setenv(config.EnvNotifyEmailTo, "")
-	t.Setenv(config.EnvSlackWebhookURL, "")
-	t.Setenv(config.EnvDiscordWebhookURL, "")
-	t.Setenv(config.EnvWebappPublicURL, "")
+// staticSettings serves one fixed Settings value in place of Lookout's live
+// configuration.
+func staticSettings(s Settings) SettingsSource {
+	return func() Settings { return s }
+}
+
+// settingsDispatcher wires one settings source into the router and the
+// dispatcher, the way main does.
+func settingsDispatcher(s Settings, client *http.Client) *Dispatcher {
+	source := staticSettings(s)
+	return &Dispatcher{Channels: Router{Settings: source}, Settings: source, HTTP: client}
 }
 
 func TestRouterRoutesBySeverityAndConfiguredChannels(t *testing.T) {
-	clearChannelEnv(t)
-	router := Router{}
+	var settings Settings
+	router := Router{Settings: func() Settings { return settings }}
 	if got := router.ChannelsFor("critical"); len(got) != 0 {
 		t.Fatalf("unconfigured critical channels = %v", got)
 	}
-	t.Setenv(config.EnvNotifyEmailTo, "ops@example.test")
-	t.Setenv(config.EnvSlackWebhookURL, "https://hooks.slack.test/x")
-	t.Setenv(config.EnvDiscordWebhookURL, "https://discord.test/x")
+	if got := (Router{}).ChannelsFor("critical"); len(got) != 0 {
+		t.Fatalf("critical channels without a settings source = %v", got)
+	}
+	settings = Settings{
+		EmailRecipients:   []string{"ops@example.test"},
+		SlackWebhookURL:   "https://hooks.slack.test/x",
+		DiscordWebhookURL: "https://discord.test/x",
+	}
 	if got, want := router.ChannelsFor("critical"), []string{incidents.ChannelEmail, incidents.ChannelSlack, incidents.ChannelDiscord}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("critical channels = %v, want %v", got, want)
 	}
 	if got, want := router.ChannelsFor("warning"), []string{incidents.ChannelSlack, incidents.ChannelDiscord}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("warning channels = %v, want %v", got, want)
 	}
-	t.Setenv(config.EnvSlackWebhookURL, "")
+	settings.SlackWebhookURL = ""
 	if got, want := router.ChannelsFor("warning"), []string{incidents.ChannelDiscord}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("warning channels without slack = %v, want %v", got, want)
 	}
@@ -100,11 +111,8 @@ func captureJSONServer(t *testing.T, status int) (*httptest.Server, func() map[s
 }
 
 func TestSlackDeliveryUsesBlocksAndIncidentLink(t *testing.T) {
-	clearChannelEnv(t)
 	srv, body := captureJSONServer(t, http.StatusOK)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
-	t.Setenv(config.EnvWebappPublicURL, "https://app.example.test/")
-	d := &Dispatcher{Channels: Router{}, HTTP: srv.Client()}
+	d := settingsDispatcher(Settings{SlackWebhookURL: srv.URL, WebappURL: "https://app.example.test"}, srv.Client())
 
 	failed, err := d.Dispatch(context.Background(), Delivery{
 		Channel:    incidents.ChannelSlack,
@@ -133,10 +141,8 @@ func TestSlackDeliveryUsesBlocksAndIncidentLink(t *testing.T) {
 }
 
 func TestDiscordDeliveryUsesEmbedsWithoutMentions(t *testing.T) {
-	clearChannelEnv(t)
 	srv, body := captureJSONServer(t, http.StatusNoContent)
-	t.Setenv(config.EnvDiscordWebhookURL, srv.URL)
-	d := &Dispatcher{Channels: Router{}, HTTP: srv.Client()}
+	d := settingsDispatcher(Settings{DiscordWebhookURL: srv.URL}, srv.Client())
 
 	if _, err := d.Dispatch(context.Background(), Delivery{
 		Channel:    incidents.ChannelDiscord,
@@ -250,16 +256,18 @@ func serveFakeSMTP(conn net.Conn, out chan<- smtpMessage) {
 }
 
 func TestEmailDeliveryThroughSMTPToEveryRecipient(t *testing.T) {
-	clearChannelEnv(t)
 	host, port, messages := startFakeSMTP(t)
-	t.Setenv("SMTP_HOST", host)
-	t.Setenv("SMTP_PORT", port)
-	t.Setenv("SMTP_USER", "")
-	t.Setenv("SMTP_PASSWORD", "")
-	t.Setenv("SMTP_ALLOW_INSECURE", "true")
-	t.Setenv("FROM_EMAIL", "lookout@example.test")
-	t.Setenv(config.EnvNotifyEmailTo, "oncall@example.test, lead@example.test")
-	d := &Dispatcher{Channels: Router{}, Mailer: SMTPMailer}
+	source := staticSettings(Settings{
+		EmailRecipients: []string{"oncall@example.test", "lead@example.test"},
+		SMTP: email.Config{
+			Host:          host,
+			Port:          port,
+			From:          "lookout@example.test",
+			FromName:      "FrameWorks",
+			AllowInsecure: true,
+		},
+	})
+	d := &Dispatcher{Channels: Router{Settings: source}, Settings: source, Mailer: SMTPMailer(source)}
 
 	if _, err := d.Dispatch(context.Background(), Delivery{
 		Channel:    incidents.ChannelEmail,
@@ -289,10 +297,8 @@ func TestEmailDeliveryThroughSMTPToEveryRecipient(t *testing.T) {
 }
 
 func TestEmailDeliveryFailsWithoutSMTPHost(t *testing.T) {
-	clearChannelEnv(t)
-	t.Setenv("SMTP_HOST", "")
-	t.Setenv(config.EnvNotifyEmailTo, "oncall@example.test")
-	d := &Dispatcher{Channels: Router{}, Mailer: SMTPMailer}
+	source := staticSettings(Settings{EmailRecipients: []string{"oncall@example.test"}})
+	d := &Dispatcher{Channels: Router{Settings: source}, Settings: source, Mailer: SMTPMailer(source)}
 	failed, err := d.Dispatch(context.Background(), Delivery{Channel: incidents.ChannelEmail, Payload: testPayload(t, incidents.DeliveryEventOpened, "critical", "x")})
 	if err == nil || !reflect.DeepEqual(failed, []string{incidents.ChannelEmail}) {
 		t.Fatalf("dispatch = %v, %v; want retryable failure", failed, err)
@@ -300,17 +306,15 @@ func TestEmailDeliveryFailsWithoutSMTPHost(t *testing.T) {
 }
 
 func TestWebhookFailuresAreRetryableAndHideTheURL(t *testing.T) {
-	clearChannelEnv(t)
 	srv, _ := captureJSONServer(t, http.StatusInternalServerError)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
-	d := &Dispatcher{Channels: Router{}, HTTP: srv.Client()}
+	d := settingsDispatcher(Settings{SlackWebhookURL: srv.URL}, srv.Client())
 	failed, err := d.Dispatch(context.Background(), Delivery{Channel: incidents.ChannelSlack, Payload: testPayload(t, incidents.DeliveryEventOpened, "warning", "x")})
 	if err == nil || !strings.Contains(err.Error(), "unexpected status 500") || !reflect.DeepEqual(failed, []string{incidents.ChannelSlack}) {
 		t.Fatalf("dispatch = %v, %v", failed, err)
 	}
 
-	t.Setenv(config.EnvDiscordWebhookURL, "http://127.0.0.1:1/api/webhooks/123/SECRET-TOKEN")
-	_, err = (&Dispatcher{Channels: Router{}, HTTP: &http.Client{Timeout: time.Second}}).Dispatch(context.Background(), Delivery{
+	unreachable := Settings{DiscordWebhookURL: "http://127.0.0.1:1/api/webhooks/123/SECRET-TOKEN"}
+	_, err = settingsDispatcher(unreachable, &http.Client{Timeout: time.Second}).Dispatch(context.Background(), Delivery{
 		Channel: incidents.ChannelDiscord,
 		Payload: testPayload(t, incidents.DeliveryEventOpened, "warning", "x"),
 	})
@@ -320,8 +324,7 @@ func TestWebhookFailuresAreRetryableAndHideTheURL(t *testing.T) {
 }
 
 func TestDispatchSkipsChannelNoLongerConfigured(t *testing.T) {
-	clearChannelEnv(t)
-	d := &Dispatcher{Channels: Router{}}
+	d := settingsDispatcher(Settings{}, nil)
 	failed, err := d.Dispatch(context.Background(), Delivery{Channel: incidents.ChannelSlack, Payload: testPayload(t, incidents.DeliveryEventOpened, "warning", "x")})
 	if err != nil || len(failed) != 0 {
 		t.Fatalf("dispatch = %v, %v; want settled skip", failed, err)
@@ -410,7 +413,6 @@ func (s *memoryStore) reclaim() {
 }
 
 func TestWorkerRetriesFailedWebhookThenDelivers(t *testing.T) {
-	clearChannelEnv(t)
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if hits.Add(1) == 1 {
@@ -420,12 +422,11 @@ func TestWorkerRetriesFailedWebhookThenDelivers(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
 	store := &memoryStore{delivery: Delivery{Channel: incidents.ChannelSlack, Payload: testPayload(t, incidents.DeliveryEventOpened, "warning", "x")}}
 	worker := &outbox.Worker[Delivery]{
 		Config:     outbox.Config{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, BatchSize: 1, Lease: time.Minute},
 		Store:      store,
-		Dispatcher: &Dispatcher{Channels: Router{}, HTTP: srv.Client()},
+		Dispatcher: settingsDispatcher(Settings{SlackWebhookURL: srv.URL}, srv.Client()),
 	}
 	worker.ProcessBatch(context.Background())
 	if store.attempts != 1 || store.delivered {
@@ -438,19 +439,17 @@ func TestWorkerRetriesFailedWebhookThenDelivers(t *testing.T) {
 }
 
 func TestWorkerCannotSettleAfterLeaseIsReclaimed(t *testing.T) {
-	clearChannelEnv(t)
 	store := &memoryStore{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		store.reclaim()
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv(config.EnvSlackWebhookURL, srv.URL)
 	store.delivery = Delivery{Channel: incidents.ChannelSlack, Payload: testPayload(t, incidents.DeliveryEventOpened, "warning", "x")}
 	worker := &outbox.Worker[Delivery]{
 		Config:     outbox.Config{BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, BatchSize: 1, Lease: time.Minute},
 		Store:      store,
-		Dispatcher: &Dispatcher{Channels: Router{}, HTTP: srv.Client()},
+		Dispatcher: settingsDispatcher(Settings{SlackWebhookURL: srv.URL}, srv.Client()),
 	}
 	worker.ProcessBatch(context.Background())
 	if store.delivered {

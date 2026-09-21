@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -19,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -275,6 +274,12 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	if err != nil {
 		return nil, err
 	}
+	// The URL check resolves DNS, so it runs before a transaction is open.
+	if policyType == "webhook" {
+		if vErr := validateWebhookURL(ctx, s.webhookDestinationPolicy, req.GetWebhook().GetUrl()); vErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid webhook url: %v", vErr)
+		}
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -283,15 +288,12 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
 
-	// Encrypt webhook secret at validation time (and SSRF-validate the URL).
+	// Encrypt the webhook secret, or keep the stored one when none is sent.
 	var webhookSecretEnc sql.NullString
 	if policyType == "webhook" {
 		wh := req.GetWebhook()
 		if wh == nil {
 			return nil, status.Error(codes.InvalidArgument, "webhook policy requires webhook block")
-		}
-		if vErr := validateWebhookURL(ctx, wh.GetUrl()); vErr != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid webhook url: %v", vErr)
 		}
 		secret := strings.TrimSpace(wh.GetSecretPt())
 		if secret == "" {
@@ -372,6 +374,19 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
+	var eventErr error
+	switch target.kind {
+	case "stream":
+		eventErr = s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, responseID, []string{"playback_policy"})
+	case "vod_asset":
+		eventErr = s.enqueueEventTx(ctx, tx, s.buildArtifactEvent(eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, responseID, "", policyType, nil), nil)
+	case "clip":
+		eventErr = s.enqueueEventTx(ctx, tx, s.buildArtifactEvent(eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, responseID, "", policyType, nil), nil)
+	}
+	if eventErr != nil {
+		s.logger.WithError(eventErr).Error("enqueue playback policy event failed; aborting policy change")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		s.logger.WithError(commitErr).Error("commit set-policy tx failed")
@@ -384,13 +399,10 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	switch target.kind {
 	case "stream":
 		resp.StreamId = responseID
-		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, responseID, []string{"playback_policy"})
 	case "vod_asset":
 		resp.VodAssetId = responseID
-		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, responseID, "", policyType, nil)
 	case "clip":
 		resp.ClipId = responseID
-		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, responseID, "", policyType, nil)
 	}
 	return resp, nil
 }
@@ -615,9 +627,13 @@ func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyReques
 	return json.Marshal(doc)
 }
 
-// validateWebhookURL is the create-time SSRF guard. The dial-time guard
-// re-resolves at the actual fetch in Foghorn's webhook client.
-func validateWebhookURL(ctx context.Context, raw string) error {
+// validateWebhookURL is the save-time check for a playback-auth webhook URL:
+// https only, no userinfo (requests are authenticated by the HMAC signature),
+// no platform-internal hostnames, and a host that the shared webhook
+// destination policy accepts together with every address it resolves to.
+// Foghorn applies the same policy to the address of each connection, which is
+// what refuses a name that later resolves elsewhere.
+func validateWebhookURL(ctx context.Context, policy restream.DestinationPolicy, raw string) error {
 	if raw == "" {
 		return errors.New("url required")
 	}
@@ -635,56 +651,17 @@ func validateWebhookURL(ctx context.Context, raw string) error {
 	if host == "" {
 		return errors.New("host required")
 	}
-	hostLower := strings.ToLower(host)
+	hostLower := strings.TrimSuffix(strings.ToLower(host), ".")
 	if strings.HasSuffix(hostLower, "frameworks.network") || strings.HasSuffix(hostLower, ".internal") {
 		return errors.New("host is operator-internal")
 	}
-
-	resolver := net.DefaultResolver
-	addrs, err := resolver.LookupHost(ctx, host)
-	if err != nil {
-		return fmt.Errorf("dns lookup failed: %w", err)
-	}
-	for _, a := range addrs {
-		ip, parseErr := netip.ParseAddr(a)
-		if parseErr != nil {
-			continue
+	if err := policy.ValidateURI(ctx, u); err != nil {
+		if errors.Is(err, restream.ErrDestinationResolution) {
+			return fmt.Errorf("dns lookup failed: %w", err)
 		}
-		if isBlockedIP(ip) {
-			return fmt.Errorf("host resolves to blocked address %s", ip.String())
-		}
+		return fmt.Errorf("host is not a public destination: %w", err)
 	}
 	return nil
-}
-
-// isBlockedIP rejects loopback, link-local, RFC1918, CGNAT, IANA-reserved,
-// and IPv6 ULA / link-local ranges. Used both at create-time validation and
-// dial-time re-resolution (DNS rebinding defense).
-func isBlockedIP(ip netip.Addr) bool {
-	if !ip.IsValid() {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsPrivate() ||
-		ip.IsInterfaceLocalMulticast() {
-		return true
-	}
-	// 100.64.0.0/10 (CGNAT)
-	if ip.Is4() {
-		v4 := ip.As4()
-		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-			return true
-		}
-		// 0.0.0.0/8 (already covered by IsUnspecified for /32 only)
-		if v4[0] == 0 {
-			return true
-		}
-	}
-	// IPv4-mapped IPv6: re-check the underlying v4
-	if ip.Is4In6() {
-		return isBlockedIP(ip.Unmap())
-	}
-	return false
 }
 
 func signingKeyProto(id, kid, name, alg, pubPEM, st string, createdAt, lastUsedAt, revokedAt sql.NullTime) (*commodorepb.SigningKey, error) {

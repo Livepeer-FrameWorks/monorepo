@@ -17,6 +17,10 @@ var allowlistedOperations = []string{
 	"orchestratorperformanceseries",
 	"orchestratorsconnection",
 	"orchestratorvantages",
+	// serverInfo carries only the release version and shipped feature slugs,
+	// so clients can check support before they authenticate. Anonymous calls
+	// fall in the public rate-limit bucket.
+	"serverinfo",
 }
 
 // allowlistedMutationOperations is the set of write fields that may be

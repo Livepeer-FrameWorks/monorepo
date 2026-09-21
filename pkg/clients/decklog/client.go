@@ -2,12 +2,14 @@ package decklog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	eventspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
@@ -664,6 +666,36 @@ func (c *BatchedClient) SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent)
 			"error":      err,
 		}).Error("Failed to send gateway telemetry to Decklog")
 		return fmt.Errorf("failed to send gateway telemetry: %w", err)
+	}
+	return nil
+}
+
+// PublishDomainEvents sends an outbox batch to Decklog's domain.events ingress
+// and returns nil only after Decklog reported every record acknowledged by
+// Kafka. Event IDs are never generated here: an event without one is a
+// producer bug that Decklog rejects. Missing source region and cluster are
+// filled from the client's configuration.
+func (c *BatchedClient) PublishDomainEvents(ctx context.Context, batch *eventspb.DomainEventBatch) error {
+	if c.disabled() {
+		return errors.New("decklog client has no target")
+	}
+	for _, env := range batch.GetEvents() {
+		if env == nil {
+			continue
+		}
+		if env.SourceRegion == "" {
+			env.SourceRegion = c.sourceRegion
+		}
+		if env.SourceClusterId == "" {
+			env.SourceClusterId = c.clusterID
+		}
+	}
+	resp, err := c.client.PublishDomainEvents(c.authContextFrom(ctx), batch)
+	if err != nil {
+		return fmt.Errorf("publish domain events: %w", err)
+	}
+	if got, want := int(resp.GetPublished()), len(batch.GetEvents()); got != want {
+		return fmt.Errorf("publish domain events: decklog acknowledged %d of %d events", got, want)
 	}
 	return nil
 }

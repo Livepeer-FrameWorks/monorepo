@@ -42,7 +42,7 @@ func ReconcileBillingTierCatalog(ctx context.Context, exec DBTX, tiers []Catalog
 	if len(tiers) == 0 {
 		return Result{}, errors.New("ReconcileBillingTierCatalog: empty tier list (refusing to no-op silently — pass EmbeddedTiers() or an explicit slice)")
 	}
-	if err := validateCatalogDNSEntitlements(tiers); err != nil {
+	if err := validateCatalogTiers(tiers); err != nil {
 		return Result{}, err
 	}
 	if err := validateCatalogPricingRuleUniqueness(tiers); err != nil {

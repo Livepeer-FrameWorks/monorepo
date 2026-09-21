@@ -1,0 +1,4 @@
+# Public event types a webhook endpoint can subscribe to
+query GetWebhookEventTypes {
+  webhookEventTypes
+}

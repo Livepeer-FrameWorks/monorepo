@@ -1,0 +1,9 @@
+# Fetch one webhook delivery with every HTTP attempt
+query GetWebhookDelivery($id: ID!) {
+  webhookDelivery(id: $id) {
+    ...WebhookDeliveryFields @mask_disable
+    attemptHistory {
+      ...WebhookDeliveryAttemptFields @mask_disable
+    }
+  }
+}

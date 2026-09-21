@@ -61,23 +61,39 @@ WHERE id = sqlc.arg(id)::text::uuid
   AND lease_token = sqlc.arg(lease_token)::text::uuid;
 
 -- name: GetInvoiceEmailHeader :one
+-- amount and currency are the EUR invoice total; the presentment fields are
+-- the total charged in the tenant's presentment currency, empty until the
+-- invoice is finalized.
 SELECT amount::float8 AS amount,
        metered_amount::float8 AS metered_amount,
        gross_metered_amount::float8 AS gross_metered_amount,
-       currency, due_date, status
+       currency, due_date, status,
+       presentment_amount_cents,
+       COALESCE(presentment_currency, '')::text AS presentment_currency,
+       COALESCE(presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       COALESCE(presentment_reference_date::text, '')::text AS presentment_reference_date
 FROM purser.billing_invoices
 WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: GetOverdueInvoiceReminder :one
-SELECT GREATEST(bi.amount - COALESCE((
-           SELECT SUM(bp.amount - (COALESCE(bp.reversed_amount_cents, 0)::numeric / 100))
+-- The amount due is in the currency the invoice was presented in, net of the
+-- original amounts of confirmed payments in that currency. eur_amount_cents is
+-- the EUR invoice total the presentment rate converts.
+SELECT GREATEST(COALESCE(bi.presentment_amount_cents, ROUND(bi.amount * 100)::bigint) - COALESCE((
+           SELECT SUM(COALESCE(bp.original_amount_cents, ROUND(bp.amount * 100)::bigint)
+                      - COALESCE(bp.reversed_amount_cents, 0))
            FROM purser.billing_payments bp
            WHERE bp.invoice_id = bi.id
              AND bp.status = 'confirmed'
-             AND bp.currency = bi.currency
-       ), 0), 0)::float8 AS amount_due,
-       bi.currency, bi.due_date, bi.status,
+             AND COALESCE(bp.original_currency, UPPER(bp.currency))
+                 = COALESCE(bi.presentment_currency, UPPER(bi.currency))
+       ), 0), 0)::bigint AS amount_due_cents,
+       COALESCE(bi.presentment_currency, UPPER(bi.currency))::text AS currency,
+       ROUND(bi.amount * 100)::bigint AS eur_amount_cents,
+       COALESCE(bi.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
+       COALESCE(bi.presentment_reference_date::text, '')::text AS presentment_reference_date,
+       bi.due_date, bi.status,
        COALESCE((
            SELECT MAX(candidate)
            FROM UNNEST(ARRAY[1, 7, 14, 30]) AS candidate

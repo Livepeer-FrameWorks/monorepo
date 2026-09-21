@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -38,14 +42,70 @@ const (
 // caller to abort its transaction. The drain worker (runBillingOutboxWorker in
 // api_billing/internal/grpc) dispatches committed rows to Decklog.
 func emitBillingEventTx(ctx context.Context, exec purserdb.DBTX, eventType, tenantID, resourceType, resourceID string, payload *ipcpb.BillingEvent) error {
+	return emitBillingEventsTx(ctx, exec, eventType, tenantID, resourceType, resourceID, payload, nil)
+}
+
+// emitBillingEventsTx is emitBillingEventTx for a fact that also has a domain
+// event: domain is written to purser.domain_event_outbox through the same exec
+// and the legacy row takes its ID. A nil domain writes the legacy row only.
+func emitBillingEventsTx(ctx context.Context, exec purserdb.DBTX, eventType, tenantID, resourceType, resourceID string, payload *ipcpb.BillingEvent, domain *events.Event) error {
 	params, err := billingEventOutboxParams(eventType, tenantID, resourceType, resourceID, payload)
 	if err != nil {
+		return err
+	}
+	if params.ID, err = billingevents.LegacyRowID(domain); err != nil {
+		return fmt.Errorf("%s billing event id: %w", eventType, err)
+	}
+	if err := billingevents.Enqueue(ctx, exec, domain); err != nil {
 		return err
 	}
 	if err := purserdb.New(exec).EnqueueBillingEventOutboxNoReturn(ctx, params); err != nil {
 		return fmt.Errorf("enqueue %s billing event: %w", eventType, err)
 	}
 	return nil
+}
+
+// legacyBillingEvent is a billing_event_outbox row a domain event helper
+// writes alongside its domain event, under the same event ID.
+type legacyBillingEvent struct {
+	eventType    string
+	resourceType string
+	resourceID   string
+	payload      *ipcpb.BillingEvent
+}
+
+// topupCreditedEvent builds billing.topup_credited for a top-up credited in
+// the caller's transaction.
+func topupCreditedEvent(tenantID, topupID string, amountCents int64, currency string) (*events.Event, error) {
+	return billingevents.New(tenantID, topupID, &publicv1.TopupCredited{
+		TopupId: topupID, Amount: &publicv1.Money{AmountMinor: amountCents, Currency: currency},
+	}, events.Actor{})
+}
+
+// enqueueInvoiceCreatedTx writes billing.invoice_created for an invoice this
+// transaction issued with amountCents EUR due. An invoice issued with nothing
+// to collect is issued paid, so billing.invoice_paid follows it. Drafts and
+// invoices held for manual review are not issued and emit nothing; their
+// finalization emits once, because it only matches a draft or held row.
+func enqueueInvoiceCreatedTx(ctx context.Context, tx *sql.Tx, tenantID, invoiceID, status string, amountCents int64, periodStart, periodEnd, dueAt time.Time) error {
+	if status != "pending" && status != "paid" {
+		return nil
+	}
+	if err := billingevents.NewAndEnqueue(ctx, tx, tenantID, invoiceID, &publicv1.InvoiceCreated{
+		InvoiceId:   invoiceID,
+		AmountDue:   billingevents.EUR(amountCents),
+		PeriodStart: timestamppb.New(periodStart),
+		PeriodEnd:   timestamppb.New(periodEnd),
+		DueAt:       timestamppb.New(dueAt),
+	}, events.Actor{}); err != nil {
+		return err
+	}
+	if status != "paid" {
+		return nil
+	}
+	return billingevents.NewAndEnqueue(ctx, tx, tenantID, invoiceID, &publicv1.InvoicePaid{
+		InvoiceId: invoiceID, AmountPaid: billingevents.EUR(amountCents),
+	}, events.Actor{})
 }
 
 // emitBillingTelemetryEvent writes a billing event row in its own statement and
@@ -80,7 +140,7 @@ func billingEventOutboxParams(eventType, tenantID, resourceType, resourceID stri
 		return purserdb.EnqueueBillingEventOutboxNoReturnParams{}, fmt.Errorf("marshal %s billing event: %w", eventType, err)
 	}
 	return purserdb.EnqueueBillingEventOutboxNoReturnParams{
-		ID: uuid.Must(uuid.NewV7()), EventType: eventType, TenantID: tenantID, UserID: "",
+		EventType: eventType, TenantID: tenantID, UserID: "",
 		ResourceType: resourceType, ResourceID: resourceID, BillingEvent: billingJSON,
 	}, nil
 }

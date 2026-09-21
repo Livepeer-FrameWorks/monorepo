@@ -46,10 +46,8 @@ func (f *fakeInternalCAStore) SaveInternalCertificate(_ context.Context, _ *stor
 }
 
 func TestEnsureCARequiresManagedFilesInProduction(t *testing.T) {
-	t.Setenv("BUILD_ENV", "production")
-
 	manager := NewInternalCAManager(&fakeInternalCAStore{}, nil, nil, "frameworks.network")
-	err := manager.EnsureCA(context.Background())
+	err := manager.EnsureCA(context.Background(), InternalCAMaterial{RequireManaged: true})
 	if err == nil {
 		t.Fatal("expected managed CA requirement error")
 	}
@@ -65,14 +63,16 @@ func TestEnsureCAImportsManagedMaterialFromBase64Env(t *testing.T) {
 		t.Fatalf("generate intermediate test cert: %v", err)
 	}
 
-	t.Setenv("BUILD_ENV", "production")
-	t.Setenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64", base64.StdEncoding.EncodeToString([]byte(rootCertPEM)))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64", base64.StdEncoding.EncodeToString([]byte(intermediateCertPEM)))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64", base64.StdEncoding.EncodeToString([]byte(intermediateKeyPEM)))
+	material := InternalCAMaterial{
+		RootCertPEMB64:         base64.StdEncoding.EncodeToString([]byte(rootCertPEM)),
+		IntermediateCertPEMB64: base64.StdEncoding.EncodeToString([]byte(intermediateCertPEM)),
+		IntermediateKeyPEMB64:  base64.StdEncoding.EncodeToString([]byte(intermediateKeyPEM)),
+		RequireManaged:         true,
+	}
 
 	fakeStore := &fakeInternalCAStore{}
 	manager := NewInternalCAManager(fakeStore, nil, nil, "frameworks.network")
-	if err := manager.EnsureCA(context.Background()); err != nil {
+	if err := manager.EnsureCA(context.Background(), material); err != nil {
 		t.Fatalf("EnsureCA returned error: %v", err)
 	}
 
@@ -107,12 +107,14 @@ func TestEnsureCARejectsMismatchedIntermediateKey(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	t.Setenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE", writeTempPEMFile(t, dir, "root.crt", rootCertPEM))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE", writeTempPEMFile(t, dir, "intermediate.crt", intermediateCertPEM))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE", writeTempPEMFile(t, dir, "intermediate.key", wrongIntermediateKeyPEM))
+	material := InternalCAMaterial{
+		RootCertFile:         writeTempPEMFile(t, dir, "root.crt", rootCertPEM),
+		IntermediateCertFile: writeTempPEMFile(t, dir, "intermediate.crt", intermediateCertPEM),
+		IntermediateKeyFile:  writeTempPEMFile(t, dir, "intermediate.key", wrongIntermediateKeyPEM),
+	}
 
 	manager := NewInternalCAManager(&fakeInternalCAStore{}, nil, nil, "frameworks.network")
-	err = manager.EnsureCA(context.Background())
+	err = manager.EnsureCA(context.Background(), material)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("expected mismatched key error, got %v", err)
 	}
@@ -133,12 +135,14 @@ func TestEnsureCARejectsIntermediateSignedByWrongRoot(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	t.Setenv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_FILE", writeTempPEMFile(t, dir, "root.crt", rootCertPEM))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_FILE", writeTempPEMFile(t, dir, "intermediate.crt", intermediateCertPEM))
-	t.Setenv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_FILE", writeTempPEMFile(t, dir, "intermediate.key", intermediateKeyPEM))
+	material := InternalCAMaterial{
+		RootCertFile:         writeTempPEMFile(t, dir, "root.crt", rootCertPEM),
+		IntermediateCertFile: writeTempPEMFile(t, dir, "intermediate.crt", intermediateCertPEM),
+		IntermediateKeyFile:  writeTempPEMFile(t, dir, "intermediate.key", intermediateKeyPEM),
+	}
 
 	manager := NewInternalCAManager(&fakeInternalCAStore{}, nil, nil, "frameworks.network")
-	err = manager.EnsureCA(context.Background())
+	err = manager.EnsureCA(context.Background(), material)
 	if err == nil || !strings.Contains(err.Error(), "not signed by root") {
 		t.Fatalf("expected broken chain error, got %v", err)
 	}

@@ -1,0 +1,253 @@
+syntax = "proto3";
+
+package bosun;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/bosun;bosunpb";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// BosunService owns outbound webhooks: tenant endpoints, their signing
+// secrets, the delivery ledger, and replay.
+//
+// Authorization: every call acts on the tenant of the caller's auth context (a
+// user JWT, or the service token with x-tenant-id metadata). No request names a
+// tenant, and an ID of another tenant's endpoint or delivery is NOT_FOUND. A
+// call without a tenant context is PERMISSION_DENIED.
+service BosunService {
+  rpc ListWebhookEndpoints(ListWebhookEndpointsRequest) returns (ListWebhookEndpointsResponse);
+  rpc GetWebhookEndpoint(GetWebhookEndpointRequest) returns (WebhookEndpoint);
+  // Returns the endpoint and its signing secret. The secret is returned only
+  // here and by RotateWebhookEndpointSecret.
+  rpc CreateWebhookEndpoint(CreateWebhookEndpointRequest) returns (WebhookEndpointWithSecret);
+  rpc UpdateWebhookEndpoint(UpdateWebhookEndpointRequest) returns (WebhookEndpoint);
+  // Deletes the endpoint with its secrets and delivery history.
+  rpc DeleteWebhookEndpoint(DeleteWebhookEndpointRequest) returns (DeleteWebhookEndpointResponse);
+  // Re-enables a disabled endpoint. Deliveries skipped while it was disabled
+  // are not replayed; use ReplayWebhookDeliveries.
+  rpc EnableWebhookEndpoint(EnableWebhookEndpointRequest) returns (WebhookEndpoint);
+  // Disables the endpoint and skips its pending deliveries.
+  rpc DisableWebhookEndpoint(DisableWebhookEndpointRequest) returns (WebhookEndpoint);
+  // Replaces the signing secret. The previous secret keeps signing alongside
+  // the new one for 24 hours unless revoke_previous is set.
+  rpc RotateWebhookEndpointSecret(RotateWebhookEndpointSecretRequest) returns (WebhookEndpointWithSecret);
+  // Sends a signed webhook.test event to the endpoint and waits for the
+  // result. RESOURCE_EXHAUSTED when the endpoint was tested in the last
+  // 10 seconds.
+  rpc TestWebhookEndpoint(TestWebhookEndpointRequest) returns (TestWebhookEndpointResponse);
+  rpc ListWebhookDeliveries(ListWebhookDeliveriesRequest) returns (ListWebhookDeliveriesResponse);
+  rpc GetWebhookDelivery(GetWebhookDeliveryRequest) returns (GetWebhookDeliveryResponse);
+  // Sends a finished event delivery again under the same ID. The endpoint
+  // must be enabled; a pending delivery or a test delivery is
+  // FAILED_PRECONDITION.
+  rpc ReplayWebhookDelivery(ReplayWebhookDeliveryRequest) returns (WebhookDelivery);
+  // Sends again every failed or skipped event delivery of one endpoint
+  // created in [created_after, created_before), oldest first, at most 1000
+  // per call.
+  rpc ReplayWebhookDeliveries(ReplayWebhookDeliveriesRequest) returns (ReplayWebhookDeliveriesResponse);
+}
+
+enum WebhookEndpointStatus {
+  WEBHOOK_ENDPOINT_STATUS_UNSPECIFIED = 0;
+  WEBHOOK_ENDPOINT_STATUS_ENABLED = 1;
+  WEBHOOK_ENDPOINT_STATUS_DISABLED = 2;
+}
+
+enum WebhookEndpointDisabledReason {
+  WEBHOOK_ENDPOINT_DISABLED_REASON_UNSPECIFIED = 0;
+  // Disabled through the API.
+  WEBHOOK_ENDPOINT_DISABLED_REASON_USER = 1;
+  // Disabled automatically after at least 20 consecutive failed attempts over
+  // at least 5 days without a successful delivery.
+  WEBHOOK_ENDPOINT_DISABLED_REASON_FAILING = 2;
+}
+
+enum WebhookDeliveryStatus {
+  WEBHOOK_DELIVERY_STATUS_UNSPECIFIED = 0;
+  // Waiting for its first attempt or for a retry.
+  WEBHOOK_DELIVERY_STATUS_PENDING = 1;
+  WEBHOOK_DELIVERY_STATUS_SUCCEEDED = 2;
+  // Every attempt of the retry schedule failed, or a test delivery failed.
+  WEBHOOK_DELIVERY_STATUS_FAILED = 3;
+  // The endpoint was disabled before the delivery succeeded.
+  WEBHOOK_DELIVERY_STATUS_SKIPPED = 4;
+}
+
+enum WebhookDeliveryKind {
+  WEBHOOK_DELIVERY_KIND_UNSPECIFIED = 0;
+  WEBHOOK_DELIVERY_KIND_EVENT = 1;
+  WEBHOOK_DELIVERY_KIND_TEST = 2;
+}
+
+message WebhookEndpoint {
+  string id = 1;
+  string url = 2;
+  string description = 3;
+  // Public event types the endpoint receives; "*" receives every type.
+  repeated string event_types = 4;
+  // Public event package major the payloads are rendered with, e.g. "v1".
+  string api_version = 5;
+  WebhookEndpointStatus status = 6;
+  WebhookEndpointDisabledReason disabled_reason = 7;
+  google.protobuf.Timestamp disabled_at = 8;
+  // Failed attempts since the last successful delivery.
+  int32 consecutive_failures = 9;
+  // First failed attempt since the last successful delivery.
+  google.protobuf.Timestamp failing_since = 10;
+  google.protobuf.Timestamp last_success_at = 11;
+  google.protobuf.Timestamp last_failure_at = 12;
+  // Until when the previous signing secret still signs deliveries; unset when
+  // there is none.
+  google.protobuf.Timestamp previous_secret_expires_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message WebhookEndpointWithSecret {
+  WebhookEndpoint endpoint = 1;
+  // "whsec_<base64>", the Standard Webhooks secret form.
+  string secret = 2;
+}
+
+message ListWebhookEndpointsRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+message ListWebhookEndpointsResponse {
+  repeated WebhookEndpoint endpoints = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message GetWebhookEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message CreateWebhookEndpointRequest {
+  // An https URL. Private, loopback, link-local, shared, and metadata
+  // addresses are rejected, at creation and again on every connection.
+  string url = 1;
+  string description = 2;
+  repeated string event_types = 3;
+  // Empty selects "v1".
+  string api_version = 4;
+}
+
+message UpdateWebhookEndpointRequest {
+  string endpoint_id = 1;
+  optional string url = 2;
+  optional string description = 3;
+  // Replaces the list when set_event_types is true.
+  repeated string event_types = 4;
+  bool set_event_types = 5;
+}
+
+message DeleteWebhookEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message DeleteWebhookEndpointResponse {
+  string endpoint_id = 1;
+}
+
+message EnableWebhookEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message DisableWebhookEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message RotateWebhookEndpointSecretRequest {
+  string endpoint_id = 1;
+  // Stops signing with the previous secret immediately instead of after
+  // 24 hours.
+  bool revoke_previous = 2;
+}
+
+message TestWebhookEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message TestWebhookEndpointResponse {
+  WebhookDelivery delivery = 1;
+  WebhookDeliveryAttempt attempt = 2;
+}
+
+message WebhookDelivery {
+  string id = 1;
+  string endpoint_id = 2;
+  // The event ID, sent as webhook-id and as the body's id. Empty for tests.
+  string event_id = 3;
+  string event_type = 4;
+  WebhookDeliveryKind kind = 5;
+  WebhookDeliveryStatus status = 6;
+  int32 attempts = 7;
+  // When the next attempt is due; unset unless pending.
+  google.protobuf.Timestamp next_attempt_at = 8;
+  // HTTP status of the last attempt; 0 when no response arrived.
+  int32 last_status_code = 9;
+  // Failure class of the last attempt: "" when it succeeded, otherwise one of
+  // http_status, redirect, timeout, connection, tls, dns, blocked_destination,
+  // secret_unavailable.
+  string last_error_class = 10;
+  google.protobuf.Timestamp delivered_at = 11;
+  int32 replay_count = 12;
+  google.protobuf.Timestamp last_replayed_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message WebhookDeliveryAttempt {
+  string id = 1;
+  int32 attempt_number = 2;
+  int32 status_code = 3;
+  string error_class = 4;
+  int32 latency_ms = 5;
+  // At most 1 KiB of the response body.
+  string response_excerpt = 6;
+  google.protobuf.Timestamp attempted_at = 7;
+}
+
+message ListWebhookDeliveriesRequest {
+  // Restricts to one endpoint when set.
+  string endpoint_id = 1;
+  repeated WebhookDeliveryStatus statuses = 2;
+  // Exact event type, e.g. "stream.live".
+  string event_type = 3;
+  string event_id = 4;
+  google.protobuf.Timestamp created_after = 5;
+  google.protobuf.Timestamp created_before = 6;
+  // Newest first. Only forward pagination is supported.
+  common.CursorPaginationRequest pagination = 7;
+}
+
+message ListWebhookDeliveriesResponse {
+  repeated WebhookDelivery deliveries = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message GetWebhookDeliveryRequest {
+  string delivery_id = 1;
+}
+
+message GetWebhookDeliveryResponse {
+  WebhookDelivery delivery = 1;
+  // Oldest first.
+  repeated WebhookDeliveryAttempt attempts = 2;
+}
+
+message ReplayWebhookDeliveryRequest {
+  string delivery_id = 1;
+}
+
+message ReplayWebhookDeliveriesRequest {
+  string endpoint_id = 1;
+  google.protobuf.Timestamp created_after = 2;
+  google.protobuf.Timestamp created_before = 3;
+}
+
+message ReplayWebhookDeliveriesResponse {
+  int32 replayed_count = 1;
+  // More failed or skipped deliveries remain in the range.
+  bool has_more = 2;
+}

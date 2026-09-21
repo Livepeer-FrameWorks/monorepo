@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -73,6 +74,17 @@ func (f *fakeProducer) ProduceMessage(topic string, key []byte, value []byte, he
 		value:   value,
 		headers: headers,
 	})
+	return f.produceErr
+}
+
+func (f *fakeProducer) ProduceRecords(_ context.Context, records []*kgo.Record) error {
+	for _, record := range records {
+		headers := make(map[string]string, len(record.Headers))
+		for _, h := range record.Headers {
+			headers[h.Key] = string(h.Value)
+		}
+		f.produceCalls = append(f.produceCalls, produceCall{topic: record.Topic, key: record.Key, value: record.Value, headers: headers})
+	}
 	return f.produceErr
 }
 
@@ -278,6 +290,8 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 				AuthType: "token",
 			},
 		},
+		ActorAuthType:  "api_token",
+		ActorTokenHash: 4242,
 	}
 
 	_, err := server.SendServiceEvent(context.Background(), serviceEvent)
@@ -313,6 +327,9 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 	}
 	if payload.Data["auth_type"] != "token" {
 		t.Fatalf("expected auth_type token, got %v", payload.Data["auth_type"])
+	}
+	if payload.ActorAuthType != "api_token" || payload.ActorTokenHash != 4242 {
+		t.Fatalf("actor = (%q, %d), want (api_token, 4242)", payload.ActorAuthType, payload.ActorTokenHash)
 	}
 }
 

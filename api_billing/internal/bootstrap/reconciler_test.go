@@ -30,7 +30,7 @@ func twoTierFixture() []CatalogTier {
 			BasePrice:       0,
 			Currency:        "EUR",
 			BillingPeriod:   "monthly",
-			Features:        map[string]any{"recording": true, "support_level": "community"},
+			Features:        map[string]any{"sla": false, "support_level": "community"},
 			SupportLevel:    "community",
 			SLALevel:        "none",
 			MeteringEnabled: true,
@@ -53,7 +53,7 @@ func twoTierFixture() []CatalogTier {
 			BasePrice:       0,
 			Currency:        "EUR",
 			BillingPeriod:   "monthly",
-			Features:        map[string]any{"recording": false, "support_level": "community"},
+			Features:        map[string]any{"support_level": "community"},
 			SupportLevel:    "community",
 			SLALevel:        "none",
 			MeteringEnabled: true,
@@ -126,6 +126,19 @@ func TestValidateCatalogDNSEntitlements(t *testing.T) {
 	}
 }
 
+func TestValidateCatalogFeaturesRejectsUnenforcedFlags(t *testing.T) {
+	allowed := []CatalogTier{{TierName: "ok", Features: map[string]any{"support_level": "basic", "sla": true, "processing_customizable": true}}}
+	if err := validateCatalogFeatures(allowed); err != nil {
+		t.Fatalf("allowed features rejected: %v", err)
+	}
+	for _, key := range []string{"recording", "analytics", "api_access", "custom_branding"} {
+		tiers := []CatalogTier{{TierName: "bad", Features: map[string]any{key: true}}}
+		if err := validateCatalogFeatures(tiers); err == nil {
+			t.Errorf("feature %q accepted", key)
+		}
+	}
+}
+
 func TestEmbeddedCatalogShape(t *testing.T) {
 	// Spot-check the entitlements/pricing-rule split is preserved in the YAML.
 	tiers, err := EmbeddedTiers()
@@ -162,8 +175,8 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 	if !free.MeteringEnabled {
 		t.Error("free tier must be metered at zero so invoices include usage lines")
 	}
-	if got := free.Features["recording"]; got != true {
-		t.Errorf("free recording feature = %v, want true so 7-day retention/storage cap docs match runtime policy", got)
+	if got := free.Entitlements["recording_retention_days"]; got == nil {
+		t.Error("free tier missing recording_retention_days entitlement")
 	}
 	if got := free.Entitlements["max_concurrent_streams"]; got != 3 {
 		t.Errorf("free max_concurrent_streams entitlement = %v, want 3", got)

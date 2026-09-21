@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
@@ -112,10 +113,9 @@ func TestGenerateUserCode_FormatAndAlphabet(t *testing.T) {
 }
 
 func TestDeviceVerificationBaseURLUsesConfiguredWebappURL(t *testing.T) {
-	t.Setenv("DEVICE_VERIFICATION_URL", "")
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://chartroom.frameworks.network/app/")
-
-	server := &CommodoreServer{logger: logrus.New()}
+	server := &CommodoreServer{logger: logrus.New(), runtimeSettings: func() RuntimeSettings {
+		return RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://chartroom.frameworks.network/app/"}}
+	}}
 	got, err := server.deviceVerificationBaseURL()
 	if err != nil {
 		t.Fatalf("deviceVerificationBaseURL: %v", err)
@@ -126,10 +126,12 @@ func TestDeviceVerificationBaseURLUsesConfiguredWebappURL(t *testing.T) {
 }
 
 func TestDeviceVerificationBaseURLOverride(t *testing.T) {
-	t.Setenv("DEVICE_VERIFICATION_URL", "https://login.example.com/device/")
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://chartroom.frameworks.network/app")
-
-	server := &CommodoreServer{logger: logrus.New()}
+	server := &CommodoreServer{logger: logrus.New(), runtimeSettings: func() RuntimeSettings {
+		return RuntimeSettings{
+			DeviceVerificationURL: "https://login.example.com/device/",
+			Branding:              config.EmailBranding{WebAppURL: "https://chartroom.frameworks.network/app"},
+		}
+	}}
 	got, err := server.deviceVerificationBaseURL()
 	if err != nil {
 		t.Fatalf("deviceVerificationBaseURL: %v", err)

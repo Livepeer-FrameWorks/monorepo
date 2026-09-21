@@ -73,6 +73,15 @@ func playableChapterRow(chapterID, parentDVRHash, chapterState string) *sqlmock.
 // register the origin artifact (+ node-copy event), transition the chapter finalizing →
 // finalized (exactly one row), and enqueue the completion lifecycle — all committed together.
 // The job is never left with a ready artifact but an un-transitioned chapter (or vice versa).
+// expectChapterParentLock expects the finalize transaction's first statement:
+// the lock on the chapter's parent recording, whose revision the chapter event
+// advances.
+func expectChapterParentLock(mock sqlmock.Sqlmock, chapterID string) {
+	mock.ExpectExec(`JOIN foghorn\.dvr_chapters c ON c\.artifact_hash = p\.artifact_hash[\s\S]*FOR UPDATE OF p`).
+		WithArgs(chapterID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
@@ -102,6 +111,7 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 	}
 
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, chapterID)
 	// Lock the chapter + allocated artifact + parent; confirm chapter='finalizing',
 	// artifact='finalizing', parent not deleted.
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
@@ -131,15 +141,18 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1)) // node-copy event
+	expectTransitionInsert(mock, "artifact.node_copy_changed", chapterHash32, "artifact_node_copy", tenant, "", chapterHash32)
 	// MarkChapterFinalizedTx: finalizing → finalized, exactly one row.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'finalized'`).
 		WithArgs(int32(7), false, nil, nil, chapterID, chapterFinalizeAttempt).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Completion lifecycle enqueue (same tx).
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	// recording.chapter_ready is keyed by the parent recording and shares its ID with the
+	// chapter's completion lifecycle row (same tx).
+	mock.ExpectQuery(`SELECT c.artifact_hash AS recording_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"recording_hash", "stream_id", "start_ms", "end_ms"}).
+			AddRow("parentdvrhash", "", int64(0), int64(60000)))
+	expectTransitionInsert(mock, "recording.chapter_ready", "parentdvrhash", "vod_lifecycle", tenant, "", chapterHash32)
 	mock.ExpectCommit()
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "completed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
@@ -169,6 +182,7 @@ func TestHandleChapterFinalizeResult_DuplicateCompletionIsNoOp(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, chapterID)
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
@@ -191,6 +205,7 @@ func TestHandleChapterFinalizeResult_RejectsPriorAttemptOnSameNode(t *testing.T)
 		OutputPath: "/data/vod/" + chapterHash32 + ".mkv", OutputSizeBytes: 4096,
 	}
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, chapterID)
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).WithArgs(chapterID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
 			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "finalizing", "ready", "node-1", int32(4)))
@@ -242,6 +257,7 @@ func TestHandleChapterFinalizeResult_RejectsForeignNode(t *testing.T) {
 	// assigned to "assigned-node", so a completion from "attacker-node" rolls back with NO writes (no artifact
 	// readiness, no origin registration, no bounce).
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, "chap-foreign")
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs("chap-foreign").
 		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
@@ -270,6 +286,7 @@ func TestHandleChapterFinalizeResult_DoesNotResurrectDeletedArtifact(t *testing.
 		OutputSizeBytes: 4096,
 	}
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, chapterID)
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
@@ -300,6 +317,7 @@ func TestHandleChapterFinalizeResult_TransientPersistFailureBouncesToClosed(t *t
 	}
 
 	mock.ExpectBegin()
+	expectChapterParentLock(mock, chapterID)
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).

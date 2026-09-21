@@ -15,6 +15,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -217,7 +218,9 @@ func (j *AbortingVodRecoveryJob) convergeToDeleted(ctx context.Context, r aborti
 			data.UserId = &r.userID
 		}
 		moved = true
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, data)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, data, &publicv1.UploadAborted{
+			Artifact: artifactoutbox.UploadArtifact(r.artifactHash),
+		})
 	})
 	if err != nil {
 		j.logger.WithError(err).WithField("artifact_hash", r.artifactHash).Warn("Aborting-VOD recovery: convergence to deleted failed; row stays 'aborting' for a later pass")

@@ -138,10 +138,20 @@ func TestResolveStripeDefaultPaymentMethodUsesExplicitPrecedence(t *testing.T) {
 			t.Fatalf("method=%q err=%v", got, err)
 		}
 	})
-	t.Run("missing provider ids rejected", func(t *testing.T) {
+	t.Run("customer without subscription reads the customer default", func(t *testing.T) {
+		backend := &stripeMoneyBackend{
+			customer: &stripeapi.Customer{InvoiceSettings: &stripeapi.CustomerInvoiceSettings{DefaultPaymentMethod: &stripeapi.PaymentMethod{ID: "pm_setup"}}},
+		}
+		installBackend(t, backend)
+		got, err := newStripeClient().ResolveDefaultPaymentMethod(context.Background(), "cus_1", "")
+		if err != nil || got != "pm_setup" || backend.calls != 1 {
+			t.Fatalf("method=%q calls=%d err=%v", got, backend.calls, err)
+		}
+	})
+	t.Run("missing customer id rejected", func(t *testing.T) {
 		backend := &stripeMoneyBackend{}
 		installBackend(t, backend)
-		for _, ids := range [][2]string{{"", "sub_1"}, {"cus_1", ""}, {"", ""}} {
+		for _, ids := range [][2]string{{"", "sub_1"}, {"", ""}} {
 			if _, err := newStripeClient().ResolveDefaultPaymentMethod(context.Background(), ids[0], ids[1]); err == nil {
 				t.Fatalf("ids %q/%q accepted", ids[0], ids[1])
 			}

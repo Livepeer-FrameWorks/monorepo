@@ -28,11 +28,11 @@ func resetReloadFnsForTest(t *testing.T) {
 	reloadMu.Unlock()
 }
 
-func TestSetupServiceRouter(t *testing.T) {
+func TestBaseServiceRouterServesRegisteredRoutes(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-setup", "v1")
 	mc := monitoring.NewMetricsCollectorWithRegistry("svc-setup", "v1", "abc", prometheus.NewRegistry())
-	r := SetupServiceRouter(logger, "svc", hc, mc)
+	r := baseServiceRouter(logger, hc, mc, false, nil)
 	r.GET("/ping", func(c *gin.Context) { c.String(200, "pong") })
 
 	w := httptest.NewRecorder()
@@ -43,11 +43,11 @@ func TestSetupServiceRouter(t *testing.T) {
 	}
 }
 
-func TestSetupServiceRouterHandlesAlternateTrailingSlash(t *testing.T) {
+func TestBaseServiceRouterHandlesAlternateTrailingSlash(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-slash", "v1")
 	mc := monitoring.NewMetricsCollectorWithRegistry("svc-slash", "v1", "abc", prometheus.NewRegistry())
-	r := SetupServiceRouter(logger, "svc", hc, mc)
+	r := baseServiceRouter(logger, hc, mc, false, nil)
 	r.POST("/api/action", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()
@@ -205,11 +205,11 @@ func TestStartReloadListener_CallbackErrorDoesNotAbortSubsequent(t *testing.T) {
 	}
 }
 
-func TestSetupServiceRouterAlternateTrailingSlashDefaultsToOK(t *testing.T) {
+func TestBaseServiceRouterAlternateTrailingSlashDefaultsToOK(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-slash-default", "v1")
 	mc := monitoring.NewMetricsCollectorWithRegistry("svc-slash-default", "v1", "abc", prometheus.NewRegistry())
-	r := SetupServiceRouter(logger, "svc", hc, mc)
+	r := baseServiceRouter(logger, hc, mc, false, nil)
 	r.POST("/graphql", func(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte(`{"data":{"__typename":"Query"}}`))
 	})

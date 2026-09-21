@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -327,7 +328,7 @@ func TestMeteringSourceRegionRemainsAuthoritative_RealPG(t *testing.T) {
 }
 
 func TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG(t *testing.T) {
-	t.Setenv("WAIVE_USAGE_CHARGES", "false")
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	db := startPurserUsageRealPG(t)
 	ctx := context.Background()
 	periodStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)

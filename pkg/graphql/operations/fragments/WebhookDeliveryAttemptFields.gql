@@ -1,0 +1,9 @@
+fragment WebhookDeliveryAttemptFields on WebhookDeliveryAttempt {
+  id
+  attemptNumber
+  statusCode
+  errorClass
+  latencyMs
+  responseExcerpt
+  attemptedAt
+}

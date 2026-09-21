@@ -365,12 +365,19 @@ func (q *Queries) ListAPITokensForwardAfter(ctx context.Context, arg ListAPIToke
 }
 
 const revokeAPIToken = `-- name: RevokeAPIToken :one
-UPDATE commodore.api_tokens
+WITH target AS (
+    SELECT id, is_active
+    FROM commodore.api_tokens
+    WHERE id = $1::uuid
+      AND (user_id = $2::uuid OR $3::boolean)
+      AND tenant_id = $4::uuid
+    FOR UPDATE
+)
+UPDATE commodore.api_tokens AS t
 SET is_active = false, updated_at = NOW()
-WHERE id = $1::uuid
-  AND (user_id = $2::uuid OR $3::boolean)
-  AND tenant_id = $4::uuid
-RETURNING token_name
+FROM target
+WHERE t.id = target.id
+RETURNING t.token_name, target.is_active AS was_active
 `
 
 type RevokeAPITokenParams struct {
@@ -380,16 +387,23 @@ type RevokeAPITokenParams struct {
 	TenantID      string `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (string, error) {
+type RevokeAPITokenRow struct {
+	TokenName string       `db:"token_name" json:"token_name"`
+	WasActive sql.NullBool `db:"was_active" json:"was_active"`
+}
+
+// was_active is the state before this update, so a repeated revoke is
+// recognisable as no change.
+func (q *Queries) RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (RevokeAPITokenRow, error) {
 	row := q.db.QueryRowContext(ctx, revokeAPIToken,
 		arg.TokenID,
 		arg.UserID,
 		arg.TenantManager,
 		arg.TenantID,
 	)
-	var token_name string
-	err := row.Scan(&token_name)
-	return token_name, err
+	var i RevokeAPITokenRow
+	err := row.Scan(&i.TokenName, &i.WasActive)
+	return i, err
 }
 
 const touchAPITokenLastUsed = `-- name: TouchAPITokenLastUsed :exec

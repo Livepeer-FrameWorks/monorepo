@@ -90,23 +90,29 @@ func buildToolPolicies() map[string]ToolPolicy {
 		"manage_node", "reject_subscription_request", "revoke_cluster_invite", "unsubscribe_from_cluster", "update_cluster_marketplace")
 	add("developer:read", ToolRiskRead, "generate_query", "introspect_schema")
 	add("developer:write", ToolRiskHigh, "execute_query")
+	add("developer:read", ToolRiskRead,
+		"list_webhook_endpoints", "get_webhook_endpoint", "list_webhook_deliveries", "get_webhook_delivery", "list_webhook_event_types")
+	add("developer:write", ToolRiskHigh,
+		"create_webhook_endpoint", "update_webhook_endpoint", "delete_webhook_endpoint", "enable_webhook_endpoint",
+		"disable_webhook_endpoint", "rotate_webhook_secret", "test_webhook_endpoint", "replay_webhook_delivery",
+		"replay_webhook_deliveries")
 	add("consultant:use", ToolRiskRead, "ask_consultant")
 	add("security:read", ToolRiskRead, "list_linked_wallets")
 	add("security:write", ToolRiskHigh, "link_wallet", "unlink_wallet")
 	add("security:write", ToolRiskWrite, "link_email", "request_wallet_challenge")
 	add("billing:write", ToolRiskWrite, "activate_free_tier")
 
-	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "execute_query", "manage_node", "refresh_stream_key", "reject_subscription_request", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_playback_policy", "unlink_wallet", "unsubscribe_from_cluster", "update_cluster_marketplace"} {
+	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "delete_webhook_endpoint", "disable_webhook_endpoint", "execute_query", "manage_node", "refresh_stream_key", "reject_subscription_request", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "rotate_webhook_secret", "set_playback_policy", "unlink_wallet", "unsubscribe_from_cluster", "update_cluster_marketplace"} {
 		policy := policies[name]
 		policy.Destructive = true
 		policies[name] = policy
 	}
-	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "complete_mollie_postpaid_setup", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_node_mode", "set_playback_policy", "set_preferred_cluster", "set_retention_policy", "set_stream_retention_overrides", "stop_dvr", "unlink_wallet", "unsubscribe_from_cluster", "update_asset_retention", "update_billing_details", "update_cluster_marketplace", "update_push_target", "update_stream", "update_tenant_settings"} {
+	for _, name := range []string{"abort_vod_upload", "clear_playback_policy", "complete_mollie_postpaid_setup", "delete_clip", "delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset", "reset_asset_retention", "revoke_cluster_invite", "revoke_signing_key", "set_node_mode", "set_playback_policy", "set_preferred_cluster", "set_retention_policy", "set_stream_retention_overrides", "stop_dvr", "unlink_wallet", "unsubscribe_from_cluster", "update_asset_retention", "update_billing_details", "update_cluster_marketplace", "update_push_target", "update_stream", "update_tenant_settings", "update_webhook_endpoint", "delete_webhook_endpoint", "enable_webhook_endpoint", "disable_webhook_endpoint"} {
 		policy := policies[name]
 		policy.Idempotent = true
 		policies[name] = policy
 	}
-	for _, name := range []string{"ask_consultant", "create_push_target", "set_playback_policy", "test_playback_access", "update_push_target"} {
+	for _, name := range []string{"ask_consultant", "create_push_target", "create_webhook_endpoint", "replay_webhook_deliveries", "replay_webhook_delivery", "set_playback_policy", "test_playback_access", "test_webhook_endpoint", "update_push_target", "update_webhook_endpoint"} {
 		policy := policies[name]
 		policy.OpenWorld = true
 		policies[name] = policy
@@ -211,8 +217,17 @@ var toolEnums = map[string]map[string][]any{
 		"pricing_model": {"FREE_UNMETERED", "METERED", "MONTHLY", "TIER_INHERIT", "CUSTOM"},
 		"confirm":       {"UPDATE CLUSTER MARKETPLACE"},
 	},
-	"update_stream":            {"ingest_mode": {"push", "pull"}},
-	"unsubscribe_from_cluster": {"confirm": {"UNSUBSCRIBE FROM CLUSTER"}},
+	"update_stream":             {"ingest_mode": {"push", "pull"}},
+	"unsubscribe_from_cluster":  {"confirm": {"UNSUBSCRIBE FROM CLUSTER"}},
+	"create_webhook_endpoint":   {"confirm": {confirmCreateWebhookEndpoint}},
+	"update_webhook_endpoint":   {"confirm": {confirmUpdateWebhookEndpoint}},
+	"delete_webhook_endpoint":   {"confirm": {confirmDeleteWebhookEndpoint}},
+	"enable_webhook_endpoint":   {"confirm": {confirmEnableWebhookEndpoint}},
+	"disable_webhook_endpoint":  {"confirm": {confirmDisableWebhookEndpoint}},
+	"rotate_webhook_secret":     {"confirm": {confirmRotateWebhookSecret}},
+	"test_webhook_endpoint":     {"confirm": {confirmTestWebhookEndpoint}},
+	"replay_webhook_delivery":   {"confirm": {confirmReplayWebhookDelivery}},
+	"replay_webhook_deliveries": {"confirm": {confirmReplayWebhookRange}},
 }
 
 type numericBounds struct {

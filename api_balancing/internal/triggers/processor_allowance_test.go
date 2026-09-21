@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/state"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -135,8 +136,7 @@ func TestFreeTierAllowanceState(t *testing.T) {
 // ============================================================================
 
 func TestIngestLoadThresholdsDefaults(t *testing.T) {
-	t.Setenv("FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD", "")
-	t.Setenv("FOGHORN_INGEST_REJECT_FREE_LOAD", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 	got := ingestLoadThresholds()
 	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.95 {
 		t.Errorf("defaults: got %+v, want over=0.5 redline=0.95", got)
@@ -144,15 +144,17 @@ func TestIngestLoadThresholdsDefaults(t *testing.T) {
 }
 
 func TestIngestLoadThresholdsOverridesAndFallback(t *testing.T) {
-	t.Setenv("FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD", "0.4")
-	t.Setenv("FOGHORN_INGEST_REJECT_FREE_LOAD", "0.85")
+	settings := &appconfig.Foghorn{}
+	settings.IngestRejectOverAllowanceLoad = "0.4"
+	settings.IngestRejectFreeLoad = "0.85"
+	useFoghornConfig(t, settings)
 	got := ingestLoadThresholds()
 	if got.rejectOverAllowance != 0.4 || got.rejectAnyFree != 0.85 {
 		t.Errorf("overrides: got %+v", got)
 	}
 
-	t.Setenv("FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD", "garbage")
-	t.Setenv("FOGHORN_INGEST_REJECT_FREE_LOAD", "1.5") // out of range
+	settings.IngestRejectOverAllowanceLoad = "garbage"
+	settings.IngestRejectFreeLoad = "1.5" // out of range
 	got = ingestLoadThresholds()
 	if got.rejectOverAllowance != 0.5 || got.rejectAnyFree != 0.95 {
 		t.Errorf("garbage/out-of-range fall back to defaults: got %+v", got)
@@ -160,8 +162,7 @@ func TestIngestLoadThresholdsOverridesAndFallback(t *testing.T) {
 }
 
 func TestViewerLoadThresholdsDefaults(t *testing.T) {
-	t.Setenv("FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD", "")
-	t.Setenv("FOGHORN_VIEWER_REJECT_FREE_LOAD", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 	got := viewerLoadThresholds()
 	if got.rejectOverAllowance != 0.8 || got.rejectAnyFree != 0.95 {
 		t.Errorf("viewer defaults: got %+v, want over=0.8 redline=0.95", got)

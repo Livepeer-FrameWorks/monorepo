@@ -49,6 +49,9 @@ type PlacementNodeCheckerConfig struct {
 	QuartermasterClient *qmclient.GRPCClient
 	PurserClient        *purserclient.GRPCClient
 	FoghornPool         *foghornclient.FoghornPool
+	// SystemTenantID is the deployment's Quartermaster-owned system tenant.
+	// The zero value means the reserved tenants.SystemTenantID.
+	SystemTenantID uuid.UUID
 }
 
 func NewPlacementNodeChecker(cfg PlacementNodeCheckerConfig) *PlacementNodeChecker {
@@ -58,6 +61,7 @@ func NewPlacementNodeChecker(cfg PlacementNodeCheckerConfig) *PlacementNodeCheck
 		foghornPool:          cfg.FoghornPool,
 		quartermasterClient:  cfg.QuartermasterClient,
 		purserClient:         cfg.PurserClient,
+		systemTenantID:       cfg.SystemTenantID,
 		foghornCandidateNext: make(map[string]int),
 	}
 	if cfg.QuartermasterClient != nil {
@@ -118,7 +122,7 @@ func (s *CommodoreServer) checkPlacementNodes(ctx context.Context, tenantID stri
 	if !ready {
 		return placement.NodePlacementNotReadyError("node placement rules require every media cell serving this tenant to support node placement")
 	}
-	if isSystemPlacementTenant(tenantID) {
+	if s.isSystemPlacementTenant(tenantID) {
 		return nil
 	}
 	owned, err := s.ownedPlacementNodes(ctx, tenantID, facts.entitlement)
@@ -137,9 +141,21 @@ func (s *CommodoreServer) checkPlacementNodes(ctx context.Context, tenantID stri
 	return nil
 }
 
-func isSystemPlacementTenant(tenantID string) bool {
+// isSystemPlacementTenant reports whether tenantID is a reserved platform
+// identity or the deployment's system tenant.
+func (s *CommodoreServer) isSystemPlacementTenant(tenantID string) bool {
 	id, err := uuid.Parse(tenantID)
-	return err == nil && tenants.IsSystemTenant(id)
+	if err != nil {
+		return false
+	}
+	if id == tenants.ServiceAccountUserID || id == tenants.AnonymousTenantID {
+		return true
+	}
+	systemTenantID := s.systemTenantID
+	if systemTenantID == uuid.Nil {
+		systemTenantID = tenants.SystemTenantID
+	}
+	return id == systemTenantID
 }
 
 // ownedPlacementNodes maps node ID to cluster ID for every registered node of

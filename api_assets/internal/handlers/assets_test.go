@@ -22,6 +22,7 @@ import (
 	"frameworks/api_assets/internal/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
 type fakeS3 struct {
@@ -358,28 +359,34 @@ func TestHandleGetAsset_QueryDoesNotBypassServerCache(t *testing.T) {
 	}
 }
 
-// /ready proves ONLY that this instance can read its immutable backend: a reachable store is 200, an unreachable one
-// is 503. No resolver, no Foghorn.
-func TestHandleReady(t *testing.T) {
+// Readiness proves ONLY that this instance can read its immutable backend: a reachable store is healthy, an
+// unreachable one is unhealthy. No resolver, no Foghorn.
+func TestStoreReadinessCheck(t *testing.T) {
 	fake := &fakeS3{data: []byte("jpeg-data")}
 
-	t.Run("store reachable is 200", func(t *testing.T) {
+	t.Run("store reachable is healthy", func(t *testing.T) {
 		h, _, _, _ := newTestHandler(fake, "")
 		h.storeReachableFn = func(context.Context) bool { return true }
-		w := serveRequest(h, "/ready")
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
+			t.Fatalf("expected healthy, got %+v", got)
 		}
 	})
 
-	t.Run("store unreachable is 503", func(t *testing.T) {
+	t.Run("store unreachable is unhealthy", func(t *testing.T) {
 		h, _, _, _ := newTestHandler(fake, "")
 		h.storeReachableFn = func(context.Context) bool { return false }
-		w := serveRequest(h, "/ready")
-		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("expected 503 when the store is unreachable, got %d body=%s", w.Code, w.Body.String())
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusUnhealthy {
+			t.Fatalf("expected unhealthy when the store is unreachable, got %+v", got)
 		}
 	})
+}
+
+// The service router owns /ready, so the asset routes must not register it; a second registration panics in gin.
+func TestRegisterRoutesLeavesReadyToServiceRouter(t *testing.T) {
+	h, _, _, _ := newTestHandler(&fakeS3{data: []byte("x")}, "")
+	if w := serveRequest(h, "/ready"); w.Code != http.StatusNotFound {
+		t.Fatalf("expected RegisterRoutes to leave /ready unregistered, got %d", w.Code)
+	}
 }
 
 // Readiness FULLY READS a KNOWN sentinel object (provisioned by Foghorn under the served namespace): a successful body

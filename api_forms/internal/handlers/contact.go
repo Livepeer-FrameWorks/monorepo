@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"frameworks/api_forms/internal/validation"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/serviceevents"
@@ -25,6 +25,8 @@ type ContactHandler struct {
 	toEmail            string
 	emailSubjectPrefix string
 	successMessage     string
+	branding           config.EmailBranding
+	BrandingSource     func() config.EmailBranding
 	turnstileEnabled   bool
 	logger             logging.Logger
 	metrics            *FormMetrics
@@ -37,6 +39,7 @@ func NewContactHandler(
 	toEmail string,
 	emailSubjectPrefix string,
 	successMessage string,
+	branding config.EmailBranding,
 	turnstileEnabled bool,
 	logger logging.Logger,
 	metrics *FormMetrics,
@@ -48,6 +51,7 @@ func NewContactHandler(
 		toEmail:            toEmail,
 		emailSubjectPrefix: emailSubjectPrefix,
 		successMessage:     successMessage,
+		branding:           branding,
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
 		metrics:            metrics,
@@ -137,7 +141,11 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 	}
 
 	emailSubject := fmt.Sprintf("%s: %s", h.emailSubjectPrefix, req.Name)
-	emailBody, err := renderContactEmail(req.Name, req.Email, req.Company, req.Message, remoteIP)
+	branding := h.branding
+	if h.BrandingSource != nil {
+		branding = h.BrandingSource()
+	}
+	emailBody, err := renderContactEmail(branding, req.Name, req.Email, req.Company, req.Message, remoteIP)
 	if err != nil {
 		h.metrics.IncContact("email_error")
 		h.logger.WithError(err).Error("Failed to render contact email")
@@ -198,14 +206,14 @@ func getRemoteIP(c *gin.Context) string {
 }
 
 func buildEmailHTML(name, email, company, message, ip string) string {
-	body, err := renderContactEmail(name, email, company, message, ip)
+	body, err := renderContactEmail(config.EmailBranding{}, name, email, company, message, ip)
 	if err != nil {
 		return ""
 	}
 	return body
 }
 
-func renderContactEmail(name, email, company, message, ip string) (string, error) {
+func renderContactEmail(branding config.EmailBranding, name, email, company, message, ip string) (string, error) {
 	companyText := "Not provided"
 	if company != "" {
 		companyText = company
@@ -219,11 +227,11 @@ func renderContactEmail(name, email, company, message, ip string) (string, error
 		IP:           ip,
 	}
 	return emailpkg.RenderLayout(emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      branding.Logo(),
 		Preheader:    "A new website contact request was submitted.",
 		Eyebrow:      "Steward · Website",
 		Title:        "New contact form submission",
-		SupportEmail: contactSupportEmail(),
+		SupportEmail: branding.Support(),
 		Content:      data,
 	}, contactEmailTemplate, nil)
 }
@@ -235,13 +243,6 @@ type contactEmailData struct {
 	MessageLines []string
 	SubmittedAt  string
 	IP           string
-}
-
-func contactSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }
 
 const contactEmailTemplate = `<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin:0 0 20px; font-size:13px;">

@@ -130,6 +130,10 @@ type Querier interface {
 	ListBootstrapTenantAliases(ctx context.Context) ([]ListBootstrapTenantAliasesRow, error)
 	ListDesiredTenantAliases(ctx context.Context) ([]ListDesiredTenantAliasesRow, error)
 	ListDesiredTenantCustomDomains(ctx context.Context) ([]ListDesiredTenantCustomDomainsRow, error)
+	// Edge capability service types (edge-ingest, edge-egress, edge-storage,
+	// edge-processing) that at least one active edge node in each cluster reported
+	// healthy within the freshness window. ReportAliveNodes maintains these rows.
+	ListFreshEdgeCapabilityServices(ctx context.Context, arg ListFreshEdgeCapabilityServicesParams) ([]ListFreshEdgeCapabilityServicesRow, error)
 	ListGRPCHealthWatchCandidates(ctx context.Context) ([]ListGRPCHealthWatchCandidatesRow, error)
 	ListHealthPollCandidates(ctx context.Context, arg ListHealthPollCandidatesParams) ([]ListHealthPollCandidatesRow, error)
 	ListIngressSitesForNode(ctx context.Context, nodeID string) ([]ListIngressSitesForNodeRow, error)
@@ -148,6 +152,13 @@ type Querier interface {
 	LockServiceType(ctx context.Context, serviceType string) error
 	LockTenantAliasEligibility(ctx context.Context, tenantID string) (LockTenantAliasEligibilityRow, error)
 	LockTenantBillingEntitlements(ctx context.Context, tenantID string) (LockTenantBillingEntitlementsRow, error)
+	// Locks the tenant's access row for the cluster and reports whether it grants
+	// access: active, subscribed, and unexpired.
+	LockTenantClusterAccessActive(ctx context.Context, arg LockTenantClusterAccessActiveParams) (bool, error)
+	// Serializes the writers that grant a tenant access to a cluster, so each one
+	// reads the access state the previous one committed, including when no row
+	// exists yet for FOR UPDATE to lock.
+	LockTenantClusterAccessKey(ctx context.Context, arg LockTenantClusterAccessKeyParams) error
 	// Owned-cluster creation writes the tenant row rather than only locking it.
 	// Under snapshot isolation a row lock released by a committed transaction does
 	// not invalidate the waiter's older snapshot, but a committed write does: the
@@ -162,7 +173,9 @@ type Querier interface {
 	MarkNavigatorTenantAliasOutboxClaimed(ctx context.Context, ids []string) error
 	MarkNodeEdgeInstancesOffline(ctx context.Context, nodeID sql.NullString) error
 	MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkServiceEventOutboxClaimedParams) error
-	MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) (int64, error)
+	// Returns the access row's ID when the insert or update applied, and no row
+	// when the conflict guard kept the existing access.
+	MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) ([]string, error)
 	MoveBootstrapNode(ctx context.Context, arg MoveBootstrapNodeParams) error
 	MoveBootstrapNodeIngressSites(ctx context.Context, arg MoveBootstrapNodeIngressSitesParams) error
 	MoveBootstrapNodeServiceInstances(ctx context.Context, arg MoveBootstrapNodeServiceInstancesParams) error

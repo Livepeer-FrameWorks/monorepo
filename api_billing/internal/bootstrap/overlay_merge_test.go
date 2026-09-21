@@ -1,6 +1,9 @@
 package bootstrap
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // mergeTier overlays a rendered BillingTier onto an embedded CatalogTier:
 // any non-zero overlay field replaces the baseline; zero/empty fields fall back.
@@ -86,7 +89,7 @@ func TestMergeBillingTierOverlay(t *testing.T) {
 			TierLevel:        3,
 			BasePriceMonthly: "199.00",
 			Currency:         "EUR",
-			Features:         []string{"sso", "priority_support"},
+			Features:         []string{"sla", "processing_customizable"},
 			Entitlements:     requiredDNSEntitlements(true, true),
 			PricingRules: []OverlayPricingRule{
 				{Meter: "egress_gb", Model: "per_unit", UnitPrice: "0.02"},
@@ -108,12 +111,22 @@ func TestMergeBillingTierOverlay(t *testing.T) {
 			t.Fatalf("addition mapped wrong: %+v", added)
 		}
 		// featuresFromList projects []string -> map[string]any{feature: true}.
-		if added.Features["sso"] != true || added.Features["priority_support"] != true {
+		if added.Features["sla"] != true || added.Features["processing_customizable"] != true {
 			t.Fatalf("features not projected to map: %+v", added.Features)
 		}
 		// pricingRulesFromOverlay converts field-for-field.
 		if len(added.PricingRules) != 1 || added.PricingRules[0].UnitPrice != "0.02" {
 			t.Fatalf("pricing rules not converted: %+v", added.PricingRules)
+		}
+	})
+
+	t.Run("feature outside the billing feature keys is refused", func(t *testing.T) {
+		_, err := MergeBillingTierOverlay(embedded, []BillingTier{{
+			ID: "branded", BasePriceMonthly: "5.00", Features: []string{"custom_branding"},
+			Entitlements: requiredDNSEntitlements(false, false),
+		}})
+		if err == nil || !strings.Contains(err.Error(), "custom_branding") {
+			t.Fatalf("error = %v, want refusal naming custom_branding", err)
 		}
 	})
 

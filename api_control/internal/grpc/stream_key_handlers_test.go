@@ -16,13 +16,13 @@ import (
 
 func expectPushStream(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("SELECT ingest_mode").
-		WithArgs("s1", "u1", "t1").
+		WithArgs("s1", "u1", testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"ingest_mode"}).AddRow("push"))
 }
 
 func expectMissingStream(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery("SELECT ingest_mode").
-		WithArgs("s1", "u1", "t1").
+		WithArgs("s1", "u1", testTenantID).
 		WillReturnError(sql.ErrNoRows)
 }
 
@@ -35,16 +35,8 @@ func newMockServer(t *testing.T) (*CommodoreServer, sqlmock.Sqlmock, func()) {
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	server := &CommodoreServer{db: db, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	return server, mock, func() { _ = db.Close() }
-}
-
-// expectOutboxInsert mirrors the trailing service-event outbox row that every
-// mutating handler writes via emit*Event → EnqueueServiceEventTx. It is a
-// QueryRowContext (INSERT ... RETURNING id), so it must be an ExpectQuery.
-func expectOutboxInsert(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery("INSERT INTO commodore.service_event_outbox").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-1"))
 }
 
 func wantCode(t *testing.T, err error, want codes.Code) {
@@ -65,7 +57,7 @@ func TestRefreshStreamKey(t *testing.T) {
 	t.Run("empty_stream_id", func(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
-		_, err := s.RefreshStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.RefreshStreamKeyRequest{})
+		_, err := s.RefreshStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.RefreshStreamKeyRequest{})
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
@@ -73,10 +65,12 @@ func TestRefreshStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectPushStream(mock)
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.streams").
-			WithArgs(sqlmock.AnyArg(), "s1", "u1", "t1").
+			WithArgs(sqlmock.AnyArg(), "s1", "u1", testTenantID).
 			WillReturnResult(sqlmock.NewResult(0, 0))
-		_, err := s.RefreshStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.RefreshStreamKeyRequest{StreamId: "s1"})
+		mock.ExpectRollback()
+		_, err := s.RefreshStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.RefreshStreamKeyRequest{StreamId: "s1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -87,15 +81,17 @@ func TestRefreshStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectPushStream(mock)
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.streams").
-			WithArgs(sqlmock.AnyArg(), "s1", "u1", "t1").
+			WithArgs(sqlmock.AnyArg(), "s1", "u1", testTenantID).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDualEventInsert(mock, "stream.key_rotated", eventStreamUpdated)
+		mock.ExpectCommit()
 		mock.ExpectQuery("SELECT playback_id FROM commodore.streams").
-			WithArgs("s1", "u1", "t1").
+			WithArgs("s1", "u1", testTenantID).
 			WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("pb-1"))
-		expectOutboxInsert(mock)
 
-		resp, err := s.RefreshStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.RefreshStreamKeyRequest{StreamId: "s1"})
+		resp, err := s.RefreshStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.RefreshStreamKeyRequest{StreamId: "s1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -127,7 +123,7 @@ func TestCreateStreamKey(t *testing.T) {
 	t.Run("empty_stream_id", func(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
-		_, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{})
+		_, err := s.CreateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateStreamKeyRequest{})
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
@@ -135,7 +131,7 @@ func TestCreateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectMissingStream(mock)
-		_, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
+		_, err := s.CreateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -146,11 +142,13 @@ func TestCreateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectPushStream(mock)
+		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO commodore.stream_keys").
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		expectOutboxInsert(mock)
+		expectDualEventInsert(mock, "stream.updated", eventStreamKeyCreated)
+		mock.ExpectCommit()
 
-		resp, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1", KeyName: "primary"})
+		resp, err := s.CreateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1", KeyName: "primary"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -164,7 +162,7 @@ func TestCreateStreamKey(t *testing.T) {
 		if key.GetKeyName() != "primary" {
 			t.Errorf("key name = %q, want primary", key.GetKeyName())
 		}
-		if key.GetTenantId() != "t1" || key.GetUserId() != "u1" || key.GetStreamId() != "s1" {
+		if key.GetTenantId() != testTenantID || key.GetUserId() != "u1" || key.GetStreamId() != "s1" {
 			t.Errorf("ownership fields not propagated: %+v", key)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -176,9 +174,9 @@ func TestCreateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectQuery("SELECT ingest_mode").
-			WithArgs("s1", "u1", "t1").
+			WithArgs("s1", "u1", testTenantID).
 			WillReturnRows(sqlmock.NewRows([]string{"ingest_mode"}).AddRow("mist_native"))
-		_, err := s.CreateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
+		_, err := s.CreateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateStreamKeyRequest{StreamId: "s1"})
 		wantCode(t, err, codes.FailedPrecondition)
 	})
 }
@@ -194,7 +192,7 @@ func TestListStreamKeys(t *testing.T) {
 	t.Run("empty_stream_id", func(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
-		_, err := s.ListStreamKeys(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamKeysRequest{})
+		_, err := s.ListStreamKeys(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListStreamKeysRequest{})
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
@@ -202,7 +200,7 @@ func TestListStreamKeys(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectMissingStream(mock)
-		_, err := s.ListStreamKeys(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamKeysRequest{StreamId: "s1"})
+		_, err := s.ListStreamKeys(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListStreamKeysRequest{StreamId: "s1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -215,18 +213,18 @@ func TestListStreamKeys(t *testing.T) {
 		now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 		expectPushStream(mock)
 		mock.ExpectQuery("SELECT COUNT").
-			WithArgs("s1", "u1", "t1").
+			WithArgs("s1", "u1", testTenantID).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 		mock.ExpectQuery("FROM commodore.stream_keys").
-			WithArgs("s1", "u1", "t1", int32(51)).
+			WithArgs("s1", "u1", testTenantID, int32(51)).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "tenant_id", "user_id", "stream_id", "key_value", "key_name",
 				"is_active", "last_used_at", "created_at", "updated_at",
 			}).
-				AddRow("k1", "t1", "u1", "s1", "sk_aaa", "first", true, nil, now, now).
-				AddRow("k2", "t1", "u1", "s1", "sk_bbb", "second", false, now, now, now))
+				AddRow("k1", testTenantID, "u1", "s1", "sk_aaa", "first", true, nil, now, now).
+				AddRow("k2", testTenantID, "u1", "s1", "sk_bbb", "second", false, now, now, now))
 
-		resp, err := s.ListStreamKeys(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamKeysRequest{StreamId: "s1"})
+		resp, err := s.ListStreamKeys(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListStreamKeysRequest{StreamId: "s1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -258,7 +256,7 @@ func TestDeactivateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectMissingStream(mock)
-		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
+		_, err := s.DeactivateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -269,10 +267,12 @@ func TestDeactivateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectPushStream(mock)
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.stream_keys").
-			WithArgs("k1", "s1", "u1", "t1").
+			WithArgs("k1", "s1", "u1", testTenantID).
 			WillReturnResult(sqlmock.NewResult(0, 0))
-		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
+		mock.ExpectRollback()
+		_, err := s.DeactivateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -283,12 +283,14 @@ func TestDeactivateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		expectPushStream(mock)
+		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.stream_keys").
-			WithArgs("k1", "s1", "u1", "t1").
+			WithArgs("k1", "s1", "u1", testTenantID).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		expectOutboxInsert(mock)
+		expectDualEventInsert(mock, "stream.updated", eventStreamKeyDeleted)
+		mock.ExpectCommit()
 
-		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
+		_, err := s.DeactivateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -301,9 +303,9 @@ func TestDeactivateStreamKey(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectQuery("SELECT ingest_mode").
-			WithArgs("s1", "u1", "t1").
+			WithArgs("s1", "u1", testTenantID).
 			WillReturnError(errors.New("connection reset"))
-		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
+		_, err := s.DeactivateStreamKey(ctxAs("u1", testTenantID, "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		wantCode(t, err, codes.Internal)
 	})
 }

@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"frameworks/api_analytics_ingest/internal/appconfig"
 	"frameworks/api_analytics_ingest/internal/handlers"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -21,7 +21,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
@@ -41,29 +40,26 @@ func main() {
 
 	logger.Info("Starting Periscope-Ingest (Analytics Event Processing)")
 
-	dbURL := config.RequireEnv("DATABASE_URL")
-	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
-	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
-	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
-	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
-	brokersEnv := config.RequireEnv("KAFKA_BROKERS")
-	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	configOptions := config.Options{Service: "periscope-ingest", Logger: logger}
+	cfg, err := config.Load[appconfig.PeriscopeIngest](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
 
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "periscope-ingest"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	postgres := database.MustConnect(dbConfig, logger)
 	defer func() { _ = postgres.Close() }()
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
 	chConfig.ServiceName = "periscope-ingest"
-	chConfig.Addr = strings.Split(clickhouseAddr, ",")
-	chConfig.Database = clickhouseDB
-	chConfig.Username = clickhouseUser
-	chConfig.Password = clickhousePassword
+	chConfig.Addr = cfg.Addr
+	chConfig.Database = cfg.Database
+	chConfig.Username = cfg.User
+	chConfig.Password = cfg.Password
 	clickhouse := database.MustConnectClickHouseNative(chConfig, logger)
 	defer func() { _ = clickhouse.Close() }()
 
@@ -81,6 +77,7 @@ func main() {
 		ProjectionDivergences:   metricsCollector.NewCounter("projection_divergence_total", "Projection rows whose rated field value diverged from a prior projection beyond per-meter epsilon", []string{"table", "meter", "field"}),
 		LedgerLeader:            metricsCollector.NewGauge("ledger_rebuild_leader", "Result of this Periscope ingest replica's latest ledger-rebuilder lease election", []string{"ledger"}),
 		LedgerCursorLag:         metricsCollector.NewGauge("ledger_rebuild_cursor_lag_seconds", "Wall-clock age of each ledger rebuild cursor", []string{"ledger"}),
+		DomainEvents:            metricsCollector.NewCounter("domain_events_total", "domain.events records by type and outcome (processed, unknown_type, invalid, error)", []string{"event_type", "status"}),
 	}
 
 	// Create Kafka metrics
@@ -93,14 +90,11 @@ func main() {
 	// We'll add health checks after we have the consumer client
 
 	// Setup Kafka consumer
-	brokers := strings.Split(brokersEnv, ",")
-	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
-	clientID := config.GetEnv("KAFKA_CLIENT_ID", "periscope-ingest")
-	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", topology.TopicAnalyticsEvents)
-	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", topology.TopicServiceEvents)
-	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", topology.TopicDecklogDLQ)
+	analyticsTopic := cfg.AnalyticsTopic
+	serviceEventsTopic := cfg.ServiceEventsTopic
+	dlqTopic := cfg.DLQTopic
 
-	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger,
+	consumer, err := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaGroupID, cfg.KafkaClusterID, cfg.KafkaClientID, logger,
 		kafka.WithLagTracker(kafka.LagTrackerConfig{Gauge: metrics.KafkaLag}),
 	)
 	if err != nil {
@@ -108,7 +102,7 @@ func main() {
 	}
 
 	var dlqProducer *kafka.KafkaProducer
-	dlqProducer, err = kafka.NewKafkaProducer(brokers, dlqTopic, clusterID, logger)
+	dlqProducer, err = kafka.NewKafkaProducer(cfg.KafkaBrokers, dlqTopic, cfg.KafkaClusterID, logger)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
 		dlqProducer = nil
@@ -189,17 +183,7 @@ func main() {
 					key = []byte(fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset))
 				}
 
-				headers := map[string]string{
-					"source":         consumerName,
-					"original_topic": msg.Topic,
-				}
-				if tenantID, ok := msg.Headers["tenant_id"]; ok {
-					headers["tenant_id"] = tenantID
-				}
-				if eventType, ok := msg.Headers["event_type"]; ok {
-					headers["event_type"] = eventType
-				}
-
+				headers := dlqHeaders(consumerName, msg)
 				if produceErr := dlqProducer.ProduceMessage(dlqTopic, key, payload, headers); produceErr != nil {
 					logger.WithError(produceErr).WithFields(logging.Fields{
 						"topic":     msg.Topic,
@@ -269,13 +253,19 @@ func main() {
 	}
 	// Decklog republishes the original MistTrigger envelope for final and
 	// accounting triggers to the raw journal topic; HandleRawMistTriggerMessage
-	// logs and drops poison protobuf payloads itself.
-	rawTriggersTopic := config.GetEnv("RAW_MIST_TRIGGERS_KAFKA_TOPIC", topology.TopicRawMistTriggers)
+	// logs and drops poison protobuf payloads itself. domain.events has one
+	// canonical name and no setting.
 	subscriptions := ingestSubscriptions(
-		ingestTopics{analytics: analyticsTopic, serviceEvents: serviceEventsTopic, rawTriggers: rawTriggersTopic},
+		ingestTopics{
+			analytics:     analyticsTopic,
+			serviceEvents: serviceEventsTopic,
+			domainEvents:  topology.TopicDomainEvents,
+			rawTriggers:   cfg.RawTriggersTopic,
+		},
 		ingestHandlers{
 			analytics:     eventHandler.HandleMessage,
 			serviceEvents: serviceHandler,
+			domainEvents:  analyticsHandler.HandleDomainEventMessage,
 			rawTriggers:   analyticsHandler.HandleRawMistTriggerMessage,
 		},
 		wrapWithDLQ,
@@ -283,7 +273,7 @@ func main() {
 	)
 	// MIRROR_REGION_PREFIXES lists the MirrorMaker2 source aliases whose
 	// prefixed topic copies land in this aggregator Kafka cluster.
-	subscribedTopics := registerIngestSubscriptions(consumer, subscriptions, splitMirrorPrefixes(config.GetEnv("MIRROR_REGION_PREFIXES", "")))
+	subscribedTopics := registerIngestSubscriptions(consumer, subscriptions, cfg.MirrorRegionPrefixes)
 	logger.WithField("topics", subscribedTopics).Info("Subscribed to Kafka topics")
 
 	// Now add health checks with all dependencies
@@ -294,19 +284,40 @@ func main() {
 		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
 	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":               dbURL,
-		"CLICKHOUSE_ADDR":            clickhouseAddr,
-		"KAFKA_BROKERS":              brokersEnv,
-		"KAFKA_GROUP_ID":             groupID,
+		"DATABASE_URL":               cfg.DatabaseURL,
+		"CLICKHOUSE_ADDR":            strings.Join(cfg.Addr, ","),
+		"KAFKA_BROKERS":              strings.Join(cfg.KafkaBrokers, ","),
+		"KAFKA_GROUP_ID":             cfg.KafkaGroupID,
 		"SERVICE_EVENTS_KAFKA_TOPIC": serviceEventsTopic,
 		"DECKLOG_DLQ_KAFKA_TOPIC":    dlqTopic,
 	}))
 
+	// Every consumed event is written to ClickHouse, so an instance that
+	// cannot reach it cannot make progress.
+	readiness := monitoring.NewReadinessChecker("periscope-ingest", version.Version)
+	readiness.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
+
+	// runCtx ends the process; consumerCtx stops consumption and the ledger
+	// rebuilders. They are separate so a signal drains the HTTP listener
+	// before the consumer stops, and a consumer failure ends the process.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
+	defer consumerCancel()
+
 	// Start consuming
-	ctx, cancel := context.WithCancel(context.Background())
-	consumerDone := make(chan error, 1)
+	consumerDone := make(chan struct{})
+	var consumerErr error
+	var consumerFailed atomic.Bool
 	go func() {
-		consumerDone <- consumer.Start(ctx)
+		consumerErr = consumer.Start(consumerCtx)
+		if consumerErr != nil && !errors.Is(consumerErr, context.Canceled) {
+			consumerFailed.Store(true)
+		}
+		close(consumerDone)
+		if consumerFailed.Load() {
+			runCancel()
+		}
 	}()
 
 	// Start the canonical 5-min ledger rebuilders. Each runs on its own
@@ -314,89 +325,98 @@ func main() {
 	// from its source table into the append-only ledger. See
 	// docs/architecture/meter-contracts.md.
 	ledgerScheduler := handlers.NewLedgerScheduler(analyticsHandler, handlers.NewPostgresLedgerLease(postgres))
-	ledgerScheduler.Start(ctx)
+	ledgerScheduler.Start(consumerCtx)
 	logger.Info("Started 5-minute ledger rebuilders")
 
-	// Optional health check server
-	if config.GetEnvBool("ENABLE_HEALTH_ENDPOINT", true) {
-		go startHealthServer(healthChecker, metricsCollector, logger)
-	}
+	// Health, readiness, and metrics are served over HTTP; events arrive from Kafka.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "periscope-ingest",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
+	})
 
 	logger.Info("Periscope-Ingest started - consuming analytics events from Kafka")
 
 	// Best-effort service registration in Quartermaster (using gRPC)
-	go func() {
-		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:      quartermasterGRPCAddr,
-			Timeout:       10 * time.Second,
-			Logger:        logger,
-			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
-			return
-		}
-		defer func() { _ = qc.Close() }()
-		healthEndpoint := "/health"
-		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:           "periscope-ingest",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: &healthEndpoint,
-			Port:           18005,
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-ingest")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (periscope-ingest) failed")
-		} else {
-			logger.Info("Quartermaster bootstrap (periscope-ingest) ok")
-		}
-	}()
+	go registerWithQuartermaster(runCtx, cfg, logger)
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case <-sigChan:
-	case err := <-consumerDone:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			logger.WithError(err).Fatal("Kafka consumer exited")
-		}
-	}
-	logger.Info("Shutting down Periscope-Ingest...")
-
-	// Cleanup
-	cancel()
-	if consumer != nil {
+	// Consumers stop after the HTTP listener has drained: cancel consumption,
+	// close the consumer client, wait briefly for Start to return, then close
+	// the DLQ producer. ClickHouse and PostgreSQL close last, when main returns.
+	shutdownConsumers := func(context.Context) {
+		consumerCancel()
 		closeWithTimeout(logger, "Kafka consumer", 10*time.Second, consumer.Close)
-	}
-	select {
-	case err := <-consumerDone:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			logger.WithError(err).Error("Kafka consumer error")
+		select {
+		case <-consumerDone:
+			if consumerErr != nil && !errors.Is(consumerErr, context.Canceled) && !consumerFailed.Load() {
+				logger.WithError(consumerErr).Error("Kafka consumer error")
+			}
+		case <-time.After(2 * time.Second):
+			logger.Warn("Kafka consumer did not report shutdown before timeout")
 		}
-	case <-time.After(2 * time.Second):
-		logger.Warn("Kafka consumer did not report shutdown before timeout")
+		if dlqProducer != nil {
+			closeWithTimeout(logger, "DLQ Kafka producer", 10*time.Second, dlqProducer.Close)
+		}
 	}
-	if dlqProducer != nil {
-		closeWithTimeout(logger, "DLQ Kafka producer", 10*time.Second, dlqProducer.Close)
+
+	server.RegisterEnvFileReload("periscope-ingest", logger)
+	runErr := server.Run(runCtx, server.RunSpec{
+		Service:    "periscope-ingest",
+		Logger:     logger,
+		Ready:      readiness,
+		HTTP:       []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
+		OnShutdown: []func(context.Context){shutdownConsumers},
+	})
+	if consumerFailed.Load() {
+		<-consumerDone
+		logger.WithError(consumerErr).Fatal("Kafka consumer exited")
+	}
+	if runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 
 	logger.Info("Periscope-Ingest stopped")
+}
+
+// registerWithQuartermaster registers the HTTP port with the /health endpoint
+// from servicedefs.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.PeriscopeIngest, logger logging.Logger) {
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		return
+	}
+	defer func() { _ = qc.Close() }()
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:   "periscope-ingest",
+		Port:          cfg.Port,
+		AdvertiseHost: cfg.AdvertiseHost,
+		ClusterID:     cfg.ClusterID,
+		NodeID:        cfg.NodeID,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qc, req, logger, qmbootstrap.DefaultRetryConfig("periscope-ingest")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap (periscope-ingest) failed")
+	} else {
+		logger.Info("Quartermaster bootstrap (periscope-ingest) ok")
+	}
 }
 
 func isRetryableConsumerError(err error) bool {
@@ -469,15 +489,5 @@ func closeWithTimeout(logger logging.Logger, name string, timeout time.Duration,
 		}
 	case <-time.After(timeout):
 		logger.WithField("component", name).Warn("Timed out closing component")
-	}
-}
-
-func startHealthServer(healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector, logger logging.Logger) {
-	router := server.SetupServiceRouter(logger, "periscope-ingest", healthChecker, metricsCollector)
-
-	serverConfig := server.DefaultConfig("periscope-ingest", "18005")
-	server.RegisterEnvFileReload("periscope-ingest", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Error("Health server error")
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
 )
@@ -128,7 +130,7 @@ func TestLoadPricedClusterIDs(t *testing.T) {
 // A nil db is a programming error the validator must reject before attempting
 // any Quartermaster dial.
 func TestValidatePlatformOfficialPricingCoverageNilDB(t *testing.T) {
-	_, err := ValidatePlatformOfficialPricingCoverage(context.Background(), nil, "qm:9000", "tok", nil)
+	_, err := ValidatePlatformOfficialPricingCoverage(context.Background(), nil, qmclient.GRPCConfig{GRPCAddr: "qm:9000", ServiceToken: "tok"})
 	if err == nil {
 		t.Fatal("expected error for nil db, got nil")
 	}

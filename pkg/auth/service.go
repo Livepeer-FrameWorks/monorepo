@@ -3,7 +3,6 @@ package auth
 import (
 	"crypto/subtle"
 	"errors"
-	"os"
 )
 
 var (
@@ -22,9 +21,4 @@ func ValidateServiceToken(token string, expectedToken string) error {
 	}
 
 	return nil
-}
-
-// GetServiceToken gets the service token from environment
-func GetServiceToken() string {
-	return os.Getenv("SERVICE_TOKEN")
 }

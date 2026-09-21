@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -141,7 +142,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
 
-	mistClient := mist.NewClient(h.logger)
+	mistClient := mist.NewClient(h.logger, appconfig.MistClient())
 	if h.mistServerURL != "" {
 		mistClient.BaseURL = h.mistServerURL
 	}

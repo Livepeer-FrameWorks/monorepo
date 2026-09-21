@@ -2585,9 +2585,7 @@ func TestSyncService_ProxiedServices(t *testing.T) {
 }
 
 func TestLoadProxyServices_Default(t *testing.T) {
-	// Unset the env var to test default behavior
-	t.Setenv("NAVIGATOR_PROXY_SERVICES", "")
-	proxy := loadProxyServices()
+	proxy := loadProxyServices("")
 	for _, svc := range []string{"bridge", "chartroom", "chatwoot", "foredeck", "grafana", "listmonk", "logbook", "metabase", "steward"} {
 		if !proxy[svc] {
 			t.Fatalf("expected %s in default proxied services, got %v", svc, proxy)
@@ -2602,8 +2600,7 @@ func TestLoadProxyServices_Default(t *testing.T) {
 }
 
 func TestLoadProxyServices_Custom(t *testing.T) {
-	t.Setenv("NAVIGATOR_PROXY_SERVICES", "edge-egress, bridge, livepeer-gateway, ")
-	proxy := loadProxyServices()
+	proxy := loadProxyServices("edge-egress, bridge, livepeer-gateway, ")
 	if !proxy["edge-egress"] || !proxy["bridge"] {
 		t.Fatalf("expected edge-egress, bridge from env, got %v", proxy)
 	}
@@ -2945,16 +2942,68 @@ func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
 func TestDefaultServiceHealthPaths_MatchServicedefs(t *testing.T) {
 	paths := defaultServiceHealthPaths()
 
-	for _, name := range []string{"bridge", "foghorn", "livepeer-gateway", "chartroom", "foredeck", "logbook", "steward"} {
+	for _, name := range []string{"bridge", "foghorn", "chandler", "livepeer-gateway", "chartroom", "foredeck", "logbook", "steward"} {
 		svc, ok := servicedefs.Lookup(name)
 		if !ok {
 			t.Fatalf("servicedefs missing entry for %q", name)
 		}
-		if got := paths[name]; got != svc.HealthPath {
-			t.Errorf("healthPath[%q] = %q, want %q", name, got, svc.HealthPath)
+		if got := paths[name]; got != svc.ReadinessPath() {
+			t.Errorf("healthPath[%q] = %q, want the fleet readiness path %q", name, got, svc.ReadinessPath())
 		}
 	}
+	// Chandler serves /ready in every supported release, so its monitor follows it. A pool of Go services whose /ready
+	// arrived in a release that may not run everywhere yet keeps probing /health: one monitor covers every origin in a
+	// pool, including origins still on the older release during a rolling upgrade.
+	if paths["chandler"] != "/ready" {
+		t.Errorf("chandler monitor path = %q, want /ready", paths["chandler"])
+	}
+	for _, name := range []string{"bridge", "steward", "foghorn"} {
+		if svc := servicedefs.Services[name]; svc.ReadySince != "" && paths[name] != "/health" {
+			t.Errorf("%s monitor path = %q while ReadySince=%s, want /health", name, paths[name], svc.ReadySince)
+		}
+	}
+	for _, edge := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+		if paths[edge] != "/health" {
+			t.Errorf("%s monitor path = %q, want the edge ingress /health", edge, paths[edge])
+		}
+	}
+}
 
+// TestEnsureMonitorMovesExistingMonitorToReadinessPath proves the reconcile path the readiness switch relies on: a
+// monitor created on /health is updated in place once the service's fleet readiness path is /ready, without creating
+// a second monitor.
+func TestEnsureMonitorMovesExistingMonitorToReadinessPath(t *testing.T) {
+	var updated, created []cloudflare.Monitor
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return []cloudflare.Monitor{{ID: "mon-chandler", Description: "nav-chandler-health", Type: "http", Method: "GET", Path: "/health", Port: 18020, ExpectedCodes: "200"}}, nil
+		},
+		updateMonitor: func(id string, m cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			updated = append(updated, m)
+			m.ID = id
+			return &m, nil
+		},
+		createMonitor: func(m cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			created = append(created, m)
+			m.ID = "new"
+			return &m, nil
+		},
+	}
+	manager := NewDNSManager(cf, &fakeQuartermasterClient{}, logrus.New(), "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
+
+	id, err := manager.ensureMonitor("chandler")
+	if err != nil {
+		t.Fatalf("ensureMonitor: %v", err)
+	}
+	if id != "mon-chandler" {
+		t.Fatalf("monitor id = %q, want the existing monitor", id)
+	}
+	if len(updated) != 1 || updated[0].Path != "/ready" {
+		t.Fatalf("updated monitors = %+v, want one update to /ready", updated)
+	}
+	if len(created) != 0 {
+		t.Fatalf("created %d monitors, want the existing one updated in place", len(created))
+	}
 }
 
 func TestSyncService_BridgeUsesServiceType(t *testing.T) {

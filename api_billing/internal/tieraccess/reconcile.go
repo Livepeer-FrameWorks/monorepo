@@ -37,7 +37,7 @@ type quartermasterAPI interface {
 	UpdateTenantCluster(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) error
 	ApplyTenantBillingEntitlements(ctx context.Context, req *quartermasterpb.ApplyTenantBillingEntitlementsRequest) (*quartermasterpb.ApplyTenantBillingEntitlementsResponse, error)
 	CompleteTenantDNSEntitlementHandoff(ctx context.Context, subscriptionCount int64) (*quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse, error)
-	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits, actor *commonpb.RequestActor) error
 	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
 }
 
@@ -223,7 +223,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		if _, already := currentActive[entry.clusterID]; already {
 			continue
 		}
-		if subErr := r.qm.BootstrapClusterAccess(ctx, tenantID, entry.clusterID, nil); subErr != nil {
+		if subErr := r.qm.BootstrapClusterAccess(ctx, tenantID, entry.clusterID, nil, nil); subErr != nil {
 			return eligibleClusterIDs, primaryClusterID, fmt.Errorf("grant cluster access %s: %w", entry.clusterID, subErr)
 		}
 	}

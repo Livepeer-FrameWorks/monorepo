@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -155,6 +156,13 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			AllowCookies: true,
 			AllowWallet:  true,
 		}, nil)
+		if errors.Is(err, ErrAuthBackendUnavailable) {
+			// The credential could not be checked, which says nothing about
+			// whether it is valid; 503 tells the client to retry.
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication unavailable", "code": "UNAVAILABLE"})
+			c.Abort()
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
 			c.Abort()

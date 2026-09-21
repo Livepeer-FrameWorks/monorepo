@@ -785,7 +785,7 @@ func (s *CommodoreServer) compensateOrphanedClipIntent(ctx context.Context, r cr
 	if err != nil {
 		return fmt.Errorf("resolve foghorn: %w", err)
 	}
-	resp, _, dErr := fc.DeleteClip(ctx, r.artifactHash, &r.tenantID)
+	resp, _, dErr := fc.DeleteClip(ctx, r.artifactHash, &r.tenantID, "")
 	return childDeleteAcked("clip", r.artifactHash, resp, dErr)
 }
 

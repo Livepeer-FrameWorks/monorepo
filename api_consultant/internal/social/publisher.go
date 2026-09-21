@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -13,25 +14,31 @@ type Publisher interface {
 }
 
 type EmailPublisherConfig struct {
-	Sender *email.Sender
-	SMTP   email.Config
-	To     string
-	Logger logging.Logger
+	Sender         *email.Sender
+	SMTP           email.Config
+	Branding       config.EmailBranding
+	BrandingSource func() config.EmailBranding
+	To             string
+	Logger         logging.Logger
 }
 
 type EmailPublisher struct {
-	sender *email.Sender
-	smtp   email.Config
-	to     string
-	logger logging.Logger
+	sender         *email.Sender
+	smtp           email.Config
+	branding       config.EmailBranding
+	brandingSource func() config.EmailBranding
+	to             string
+	logger         logging.Logger
 }
 
 func NewEmailPublisher(cfg EmailPublisherConfig) *EmailPublisher {
 	return &EmailPublisher{
-		sender: cfg.Sender,
-		smtp:   cfg.SMTP,
-		to:     cfg.To,
-		logger: cfg.Logger,
+		sender:         cfg.Sender,
+		smtp:           cfg.SMTP,
+		branding:       cfg.Branding,
+		brandingSource: cfg.BrandingSource,
+		to:             cfg.To,
+		logger:         cfg.Logger,
 	}
 }
 
@@ -46,7 +53,11 @@ func (p *EmailPublisher) Publish(ctx context.Context, post PostRecord) error {
 	}
 
 	subject := socialEmailSubject(post)
-	body, err := renderSocialEmail(post)
+	branding := p.branding
+	if p.brandingSource != nil {
+		branding = p.brandingSource()
+	}
+	body, err := renderSocialEmail(post, branding)
 	if err != nil {
 		return fmt.Errorf("render social email: %w", err)
 	}

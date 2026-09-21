@@ -1567,6 +1567,10 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 	projectionVersionMS := time.Now().UnixMilli()
 	if err := h.clickhouse.Exec(ctx, `
 		INSERT INTO periscope.api_usage_5m
+			(window_start, tenant_id, auth_type, operation_type, operation_name, service,
+			 llm_model, llm_provider, requests, errors, duration_ms, complexity,
+			 llm_input_tokens, llm_output_tokens, unique_users_state, unique_tokens_state,
+			 projection_version_ms, root_fields)
 		WITH affected_windows AS (
 			SELECT DISTINCT tenant_id, toStartOfFiveMinute(timestamp) AS window_start
 			FROM periscope.api_requests
@@ -1587,7 +1591,11 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 				argMax(llm_input_tokens, ingested_at_ms) AS llm_input_tokens,
 				argMax(llm_output_tokens, ingested_at_ms) AS llm_output_tokens,
 				argMax(user_hashes, ingested_at_ms) AS user_hashes,
-				argMax(token_hashes, ingested_at_ms) AS token_hashes
+				argMax(token_hashes, ingested_at_ms) AS token_hashes,
+				-- The first stored copy fixes a source event's signature, so a later copy
+				-- carrying root fields (a replay across the upgrade) cannot move counts out
+				-- of a signature an earlier projection holds; api_usage_5m_v keys on it.
+				argMin(root_fields, ingested_at_ms) AS root_fields
 			FROM periscope.api_requests
 			WHERE (tenant_id, toStartOfFiveMinute(timestamp)) IN affected_windows
 			GROUP BY tenant_id, source_event_id
@@ -1609,10 +1617,11 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			sum(llm_output_tokens)                       AS llm_output_tokens,
 			uniqCombinedArrayState(user_hashes)          AS unique_users_state,
 			uniqCombinedArrayState(token_hashes)         AS unique_tokens_state,
-			?                                            AS projection_version_ms
+			?                                            AS projection_version_ms,
+			root_fields
 		FROM dedup
 		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
-		         service, llm_model, llm_provider`,
+		         service, llm_model, llm_provider, root_fields`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli(), projectionVersionMS); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}

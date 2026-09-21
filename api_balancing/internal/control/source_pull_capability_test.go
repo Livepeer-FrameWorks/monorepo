@@ -3,10 +3,12 @@ package control
 import (
 	"net/url"
 	"testing"
+
+	"frameworks/api_balancing/internal/appconfig"
 )
 
 func TestSourcePullCredentialTransportAndRedaction(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "source-pull-test-secret")
+	settings := useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "source-pull-test-secret"})
 	pull := OutboundPull{TenantID: "tenant", AttemptID: "attempt", SourceNodeID: "origin", SourceMediaClusterID: "source",
 		SourceGeneration: "generation", SourceRevision: 1, DestClusterID: "destination", DestNodeID: "replica", DTSCURL: "dtsc://origin:4200/live+stream"}
 	signed, err := SourcePullURL(pull.DTSCURL, "stream", pull)
@@ -34,7 +36,7 @@ func TestSourcePullCredentialTransportAndRedaction(t *testing.T) {
 	if _, err := SourcePullURL("dtsc://another/live+stream", "stream", pull); err == nil {
 		t.Fatal("source credential was minted for a different media URL")
 	}
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "")
+	settings.BalancerCapabilitySecret = ""
 	if _, err := SourcePullURL(pull.DTSCURL, "stream", pull); err == nil {
 		t.Fatal("missing signing key returned an uncredentialed fallback")
 	}

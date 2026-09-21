@@ -7,12 +7,11 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"frameworks/api_billing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -52,9 +51,10 @@ const LowBalanceThreshold = 0.005
 
 // NewGasWalletMonitor creates a new gas wallet monitor
 func NewGasWalletMonitor(log logging.Logger) *GasWalletMonitor {
-	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
-	address := os.Getenv("X402_GAS_WALLET_ADDRESS")
-	includeTestnets := config.X402IncludeTestnetsEnabled()
+	rt := appconfig.Runtime()
+	privKey := rt.X402GasWalletPrivkey
+	address := rt.X402GasWalletAddress
+	includeTestnets := rt.X402IncludeTestnets
 
 	// Derive address from private key if not provided
 	if address == "" && privKey != "" {

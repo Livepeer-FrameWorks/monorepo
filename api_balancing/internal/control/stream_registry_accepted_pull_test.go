@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -13,7 +14,7 @@ import (
 // pull this origin accepted against the current generation on the owning node;
 // a different node, a superseded generation or a stale record is a viewer.
 func TestAcceptedOutboundPullBindsNodeGenerationAndWindow(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "source-pull-test-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "source-pull-test-secret"})
 	const stream = "60546679b497415db2338cd5cae54992"
 	r := newPopulatedRegistry(t)
 	projectSourceForTest(t, r, stream, "edge-1", 100, "trigger-1", "gen-1", 1)
@@ -66,7 +67,7 @@ func TestAcceptedOutboundPullBindsNodeGenerationAndWindow(t *testing.T) {
 }
 
 func TestAcceptedOutboundDVRPullRequiresCurrentRecordingOwner(t *testing.T) {
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "source-pull-test-secret")
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "source-pull-test-secret"})
 	localDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)

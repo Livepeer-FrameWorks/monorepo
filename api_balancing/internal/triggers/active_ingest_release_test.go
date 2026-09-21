@@ -155,8 +155,8 @@ func expectSessionFinalized(mock sqlmock.Sqlmock, generation string) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*RETURNING id`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).
-			AddRow(generation, closingClaimToken, "demo-media"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id", "stream_id"}).
+			AddRow(generation, closingClaimToken, "demo-media", ""))
 	mock.ExpectQuery(`foghorn\.artifacts`).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "storage_node_id"}))
 	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).

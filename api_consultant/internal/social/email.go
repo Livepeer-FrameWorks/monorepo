@@ -2,15 +2,15 @@ package social
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
-func renderSocialEmail(post PostRecord) (string, error) {
+func renderSocialEmail(post PostRecord, branding config.EmailBranding) (string, error) {
 	data := socialEmailData{
 		TweetText:      post.TweetText,
 		TweetLength:    len(post.TweetText),
@@ -21,11 +21,11 @@ func renderSocialEmail(post PostRecord) (string, error) {
 	}
 
 	return emailpkg.RenderLayout(emailpkg.LayoutData{
-		LogoURL:      emailpkg.PublicLogoURL(os.Getenv("EMAIL_LOGO_URL"), os.Getenv("WEBAPP_PUBLIC_URL")),
+		LogoURL:      branding.Logo(),
 		Preheader:    "Skipper prepared a social post draft for review.",
 		Eyebrow:      "Social publishing",
 		Title:        "Social post draft",
-		SupportEmail: socialSupportEmail(),
+		SupportEmail: branding.Support(),
 		Content:      data,
 	}, socialEmailTemplate, nil)
 }
@@ -77,13 +77,6 @@ func formatDataPoints(data map[string]any) []string {
 		}
 	}
 	return points
-}
-
-func socialSupportEmail() string {
-	if supportEmail := strings.TrimSpace(os.Getenv("SUPPORT_EMAIL")); supportEmail != "" {
-		return supportEmail
-	}
-	return "support@frameworks.network"
 }
 
 const socialEmailTemplate = `<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Skipper drafted a post for you. Review the text below, then copy it into X when you are ready.</p>

@@ -47,6 +47,12 @@ service TenantService {
   // Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
   rpc GetClusterRouting(GetClusterRoutingRequest) returns (ClusterRoutingResponse);
 
+  // Describe what the tenant can use now: custom subdomain and custom domain
+  // eligibility, and per entitled cluster the media verbs placement accepts.
+  // The cluster set is the GetClusterRouting peer set; media capabilities
+  // combine capacity-owner consent with fresh edge capability reports.
+  rpc GetTenantClusterCapabilities(GetTenantClusterCapabilitiesRequest) returns (GetTenantClusterCapabilitiesResponse);
+
   // List tenants (admin)
   rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
 
@@ -627,6 +633,38 @@ message ClusterRoutingResponse {
   optional tenant_limits.TenantResourceLimits tenant_resource_limits = 20;
 }
 
+message GetTenantClusterCapabilitiesRequest {
+  string tenant_id = 1;
+}
+
+// Media verbs a cluster accepts for the tenant. Each is true only when
+// capacity-owner consent permits it (storage and processing need any consent
+// verb) and at least one active edge node reported the capability within the
+// edge health freshness window.
+message ClusterMediaCapabilities {
+  bool ingest = 1;
+  bool playback = 2;
+  bool storage = 3;
+  bool processing = 4;
+}
+
+message TenantClusterCapability {
+  string cluster_id = 1;
+  string cluster_name = 2;
+  string role = 3;          // preferred | official | subscribed
+  string access_level = 4;  // tenant_cluster_access.access_level
+  ClusterMediaCapabilities media = 5;
+}
+
+message GetTenantClusterCapabilitiesResponse {
+  // Custom subdomain alias and custom domain eligibility, as the Navigator
+  // outbox enqueue path decides it.
+  bool custom_subdomain = 1;
+  bool custom_domain = 2;
+  repeated TenantClusterCapability clusters = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
 // ============================================================================
 // CLUSTER MANAGEMENT MESSAGES
 // ============================================================================
@@ -860,6 +898,9 @@ message BootstrapClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
   optional tenant_limits.TenantResourceLimits resource_limits = 3;
+  // Principal the calling service grants access for; tenant.cluster_assigned
+  // is attributed to it. Unset records the calling service.
+  common.RequestActor actor = 4;
 }
 
 message MaterializeClusterAccessRequest {
@@ -872,6 +913,10 @@ message MaterializeClusterAccessRequest {
   // "active" for completed authority or "pending_approval" for a Purser-
   // vetted custom marketplace request. Empty is treated as "active".
   string subscription_status = 7;
+  // Principal the calling service materializes access for; the access
+  // events are attributed to it. Unset records the calling service. Not
+  // covered by authorization_proof: it attributes, it does not authorize.
+  common.RequestActor actor = 8;
 }
 
 message RevokeMaterializedClusterAccessRequest {

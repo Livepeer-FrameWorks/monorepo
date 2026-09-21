@@ -15,5 +15,13 @@ mutation GetCryptoTopupStatus($topupId: ID!) {
     expiresAt
     detectedAt
     completedAt
+    conversion {
+      originalAmountCents
+      originalCurrency
+      eurAmountCents
+      unitsPerEur
+      source
+      referenceDate
+    }
   }
 }

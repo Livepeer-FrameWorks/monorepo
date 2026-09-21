@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -304,7 +305,7 @@ func TestStartRecording_PushStartError(t *testing.T) {
 func TestStopRecording_PushStopCalled(t *testing.T) {
 	clearConn()
 	outboxDir := t.TempDir()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
 	mc := &startAwareFakeMist{pushIDToReturn: 77}
 	dm := newDVRManagerWithMist(t, mc)
 
@@ -337,7 +338,7 @@ func TestStopRecording_PushStopCalled(t *testing.T) {
 
 func TestStopRecording_PushStopError(t *testing.T) {
 	clearConn()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	mc := &startAwareFakeMist{
 		pushIDToReturn: 88,
 		pushStopErr:    fmt.Errorf("mist unreachable"),
@@ -842,7 +843,7 @@ func TestMaintainPushStatus_UnconfirmedRecreateDoesNotReissue(t *testing.T) {
 // the recording is not falsely reported complete over it.
 func TestStopRecording_UnconfirmedPushStoppedByIdentity(t *testing.T) {
 	clearConn()
-	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	mc := &startAwareFakeMist{pushIDToReturn: 91}
 	dm := newDVRManagerWithMist(t, mc)
 	if err := dm.StartRecording("hash-unconf-stop", "stream-1", "test-u", "live+test-u", "http://source", &ipcpb.DVRConfig{}, nil); err != nil {

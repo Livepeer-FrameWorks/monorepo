@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package frameworks.events.internal.v1;
+
+// Go reserves "internal" path elements, so the generated package lives in
+// events/internalv1 where every service can import it.
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
+
+import "google/protobuf/timestamp.proto";
+import "events/options.proto";
+
+// WebhookEndpointAutoDisabled reports that Bosun disabled a tenant's webhook
+// endpoint after sustained delivery failure. Its pending deliveries were
+// skipped in the same transaction.
+message WebhookEndpointAutoDisabled {
+  option (frameworks.events.event) = {type: "webhook.endpoint_auto_disabled", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "webhook_endpoints"};
+  string endpoint_id = 1;
+  int32 consecutive_failures = 2;
+  google.protobuf.Timestamp failing_since = 3;
+  int32 skipped_deliveries = 4;
+}

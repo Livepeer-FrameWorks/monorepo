@@ -9,17 +9,43 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"google.golang.org/protobuf/proto"
 )
 
 type clipCreatorSpy struct {
 	called bool
+	req    *sharedpb.CreateClipRequest
 }
 
-func (c *clipCreatorSpy) CreateClip(context.Context, *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
+func (c *clipCreatorSpy) CreateClip(_ context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	c.called = true
+	c.req = req
 	return &sharedpb.CreateClipResponse{ClipHash: "cliphash", NodeId: "node-a"}, nil
+}
+
+// A peer that names the requesting principal has the local clip creation
+// attribute clip.requested to it.
+func TestCreateRemoteClipCarriesTheNamedActor(t *testing.T) {
+	state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	if err := state.DefaultManager().UpdateStreamFromBuffer("stream-a", "stream-a", "node-a", "tenant-origin", "FULL", ""); err != nil {
+		t.Fatalf("UpdateStreamFromBuffer: %v", err)
+	}
+	cc := &clipCreatorSpy{}
+	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc, AllowFederationMutations: true})
+	actor := &commonpb.RequestActor{AuthType: "api_token", UserId: "user-7", TokenHash: 4242}
+	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &foghornfederationpb.RemoteClipRequest{
+		StreamInternalName: "stream-a", TenantId: "tenant-origin", Actor: actor,
+	})
+	if err != nil || !resp.GetAccepted() {
+		t.Fatalf("CreateRemoteClip = %+v, %v", resp, err)
+	}
+	if !proto.Equal(cc.req.GetActor(), actor) {
+		t.Fatalf("local clip request actor = %v, want %v", cc.req.GetActor(), actor)
+	}
 }
 
 type dvrCreatorSpy struct {

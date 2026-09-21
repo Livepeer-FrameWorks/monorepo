@@ -10,16 +10,16 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -32,19 +32,10 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-// ecbRateCache holds the cached EUR/USD exchange rate
-var ecbRateCache struct {
-	sync.RWMutex
-	rate      float64
-	fetchedAt time.Time
-}
-
 const (
-	ecbRateCacheTTL            = 24 * time.Hour
-	defaultX402TopupUSDCents   = int64(500)
-	maximumX402TopupUSDCents   = int64(10_000)
-	usdcBaseUnitsPerDollarCent = int64(10_000)
-	x402ReceiptPollInterval    = 500 * time.Millisecond
+	defaultX402TopupUSDCents = int64(500)
+	maximumX402TopupUSDCents = int64(10_000)
+	x402ReceiptPollInterval  = 500 * time.Millisecond
 )
 
 const x402SettlementValidityMargin = 6 * time.Second
@@ -64,7 +55,7 @@ type X402Handler struct {
 	gasWalletPrivKey      string // Single privkey = same address on all EVM chains
 	gasWalletAddress      string // Derived from privkey
 	includeTestnets       bool   // Whether to accept testnet payments
-	topupUSDCents         int64  // Exact v1 top-up amount; replaced by durable quotes in v2
+	topupUSDCents         int64  // Minimum USD amount of a durable quote
 	facilitatorProvider   string
 	facilitator           x402FacilitatorClient
 	facilitatorConfigErr  error
@@ -79,17 +70,21 @@ type X402Handler struct {
 	supplierRegistration string
 	supplierCountry      string
 	countryFromIP        func(string) string
+	// geoipReader resolves the payer country for crypto invoices. Nil leaves
+	// the IP country unknown.
+	geoipReader *geoip.Reader
 
 	// Commodore client for cache invalidation after balance changes
 	commodoreClient CommodoreClient
 }
 
 // NewX402Handler creates a new x402 payment handler
-func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rpc *RPCClient, commodoreClient CommodoreClient) *X402Handler {
-	privKey := os.Getenv("X402_GAS_WALLET_PRIVKEY")
-	gasAddr := os.Getenv("X402_GAS_WALLET_ADDRESS")
-	includeTestnets := config.X402IncludeTestnetsEnabled()
-	topupUSDCents := int64(config.GetEnvInt("X402_TOPUP_USD_CENTS", int(defaultX402TopupUSDCents)))
+func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rpc *RPCClient, commodoreClient CommodoreClient, geoipReader *geoip.Reader) *X402Handler {
+	rt := appconfig.Runtime()
+	privKey := rt.X402GasWalletPrivkey
+	gasAddr := rt.X402GasWalletAddress
+	includeTestnets := rt.X402IncludeTestnets
+	topupUSDCents := int64(rt.X402TopupUSDCents)
 	if topupUSDCents <= 0 || topupUSDCents > maximumX402TopupUSDCents {
 		log.WithFields(logging.Fields{
 			"configured_cents": topupUSDCents,
@@ -107,15 +102,15 @@ func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rp
 	}
 
 	// Supplier info is optional - only needed for simplified invoicing
-	supplierName := config.GetEnv("SUPPLIER_NAME", "")
-	supplierAddress := config.GetEnv("SUPPLIER_ADDRESS", "")
-	supplierVAT := config.GetEnv("SUPPLIER_VAT_NUMBER", "")
-	supplierRegistration := config.GetEnv("SUPPLIER_REGISTRATION_NUMBER", "")
-	supplierCountry := countries.Normalize(config.GetEnv("SUPPLIER_COUNTRY", ""))
+	supplierName := rt.SupplierName
+	supplierAddress := rt.SupplierAddress
+	supplierVAT := rt.SupplierVATNumber
+	supplierRegistration := rt.SupplierRegistrationNumber
+	supplierCountry := countries.Normalize(rt.SupplierCountry)
 	if supplierName == "" || supplierAddress == "" || supplierVAT == "" || supplierRegistration == "" || len(supplierCountry) != 2 {
 		log.Warn("x402 supplier info incomplete - crypto invoicing disabled (set SUPPLIER_NAME, SUPPLIER_ADDRESS, SUPPLIER_VAT_NUMBER, SUPPLIER_REGISTRATION_NUMBER, SUPPLIER_COUNTRY)")
 	}
-	facilitatorProvider, facilitator, facilitatorErr := newX402FacilitatorFromEnv()
+	facilitatorProvider, facilitator, facilitatorErr := newX402FacilitatorFromConfig(rt)
 	if facilitatorErr != nil {
 		log.WithError(facilitatorErr).Warn("x402 facilitator is not ready")
 	}
@@ -137,6 +132,7 @@ func NewX402Handler(database *sql.DB, log logging.Logger, hdwallet *HDWallet, rp
 		supplierVAT:          supplierVAT,
 		supplierRegistration: supplierRegistration,
 		supplierCountry:      supplierCountry,
+		geoipReader:          geoipReader,
 		commodoreClient:      commodoreClient,
 	}
 }
@@ -163,7 +159,7 @@ func (h *X402Handler) getNetworkConfig(network string) (NetworkConfig, error) {
 	if cfg.IsTestnet && !h.includeTestnets {
 		return NetworkConfig{}, fmt.Errorf("testnet payments disabled: %s", network)
 	}
-	if cfg.IsTestnet && config.IsProduction() {
+	if cfg.IsTestnet && appconfig.Runtime().IsProduction() {
 		return NetworkConfig{}, fmt.Errorf("testnet payments are forbidden in production: %s", network)
 	}
 	return cfg, nil
@@ -172,7 +168,7 @@ func (h *X402Handler) getNetworkConfig(network string) (NetworkConfig, error) {
 // GetSupportedNetworks returns all networks available for x402 payments
 func (h *X402Handler) GetSupportedNetworks() []NetworkConfig {
 	networks := X402Networks(h.includeTestnets)
-	if !config.IsProduction() {
+	if !appconfig.Runtime().IsProduction() {
 		return networks
 	}
 	mainnets := networks[:0]
@@ -222,7 +218,7 @@ func (h *X402Handler) Readiness(ctx context.Context) error {
 				missing = append(missing, err.Error())
 			}
 		}
-		if config.IsProduction() {
+		if appconfig.Runtime().IsProduction() {
 			if err := ValidateCryptoCustodyNetwork(ctx, h.rpc, network, "USDC"); err != nil {
 				missing = append(missing, err.Error())
 			}
@@ -331,7 +327,7 @@ func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID stri
 }
 
 func (h *X402Handler) ensureX402CustodyInventoryTx(ctx context.Context, tx *sql.Tx, tenantID, address string, derivationIndex int32, derivationXpub string) error {
-	for _, network := range X402Networks(config.X402IncludeTestnetsEnabled()) {
+	for _, network := range X402Networks(appconfig.Runtime().X402IncludeTestnets) {
 		if err := purserdb.New(tx).UpsertX402CustodyAddress(ctx, purserdb.UpsertX402CustodyAddressParams{
 			TenantID: tenantID, Network: network.Name, Address: address,
 			DerivationIndex: derivationIndex, DerivationXpub: derivationXpub,
@@ -374,9 +370,6 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	if payload.X402Version != 1 && payload.X402Version != 2 {
 		return &VerifyResult{Valid: false, Error: "unsupported x402 version"}, nil
 	}
-	if payload.X402Version == 1 && config.IsProduction() && !config.GetEnvBool("X402_ALLOW_V1", false) {
-		return &VerifyResult{Valid: false, Error: "x402 v1 compatibility is disabled"}, nil
-	}
 	if payload.Scheme != "exact" {
 		return &VerifyResult{Valid: false, Error: "unsupported x402 scheme"}, nil
 	}
@@ -386,35 +379,22 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		return &VerifyResult{Valid: false, Error: "tenant-bound payment target required"}, nil
 	}
 
-	var quote *X402PaymentQuote
-	var network NetworkConfig
-	var err error
-	facilitatorPayer := ""
-	expectedPayTo := ""
-	if payload.X402Version == 2 {
-		quote, network, err = h.validateV2Quote(ctx, tenantID, payload)
-		if err != nil {
-			return &VerifyResult{Valid: false, Error: err.Error()}, nil
-		}
-		expectedPayTo = quote.PayTo
-		facilitatorPayer, err = h.verifyWithFacilitator(ctx, payload, quote)
-		if err != nil {
-			return &VerifyResult{Valid: false, Error: err.Error()}, nil
-		}
-	} else {
-		network, err = h.getNetworkConfig(payload.Network)
-		if err != nil {
-			return &VerifyResult{Valid: false, Error: err.Error()}, nil
-		}
-		// Bind the signed EIP-3009 recipient to the tenant that will receive credit.
-		expectedPayTo, _, _, err = h.GetOrCreateTenantX402Address(ctx, tenantID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get tenant payTo address: %w", err)
-		}
+	// The credited EUR amount, payTo, and tax treatment are fixed by a durable
+	// tenant-bound quote. A payload without one has no ledger amount to credit.
+	if payload.X402Version != 2 {
+		return &VerifyResult{Valid: false, Error: "x402 payment quote required"}, nil
+	}
+	quote, network, err := h.validateV2Quote(ctx, tenantID, payload)
+	if err != nil {
+		return &VerifyResult{Valid: false, Error: err.Error()}, nil
+	}
+	facilitatorPayer, err := h.verifyWithFacilitator(ctx, payload, quote)
+	if err != nil {
+		return &VerifyResult{Valid: false, Error: err.Error()}, nil
 	}
 
 	// Check 'to' matches this tenant's stable receiving address.
-	if !strings.EqualFold(auth.To, expectedPayTo) {
+	if !strings.EqualFold(auth.To, quote.PayTo) {
 		return &VerifyResult{Valid: false, Error: "invalid payTo address"}, nil
 	}
 
@@ -434,15 +414,10 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	if amountBig.Sign() == 0 {
 		return &VerifyResult{Valid: false, Error: "zero-value authorizations are not payments"}, nil
 	}
-	requiredAmount := h.RequiredTopupBaseUnits()
-	if quote != nil {
-		requiredAmount = quote.AmountAtomic
-	}
-	requiredBaseUnits, parsed := new(big.Int).SetString(requiredAmount, 10)
+	requiredBaseUnits, parsed := new(big.Int).SetString(quote.AmountAtomic, 10)
 	if !parsed || amountBig.Cmp(requiredBaseUnits) != 0 {
 		return &VerifyResult{Valid: false, Error: "payment amount does not match quote"}, nil
 	}
-	amountUsdCents := new(big.Int).Div(amountBig, centsDivisor).Int64()
 
 	// Check time bounds
 	now := time.Now().Unix()
@@ -510,61 +485,26 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		return &VerifyResult{Valid: false, Error: "insufficient USDC balance"}, nil
 	}
 
-	// Convert to EUR cents for ledger + VAT checks.
-	amountEurCents := int64(0)
-	if quote != nil {
-		amountEurCents = quote.CreditAmountCents
-	} else {
-		amountEurCents, err = h.convertToEurCents(amountUsdCents)
-		if err != nil {
-			return &VerifyResult{Valid: false, Error: fmt.Sprintf("failed to convert amount to EUR: %v", err)}, nil
-		}
-	}
-
-	var documentRequirement CryptoDocumentRequirement
-	if quote != nil {
-		var profile CryptoBillingProfile
-		if err := json.Unmarshal(quote.TaxProfileSnapshot, &profile); err != nil {
-			return nil, fmt.Errorf("decode quoted crypto tax profile: %w", err)
-		}
-		documentRequirement = CryptoDocumentRequirement{
-			NeedsFullDocument:       quote.TaxDocumentKind == "full",
-			DocumentKind:            quote.TaxDocumentKind,
-			Profile:                 profile,
-			HasVATClaim:             strings.TrimSpace(profile.VATNumber) != "",
-			RequiresCompleteProfile: quote.TaxDocumentKind == "full" && !profile.Complete(),
-		}
-	} else {
-		documentRequirement, err = h.GetCryptoDocumentRequirement(ctx, tenantID, amountEurCents)
-		if err != nil {
-			return nil, fmt.Errorf("determine crypto tax-document requirement: %w", err)
-		}
+	var profile CryptoBillingProfile
+	if err := json.Unmarshal(quote.TaxProfileSnapshot, &profile); err != nil {
+		return nil, fmt.Errorf("decode quoted crypto tax profile: %w", err)
 	}
 
 	return &VerifyResult{
 		Valid:                  true,
 		PayerAddress:           signerAddr,
-		AmountCents:            amountEurCents,
+		AmountCents:            quote.CreditAmountCents,
 		IsAuthOnly:             false,
-		RequiresBillingDetails: documentRequirement.RequiresCompleteProfile,
+		RequiresBillingDetails: quote.TaxDocumentKind == "full" && !profile.Complete(),
 	}, nil
 }
 
-// RequiredTopupUSDCents is the exact amount accepted by the legacy v1 flow.
-// Durable tenant-bound quotes replace this fixed amount in the v2 flow.
+// RequiredTopupUSDCents is the minimum USD amount a durable quote asks for.
 func (h *X402Handler) RequiredTopupUSDCents() int64 {
 	if h == nil || h.topupUSDCents <= 0 || h.topupUSDCents > maximumX402TopupUSDCents {
 		return defaultX402TopupUSDCents
 	}
 	return h.topupUSDCents
-}
-
-// RequiredTopupBaseUnits returns the required amount in USDC atomic units.
-func (h *X402Handler) RequiredTopupBaseUnits() string {
-	return new(big.Int).Mul(
-		big.NewInt(h.RequiredTopupUSDCents()),
-		big.NewInt(usdcBaseUnitsPerDollarCent),
-	).String()
 }
 
 // SettlePayment submits the transferWithAuthorization transaction and waits for
@@ -614,6 +554,13 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 			}
 			if existing != nil {
 				return h.buildIdempotentSettleResult(ctx, tenantID, existing, clientIP)
+			}
+			quote, _, quoteErr := h.loadPaymentQuote(ctx, tenantID, payload.QuoteID)
+			if quoteErr != nil {
+				return nil, quoteErr
+			}
+			if !time.Now().UTC().Before(quote.ExpiresAt) {
+				return &SettleResult{Success: false, Error: "x402 quote expired", SettlementStatus: "failed"}, nil
 			}
 			return pendingX402SettleResult("", payload.Network), nil
 		}
@@ -738,7 +685,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		Success:          true,
 		TxHash:           txHash,
 		CreditedCents:    verifyResult.AmountCents,
-		Currency:         billing.DefaultCurrency(),
+		Currency:         billing.LedgerCurrency,
 		NewBalanceCents:  newBalance,
 		InvoiceNumber:    invoiceNumber,
 		SettlementStatus: "confirmed",
@@ -975,6 +922,9 @@ func confirmAndCreditX402Settlement(ctx context.Context, db *sql.DB, tenantID st
 	if err != nil {
 		return 0, err
 	}
+	if err = queries.RecordX402SettlementConfirmedAfterQuoteExpiry(ctx, nonceID); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -1033,7 +983,7 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 		}
 	}
 
-	currentBalance, err := h.getCurrentBalance(ctx, tenantID, billing.DefaultCurrency())
+	currentBalance, err := h.getCurrentBalance(ctx, tenantID, billing.LedgerCurrency)
 	if err != nil {
 		return nil, err
 	}
@@ -1047,7 +997,7 @@ func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID 
 		Success:          true,
 		TxHash:           row.TxHash,
 		CreditedCents:    row.AmountCents,
-		Currency:         billing.DefaultCurrency(),
+		Currency:         billing.LedgerCurrency,
 		NewBalanceCents:  currentBalance,
 		InvoiceNumber:    invoiceNumber,
 		SettlementStatus: "confirmed",
@@ -1496,7 +1446,7 @@ func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, te
 }
 
 func creditX402PrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, nonceID string, txHash string, description string) (int64, error) {
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	queries := purserdb.New(tx)
 	transactionID := uuid.New()
 	referenceType := sql.NullString{String: "x402_payment", Valid: true}
@@ -1541,6 +1491,15 @@ func creditX402PrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string
 		BalanceAfterCents: newBalance,
 		ID:                transactionID,
 	}); err != nil {
+		return 0, err
+	}
+	// Only the first credit of a settlement reaches this point; a replay
+	// returned above through the existing balance transaction.
+	credited, err := topupCreditedEvent(tenantID, nonceID, amountCents, currency)
+	if err != nil {
+		return 0, err
+	}
+	if err := billingevents.Enqueue(ctx, tx, credited); err != nil {
 		return 0, err
 	}
 	return newBalance, nil
@@ -1590,7 +1549,15 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		return "", err
 	}
 	vatRateBps, reverseCharge := vatDecision.RateBPS, vatDecision.ReverseCharge
-	netAmountCents, vatAmountCents := extractVATInclusive(amountEurCents, vatRateBps)
+	// The document states the amount paid in its original currency and the EUR
+	// credit it issued, both at the quote's locked rate. VAT is extracted from
+	// the EUR amount and, separately, from the original amount.
+	document, err := taxSnapshot.FX.Scale(big.NewInt(amountEurCents), big.NewInt(taxSnapshot.FX.EURMinor))
+	if err != nil {
+		return "", fmt.Errorf("scale locked quote to credited amount: %w", err)
+	}
+	netEURCents, vatEURCents := extractVATInclusive(document.EURMinor, vatRateBps)
+	netAmountCents, vatAmountCents := extractVATInclusive(document.OriginalMinor, vatRateBps)
 	billingCountry := ""
 	if address, addressErr := parseBillingAddress(profile.Address); addressErr == nil {
 		billingCountry = countries.Normalize(address.Country)
@@ -1648,16 +1615,16 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 	nullable := func(value string) sql.NullString {
 		return sql.NullString{String: value, Valid: value != ""}
 	}
-	commonRate := sql.NullString{String: fmt.Sprintf("%.6f", taxSnapshot.EURPerUSDRate), Valid: true}
-
 	if documentKind == "full" {
 		err = queries.InsertCryptoTopupInvoice(ctx, purserdb.InsertCryptoTopupInvoiceParams{
 			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
-			GrossAmountCents: amountEurCents, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+			GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
 			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
 			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
-			TaxValidationStatus: taxValidationStatus, Currency: billing.DefaultCurrency(), AmountEurCents: amountEurCents,
-			EcbRate: commonRate, FxRateSource: nullable(taxSnapshot.FXRateSource),
+			TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
+			NetEurCents: netEURCents, VatEurCents: vatEURCents,
+			FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
+			FxRateSource:      nullable(taxSnapshot.FXRateSource),
 			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
 			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
 			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
@@ -1671,11 +1638,13 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 	} else {
 		err = queries.InsertSimplifiedCryptoTopupInvoice(ctx, purserdb.InsertSimplifiedCryptoTopupInvoiceParams{
 			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
-			GrossAmountCents: amountEurCents, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+			GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
 			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
 			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
-			TaxValidationStatus: taxValidationStatus, Currency: billing.DefaultCurrency(), AmountEurCents: amountEurCents,
-			EcbRate: commonRate, FxRateSource: nullable(taxSnapshot.FXRateSource),
+			TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
+			NetEurCents: netEURCents, VatEurCents: vatEURCents,
+			FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
+			FxRateSource:      nullable(taxSnapshot.FXRateSource),
 			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
 			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
 			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
@@ -1791,7 +1760,7 @@ func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID
 	}
 	if err := emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
 		Amount:   float64(amountEurCents) / 100,
-		Currency: billing.DefaultCurrency(),
+		Currency: billing.LedgerCurrency,
 		Status:   "confirmed",
 	}); err != nil {
 		return false, err
@@ -1969,91 +1938,6 @@ func (h *X402Handler) simulateTransfer(ctx context.Context, network NetworkConfi
 	return nil
 }
 
-func (h *X402Handler) convertToEurCents(usdCents int64) (int64, error) {
-	rate, err := h.getEurUsdRate()
-	if err != nil {
-		return 0, err
-	}
-	// EUR = USD * rate (e.g., 0.92 EUR per USD)
-	eurCents := int64(math.Round(float64(usdCents) * rate))
-	return eurCents, nil
-}
-
-// getEurUsdRate is the X402Handler-bound wrapper that preserves the existing
-// invocation site signature; new callers should use GetEurUsdRate.
-func (h *X402Handler) getEurUsdRate() (float64, error) {
-	return GetEurUsdRate(h.logger)
-}
-
-// GetEurUsdRate returns the EUR/USD exchange rate (EUR per USD), fetching
-// from frankfurter.app (ECB-sourced) when the cache is stale. Falls back to
-// stale cache if a fresh fetch fails.
-func GetEurUsdRate(logger logging.Logger) (float64, error) {
-	ecbRateCache.RLock()
-	cachedRate := ecbRateCache.rate
-	fetchedAt := ecbRateCache.fetchedAt
-	ecbRateCache.RUnlock()
-
-	if time.Since(fetchedAt) < ecbRateCacheTTL && cachedRate > 0 {
-		return cachedRate, nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.frankfurter.app/latest?from=USD&to=EUR", nil)
-	if err != nil {
-		if cachedRate > 0 {
-			return cachedRate, nil
-		}
-		return 0, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if cachedRate > 0 {
-			return cachedRate, nil
-		}
-		return 0, fmt.Errorf("failed to fetch ECB rate: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		if cachedRate > 0 {
-			return cachedRate, nil
-		}
-		return 0, fmt.Errorf("ECB rate API returned status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Rates map[string]float64 `json:"rates"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		if cachedRate > 0 {
-			return cachedRate, nil
-		}
-		return 0, fmt.Errorf("failed to decode ECB rate response: %w", err)
-	}
-
-	rate, ok := result.Rates["EUR"]
-	if !ok || rate <= 0 {
-		if cachedRate > 0 {
-			return cachedRate, nil
-		}
-		return 0, fmt.Errorf("EUR rate not found in response")
-	}
-
-	ecbRateCache.Lock()
-	ecbRateCache.rate = rate
-	ecbRateCache.fetchedAt = time.Now()
-	ecbRateCache.Unlock()
-
-	if logger != nil {
-		logger.WithFields(logging.Fields{"rate": rate}).Debug("Fetched fresh EUR/USD rate from ECB")
-	}
-	return rate, nil
-}
-
 const developmentVATRateSource = "bundled development fallback; not allowed in production"
 
 // This fallback keeps isolated unit/dev stacks useful before migrations are
@@ -2109,7 +1993,7 @@ func (h *X402Handler) loadEffectiveVATRate(ctx context.Context, country string, 
 		}, nil
 	}
 	decision := vatDecision{Country: country}
-	if !config.IsProduction() {
+	if !appconfig.Runtime().IsProduction() {
 		if rate, ok := developmentVATRates[country]; ok {
 			decision.RateBPS = rate
 			decision.Source = developmentVATRateSource
@@ -2196,7 +2080,7 @@ func (h *X402Handler) getVATDecisionForProfile(ctx context.Context, tenantID str
 type cryptoTaxSnapshot struct {
 	DocumentKind     string
 	Profile          CryptoBillingProfile
-	EURPerUSDRate    float64
+	FX               fx.Record
 	FXRateSource     string
 	FXRateObservedAt time.Time
 }
@@ -2204,7 +2088,8 @@ type cryptoTaxSnapshot struct {
 func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, referenceType, referenceID string) (cryptoTaxSnapshot, error) {
 	var snapshot cryptoTaxSnapshot
 	var raw []byte
-	var rateText string
+	var record *fx.Record
+	var recordErr error
 	var err error
 	switch referenceType {
 	case "x402_payment":
@@ -2212,17 +2097,19 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 			TenantID: tenantID, TxHash: sql.NullString{String: referenceID, Valid: true},
 		})
 		err = queryErr
-		snapshot.DocumentKind, raw, rateText, snapshot.FXRateObservedAt = row.TaxDocumentKind, row.TaxProfileSnapshot, row.EurPerUsdRate, row.CreatedAt
+		snapshot.DocumentKind, raw, snapshot.FXRateObservedAt = row.TaxDocumentKind, row.TaxProfileSnapshot, row.CreatedAt
+		record, recordErr = storedFXRecord(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
 		snapshot.FXRateSource = "European Central Bank reference rate locked by x402 quote"
 	case "crypto_payment":
 		row, queryErr := purserdb.New(h.db).GetCryptoWalletTaxSnapshot(ctx, purserdb.GetCryptoWalletTaxSnapshotParams{
 			TenantID: tenantID, TxHash: sql.NullString{String: referenceID, Valid: true},
 		})
 		err = queryErr
-		snapshot.DocumentKind, raw, rateText = row.TaxDocumentKind, row.TaxProfileSnapshot, row.QuotedUsdToEurRate
+		snapshot.DocumentKind, raw = row.TaxDocumentKind, row.TaxProfileSnapshot
 		if row.QuotedAt.Valid {
 			snapshot.FXRateObservedAt = row.QuotedAt.Time
 		}
+		record, recordErr = storedFXRecord(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
 		snapshot.FXRateSource = "European Central Bank reference rate locked by deposit quote"
 	default:
 		return cryptoTaxSnapshot{}, fmt.Errorf("unsupported crypto payment reference type %q", referenceType)
@@ -2233,9 +2120,13 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 	if err != nil {
 		return cryptoTaxSnapshot{}, err
 	}
-	if _, err := fmt.Sscan(rateText, &snapshot.EURPerUSDRate); err != nil || snapshot.EURPerUSDRate <= 0 {
-		return cryptoTaxSnapshot{}, fmt.Errorf("invalid locked EUR-per-USD rate")
+	if recordErr != nil {
+		return cryptoTaxSnapshot{}, recordErr
 	}
+	if record == nil || record.EURMinor <= 0 || record.OriginalMinor <= 0 {
+		return cryptoTaxSnapshot{}, fmt.Errorf("locked quote has no FX fields")
+	}
+	snapshot.FX = *record
 	if err := json.Unmarshal(raw, &snapshot.Profile); err != nil {
 		return cryptoTaxSnapshot{}, fmt.Errorf("decode crypto tax profile snapshot: %w", err)
 	}
@@ -2243,7 +2134,7 @@ func (h *X402Handler) loadCryptoTaxSnapshot(ctx context.Context, tenantID, refer
 		return cryptoTaxSnapshot{}, fmt.Errorf("invalid crypto tax document kind %q", snapshot.DocumentKind)
 	}
 	if snapshot.FXRateObservedAt.IsZero() {
-		return cryptoTaxSnapshot{}, fmt.Errorf("locked EUR-per-USD rate is missing its observation time")
+		return cryptoTaxSnapshot{}, fmt.Errorf("locked quote rate is missing its observation time")
 	}
 	return snapshot, nil
 }
@@ -2352,8 +2243,8 @@ func (h *X402Handler) getCountryFromIP(clientIP string) string {
 	if h.countryFromIP != nil {
 		return countries.Normalize(h.countryFromIP(clientIP))
 	}
-	if reader := geoip.GetSharedReader(); reader != nil {
-		if geo := reader.Lookup(clientIP); geo != nil && geo.CountryCode != "" {
+	if h.geoipReader != nil {
+		if geo := h.geoipReader.Lookup(clientIP); geo != nil && geo.CountryCode != "" {
 			return countries.Normalize(geo.CountryCode)
 		}
 	}

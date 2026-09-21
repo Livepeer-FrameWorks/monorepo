@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/state"
 )
 
 func TestBalancerCapabilityBindsNodeClusterAndExpiry(t *testing.T) {
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "capability-test-secret")
+	settings := &appconfig.Foghorn{BalancerCapabilitySecret: "capability-test-secret"}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	sm.SetNodeConnectionInfo(context.Background(), "edge-1", "edge.example", "tenant-1", "cluster-1", nil)
@@ -52,13 +54,13 @@ func TestBalancerCapabilityBindsNodeClusterAndExpiry(t *testing.T) {
 }
 
 func TestFoghornBalancerBaseForNodeFailsClosedWithoutIdentityOrSecret(t *testing.T) {
-	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "")
-	t.Setenv("SERVICE_TOKEN", "must-not-authorize-balancer-capabilities")
+	settings := &appconfig.Foghorn{ServiceToken: "must-not-authorize-balancer-capabilities"}
+	settings.PublicBaseURL = "https://foghorn.example"
+	useFoghornConfig(t, settings)
 	if got := FoghornBalancerBaseForNode("cluster-1", "edge-1"); got != "" {
 		t.Fatalf("base without signing authority = %q, want empty", got)
 	}
-	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "secret")
+	settings.BalancerCapabilitySecret = "secret"
 	if got := FoghornBalancerBaseForNode("", "edge-1"); got != "" {
 		t.Fatalf("base without cluster identity = %q, want empty", got)
 	}

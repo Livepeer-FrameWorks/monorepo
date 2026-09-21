@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
@@ -86,10 +87,13 @@ func TestRegister(t *testing.T) {
 		mock.ExpectQuery("COUNT").
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO commodore.users").
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "new@example.com", sqlmock.AnyArg(),
 				"", "", "owner", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		expectLegacyEventInsert(mock, eventAuthRegistered)
+		mock.ExpectCommit()
 
 		resp, err := s.Register(context.Background(), &commodorepb.RegisterRequest{
 			Email: "new@example.com", Password: "pw", HumanCheck: "human", Behavior: goodBehavior(),
@@ -319,9 +323,11 @@ func TestGetOrCreateWalletUser(t *testing.T) {
 
 func TestIssueAndConsumeWalletChallenge(t *testing.T) {
 	const address = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
-	t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.com")
 	s, mock, done := newMockServer(t)
 	defer done()
+	s.runtimeSettings = func() RuntimeSettings {
+		return RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://app.example.com"}}
+	}
 
 	mock.ExpectExec("INSERT INTO commodore.wallet_auth_challenges").
 		WithArgs(sqlmock.AnyArg(), int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -400,8 +406,8 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 		mock.ExpectQuery("DELETE FROM commodore.wallet_identities").
 			WithArgs("wallet-1", "user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("wallet-1"))
+		expectLegacyEventInsert(mock, eventWalletUnlinked)
 		mock.ExpectCommit()
-		expectOutboxInsert(mock)
 
 		resp, err := s.UnlinkWallet(walletUserContext(), &commodorepb.UnlinkWalletRequest{WalletId: "wallet-1"})
 		if err != nil || !resp.GetSuccess() {
@@ -425,8 +431,8 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 		mock.ExpectQuery("DELETE FROM commodore.wallet_identities").
 			WithArgs("wallet-1", "user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("wallet-1"))
+		expectLegacyEventInsert(mock, eventWalletUnlinked)
 		mock.ExpectCommit()
-		expectOutboxInsert(mock)
 
 		resp, err := s.UnlinkWallet(walletUserContext(), &commodorepb.UnlinkWalletRequest{WalletId: "wallet-1"})
 		if err != nil || !resp.GetSuccess() {
@@ -439,7 +445,6 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 }
 
 func TestWalletChallengeOriginAllowed(t *testing.T) {
-	t.Setenv("BUILD_ENV", "development")
 	for _, raw := range []string{
 		"https://app.example.com",
 		"http://localhost:18090/app",
@@ -450,21 +455,20 @@ func TestWalletChallengeOriginAllowed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !walletChallengeOriginAllowed(origin) {
+		if !walletChallengeOriginAllowed(origin, true) {
 			t.Fatalf("expected %q to be allowed", raw)
 		}
 	}
 
 	for _, raw := range []string{"http://example.com", "ftp://localhost", "https:///missing-host"} {
 		origin, _ := url.Parse(raw)
-		if walletChallengeOriginAllowed(origin) {
+		if walletChallengeOriginAllowed(origin, true) {
 			t.Fatalf("expected %q to be rejected", raw)
 		}
 	}
 
-	t.Setenv("BUILD_ENV", "production")
 	loopback, _ := url.Parse("http://localhost:18090/app")
-	if walletChallengeOriginAllowed(loopback) {
+	if walletChallengeOriginAllowed(loopback, false) {
 		t.Fatal("production must reject an insecure loopback origin")
 	}
 }
@@ -486,9 +490,11 @@ func TestStartDeviceAuthorization(t *testing.T) {
 	})
 
 	t.Run("happy_persists_pending_code", func(t *testing.T) {
-		t.Setenv("WEBAPP_PUBLIC_URL", "https://app.example.com")
 		s, mock, done := newMockServer(t)
 		defer done()
+		s.runtimeSettings = func() RuntimeSettings {
+			return RuntimeSettings{Branding: config.EmailBranding{WebAppURL: "https://app.example.com"}}
+		}
 		mock.ExpectExec("INSERT INTO commodore.auth_device_codes").
 			WithArgs("cli", sqlmock.AnyArg(), sqlmock.AnyArg(), "account", sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))

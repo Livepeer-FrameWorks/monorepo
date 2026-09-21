@@ -115,9 +115,12 @@ func (a *AdminAPI) SetHealth(h *HealthTracker) {
 	a.health = h
 }
 
-func (a *AdminAPI) RegisterRoutes(router *gin.Engine, jwtSecret []byte, middleware ...gin.HandlerFunc) {
+// RegisterRoutes mounts the operator-only admin API. jwtOpts configure the
+// JWT middleware and must match the main /api/skipper group's, so the shared
+// service token (auth.WithServiceIdentity) authenticates here too.
+func (a *AdminAPI) RegisterRoutes(router *gin.Engine, jwtSecret []byte, jwtOpts []auth.JWTOption, middleware ...gin.HandlerFunc) {
 	group := router.Group("/api/skipper/admin")
-	group.Use(auth.JWTAuthMiddleware(jwtSecret))
+	group.Use(auth.JWTAuthMiddleware(jwtSecret, jwtOpts...))
 	for _, mw := range middleware {
 		group.Use(mw)
 	}

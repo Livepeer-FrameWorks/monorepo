@@ -8,17 +8,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 	billingstripe "frameworks/api_billing/internal/stripe"
 
 	"github.com/google/uuid"
@@ -34,6 +35,9 @@ type CheckoutPurpose string
 const (
 	// PurposeSubscription is for tier subscription payments
 	PurposeSubscription CheckoutPurpose = "subscription"
+	// PurposeSubscriptionSetup is for saving a card that Purser charges the
+	// tier base fee to off-session, without a provider subscription
+	PurposeSubscriptionSetup CheckoutPurpose = billingstripe.PurposeSubscriptionSetup
 	// PurposeClusterSubscription is for paid cluster subscriptions
 	PurposeClusterSubscription CheckoutPurpose = "cluster_subscription"
 	// PurposeInvoice is for paying an existing invoice
@@ -105,7 +109,7 @@ func (s *CheckoutService) CreateCheckout(ctx context.Context, req CheckoutReques
 
 // createStripeCheckout creates a Stripe Checkout Session
 func (s *CheckoutService) createStripeCheckout(ctx context.Context, req CheckoutRequest) (*CheckoutResult, error) {
-	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
+	stripe.Key = appconfig.Runtime().StripeSecretKey
 	if stripe.Key == "" {
 		return nil, fmt.Errorf("STRIPE_SECRET_KEY not configured")
 	}
@@ -198,7 +202,8 @@ func (s *CheckoutService) createStripeCheckout(ctx context.Context, req Checkout
 
 // createMollieCheckout creates a Mollie payment
 func (s *CheckoutService) createMollieCheckout(ctx context.Context, req CheckoutRequest) (*CheckoutResult, error) {
-	mollieKey := os.Getenv("MOLLIE_API_KEY")
+	rt := appconfig.Runtime()
+	mollieKey := rt.MollieAPIKey
 	if mollieKey == "" {
 		return nil, fmt.Errorf("MOLLIE_API_KEY not configured")
 	}
@@ -213,7 +218,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 	amountStr := minorUnitsDecimalString(req.AmountCents, req.Currency)
 
 	webhookURL := ""
-	webhookBase := config.GetGatewayPublicURL()
+	webhookBase := rt.GatewayPublicBaseURL()
 	if webhookBase != "" {
 		webhookURL = webhookBase + "/webhooks/billing/mollie"
 	}
@@ -376,12 +381,14 @@ func (s *Service) DispatchStripeCheckoutCompleted(ctx context.Context, sessionDa
 		CustomerID    string `json:"customer"`
 		Subscription  string `json:"subscription"`
 		PaymentIntent string `json:"payment_intent"`
+		SetupIntent   string `json:"setup_intent"`
 		PaymentStatus string `json:"payment_status"`
 		Mode          string `json:"mode"`
 		Metadata      struct {
 			Purpose     string `json:"purpose"`
 			TenantID    string `json:"tenant_id"`
 			ReferenceID string `json:"reference_id"`
+			TierID      string `json:"tier_id"`
 			ClusterID   string `json:"cluster_id"`
 		} `json:"metadata"`
 		AmountTotal int64  `json:"amount_total"`
@@ -406,6 +413,12 @@ func (s *Service) DispatchStripeCheckoutCompleted(ctx context.Context, sessionDa
 	}).Info("Dispatching Stripe checkout.session.completed")
 
 	switch purpose {
+	case PurposeSubscriptionSetup:
+		tierID := sess.Metadata.TierID
+		if tierID == "" {
+			tierID = sess.Metadata.ReferenceID
+		}
+		return s.handleStripeSetupCheckoutCompleted(ctx, sess.ID, sess.Metadata.TenantID, tierID, sess.CustomerID, sess.SetupIntent)
 	case PurposeSubscription:
 		return s.handleSubscriptionCheckoutCompleted(
 			ctx,
@@ -859,9 +872,9 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 	if !strings.EqualFold(topup.Currency, currency) || strings.TrimSpace(currency) == "" {
 		return fmt.Errorf("pending top-up currency mismatch: stored %s, received %s", topup.Currency, currency)
 	}
-	// Providers report currency in their own casing (Stripe sends "eur") while
-	// balance rows are keyed by the uppercase ISO code that admission, burn, and
-	// invoice credit read. Every write below uses the stored top-up currency.
+	// Providers report currency in their own casing (Stripe sends "eur"). The
+	// provider evidence rows below record the stored top-up currency as its
+	// uppercase ISO code; the credit itself always goes to the EUR ledger row.
 	currency = strings.ToUpper(topup.Currency)
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("pending top-up provider session is missing")
@@ -916,12 +929,103 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		return nil
 	}
 
-	// 2. Credit prepaid balance.
-	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency}); err != nil {
+	// A refund or chargeback recorded before the credit (for example a Mollie
+	// payment first observed with refunds on it) was not debited from any
+	// balance, so the top-up is not credited: a fully returned payment stays
+	// uncredited, a partially returned one is held for operator review.
+	if topup.RefundedAmountCents >= topup.AmountCents {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit refunded top-up linkage: %w", commitErr)
+		}
+		s.logger.WithFields(logging.Fields{
+			"topup_id":              topupID,
+			"tenant_id":             tenantID,
+			"refunded_amount_cents": topup.RefundedAmountCents,
+		}).Warn("Settled top-up was fully refunded before credit; not credited")
+		return nil
+	}
+	topupFX, err := storedFXRecord(topup.OriginalAmountCents, topup.OriginalCurrency, topup.EurAmountCents, topup.FxUnitsPerEur, topup.FxSource, topup.FxReferenceDate)
+	if err != nil {
+		return fmt.Errorf("read pending top-up FX fields: %w", err)
+	}
+	if topupFX == nil && strings.EqualFold(strings.TrimSpace(topup.Currency), billing.LedgerCurrency) {
+		identity, identityErr := fx.RecordToEUR(topup.AmountCents, fx.Identity(now))
+		if identityErr != nil {
+			return identityErr
+		}
+		topupFX = &identity
+	}
+	reviewFX := func(params *purserdb.HoldPendingTopupForOperatorReviewParams) {
+		if topupFX == nil {
+			return
+		}
+		params.EurAmountCents = sql.NullInt64{Int64: topupFX.EURMinor, Valid: true}
+		params.FxUnitsPerEur = sql.NullString{String: topupFX.UnitsText(), Valid: true}
+		params.FxSource = sql.NullString{String: topupFX.Source, Valid: true}
+		params.FxReferenceDate = sql.NullTime{Time: topupFX.ReferenceDate, Valid: true}
+	}
+
+	if topup.RefundedAmountCents > 0 {
+		hold := purserdb.HoldPendingTopupForOperatorReviewParams{
+			TenantID: tenantID, TopupID: topupID, Provider: string(provider),
+			ReviewKey:         "refunded_before_credit_review:" + topupID,
+			ProviderPaymentID: providerPaymentID, AmountCents: amountCents,
+			Currency:    strings.ToUpper(topup.Currency),
+			Reason:      sql.NullString{String: "refunded_before_credit", Valid: true},
+			EvidenceRef: sql.NullString{String: sessionID, Valid: sessionID != ""},
+		}
+		reviewFX(&hold)
+		if err = queries.HoldPendingTopupForOperatorReview(ctx, hold); err != nil {
+			return fmt.Errorf("hold partially refunded top-up for review: %w", err)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit partially refunded top-up review: %w", commitErr)
+		}
+		s.logger.WithFields(logging.Fields{
+			"topup_id":              topupID,
+			"tenant_id":             tenantID,
+			"amount_cents":          amountCents,
+			"refunded_amount_cents": topup.RefundedAmountCents,
+		}).Error("Settled top-up was partially refunded before credit; held for operator review without credit")
+		return nil
+	}
+
+	// The EUR ledger is credited the EUR amount locked when the top-up was
+	// created. A top-up in another currency written before FX fields existed has
+	// no locked EUR amount and is held for operator review without credit.
+	if topupFX == nil {
+		hold := purserdb.HoldPendingTopupForOperatorReviewParams{
+			TenantID: tenantID, TopupID: topupID, Provider: string(provider),
+			ReviewKey:         "ledger_currency_review:" + topupID,
+			ProviderPaymentID: providerPaymentID, AmountCents: amountCents,
+			Currency:    strings.ToUpper(topup.Currency),
+			Reason:      sql.NullString{String: "non_ledger_currency", Valid: true},
+			EvidenceRef: sql.NullString{String: sessionID, Valid: sessionID != ""},
+		}
+		if err = queries.HoldPendingTopupForOperatorReview(ctx, hold); err != nil {
+			return fmt.Errorf("hold non-ledger-currency top-up for review: %w", err)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit non-ledger-currency top-up review: %w", commitErr)
+		}
+		s.logger.WithFields(logging.Fields{
+			"topup_id":        topupID,
+			"tenant_id":       tenantID,
+			"currency":        topup.Currency,
+			"ledger_currency": billing.LedgerCurrency,
+			"amount_cents":    amountCents,
+		}).Error("Settled top-up is not in the ledger currency; held for operator review without credit")
+		return nil
+	}
+
+	// 2. Credit prepaid balance. Providers report lowercase ISO codes, so the
+	// row is addressed by the canonical ledger currency.
+	creditCents := topupFX.EURMinor
+	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: billing.LedgerCurrency}); err != nil {
 		return fmt.Errorf("failed to ensure prepaid balance: %w", err)
 	}
 	currentBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+		AmountCents: creditCents, TenantID: tenantID, Currency: billing.LedgerCurrency,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update prepaid balance: %w", err)
@@ -930,11 +1034,24 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 	// 3. Create balance transaction. reference_type='topup' activates the
 	//    partial unique index at purser.sql:idx_balance_transactions_idempotency
 	//    so replayed webhooks cannot double-credit.
+	description := fmt.Sprintf("Card top-up via %s", provider)
+	if topupFX.OriginalCurrency != billing.LedgerCurrency {
+		description = fmt.Sprintf("Card top-up via %s: %s %s at the ECB %s rate of %s per EUR", provider,
+			centsToDecimalString(topupFX.OriginalMinor, topupFX.OriginalCurrency), topupFX.OriginalCurrency,
+			topupFX.ReferenceDate.Format(time.DateOnly), topupFX.UnitsText())
+	}
+	if err = queries.InsertPendingProviderSettlement(ctx, purserdb.InsertPendingProviderSettlementParams{
+		TenantID: tenantID, Provider: string(provider), ProviderPaymentID: providerPaymentID,
+		PendingTopupID:    sql.NullString{String: topupID, Valid: true},
+		ChargeAmountCents: amountCents, ChargeCurrency: strings.ToUpper(currency),
+	}); err != nil {
+		return fmt.Errorf("record pending provider settlement: %w", err)
+	}
 	txID := uuid.New()
 	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: txID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: currentBalance,
+		ID: txID, TenantID: tenantID, AmountCents: creditCents, BalanceAfterCents: currentBalance,
 		TransactionType: "topup",
-		Description:     sql.NullString{String: fmt.Sprintf("Card top-up via %s", provider), Valid: true},
+		Description:     sql.NullString{String: description, Valid: true},
 		ReferenceID:     sql.NullString{String: topupID, Valid: true},
 		ReferenceType:   sql.NullString{String: "topup", Valid: true},
 		ActorKind:       sql.NullString{String: "webhook", Valid: true},
@@ -966,13 +1083,17 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		s.logger.WithError(err).Warn("Failed to unsuspend tenant (may not have been suspended)")
 	}
 
-	if err := emitBillingEventTx(ctx, tx, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
+	credited, err := topupCreditedEvent(tenantID, topupID, creditCents, billing.LedgerCurrency)
+	if err != nil {
+		return err
+	}
+	if err := emitBillingEventsTx(ctx, tx, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
 		TopupId:  topupID,
-		Amount:   float64(amountCents) / 100.0,
-		Currency: currency,
+		Amount:   float64(creditCents) / 100.0,
+		Currency: billing.LedgerCurrency,
 		Provider: string(provider),
 		Status:   "credited",
-	}); err != nil {
+	}, credited); err != nil {
 		return err
 	}
 
@@ -984,6 +1105,8 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		"tenant_id":      tenantID,
 		"topup_id":       topupID,
 		"amount_cents":   amountCents,
+		"currency":       topupFX.OriginalCurrency,
+		"credit_cents":   creditCents,
 		"new_balance":    currentBalance,
 		"provider":       provider,
 		"transaction_id": txID,

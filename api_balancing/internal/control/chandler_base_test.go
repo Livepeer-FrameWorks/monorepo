@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
@@ -22,9 +23,11 @@ func TestGetChandlerBaseURLUsesExplicitOverride(t *testing.T) {
 		clearResolvedChandlerBaseURL()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "https://assets.frameworks.network")
-	t.Setenv("CHANDLER_HOST", "ignored-host")
-	t.Setenv("CHANDLER_PORT", "9999")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerBaseURL = "https://assets.frameworks.network"
+	settings.ChandlerHost = "ignored-host"
+	settings.ChandlerPort = "9999"
+	useFoghornConfig(t, settings)
 
 	localClusterID = "media-central-primary"
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -44,7 +47,9 @@ func TestGetChandlerBaseURLForClusterUsesExplicitOverride(t *testing.T) {
 		clearChandlerPerClusterCache()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "http://localhost:18090/")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerBaseURL = "http://localhost:18090/"
+	useFoghornConfig(t, settings)
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("should not resolve cluster when override is set")
 	}
@@ -64,9 +69,10 @@ func TestGetChandlerBaseURLDerivesPlatformDomainFromClusterMetadata(t *testing.T
 		clearResolvedChandlerBaseURL()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "fallback-host")
-	t.Setenv("CHANDLER_PORT", "18020")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerHost = "fallback-host"
+	settings.ChandlerPort = "18020"
+	useFoghornConfig(t, settings)
 
 	localClusterID = "media-central-primary"
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -99,9 +105,10 @@ func TestGetChandlerBaseURLNormalizesClusterBaseURL(t *testing.T) {
 		clearResolvedChandlerBaseURL()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "fallback-host")
-	t.Setenv("CHANDLER_PORT", "18020")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerHost = "fallback-host"
+	settings.ChandlerPort = "18020"
+	useFoghornConfig(t, settings)
 
 	localClusterID = "media-eu-1"
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -127,9 +134,10 @@ func TestGetChandlerBaseURLFallsBackToHostAndPort(t *testing.T) {
 		clearResolvedChandlerBaseURL()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "chandler-public")
-	t.Setenv("CHANDLER_PORT", "18020")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerHost = "chandler-public"
+	settings.ChandlerPort = "18020"
+	useFoghornConfig(t, settings)
 
 	localClusterID = "media-central-primary"
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -142,9 +150,11 @@ func TestGetChandlerBaseURLFallsBackToHostAndPort(t *testing.T) {
 }
 
 func TestGetChandlerInternalBaseURLsUsesInternalOverride(t *testing.T) {
-	t.Setenv("CHANDLER_INTERNAL_URL", "http://chandler-a:18020, http://chandler-b:18020/")
-	t.Setenv("CHANDLER_HOST", "chandler-public")
-	t.Setenv("CHANDLER_PORT", "9999")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerInternalURL = "http://chandler-a:18020, http://chandler-b:18020/"
+	settings.ChandlerHost = "chandler-public"
+	settings.ChandlerPort = "9999"
+	useFoghornConfig(t, settings)
 
 	got := getChandlerInternalBaseURLs()
 	want := []string{"http://chandler-a:18020", "http://chandler-b:18020"}
@@ -163,10 +173,7 @@ func TestGetChandlerInternalBaseURLsFallsBackToManagedPublicBase(t *testing.T) {
 		clearResolvedChandlerBaseURL()
 	})
 
-	t.Setenv("CHANDLER_INTERNAL_URL", "")
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "")
-	t.Setenv("CHANDLER_PORT", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 
 	localClusterID = "media-central-primary"
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -205,8 +212,9 @@ func TestInvalidateChandlerThumbnailCache(t *testing.T) {
 	srvB := newServer()
 	defer srvB.Close()
 
-	t.Setenv("SERVICE_TOKEN", "svc-token")
-	t.Setenv("CHANDLER_INTERNAL_URL", srvA.URL+","+srvB.URL)
+	settings := &appconfig.Foghorn{ServiceToken: "svc-token"}
+	settings.ChandlerInternalURL = srvA.URL + "," + srvB.URL
+	useFoghornConfig(t, settings)
 
 	invalidateChandlerThumbnailCache("stream-id", []string{
 		"thumbnails/stream-id/sprite.jpg",
@@ -385,9 +393,10 @@ func TestGetChandlerBaseURLForCluster_DoesNotMutateLegacyResolvedURL(t *testing.
 		clearChandlerPerClusterCache()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "chandler-public")
-	t.Setenv("CHANDLER_PORT", "18020")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerHost = "chandler-public"
+	settings.ChandlerPort = "18020"
+	useFoghornConfig(t, settings)
 
 	localClusterID = "media-central-primary"
 	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
@@ -434,9 +443,7 @@ func TestResolveThumbnailChandlerBase_UsesServingClusterNotLocal(t *testing.T) {
 
 	// No explicit override: force the per-cluster derivation path so the ingest
 	// cluster genuinely drives the hostname.
-	t.Setenv("CHANDLER_BASE_URL", "")
-	t.Setenv("CHANDLER_HOST", "")
-	t.Setenv("CHANDLER_PORT", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 
 	// This foghorn's official/local cluster is media-eu-1; the stream ingests on
 	// media-us-1. Only media-us-1 is mappable to a Chandler.
@@ -491,7 +498,9 @@ func TestResolveThumbnailChandlerBase_EmptyClusterFallsBackOnlyWithExplicitLocal
 		clearChandlerPerClusterCache()
 	})
 
-	t.Setenv("CHANDLER_BASE_URL", "https://assets.example.network")
+	settings := &appconfig.Foghorn{}
+	settings.ChandlerBaseURL = "https://assets.example.network"
+	useFoghornConfig(t, settings)
 	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("must not resolve a cluster for the explicit-local path")
 	}
@@ -512,8 +521,9 @@ func TestInvalidateChandlerThumbnailCacheDeduplicatesBaseURLs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("SERVICE_TOKEN", "svc-token")
-	t.Setenv("CHANDLER_INTERNAL_URL", srv.URL+","+srv.URL+"/")
+	settings := &appconfig.Foghorn{ServiceToken: "svc-token"}
+	settings.ChandlerInternalURL = srv.URL + "," + srv.URL + "/"
+	useFoghornConfig(t, settings)
 
 	invalidateChandlerThumbnailCache("stream-id", []string{
 		"thumbnails/stream-id/sprite.jpg",

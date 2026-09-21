@@ -29,7 +29,7 @@ func TestDeductPrepaidBalanceForUsage_AppliesAndLocksBalance(t *testing.T) {
 	amountCents := int64(500)
 	description := "usage charge"
 	referenceID := uuid.New()
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	currentBalance := int64(1000)
 	newBalance := currentBalance - amountCents
 
@@ -85,7 +85,7 @@ func TestDeductPrepaidBalanceForUsage_DuplicateSummaryNoOp(t *testing.T) {
 	amountCents := int64(500)
 	description := "usage charge"
 	referenceID := uuid.New()
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	currentBalance := int64(1000)
 
 	mock.ExpectBegin()

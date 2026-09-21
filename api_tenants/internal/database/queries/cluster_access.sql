@@ -16,6 +16,22 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     resource_limits = COALESCE(NULLIF(quartermaster.tenant_cluster_access.resource_limits, '{}'::jsonb), EXCLUDED.resource_limits),
     updated_at = NOW();
 
+-- name: LockTenantClusterAccessKey :exec
+-- Serializes the writers that grant a tenant access to a cluster, so each one
+-- reads the access state the previous one committed, including when no row
+-- exists yet for FOR UPDATE to lock.
+SELECT pg_advisory_xact_lock(hashtextextended('tenant_cluster_access:' || sqlc.arg(tenant_id)::text || ':' || sqlc.arg(cluster_id)::text, 0));
+
+-- name: LockTenantClusterAccessActive :one
+-- Locks the tenant's access row for the cluster and reports whether it grants
+-- access: active, subscribed, and unexpired.
+SELECT COALESCE(is_active AND subscription_status = 'active'
+                AND (expires_at IS NULL OR expires_at > NOW()), false)::boolean AS active
+FROM quartermaster.tenant_cluster_access
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND cluster_id = sqlc.arg(cluster_id)::text
+FOR UPDATE;
+
 -- name: DeactivateTenantClusterAccess :execrows
 UPDATE quartermaster.tenant_cluster_access
 SET is_active = false, subscription_status = 'suspended', updated_at = NOW()
@@ -31,7 +47,9 @@ SELECT COALESCE(owner_tenant_id::text, '')::text AS owner_tenant_id,
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = sqlc.arg(cluster_id)::text;
 
--- name: MaterializeTenantClusterAccess :execrows
+-- name: MaterializeTenantClusterAccess :many
+-- Returns the access row's ID when the insert or update applied, and no row
+-- when the conflict guard kept the existing access.
 INSERT INTO quartermaster.tenant_cluster_access (
     tenant_id, cluster_id, access_level, access_source, subscription_status,
     is_active, granted_at, requested_at, created_at, updated_at
@@ -75,7 +93,8 @@ WHERE EXCLUDED.access_source = 'owner'
            OR (quartermaster.tenant_cluster_access.expires_at IS NOT NULL
                AND quartermaster.tenant_cluster_access.expires_at <= NOW())
        )
-   );
+   )
+RETURNING id::text;
 
 -- name: RevokeMaterializedTenantClusterAccess :execrows
 UPDATE quartermaster.tenant_cluster_access

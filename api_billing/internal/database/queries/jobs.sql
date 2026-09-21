@@ -227,6 +227,11 @@ SELECT ts.tenant_id::text AS tenant_id,
        ts.stripe_subscription_id,
        ts.mollie_subscription_id,
        ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
        bt.billing_period
@@ -392,11 +397,14 @@ WHERE subscription.status = 'active'
 ORDER BY subscription.pending_effective_at ASC, subscription.tenant_id ASC;
 
 -- name: GetActiveStripeCollectionDetails :one
+-- A Stripe customer is collectable through its subscription or, without a
+-- subscription, through the default payment method saved by setup checkout.
 SELECT stripe_customer_id, stripe_subscription_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND status = 'active'
-  AND stripe_subscription_id IS NOT NULL;
+  AND (stripe_subscription_id IS NOT NULL
+       OR (payment_method = 'stripe' AND stripe_customer_id IS NOT NULL));
 
 -- name: GetLatestProviderPaymentAttempt :one
 SELECT bpa.attempt_number, bpa.status
@@ -409,11 +417,16 @@ LIMIT 1;
 
 -- name: UpsertPendingProviderBillingPayment :one
 INSERT INTO purser.billing_payments (
-    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at
+    id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at,
+    original_amount_cents, original_currency, eur_amount_cents,
+    fx_units_per_eur, fx_source, fx_reference_date
 ) VALUES (
     sqlc.arg(payment_id)::text::uuid, sqlc.arg(invoice_id)::text::uuid,
-    'card', sqlc.arg(amount)::text::numeric, sqlc.arg(currency),
-    sqlc.arg(tx_id), 'pending', NOW(), NOW()
+    'card', sqlc.arg(amount)::text::numeric, sqlc.arg(currency)::text,
+    sqlc.arg(tx_id), 'pending', NOW(), NOW(),
+    sqlc.arg(original_amount_cents)::bigint, sqlc.arg(currency)::text, sqlc.arg(eur_amount_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_source)::text,
+    sqlc.arg(fx_reference_date)::date
 )
 ON CONFLICT (id) DO UPDATE
 SET updated_at = purser.billing_payments.updated_at
@@ -521,7 +534,7 @@ FROM purser.mollie_customers mc
 JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
 WHERE mc.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND ts.status = 'active'
-  AND ts.mollie_subscription_id IS NOT NULL;
+  AND (ts.mollie_subscription_id IS NOT NULL OR ts.payment_method = 'mollie');
 
 -- name: RevokeValidMollieMandates :exec
 UPDATE purser.mollie_mandates

@@ -10,6 +10,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
+	"frameworks/api_gateway/internal/mcp/resources"
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -244,6 +245,11 @@ type TopupResult struct {
 	PriceUSD    string `json:"price_usd,omitempty"`
 	QuoteSource string `json:"quote_source,omitempty"`
 	Network     string `json:"network,omitempty"`
+
+	// AmountCents is in Currency, the tenant's presentment currency.
+	// Conversion is the EUR credit locked with the quote at the ECB rate.
+	Currency   string                    `json:"currency,omitempty"`
+	Conversion *resources.ConversionInfo `json:"conversion,omitempty"`
 }
 
 // strPtr returns a pointer to a string, or nil if empty.

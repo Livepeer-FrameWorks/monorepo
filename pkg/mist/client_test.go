@@ -29,8 +29,7 @@ func TestGetActiveStreamsFilteredContextCancelsInFlightRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(logging.NewLogger())
-	client.BaseURL = srv.URL
+	client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -61,8 +60,7 @@ func TestGetStreamInfoContextCancelsInFlightRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(logging.NewLogger())
-	client.BaseURL = srv.URL
+	client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -92,8 +90,7 @@ func TestPushStartAmbiguityClassification(t *testing.T) {
 		u := srv.URL
 		srv.Close()
 
-		c := NewClient(logging.NewLogger())
-		c.BaseURL = u
+		c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: u})
 
 		err := c.PushStart("live+x", "/data/dvr/x/seg.ts")
 		if err == nil {
@@ -116,8 +113,7 @@ func TestPushStartAmbiguityClassification(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		c := NewClient(logging.NewLogger())
-		c.BaseURL = srv.URL
+		c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
 
 		err := c.PushStart("live+x", "/data/dvr/x/seg.ts")
 		if err == nil {
@@ -131,8 +127,7 @@ func TestPushStartAmbiguityClassification(t *testing.T) {
 
 func TestPushStartTransportErrorDoesNotExposeDestinationSecret(t *testing.T) {
 	const canary = "super-secret-stream-key"
-	c := NewClient(logging.NewLogger())
-	c.BaseURL = "http://mist.invalid"
+	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: "http://mist.invalid"})
 	c.authenticated = true
 	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("transport refused " + req.URL.String())
@@ -198,8 +193,7 @@ func TestNukeStreamSendsRuntimeResetCommand(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(logging.NewLogger())
-	c.BaseURL = srv.URL
+	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
 
 	if err := c.NukeStream("processing+artifact"); err != nil {
 		t.Fatalf("NukeStream error = %v", err)
@@ -228,8 +222,7 @@ func TestPushKillSendsHardKillCommand(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(logging.NewLogger())
-	c.BaseURL = srv.URL
+	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
 
 	if err := c.PushKill(42); err != nil {
 		t.Fatalf("PushKill error = %v", err)

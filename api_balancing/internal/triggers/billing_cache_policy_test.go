@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/prometheus/client_golang/prometheus"
@@ -63,14 +64,14 @@ func TestBillingCacheGraceAndExplicitInvalidation(t *testing.T) {
 }
 
 func TestBillingCacheSWRDefault(t *testing.T) {
-	t.Setenv("BILLING_CACHE_SWR", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 	if got := billingCacheSWR(); got != 5*time.Minute {
 		t.Fatalf("billingCacheSWR = %s, want 5m", got)
 	}
 }
 
 func TestBillingDeniedCacheTTLDefault(t *testing.T) {
-	t.Setenv("BILLING_DENIED_CACHE_TTL", "")
+	useFoghornConfig(t, &appconfig.Foghorn{})
 	if got := billingDeniedTTL(); got != 30*time.Second {
 		t.Fatalf("billingDeniedTTL = %s, want 30s", got)
 	}
@@ -173,7 +174,9 @@ func TestBillingCacheDoesNotTrustPartialIdentityContext(t *testing.T) {
 }
 
 func TestBillingCacheDeniedDecisionRecoversWithoutInvalidation(t *testing.T) {
-	t.Setenv("BILLING_DENIED_CACHE_TTL", "20ms")
+	settings := &appconfig.Foghorn{}
+	settings.BillingDeniedCacheTTL = "20ms"
+	useFoghornConfig(t, settings)
 	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
 	events := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_billing_denied_expiry_events_total"}, []string{"outcome"})
 	p.SetMetrics(&ProcessorMetrics{BillingCacheEvents: events})

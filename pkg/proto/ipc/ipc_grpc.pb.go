@@ -8,6 +8,7 @@ package ipcpb
 
 import (
 	context "context"
+	events "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -158,6 +159,7 @@ const (
 	DecklogService_SendEvent_FullMethodName            = "/helmsmancontrol.DecklogService/SendEvent"
 	DecklogService_SendServiceEvent_FullMethodName     = "/helmsmancontrol.DecklogService/SendServiceEvent"
 	DecklogService_SendGatewayTelemetry_FullMethodName = "/helmsmancontrol.DecklogService/SendGatewayTelemetry"
+	DecklogService_PublishDomainEvents_FullMethodName  = "/helmsmancontrol.DecklogService/PublishDomainEvents"
 )
 
 // DecklogServiceClient is the client API for DecklogService service.
@@ -192,6 +194,13 @@ type DecklogServiceClient interface {
 	// (transcode/AI outcomes) require both stream_tenant_id and
 	// cluster_owner_tenant_id.
 	SendGatewayTelemetry(ctx context.Context, in *GatewayTelemetryEvent, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Domain events from producer outboxes onto domain.events. The whole batch
+	// is validated before anything is produced: a missing ID, a tenant that does
+	// not match the type's scope, or a payload that does not decode as its
+	// registered message is INVALID_ARGUMENT; an unregistered type is
+	// FAILED_PRECONDITION, so producers wait for an upgraded Decklog. The RPC
+	// returns only after Kafka acknowledged every record.
+	PublishDomainEvents(ctx context.Context, in *events.DomainEventBatch, opts ...grpc.CallOption) (*events.PublishDomainEventsResponse, error)
 }
 
 type decklogServiceClient struct {
@@ -232,6 +241,16 @@ func (c *decklogServiceClient) SendGatewayTelemetry(ctx context.Context, in *Gat
 	return out, nil
 }
 
+func (c *decklogServiceClient) PublishDomainEvents(ctx context.Context, in *events.DomainEventBatch, opts ...grpc.CallOption) (*events.PublishDomainEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(events.PublishDomainEventsResponse)
+	err := c.cc.Invoke(ctx, DecklogService_PublishDomainEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DecklogServiceServer is the server API for DecklogService service.
 // All implementations must embed UnimplementedDecklogServiceServer
 // for forward compatibility.
@@ -264,6 +283,13 @@ type DecklogServiceServer interface {
 	// (transcode/AI outcomes) require both stream_tenant_id and
 	// cluster_owner_tenant_id.
 	SendGatewayTelemetry(context.Context, *GatewayTelemetryEvent) (*emptypb.Empty, error)
+	// Domain events from producer outboxes onto domain.events. The whole batch
+	// is validated before anything is produced: a missing ID, a tenant that does
+	// not match the type's scope, or a payload that does not decode as its
+	// registered message is INVALID_ARGUMENT; an unregistered type is
+	// FAILED_PRECONDITION, so producers wait for an upgraded Decklog. The RPC
+	// returns only after Kafka acknowledged every record.
+	PublishDomainEvents(context.Context, *events.DomainEventBatch) (*events.PublishDomainEventsResponse, error)
 	mustEmbedUnimplementedDecklogServiceServer()
 }
 
@@ -282,6 +308,9 @@ func (UnimplementedDecklogServiceServer) SendServiceEvent(context.Context, *Serv
 }
 func (UnimplementedDecklogServiceServer) SendGatewayTelemetry(context.Context, *GatewayTelemetryEvent) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendGatewayTelemetry not implemented")
+}
+func (UnimplementedDecklogServiceServer) PublishDomainEvents(context.Context, *events.DomainEventBatch) (*events.PublishDomainEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PublishDomainEvents not implemented")
 }
 func (UnimplementedDecklogServiceServer) mustEmbedUnimplementedDecklogServiceServer() {}
 func (UnimplementedDecklogServiceServer) testEmbeddedByValue()                        {}
@@ -358,6 +387,24 @@ func _DecklogService_SendGatewayTelemetry_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DecklogService_PublishDomainEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(events.DomainEventBatch)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DecklogServiceServer).PublishDomainEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DecklogService_PublishDomainEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DecklogServiceServer).PublishDomainEvents(ctx, req.(*events.DomainEventBatch))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DecklogService_ServiceDesc is the grpc.ServiceDesc for DecklogService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -376,6 +423,10 @@ var DecklogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendGatewayTelemetry",
 			Handler:    _DecklogService_SendGatewayTelemetry_Handler,
+		},
+		{
+			MethodName: "PublishDomainEvents",
+			Handler:    _DecklogService_PublishDomainEvents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

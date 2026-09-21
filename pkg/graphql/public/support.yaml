@@ -1,0 +1,15 @@
+# SDK compatibility lines and the FrameWorks releases each supports.
+#
+# The TypeScript, Go, and Python SDKs share one version and this file. Under
+# 0.x a minor release may break, so each MAJOR.MINOR is its own line; after
+# 1.0 a line is a major. A live line supports every stable release at or above
+# min_server. majors/v<MAJOR>.json holds the operation documents of each line;
+# make verify-api-compat validates them against every such release.
+#
+# docs/standards/graphql-deprecation.md is the policy these lines enforce.
+current: "0.1"
+lines:
+  - line: "0.1"
+    status: live
+    # v0.3.11 is the first release that serves serverInfo.
+    min_server: v0.3.11

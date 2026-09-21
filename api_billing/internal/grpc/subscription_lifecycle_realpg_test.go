@@ -86,13 +86,20 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 	created, err := server.CreateSubscription(ctx, &purserpb.CreateSubscriptionRequest{
 		TenantId: tenantID, TierId: tierID, BillingEmail: "first@example.com",
 		BillingModel: "postpaid", PaymentMethod: "card",
-		CustomFeatures: &purserpb.BillingFeatures{Recording: true},
+		CustomFeatures: &purserpb.BillingFeatures{ProcessingCustomizable: true, SupportLevel: "dedicated"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, parseErr := uuid.Parse(created.GetId()); parseErr != nil {
 		t.Fatalf("created subscription ID = %q: %v", created.GetId(), parseErr)
+	}
+	var storedFeatures []byte
+	if err := db.QueryRowContext(ctx, `SELECT custom_features FROM purser.tenant_subscriptions WHERE id = $1`, created.GetId()).Scan(&storedFeatures); err != nil {
+		t.Fatal(err)
+	}
+	if got := scanBillingFeatures(storedFeatures); !got.GetProcessingCustomizable() || got.GetSupportLevel() != "dedicated" {
+		t.Fatalf("stored custom_features %s read back as %+v", storedFeatures, got)
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)

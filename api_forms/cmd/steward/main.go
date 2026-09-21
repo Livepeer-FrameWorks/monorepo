@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+
+	"frameworks/api_forms/internal/appconfig"
 	"frameworks/api_forms/internal/handlers"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
@@ -11,8 +14,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -24,32 +25,48 @@ func main() {
 	logger := logging.NewLoggerWithService("steward")
 	config.LoadEnv(logger)
 
-	port := config.GetEnv("PORT", "18032")
-	turnstileKey := config.GetEnv("TURNSTILE_FORMS_SECRET_KEY", "")
+	configOptions := config.Options{Service: "steward", Logger: logger}
+	cfg, err := config.Load[appconfig.Steward](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	liveBranding := config.NewLive(&cfg.EmailBranding, configOptions)
 
 	emailConfig := email.Config{
-		Host:          config.GetEnv("SMTP_HOST", ""),
-		Port:          config.GetEnv("SMTP_PORT", "587"),
-		User:          config.GetEnv("SMTP_USER", ""),
-		Password:      config.GetEnv("SMTP_PASSWORD", ""),
-		From:          config.GetEnv("FROM_EMAIL", "noreply@frameworks.network"),
-		FromName:      config.GetEnv("FROM_NAME", "FrameWorks"),
-		AllowInsecure: config.GetEnvBool("SMTP_ALLOW_INSECURE", false),
+		Host:          cfg.SMTPHost,
+		Port:          cfg.SMTPPort,
+		User:          cfg.SMTPUser,
+		Password:      cfg.SMTPPassword,
+		From:          cfg.FromEmail,
+		FromName:      cfg.FromName,
+		AllowInsecure: cfg.SMTPAllowInsecure,
 	}
 	emailSender := email.NewSender(emailConfig)
 
-	turnstileValidator := turnstile.NewValidator(turnstileKey)
-	turnstileEnabled := turnstileKey != ""
+	turnstileValidator := turnstile.NewValidator(cfg.TurnstileFormsSecretKey)
+	turnstileEnabled := cfg.TurnstileFormsSecretKey != ""
 
 	healthChecker := monitoring.NewHealthChecker("steward", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("steward", version.Version, version.GitCommit)
 
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"SMTP_HOST": emailConfig.Host,
-		"TO_EMAIL":  config.GetEnv("TO_EMAIL", ""),
+		"SMTP_HOST": cfg.SMTPHost,
+		"TO_EMAIL":  cfg.ToEmail,
 	}))
 
-	app := server.SetupServiceRouter(logger, "steward", healthChecker, metricsCollector)
+	// Steward has no dependency it needs to accept requests; readiness only
+	// reports the drain window during shutdown.
+	readiness := monitoring.NewReadinessChecker("steward", version.Version)
+
+	app := server.NewServiceRouter(server.RouterSpec{
+		Service: "steward",
+		Logger:  logger,
+		Health:  healthChecker,
+		Ready:   readiness,
+		Metrics: metricsCollector,
+		Runtime: cfg.HTTPRuntime,
+	})
 
 	formMetrics := &handlers.FormMetrics{
 		ContactRequests: metricsCollector.NewCounter(
@@ -66,15 +83,15 @@ func main() {
 
 	var activityEmitter handlers.ActivityEmitter
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
-		Target:        strings.TrimSpace(config.GetEnv("DECKLOG_GRPC_ADDR", "")),
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    strings.TrimSpace(config.GetEnv("GRPC_TLS_CA_PATH", "")),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       5 * time.Second,
 		Source:        "steward",
-		ServiceToken:  strings.TrimSpace(config.GetEnv("SERVICE_TOKEN", "")),
-		ClusterID:     strings.TrimSpace(config.GetEnv("CLUSTER_ID", "")),
-		SourceRegion:  strings.TrimSpace(config.GetEnv("REGION", "")),
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 		Optional:      true,
 	}, logger)
 	if err != nil {
@@ -87,39 +104,40 @@ func main() {
 	contactHandler := handlers.NewContactHandler(
 		emailSender,
 		turnstileValidator,
-		config.GetEnv("TO_EMAIL", "contact@frameworks.network"),
-		config.GetEnv("EMAIL_SUBJECT_PREFIX", "Contact Form"),
-		config.GetEnv("CONTACT_SUCCESS_MESSAGE", "Thank you for your message! We'll get back to you soon."),
+		cfg.ContactRecipient(),
+		cfg.EmailSubjectPrefix,
+		cfg.ContactSuccessMessage,
+		cfg.EmailBranding,
 		turnstileEnabled,
 		logger,
 		formMetrics,
 		activityEmitter,
 	)
 
+	contactHandler.BrandingSource = func() config.EmailBranding { return *liveBranding.Get() }
 	app.POST("/api/contact", contactHandler.Handle)
 
 	// Listmonk Integration (optional)
-	listmonkURL := config.GetEnv("LISTMONK_URL", "")
-	if listmonkURL != "" {
-		listmonkUser := strings.TrimSpace(config.GetEnv("LISTMONK_API_USERNAME", ""))
-		listmonkToken := strings.TrimSpace(config.GetEnv("LISTMONK_API_TOKEN", ""))
-		listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")
-		listID, _ := strconv.Atoi(listIDStr)
-
-		if listmonkUser == "" || listmonkToken == "" {
+	if cfg.ListmonkURL != "" {
+		if cfg.ListmonkAPIUsername == "" || cfg.ListmonkAPIToken == "" {
 			logger.Warn("LISTMONK_URL is set but LISTMONK_API_USERNAME or LISTMONK_API_TOKEN is missing, subscribe endpoint disabled")
 		} else {
-			lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkToken)
-			subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics, activityEmitter)
+			lmClient := listmonk.NewClient(cfg.ListmonkURL, cfg.ListmonkAPIUsername, cfg.ListmonkAPIToken)
+			subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, cfg.DefaultMailingListID, turnstileEnabled, logger, formMetrics, activityEmitter)
 			app.POST("/api/subscribe", subHandler.Handle)
 		}
 	} else {
 		logger.Info("LISTMONK_URL not set, subscribe endpoint disabled")
 	}
 
-	serverConfig := server.DefaultConfig("steward", port)
 	server.RegisterEnvFileReload("steward", logger)
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.Fatal(err.Error())
+	if runErr := server.Run(context.Background(), server.RunSpec{
+		Service:  "steward",
+		Logger:   logger,
+		Ready:    readiness,
+		HTTP:     []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: app}},
+		OnReload: []server.ReloadCallback{liveBranding.Reload},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Server exited with error")
 	}
 }

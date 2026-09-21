@@ -1,0 +1,163 @@
+# The public tenant events, the same messages webhooks deliver. reason has a
+# different enum type per event family, so each family selects it under its
+# own alias.
+
+subscription TenantEvents($types: [String!], $streamId: ID) {
+  tenantEvents(types: $types, streamId: $streamId) {
+    id
+    type
+    time
+    subject
+    data {
+      __typename
+      ... on AccountSuspended {
+        suspensionReason: reason
+      }
+      ... on ApiTokenCreated {
+        tokenId
+        name
+        permissions
+        expiresAt
+      }
+      ... on ApiTokenRevoked {
+        tokenId
+      }
+      ... on BillingDetailsUpdated {
+        changedFields
+      }
+      ... on InvoiceCreated {
+        invoiceId
+        amountDue {
+          ...EventMoneyFields
+        }
+        periodStart
+        periodEnd
+        dueAt
+      }
+      ... on InvoicePaid {
+        invoiceId
+        amountPaid {
+          ...EventMoneyFields
+        }
+      }
+      ... on PaymentFailed {
+        paymentId
+        invoiceId
+        amount {
+          ...EventMoneyFields
+        }
+        paymentFailureReason: reason
+        provider
+        providerReferenceId
+      }
+      ... on TopupCredited {
+        topupId
+        amount {
+          ...EventMoneyFields
+        }
+      }
+      ... on ClipRequested {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+      }
+      ... on ClipReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        mediaFailureReason: reason
+      }
+      ... on CustomDomainVerified {
+        domain
+      }
+      ... on CustomDomainFailed {
+        domain
+        customDomainFailureReason: reason
+      }
+      ... on MultistreamStatusChanged {
+        streamId
+        targetId
+        targetName
+        status
+        previousStatus
+      }
+      ... on RecordingReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on RecordingFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        mediaFailureReason: reason
+      }
+      ... on StreamConnected {
+        streamId
+        protocol
+      }
+      ... on StreamCreated {
+        streamId
+        name
+        playbackId
+      }
+      ... on StreamDeleted {
+        streamId
+      }
+      ... on StreamIdle {
+        streamId
+      }
+      ... on StreamKeyRotated {
+        streamId
+      }
+      ... on StreamLive {
+        streamId
+      }
+      ... on StreamUpdated {
+        streamId
+        changedFields
+      }
+      ... on UploadCreated {
+        artifact {
+          ...EventArtifactFields
+        }
+        filename
+        expectedSizeBytes
+      }
+      ... on UploadCompleted {
+        artifact {
+          ...EventArtifactFields
+        }
+        sizeBytes
+      }
+      ... on UploadAborted {
+        artifact {
+          ...EventArtifactFields
+        }
+      }
+      ... on UploadReady {
+        artifact {
+          ...EventArtifactFields
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on UploadFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        mediaFailureReason: reason
+      }
+    }
+  }
+}

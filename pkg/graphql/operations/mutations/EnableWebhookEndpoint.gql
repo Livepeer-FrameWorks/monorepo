@@ -1,0 +1,15 @@
+# Enable a disabled webhook endpoint
+mutation EnableWebhookEndpoint($id: ID!) {
+  enableWebhookEndpoint(id: $id) {
+    __typename
+    ... on WebhookEndpoint {
+      ...WebhookEndpointFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

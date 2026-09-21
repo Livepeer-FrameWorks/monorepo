@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_consultant/internal/diagnostics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -493,7 +494,7 @@ func TestRenderInfraAlertEmail(t *testing.T) {
 		},
 	}
 
-	body, err := renderInfraAlertEmail(alerts)
+	body, err := renderInfraAlertEmail(alerts, config.EmailBranding{})
 	if err != nil {
 		t.Fatalf("renderInfraAlertEmail: %v", err)
 	}
@@ -510,7 +511,7 @@ func TestRenderInfraAlertEmail(t *testing.T) {
 }
 
 func TestRenderInfraAlertEmail_NoAlerts(t *testing.T) {
-	_, err := renderInfraAlertEmail(nil)
+	_, err := renderInfraAlertEmail(nil, config.EmailBranding{})
 	if err == nil {
 		t.Fatal("expected error for empty alerts")
 	}

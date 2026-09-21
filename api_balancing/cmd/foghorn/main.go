@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
@@ -21,6 +21,7 @@ import (
 	"frameworks/api_balancing/internal/configseedackoutbox"
 	"frameworks/api_balancing/internal/control"
 	foghornmigrations "frameworks/api_balancing/internal/datamigrations"
+	"frameworks/api_balancing/internal/domainevents"
 	"frameworks/api_balancing/internal/federation"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
@@ -44,10 +45,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	eventsoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -56,11 +59,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -276,10 +279,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
 		logger := logging.NewLoggerWithService("foghorn")
 		config.LoadEnv(logger)
+		migrationsCfg, cfgErr := config.Load[appconfig.FoghornDataMigrations](config.Options{Service: "foghorn", Logger: logger})
+		if cfgErr != nil {
+			logger.WithError(cfgErr).Fatal("Invalid configuration")
+		}
 		foghornmigrations.Register()
 		dbConfig := database.DefaultConfig()
 		dbConfig.ServiceName = "foghorn"
-		dbConfig.URL = config.RequireEnv("DATABASE_URL")
+		dbConfig.URL = migrationsCfg.DatabaseURL
 		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
 			return database.Connect(dbConfig, logger)
 		}, os.Stdout, os.Args[1:])
@@ -295,34 +302,41 @@ func main() {
 
 	// Load environment variables
 	config.LoadEnv(logger)
-	// Transcode job capabilities are mandatory: without this shared secret,
-	// Livepeer dispatches would be minted/rejected only at request time and every
-	// ingest would fail as an opaque 403. Refuse to start the release instead.
-	_ = config.RequireEnv("FOGHORN_BALANCER_CAPABILITY_SECRET")
-	if err := control.ConfigureAdmissionEffectEncryption(os.Getenv("FOGHORN_STATE_ENCRYPTION_KEY")); err != nil {
-		logger.WithError(err).Fatal("Foghorn durable state encryption is unavailable")
+	configOptions := config.Options{Service: "foghorn", Logger: logger}
+	cfg, err := config.Load[appconfig.Foghorn](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
-	foghornCfg := foghornconfig.Load()
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	liveConfig := config.NewLive(cfg, configOptions)
+	// Internal packages read use-time settings through appconfig.Current, so
+	// they follow the SIGHUP reload that server.Run applies to liveConfig.
+	appconfig.Install(liveConfig.Get)
+	state.SetRestartReconnectWindowSeconds(cfg.RestartReconnectWindowSeconds)
+	if encryptionErr := control.ConfigureAdmissionEffectEncryption(cfg.StateEncryptionKey); encryptionErr != nil {
+		logger.WithError(encryptionErr).Fatal("Foghorn durable state encryption is unavailable")
+	}
+	foghornCfg := foghornconfig.New(cfg)
 	control.SetLocalClusterID(foghornCfg.ClusterID)
-	controlCellID := config.GetEnv("MEDIA_AUTHORITY_CELL_ID", foghornCfg.ClusterID)
+	controlCellID := cfg.ControlCellID()
 	control.SetLocalControlCellID(controlCellID)
 
 	// Explicit platform-shared edge clusters: only on these may a tenantless node serve arbitrary tenants'
 	// durable bytes (control.nodeMayServeTenant). Comma-separated cluster IDs. This is the operator-declared
 	// source; the canonical Quartermaster is_platform_official set is loaded separately below. Unset here ⇒
 	// only Quartermaster-official clusters qualify; if both are empty, tenantless nodes serve nothing.
-	for _, c := range strings.Split(config.GetEnv("FOGHORN_PLATFORM_SHARED_CLUSTERS", ""), ",") {
-		if c = strings.TrimSpace(c); c != "" {
-			control.AddPlatformSharedCluster(c)
-		}
+	for _, c := range cfg.PlatformSharedClusters {
+		control.AddPlatformSharedCluster(c)
 	}
 
 	// Storage base path for local-path reconstruction (DVR dispatch) when node
-	// has no StorageLocal. Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH.
-	if storageBase := config.GetEnv("FOGHORN_DEFAULT_STORAGE_BASE", ""); storageBase != "" {
-		if !filepath.IsAbs(storageBase) {
-			logger.WithField("path", storageBase).Fatal("FOGHORN_DEFAULT_STORAGE_BASE must be absolute path")
-		}
+	// has no StorageLocal. Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH;
+	// appconfig.Foghorn.Validate rejects a relative path.
+	if storageBase := cfg.DefaultStorageBase; storageBase != "" {
 		control.SetDefaultStorageBase(storageBase)
 		logger.WithField("storage_base", storageBase).Info("Using custom default storage base")
 	}
@@ -330,12 +344,12 @@ func main() {
 	logger.WithField("service", "foghorn").Info("Starting Foghorn Load Balancer")
 
 	// Service token for service-to-service authentication
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	serviceToken := cfg.ServiceToken
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "foghorn"
-	dbURL := config.RequireEnv("DATABASE_URL")
+	dbURL := cfg.DatabaseURL
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
@@ -354,7 +368,7 @@ func main() {
 	// with it must run the shared-state relay rather than degrade silently.
 	haRequired := foghornCfg.Redis.Mode == pkgredis.ModeSentinel
 
-	instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", "")
+	instanceID := cfg.InstanceID
 	if instanceID == "" {
 		instanceID = fmt.Sprintf("foghorn-%d", time.Now().UnixNano())
 		if foghornCfg.Redis.Mode != "" || foghornCfg.RedisURL != "" {
@@ -367,9 +381,9 @@ func main() {
 		// A Sentinel topology makes this Foghorn an HA replica: shared state,
 		// relay grants, and the command relay depend on Redis, so startup waits
 		// for the topology and exits if it never becomes reachable.
-		client, err := connectRequiredRedis(context.Background(), foghornCfg.Redis, pkgredis.NewUniversalClient, sentinelConnectAttempts, sentinelConnectMaxBackoff, logger)
-		if err != nil {
-			logger.WithError(err).Fatal("Redis Sentinel is configured but unreachable")
+		client, connectErr := connectRequiredRedis(context.Background(), foghornCfg.Redis, pkgredis.NewUniversalClient, sentinelConnectAttempts, sentinelConnectMaxBackoff, logger)
+		if connectErr != nil {
+			logger.WithError(connectErr).Fatal("Redis Sentinel is configured but unreachable")
 		}
 		redisClient = client
 	} else if foghornCfg.Redis.Mode != "" {
@@ -399,15 +413,9 @@ func main() {
 		state.DefaultTenantCapacity().EnableRedisSync(redisClient, foghornCfg.ClusterID)
 	}
 
-	// Set weights from environment variables
-	cpu := uint64(config.GetEnvInt("CPU_WEIGHT", 500))
-	ram := uint64(config.GetEnvInt("RAM_WEIGHT", 500))
-	bw := uint64(config.GetEnvInt("BANDWIDTH_WEIGHT", 1000))
-	geo := uint64(config.GetEnvInt("GEO_WEIGHT", 1000))
-	bonus := uint64(config.GetEnvInt("STREAM_BONUS", 50))
-
-	if cpu > 0 && ram > 0 && bw > 0 && geo > 0 && bonus > 0 {
-		lb.SetWeights(cpu, ram, bw, geo, bonus)
+	// Balancer weights apply only when every weight is positive.
+	if cfg.CPUWeight > 0 && cfg.RAMWeight > 0 && cfg.BandwidthWeight > 0 && cfg.GeoWeight > 0 && cfg.StreamBonus > 0 {
+		lb.SetWeights(uint64(cfg.CPUWeight), uint64(cfg.RAMWeight), uint64(cfg.BandwidthWeight), uint64(cfg.GeoWeight), uint64(cfg.StreamBonus))
 	}
 
 	// Setup monitoring
@@ -612,18 +620,16 @@ func main() {
 
 	// --- Initialize Clients (Lifted from Handlers) ---
 
-	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
-	allowInsecure := config.GetEnvBool("GRPC_ALLOW_INSECURE", false)
 	decklogConfig := decklog.BatchedClientConfig{
-		Target:        decklogGRPCAddr,
-		AllowInsecure: allowInsecure,
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("decklog"),
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
 		ServiceToken:  serviceToken,
-		ClusterID:     config.GetEnv("CLUSTER_ID", ""),
-		SourceRegion:  config.GetEnv("REGION", ""),
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
 	}
 	decklogClient, err := decklog.NewBatchedClient(decklogConfig, logger)
 	if err != nil {
@@ -636,16 +642,39 @@ func main() {
 	artifactoutbox.Init(db, logger, decklogClient)
 	go artifactoutbox.RunWorker(context.Background())
 
+	// Domain events commit into foghorn.domain_event_outbox with the state changes they
+	// describe; this relay publishes them to Decklog and stops after every listener. Rows
+	// written while no Decklog client exists wait in the outbox.
+	domainEventCtx, cancelDomainEvents := context.WithCancel(context.Background())
+	var domainEventWG sync.WaitGroup
+	if decklogClient != nil {
+		domainEventRelay, relayErr := eventsoutbox.NewRelay(db, domainevents.Schema, decklogClient, logger)
+		if relayErr != nil {
+			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
+		}
+		domainEventWG.Add(1)
+		go func() {
+			defer domainEventWG.Done()
+			domainEventRelay.Run(domainEventCtx)
+		}()
+	} else {
+		logger.Warn("Domain event relay not started: no Decklog client")
+	}
+	stopDomainEvents := func() {
+		cancelDomainEvents()
+		domainEventWG.Wait()
+	}
+
 	// Quartermaster (gRPC)
-	quartermasterGRPCURL := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	quartermasterGRPCURL := cfg.QuartermasterGRPCAddr
 	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 		GRPCAddr:      quartermasterGRPCURL,
 		Timeout:       30 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Quartermaster gRPC client - starting in degraded mode")
@@ -663,35 +692,14 @@ func main() {
 	startReleaseReconciler(qmClient, logger)
 
 	// Commodore (gRPC)
-	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
+	commodoreGRPCURL := cfg.CommodoreGRPCAddr
 
 	// Commodore Cache
-	ttl := 60 * time.Second
-	if v := config.GetEnv("COMMODORE_CACHE_TTL", ""); v != "" {
-		if d, errParse := time.ParseDuration(v); errParse == nil {
-			ttl = d
-		}
+	maxEntries := cfg.CommodoreCacheMaxEntries
+	if maxEntries <= 0 {
+		maxEntries = 10000
 	}
-	swr := 30 * time.Second
-	if v := config.GetEnv("COMMODORE_CACHE_SWR", ""); v != "" {
-		if d, errParse := time.ParseDuration(v); errParse == nil {
-			swr = d
-		}
-	}
-	neg := 10 * time.Second
-	if v := config.GetEnv("COMMODORE_CACHE_NEG_TTL", ""); v != "" {
-		if d, errParse := time.ParseDuration(v); errParse == nil {
-			neg = d
-		}
-	}
-	maxEntries := 10000
-	if v := config.GetEnv("COMMODORE_CACHE_MAX", ""); v != "" {
-		if n, errParse := strconv.Atoi(v); errParse == nil && n > 0 {
-			maxEntries = n
-		}
-	}
-	// Use the cache factory from main
-	commodoreCache := newServiceCache("commodore", ttl, swr, neg, maxEntries, cacheMetrics)
+	commodoreCache := newServiceCache("commodore", cfg.CommodoreCacheTTL, cfg.CommodoreCacheSWR, cfg.CommodoreCacheNegativeTTL, maxEntries, cacheMetrics)
 
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
 		GRPCAddr:      commodoreGRPCURL,
@@ -699,9 +707,9 @@ func main() {
 		Logger:        logger,
 		Cache:         commodoreCache,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.CommodoreGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to create Commodore gRPC client - starting in degraded mode")
@@ -765,7 +773,7 @@ func main() {
 
 	// Navigator is optional; dev compose does not run it, and the client
 	// connects lazily, so an unset address is the only reliable off switch.
-	navigatorAddr := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_ADDR", ""))
+	navigatorAddr := cfg.NavigatorGRPCAddr
 	if navigatorAddr == "" {
 		logger.Info("Navigator gRPC address not configured; TLS bundles will not be seeded")
 	} else {
@@ -774,9 +782,9 @@ func main() {
 			Timeout:       10 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("navigator"),
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.NavigatorGRPCTLSServerName,
 		})
 		if navErr != nil {
 			logger.WithError(navErr).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
@@ -792,17 +800,16 @@ func main() {
 	// and joins every worker before closing the RPC transport it may still use.
 	defer stopConfigSeedAckOutbox()
 	// Purser (gRPC) - x402 settlement + billing checks
-	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr: purserGRPCURL,
+		GRPCAddr: cfg.PurserGRPCAddr,
 		// Settlement may legitimately consume the facilitator's full 30-second
 		// budget; leave headroom for Purser's surrounding persistence work.
 		Timeout:       45 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.PurserGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - x402 payments will be unavailable")
@@ -812,38 +819,20 @@ func main() {
 	}
 
 	// GeoIP
-	var geoipReader *geoip.Reader
 	var geoipCache *cache.Cache
-	geoipReader = geoip.GetSharedReader()
+	geoipReader, err := geoip.Open(cfg.MMDBPath)
+	if err != nil {
+		logger.WithError(err).Warn("GeoIP unavailable; continuing without geolocation")
+	}
 	if geoipReader != nil {
-		gttl := 300 * time.Second
-		gswr := 120 * time.Second
-		gneg := 60 * time.Second
-		gmax := 50000
-		if v := config.GetEnv("GEOIP_CACHE_TTL", ""); v != "" {
-			if d, errParse := time.ParseDuration(v); errParse == nil {
-				gttl = d
-			}
+		gmax := cfg.GeoIPCacheMaxEntries
+		if gmax <= 0 {
+			gmax = 50000
 		}
-		if v := config.GetEnv("GEOIP_CACHE_SWR", ""); v != "" {
-			if d, errParse := time.ParseDuration(v); errParse == nil {
-				gswr = d
-			}
-		}
-		if v := config.GetEnv("GEOIP_CACHE_NEG_TTL", ""); v != "" {
-			if d, errParse := time.ParseDuration(v); errParse == nil {
-				gneg = d
-			}
-		}
-		if v := config.GetEnv("GEOIP_CACHE_MAX", ""); v != "" {
-			if n, errParse := strconv.Atoi(v); errParse == nil && n > 0 {
-				gmax = n
-			}
-		}
-		geoipCache = newServiceCache("geoip", gttl, gswr, gneg, gmax, cacheMetrics)
+		geoipCache = newServiceCache("geoip", cfg.GeoIPCacheTTL, cfg.GeoIPCacheSWR, cfg.GeoIPCacheNegativeTTL, gmax, cacheMetrics)
 		logger.Info("GeoIP reader initialized successfully with cache")
 	} else {
-		logger.Info("GeoIP disabled (no GEOIP_MMDB_PATH or failed to load)")
+		logger.Info("GeoIP disabled (no readable database)")
 	}
 
 	// S3 Cold Storage Client (optional - only if STORAGE_S3_BUCKET is configured)
@@ -862,14 +851,14 @@ func main() {
 	// (PrepareArtifact redirect emit, MintStorageURLs callee validation)
 	// and by the storage resolver factory to decide local vs federated mint.
 	var localS3Backing storage.S3Backing
-	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
+	if s3Bucket := cfg.S3Bucket; s3Bucket != "" {
 		s3Config := storage.S3Config{
 			Bucket:    s3Bucket,
-			Prefix:    config.GetEnv("STORAGE_S3_PREFIX", ""),
-			Region:    config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
-			Endpoint:  config.GetEnv("STORAGE_S3_ENDPOINT", ""),
-			AccessKey: config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
-			SecretKey: config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
+			Prefix:    cfg.S3Prefix,
+			Region:    cfg.S3Region,
+			Endpoint:  cfg.S3Endpoint,
+			AccessKey: cfg.S3AccessKey,
+			SecretKey: cfg.S3SecretKey,
 		}
 		localS3Backing = storage.S3Backing{
 			Bucket:   s3Config.Bucket,
@@ -938,7 +927,7 @@ func main() {
 		// proof, and silently disabling durable storage would strand every durable write after a config omission. Valid
 		// only when: STORAGE_MODE=none is explicitly set, OR a REACHABLE Quartermaster declares NO S3 backend for this
 		// cluster. Otherwise (unreachable QM, no QM client, or QM declares a bucket) fail closed.
-		if strings.EqualFold(strings.TrimSpace(config.GetEnv("STORAGE_MODE", "")), "none") {
+		if strings.EqualFold(cfg.StorageMode, "none") {
 			logger.Info("S3 cold storage disabled (STORAGE_MODE=none)")
 		} else if qmClient == nil {
 			logger.Fatal("No STORAGE_S3_BUCKET and no Quartermaster client to confirm this cell is storage-less; refusing to start S3-disabled (set STORAGE_MODE=none for a genuinely storage-less cell, or set STORAGE_S3_*)")
@@ -960,31 +949,34 @@ func main() {
 	// Initialize handlers with injected clients before bootstrap metadata is applied.
 	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
-	internalGRPCBindAddr := config.GetEnv("FOGHORN_INTERNAL_GRPC_BIND_ADDR", ":18019")
-	externalGRPCBindAddr := config.GetEnv("FOGHORN_EXTERNAL_GRPC_BIND_ADDR", ":18029")
+	internalGRPCBindAddr := cfg.InternalGRPCBindAddr
+	externalGRPCBindAddr := cfg.ExternalGRPCBindAddr
 
 	// Register at QM before federation starts so leadership events have stable
 	// cluster ownership metadata. QM resolves the address as wireguard_ip >
-	// internal_ip > external_ip.
+	// internal_ip > external_ip. The registration advertises the internal
+	// control gRPC listener and carries no health endpoint.
 	advertiseAddr := ""
 	if qmClient != nil {
-		grpcPort := config.GetEnvInt("FOGHORN_INTERNAL_GRPC_PORT", controlPortFromBindAddr(internalGRPCBindAddr, 18019))
-		bsReq := &quartermasterpb.BootstrapServiceRequest{
-			Type:      "foghorn",
-			Version:   version.Version,
-			Protocol:  "grpc",
-			Port:      int32(grpcPort),
-			ClusterId: &foghornCfg.ClusterID,
-			Metadata: map[string]string{
-				"foghorn_listener": "internal_control",
-				"instance_id":      instanceID,
-			},
+		grpcPort := cfg.InternalGRPCPort
+		if grpcPort <= 0 {
+			grpcPort = controlPortFromBindAddr(internalGRPCBindAddr, 18019)
 		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			bsReq.NodeId = &nodeID
+		bsReq, bsReqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:        "foghorn",
+			Protocol:           "grpc",
+			Port:               strconv.Itoa(grpcPort),
+			AdvertiseHost:      cfg.AdvertiseHost,
+			ClusterID:          foghornCfg.ClusterID,
+			NodeID:             cfg.NodeID,
+			OmitHealthEndpoint: true,
+		})
+		if bsReqErr != nil {
+			logger.WithError(bsReqErr).Fatal("Invalid Foghorn service registration")
 		}
-		if host := config.GetEnv("FOGHORN_HOST", ""); host != "" {
-			bsReq.AdvertiseHost = &host
+		bsReq.Metadata = map[string]string{
+			"foghorn_listener": "internal_control",
+			"instance_id":      instanceID,
 		}
 
 		// Service discovery is a central-plane projection, not a prerequisite
@@ -1016,7 +1008,7 @@ func main() {
 	_, bootstrapOwnerTenantID := handlers.GetClusterInfo()
 
 	// --- Federation (cross-cluster stream routing) ---
-	federationEnabled := config.GetEnv("FEDERATION_ENABLED", "false") == "true"
+	federationEnabled := cfg.Federation()
 	if federationEnabled {
 		if qmClient == nil {
 			logger.Fatal("FEDERATION_ENABLED requires Quartermaster authority")
@@ -1035,7 +1027,7 @@ func main() {
 				"is_platform_official": cluster.GetIsPlatformOfficial(),
 			}).Fatal("FEDERATION_ENABLED is restricted to active platform-operated Foghorn clusters")
 		}
-		if config.GetEnvBool("GRPC_ALLOW_INSECURE", false) && !config.GetEnvBool("FEDERATION_ALLOW_INSECURE_DEV", false) {
+		if cfg.AllowInsecure && !cfg.FederationAllowInsecureDev {
 			logger.Fatal("FEDERATION_ENABLED requires authenticated TLS; FEDERATION_ALLOW_INSECURE_DEV is permitted only for isolated development")
 		}
 	}
@@ -1118,9 +1110,9 @@ func main() {
 		fedPool := foghornpool.NewPool(federationFoghornPoolConfig(
 			serviceToken,
 			logger,
-			config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			config.GetServiceGRPCTLSServerName("foghorn"),
+			cfg.AllowInsecure,
+			cfg.CAPath,
+			cfg.FoghornGRPCTLSServerName,
 		))
 		defer fedPool.Close()
 
@@ -1281,6 +1273,7 @@ func main() {
 
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
+	control.SetGeoIPReader(geoipReader)
 	control.SetGeoIPCache(geoipCache)
 
 	// Unified stream registry: identity (push, pull, mist-native, federated
@@ -1311,7 +1304,7 @@ func main() {
 	// Stale-on-transient-error window: expired registry entries may serve as
 	// fallback while Commodore/SQL re-hydration fails transiently (never on
 	// authoritative not-found). 0 disables stale serving.
-	if staleMaxRaw := config.GetEnv("FOGHORN_REGISTRY_STALE_MAX", ""); staleMaxRaw != "" {
+	if staleMaxRaw := cfg.RegistryStaleMax; staleMaxRaw != "" {
 		if staleMax, parseErr := time.ParseDuration(staleMaxRaw); parseErr == nil && staleMax >= 0 {
 			streamRegistry.SetStaleMax(staleMax)
 		} else {
@@ -1536,11 +1529,10 @@ func main() {
 	foghornServer.SetLocalIngestResolver(triggerProcessor)
 	foghornServer.SetLocalPlaybackPolicyEvaluator(triggerProcessor)
 	var authorityStore *localauthority.Store
-	mediaAuthorityCellID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_CELL_ID"))
-	if encodedTrust := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_TRUST_SET")); encodedTrust != "" {
-		if mediaAuthorityCellID == "" {
-			logger.Fatal("MEDIA_AUTHORITY_CELL_ID is required when signed media authority is enabled")
-		}
+	mediaAuthorityCellID := cfg.MediaAuthorityCellID
+	// appconfig.Foghorn.Validate guarantees a cell ID and a complete seal key
+	// pair whenever a trust set is configured.
+	if encodedTrust := cfg.MediaAuthorityTrustSet; encodedTrust != "" {
 		trust, trustErr := sharedauthority.ParseTrustSet(encodedTrust)
 		if trustErr != nil {
 			logger.WithError(trustErr).Fatal("Invalid MEDIA_AUTHORITY_TRUST_SET")
@@ -1574,12 +1566,9 @@ func main() {
 			logger.WithError(fenceErr).Warn("Could not read the media authority restore fence; withholding local authority until the local marker can be read")
 		}
 		stopFence()
-		sealKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_KEY_ID"))
-		sealPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"))
-		if sealKeyID != "" || sealPrivateEncoded != "" {
-			if sealKeyID == "" || sealPrivateEncoded == "" {
-				logger.Fatal("MEDIA_AUTHORITY_SEAL_KEY_ID and MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64 must be configured together")
-			}
+		sealKeyID := cfg.MediaAuthoritySealKeyID
+		sealPrivateEncoded := cfg.MediaAuthoritySealPrivateKeyPEMB64
+		if sealKeyID != "" {
 			sealPrivateKey, sealErr := sharedauthority.ParseSealPrivateKey(sealPrivateEncoded)
 			if sealErr != nil {
 				logger.WithError(sealErr).Fatal("Invalid media authority seal private key")
@@ -1916,15 +1905,15 @@ func main() {
 		federationServer.SetArtifactCommandHandler(foghornServer)
 	}
 
-	relayAdvertiseAddr := foghornRelayAdvertiseAddr(internalGRPCBindAddr, advertiseAddr)
+	relayAdvertiseAddr := foghornRelayAdvertiseAddr(cfg, advertiseAddr)
 	if redisStore != nil && relayAdvertiseAddr != "" {
 		relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
 			ServiceToken:  serviceToken,
 			Timeout:       10 * time.Second,
 			Logger:        logger,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
+			AllowInsecure: cfg.AllowInsecure,
+			CACertFile:    cfg.CAPath,
+			ServerName:    cfg.FoghornGRPCTLSServerName,
 		})
 		defer relayPool.Close()
 
@@ -1968,17 +1957,26 @@ func main() {
 	if relayServer != nil {
 		internalRegistrars = append(internalRegistrars, relayServer.RegisterServices)
 	}
-	jwtSecret := os.Getenv("JWT_SECRET")
-	grpcServers, err := control.StartGRPCServers(context.Background(), control.GRPCServerConfig{
+	// server.Run binds both control gRPC ports and builds the servers in the
+	// background, so waiting for TLS files or Navigator bundles never delays
+	// the HTTP listeners.
+	grpcServerConfig := control.GRPCServerConfig{
 		InternalBindAddr:   internalGRPCBindAddr,
 		ExternalBindAddr:   externalGRPCBindAddr,
 		Logger:             logger,
 		ServiceToken:       serviceToken,
-		JWTSecret:          jwtSecret,
+		JWTSecret:          cfg.JWTSecret,
+		MetadataPolicy:     metadataPolicy,
 		InternalRegistrars: internalRegistrars,
+	}
+	controlDrain := newControlGRPCDrain(10*time.Second, func(ctx context.Context) {
+		control.CleanupLocalConnOwners(ctx)
+		if shutdownErr := triggerProcessor.Shutdown(ctx); shutdownErr != nil {
+			logger.WithError(shutdownErr).Warn("Trigger processor shutdown did not finish cleanly; some client lifecycle batches may have been lost")
+		}
 	})
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to start control gRPC server")
+	controlDrain.begin = func(ctx context.Context, closeListeners func()) {
+		control.BeginShutdown(ctx, closeListeners, logger)
 	}
 	if commodoreClient != nil && authorityStore != nil {
 		// Local persisted authority is immediately usable; replay only repairs
@@ -2014,7 +2012,7 @@ func main() {
 	//   - 60s repair sync: re-publishes the full alive set so transient losses
 	//     converge without an event.
 	if qmClient != nil {
-		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, config.GetEnv("CLUSTER_ID", ""), logger)
+		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, cfg.ClusterID, logger)
 	}
 
 	// Start the hourly storage snapshot scheduler
@@ -2374,14 +2372,34 @@ func main() {
 	processingDispatcher.Start()
 	defer processingDispatcher.Stop()
 
-	publicRouter, internalRouter := configureFoghornHTTPRouters(logger, healthChecker, metricsCollector)
-
-	publicConfig := server.DefaultConfig("foghorn", "18008")
-	publicConfig.BindAddr = strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_HTTP_BIND_ADDR"))
-	internalHTTPPort := strconv.Itoa(servicedefs.FoghornInternalHTTPPort)
-	internalConfig := server.DefaultConfig("foghorn-internal", internalHTTPPort)
-	internalConfig.Port = config.GetEnv("FOGHORN_INTERNAL_HTTP_PORT", internalHTTPPort)
-	internalConfig.BindAddr = config.GetEnv("FOGHORN_INTERNAL_HTTP_BIND_ADDR", "127.0.0.1")
+	// /ready carries no control-plane dependency checks: this instance keeps
+	// serving media from local authority while Commodore, Quartermaster,
+	// Decklog, or Navigator are down. It reports only its own control gRPC
+	// listeners, which server.Run marks unready until they are built, and the
+	// drain window. Database, HA relay, and control-plane client state stay on
+	// /health.
+	readiness := monitoring.NewReadinessChecker("foghorn", version.Version)
+	publicRouter, internalRouter := configureFoghornHTTPRouters(
+		server.RouterSpec{
+			Service: "foghorn",
+			Logger:  logger,
+			Health:  healthChecker,
+			Ready:   readiness,
+			Metrics: metricsCollector,
+			Runtime: cfg.HTTPRuntime,
+		},
+		server.RouterSpec{
+			Service:            "foghorn",
+			Logger:             logger,
+			Health:             healthChecker,
+			Ready:              readiness,
+			Metrics:            metricsCollector,
+			Runtime:            cfg.HTTPRuntime,
+			DebugToken:         cfg.ServiceToken,
+			DebugConfig:        func() any { return liveConfig.Get() },
+			DebugConfigOptions: configOptions,
+		},
+	)
 
 	refreshDone := make(chan struct{})
 	defer close(refreshDone)
@@ -2400,60 +2418,55 @@ func main() {
 		}
 	}()
 
+	internalGRPCHost, internalGRPCPort, splitErr := net.SplitHostPort(internalGRPCBindAddr)
+	if splitErr != nil {
+		logger.WithError(splitErr).Fatal("Invalid FOGHORN_INTERNAL_GRPC_BIND_ADDR")
+	}
+	externalGRPCHost, externalGRPCPort, splitErr := net.SplitHostPort(externalGRPCBindAddr)
+	if splitErr != nil {
+		logger.WithError(splitErr).Fatal("Invalid FOGHORN_EXTERNAL_GRPC_BIND_ADDR")
+	}
 	server.RegisterEnvFileReload("foghorn", logger)
-	if err := server.StartAll([]server.Listener{
-		{Config: publicConfig, Router: publicRouter},
-		{Config: internalConfig, Router: internalRouter},
-	}, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
+	runErr := server.Run(context.Background(), server.RunSpec{
+		Service: "foghorn",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP: []server.HTTPListener{
+			{Name: "public", BindAddr: cfg.PublicHTTPBindAddr, Port: cfg.Port, Handler: publicRouter},
+			{Name: "internal", BindAddr: cfg.InternalHTTPBindAddr, Port: cfg.InternalHTTPPort, Handler: internalRouter},
+		},
+		GRPC: []server.GRPCListener{
+			{Name: "internal", BindAddr: internalGRPCHost, Port: internalGRPCPort, Build: controlDrain.internalBuild(func(ctx context.Context) (*grpc.Server, error) {
+				return control.BuildInternalGRPCServer(ctx, grpcServerConfig)
+			})},
+			{Name: "external", BindAddr: externalGRPCHost, Port: externalGRPCPort, Build: controlDrain.externalBuild(func(ctx context.Context) (*grpc.Server, error) {
+				return control.BuildExternalGRPCServer(ctx, grpcServerConfig)
+			})},
+		},
+		OnReload: []server.ReloadCallback{liveConfig.Reload},
+		// Conn-owner cleanup, the trigger flush, and the control gRPC stop run
+		// before any listener stops, while HelmsmanControl streams are still
+		// registered.
+		OnDrain: []func(context.Context){controlDrain.onDrain},
+		// The ConfigSeed acknowledgement workers and the domain event relay stop
+		// after every listener, so events committed by in-flight requests stay queued.
+		OnShutdown: []func(context.Context){func(context.Context) {
+			stopConfigSeedAckOutbox()
+			stopDomainEvents()
+		}},
+	})
+	if runErr != nil {
+		logger.WithError(runErr).Fatal("Foghorn server exited with error")
 	}
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	// The order is what makes a deploy invisible at the edge. The listeners close
-	// before any node is told to go, so its immediate redial lands on another
-	// instance. The trigger processor stays up until the nodes have gone, so the
-	// requests they had in flight are answered rather than denied. Conn owners
-	// are cleaned last: for a node that already re-registered elsewhere at a
-	// higher fence that is a no-op.
-	done := make(chan struct{})
-	control.BeginShutdown(shutdownCtx, func() {
-		// Both at once: GracefulStop closes its listener first and then waits for
-		// open calls, and the control streams live on the external server.
-		var stopping sync.WaitGroup
-		for _, gracefulStop := range []func(){grpcServers.Internal.GracefulStop, grpcServers.External.GracefulStop} {
-			stopping.Add(1)
-			go func() {
-				defer stopping.Done()
-				gracefulStop()
-			}()
-		}
-		go func() {
-			stopping.Wait()
-			close(done)
-		}()
-	}, logger)
-	control.CleanupLocalConnOwners(shutdownCtx)
-	if err := triggerProcessor.Shutdown(shutdownCtx); err != nil {
-		logger.WithError(err).Warn("Trigger processor shutdown did not finish cleanly; some client lifecycle batches may have been lost")
-	}
-
-	select {
-	case <-done:
-	case <-shutdownCtx.Done():
-		grpcServers.Internal.Stop()
-		grpcServers.External.Stop()
-	}
-	stopConfigSeedAckOutbox()
 }
 
-func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
-	if addr := strings.TrimSpace(os.Getenv("FOGHORN_RELAY_ADVERTISE_ADDR")); addr != "" {
-		return addr
+func foghornRelayAdvertiseAddr(cfg *appconfig.Foghorn, fallbackAddr string) string {
+	if cfg.RelayAdvertiseAddr != "" {
+		return cfg.RelayAdvertiseAddr
 	}
-	relayHost := strings.TrimSpace(os.Getenv("FOGHORN_RELAY_ADVERTISE_HOST"))
+	relayHost := cfg.RelayAdvertiseHost
 	if relayHost == "" {
-		relayHost = strings.TrimSpace(os.Getenv("FOGHORN_HOST"))
+		relayHost = cfg.AdvertiseHost
 	}
 	if relayHost == "" {
 		host, _, err := net.SplitHostPort(strings.TrimSpace(fallbackAddr))
@@ -2462,12 +2475,12 @@ func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
 		}
 	}
 	if relayHost == "" {
-		if config.IsProduction() {
+		if cfg.IsProduction() {
 			return ""
 		}
 		relayHost = "127.0.0.1"
 	}
-	relayPort := controlPortFromBindAddr(internalBindAddr, 18019)
+	relayPort := controlPortFromBindAddr(cfg.InternalGRPCBindAddr, 18019)
 	return net.JoinHostPort(relayHost, strconv.Itoa(relayPort))
 }
 
@@ -2500,14 +2513,15 @@ func reconnectQuartermaster(
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		settings := appconfig.Current()
 		client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
 			GRPCAddr:      grpcAddr,
 			Timeout:       30 * time.Second,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+			AllowInsecure: settings.AllowInsecure,
+			CACertFile:    settings.CAPath,
+			ServerName:    settings.QuartermasterGRPCTLSServerName,
 		})
 		if err != nil {
 			clients.setQuartermaster(false, err)
@@ -2536,7 +2550,7 @@ func startReleaseReconciler(qmClient *qmclient.GRPCClient, logger logging.Logger
 	}
 	releaseReconcilerClient.Store(qmClient)
 	releaseReconcilerOnce.Do(func() {
-		interval := time.Duration(config.GetEnvInt("EDGE_RELEASE_RECONCILE_INTERVAL_SECONDS", 60)) * time.Second
+		interval := time.Duration(appconfig.Current().EdgeReleaseReconcileIntervalSeconds) * time.Second
 		orchestrator.StartReleaseReconciler(context.Background(), releaseReconcilerClient.Load, interval, logger)
 	})
 }
@@ -2556,15 +2570,16 @@ func reconnectCommodore(
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		settings := appconfig.Current()
 		client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
 			GRPCAddr:      grpcAddr,
 			Timeout:       30 * time.Second,
 			Logger:        logger,
 			Cache:         commodoreCache,
 			ServiceToken:  serviceToken,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+			AllowInsecure: settings.AllowInsecure,
+			CACertFile:    settings.CAPath,
+			ServerName:    settings.CommodoreGRPCTLSServerName,
 		})
 		if err != nil {
 			clients.setCommodore(false, err)
@@ -2817,9 +2832,12 @@ func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger)
 	}
 }
 
-func configureFoghornHTTPRouters(logger logging.Logger, healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector) (*gin.Engine, *gin.Engine) {
-	publicRouter := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
-	internalRouter := server.SetupServiceRouter(logger, "foghorn-internal", healthChecker, metricsCollector)
+// configureFoghornHTTPRouters builds the public and internal routers. Only the
+// internal spec should carry a DebugToken, so pprof and /debug/config are
+// never served on the public listener.
+func configureFoghornHTTPRouters(publicSpec, internalSpec server.RouterSpec) (*gin.Engine, *gin.Engine) {
+	publicRouter := server.NewServiceRouter(publicSpec)
+	internalRouter := server.NewServiceRouter(internalSpec)
 
 	internalRead := internalRouter.Group("", handlers.RequireInternalRead())
 	internalRead.GET("/nodes/overview", handlers.HandleNodesOverview)

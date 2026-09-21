@@ -146,6 +146,7 @@ func (q *Queries) ClaimNavigatorTenantAliasOutboxBatch(ctx context.Context, arg 
 
 const claimServiceEventOutboxBatch = `-- name: ClaimServiceEventOutboxBatch :many
 SELECT id::text AS id,
+       COALESCE(event_id::text, '')::text AS event_id,
        payload::text AS payload,
        attempts,
        created_at
@@ -164,6 +165,7 @@ type ClaimServiceEventOutboxBatchParams struct {
 
 type ClaimServiceEventOutboxBatchRow struct {
 	ID        string    `db:"id" json:"id"`
+	EventID   string    `db:"event_id" json:"event_id"`
 	Payload   string    `db:"payload" json:"payload"`
 	Attempts  int32     `db:"attempts" json:"attempts"`
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
@@ -180,6 +182,7 @@ func (q *Queries) ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimSer
 		var i ClaimServiceEventOutboxBatchRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.EventID,
 			&i.Payload,
 			&i.Attempts,
 			&i.CreatedAt,
@@ -326,20 +329,22 @@ func (q *Queries) EnqueueNavigatorTenantAlias(ctx context.Context, arg EnqueueNa
 
 const enqueueServiceEvent = `-- name: EnqueueServiceEvent :one
 INSERT INTO quartermaster.service_event_outbox (
-    event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
+    event_id, event_type, tenant_id, scope, user_id, resource_type, resource_id, payload
 ) VALUES (
-    $1::text,
-    NULLIF($2::text, '')::uuid,
-    $3::text,
+    $1::uuid,
+    $2::text,
+    NULLIF($3::text, '')::uuid,
     $4::text,
     $5::text,
     $6::text,
-    $7::text::jsonb
+    $7::text,
+    $8::text::jsonb
 )
 RETURNING id::text
 `
 
 type EnqueueServiceEventParams struct {
+	EventID      string `db:"event_id" json:"event_id"`
 	EventType    string `db:"event_type" json:"event_type"`
 	TenantID     string `db:"tenant_id" json:"tenant_id"`
 	Scope        string `db:"scope" json:"scope"`
@@ -351,6 +356,7 @@ type EnqueueServiceEventParams struct {
 
 func (q *Queries) EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, enqueueServiceEvent,
+		arg.EventID,
 		arg.EventType,
 		arg.TenantID,
 		arg.Scope,

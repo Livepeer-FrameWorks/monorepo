@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
@@ -39,7 +40,7 @@ func TestRecheckETHSweepRejectsChangedBalanceAndNonce(t *testing.T) {
 	t.Run("balance", func(t *testing.T) {
 		server := newSweepRPCTestServer(t, "0x20", "0x1")
 		defer server.Close()
-		t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+		appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 		purser := &PurserServer{rpcClient: handlers.NewRPCClient()}
 		if err := purser.recheckSweepItemBeforeBroadcast(context.Background(), handlers.Networks["base"], item); err == nil || !strings.Contains(err.Error(), "balance") {
 			t.Fatalf("expected changed balance rejection, got %v", err)
@@ -48,7 +49,7 @@ func TestRecheckETHSweepRejectsChangedBalanceAndNonce(t *testing.T) {
 	t.Run("nonce", func(t *testing.T) {
 		server := newSweepRPCTestServer(t, "0x100", "0x2")
 		defer server.Close()
-		t.Setenv("BASE_RPC_ENDPOINT", server.URL)
+		appconfigtest.Set(t, "BASE_RPC_ENDPOINT", server.URL)
 		purser := &PurserServer{rpcClient: handlers.NewRPCClient()}
 		if err := purser.recheckSweepItemBeforeBroadcast(context.Background(), handlers.Networks["base"], item); err == nil || !strings.Contains(err.Error(), "nonce") {
 			t.Fatalf("expected changed nonce rejection, got %v", err)
@@ -73,7 +74,7 @@ func TestReserveRelayerTransactionReplaysPersistedIntent(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	t.Setenv("CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE", strings.Repeat("1", 64))
+	appconfigtest.Set(t, "CRYPTO_SWEEP_RELAYER_PRIVATE_KEY_BASE", strings.Repeat("1", 64))
 
 	server := &PurserServer{db: db}
 	item := cryptosweep.ManifestItem{

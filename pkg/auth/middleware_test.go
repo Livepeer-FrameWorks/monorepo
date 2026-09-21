@@ -8,6 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 func TestServiceAuthMiddleware(t *testing.T) {
@@ -225,11 +226,15 @@ func TestJWTAuthMiddleware_ServiceTokenFallback(t *testing.T) {
 	secret := []byte("secret")
 	serviceToken := "test-service-token-xyz"
 	systemTenantID := "11111111-2222-3333-4444-555555555555"
-	t.Setenv("SERVICE_TOKEN", serviceToken)
-	t.Setenv("SYSTEM_TENANT_ID", systemTenantID)
 
+	newRouter := func(opts ...JWTOption) *gin.Engine {
+		r := gin.New()
+		r.Use(JWTAuthMiddleware(secret, opts...))
+		r.GET("/ok", func(c *gin.Context) { c.String(200, "ok") })
+		return r
+	}
 	r := gin.New()
-	r.Use(JWTAuthMiddleware(secret))
+	r.Use(JWTAuthMiddleware(secret, WithServiceIdentity(serviceToken, uuid.MustParse(systemTenantID))))
 	r.GET("/ok", func(c *gin.Context) {
 		if c.GetString(string(ctxkeys.KeyUserID)) != "00000000-0000-0000-0000-000000000000" {
 			t.Fatalf("expected service user ID")
@@ -259,19 +264,28 @@ func TestJWTAuthMiddleware_ServiceTokenFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid JWT with empty service token returns 401", func(t *testing.T) {
-		t.Setenv("SERVICE_TOKEN", "")
+	t.Run("service token without the option returns 401 even when SERVICE_TOKEN is set", func(t *testing.T) {
+		t.Setenv("SERVICE_TOKEN", serviceToken)
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
-		req.Header.Set("Authorization", "Bearer not-a-valid-jwt")
-		r.ServeHTTP(w, req)
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+		newRouter().ServeHTTP(w, req)
 		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("expected 401 with empty service token env, got %d", w.Code)
+			t.Fatalf("expected 401 without WithServiceIdentity, got %d", w.Code)
+		}
+	})
+
+	t.Run("empty configured service token returns 401", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.Header.Set("Authorization", "Bearer ")
+		newRouter(WithServiceIdentity("", uuid.MustParse(systemTenantID))).ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 with empty service token, got %d", w.Code)
 		}
 	})
 
 	t.Run("invalid JWT with wrong service token returns 401", func(t *testing.T) {
-		t.Setenv("SERVICE_TOKEN", "correct-token")
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 		req.Header.Set("Authorization", "Bearer wrong-token")

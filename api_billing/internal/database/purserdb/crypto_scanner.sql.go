@@ -88,7 +88,12 @@ SELECT event.id::text AS event_id, event.tx_hash, event.block_number,
        wallet.expected_amount_cents, wallet.asset, wallet.network, wallet.wallet_address,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
        COALESCE(wallet.quoted_price_usd::text, '')::text AS quoted_price_usd,
-       COALESCE(wallet.quoted_usd_to_eur_rate::text, '')::text AS quoted_usd_to_eur_rate,
+       COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(wallet.original_currency, '')::text AS original_currency,
+       COALESCE(wallet.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(wallet.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(wallet.fx_source, '')::text AS fx_source,
+       COALESCE(wallet.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
        COALESCE(wallet.quote_source, '')::text AS quote_source,
        COALESCE(wallet.credited_amount_currency, '')::text AS credited_amount_currency,
        COALESCE(wallet.client_ip, '')::text AS client_ip, wallet.expires_at,
@@ -122,7 +127,12 @@ type ListConfirmedCryptoDepositAllocationsRow struct {
 	WalletAddress           string        `db:"wallet_address" json:"wallet_address"`
 	ExpectedAmountBaseUnits string        `db:"expected_amount_base_units" json:"expected_amount_base_units"`
 	QuotedPriceUsd          string        `db:"quoted_price_usd" json:"quoted_price_usd"`
-	QuotedUsdToEurRate      string        `db:"quoted_usd_to_eur_rate" json:"quoted_usd_to_eur_rate"`
+	OriginalAmountCents     int64         `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string        `db:"original_currency" json:"original_currency"`
+	EurAmountCents          int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string        `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
 	QuoteSource             string        `db:"quote_source" json:"quote_source"`
 	CreditedAmountCurrency  string        `db:"credited_amount_currency" json:"credited_amount_currency"`
 	ClientIp                string        `db:"client_ip" json:"client_ip"`
@@ -155,7 +165,12 @@ func (q *Queries) ListConfirmedCryptoDepositAllocations(ctx context.Context) ([]
 			&i.WalletAddress,
 			&i.ExpectedAmountBaseUnits,
 			&i.QuotedPriceUsd,
-			&i.QuotedUsdToEurRate,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 			&i.QuoteSource,
 			&i.CreditedAmountCurrency,
 			&i.ClientIp,

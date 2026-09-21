@@ -213,10 +213,12 @@ func TestGRPCQueryPack_RealPG(t *testing.T) { //nolint:funlen // One engine star
 		if _, err := db.ExecContext(ctx, `
 			INSERT INTO purser.x402_payment_quotes (
 				id, tenant_id, resource, resource_class, network, asset, pay_to,
-				amount_atomic, credit_amount_cents, eur_per_usd_rate, requirements_json,
-				status, expires_at
+				amount_atomic, credit_amount_cents, requirements_json,
+				status, expires_at, original_amount_cents, original_currency, eur_amount_cents,
+				fx_units_per_eur, fx_source, fx_reference_date
 			) VALUES ($1,$2,'contract','api','eip155:1','0x0000000000000000000000000000000000000001',
-				'0x0000000000000000000000000000000000000002',1,1,1,'{}','confirmed',NOW()+INTERVAL '1 hour')
+				'0x0000000000000000000000000000000000000002',1,1,'{}','confirmed',NOW()+INTERVAL '1 hour',
+				1,'EUR',1,1,'identity',CURRENT_DATE)
 		`, quoteID, tenantID); err != nil {
 			t.Fatal(err)
 		}

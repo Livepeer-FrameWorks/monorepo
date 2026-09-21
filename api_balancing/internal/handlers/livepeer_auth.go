@@ -133,7 +133,7 @@ func HandleLivepeerAuth(c *gin.Context) {
 func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req livepeerAuthRequest) (*LivepeerAuthContext, string) {
 	// Verify the capability before any resolver/database call so the public
 	// webhook cannot be used to probe tenant or stream existence.
-	claims, err := control.VerifyTranscodeJobTokenFromEnvironment(req.JobToken, time.Now())
+	claims, err := control.VerifyTranscodeJobTokenWithConfiguredSecret(req.JobToken, time.Now())
 	if err != nil || canonicalLivepeerManifestID(manifestID) != claims.ManifestID || !control.TranscodeJobTokenAllowsGatewayCluster(claims, clusterID) {
 		return nil, authRejectInvalidToken
 	}

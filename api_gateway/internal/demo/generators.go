@@ -13,16 +13,21 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	bosunpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/bosun"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -236,9 +241,6 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   0.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:    true,
-				Analytics:    true,
-				ApiAccess:    true,
 				SupportLevel: "community",
 			},
 			PricingRules: demoPricingRulesForTier("payg"),
@@ -255,9 +257,6 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   0.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:    false,
-				Analytics:    true,
-				ApiAccess:    true,
 				SupportLevel: "community",
 			},
 			PricingRules: []*purserpb.PricingRule{},
@@ -274,9 +273,6 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   79.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:    true,
-				Analytics:    true,
-				ApiAccess:    true,
 				SupportLevel: "basic",
 			},
 			PricingRules: demoPricingRulesForTier("supporter"),
@@ -293,9 +289,6 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   249.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:    true,
-				Analytics:    true,
-				ApiAccess:    true,
 				SupportLevel: "priority",
 			},
 			PricingRules: demoPricingRulesForTier("developer"),
@@ -312,12 +305,8 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   999.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:      true,
-				Analytics:      true,
-				ApiAccess:      true,
-				CustomBranding: true,
-				Sla:            true,
-				SupportLevel:   "enterprise",
+				Sla:          true,
+				SupportLevel: "enterprise",
 			},
 			PricingRules: demoPricingRulesForTier("production"),
 			Entitlements: map[string]string{"recording_retention_days": "0"},
@@ -333,12 +322,9 @@ func GenerateBillingTiers() []*purserpb.BillingTier {
 			BasePrice:   0.00,
 			Currency:    "EUR",
 			Features: &purserpb.BillingFeatures{
-				Recording:      true,
-				Analytics:      true,
-				CustomBranding: true,
-				ApiAccess:      true,
-				SupportLevel:   "dedicated",
-				Sla:            true,
+				SupportLevel:           "dedicated",
+				Sla:                    true,
+				ProcessingCustomizable: true,
 			},
 			PricingRules: []*purserpb.PricingRule{},
 			Entitlements: map[string]string{},
@@ -402,7 +388,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 		},
 	})
 
-	return []*purserpb.Invoice{
+	invoices := []*purserpb.Invoice{
 		{
 			Id:                   "inv_demo_current_001",
 			TenantId:             DemoTenantID,
@@ -452,6 +438,38 @@ func GenerateInvoices() []*purserpb.Invoice {
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
+	}
+	for _, inv := range invoices {
+		setDemoInvoicePresentment(inv, inv.GetCreatedAt().AsTime())
+	}
+	return invoices
+}
+
+// DemoPresentmentCurrency is the demo tenant's presentment currency, derived
+// from its German billing address.
+const DemoPresentmentCurrency = "EUR"
+
+// setDemoInvoicePresentment fills the presentment fields of a finalized demo
+// invoice. The demo tenant is presented in EUR, so the rate is the identity.
+func setDemoInvoicePresentment(inv *purserpb.Invoice, finalizedAt time.Time) {
+	cents := int64(math.Round(inv.GetAmount() * 100))
+	inv.PresentmentAmountCents = &cents
+	inv.PresentmentCurrency = DemoPresentmentCurrency
+	inv.PresentmentUnitsPerEur = "1"
+	inv.PresentmentReferenceDate = finalizedAt.UTC().Format(time.DateOnly)
+	inv.FinalizedAt = timestamppb.New(finalizedAt)
+}
+
+// DemoConversion is the identity FX record of an EUR amount charged to the
+// demo tenant on the given date.
+func DemoConversion(eurCents int64, on time.Time) *purserpb.FxConversion {
+	return &purserpb.FxConversion{
+		OriginalAmountCents: eurCents,
+		OriginalCurrency:    DemoPresentmentCurrency,
+		EurAmountCents:      eurCents,
+		UnitsPerEur:         "1",
+		Source:              "identity",
+		ReferenceDate:       on.UTC().Format(time.DateOnly),
 	}
 }
 
@@ -589,28 +607,26 @@ func GenerateBillingStatus() *purserpb.BillingStatusResponse {
 	return &purserpb.BillingStatusResponse{
 		TenantId: DemoTenantID,
 		Subscription: &purserpb.TenantSubscription{
-			Id:                 "sub_demo_123",
-			TenantId:           DemoTenantID,
-			TierId:             "tier_demo_developer",
-			Status:             "active",
-			BillingEmail:       "demo@frameworks.network",
-			StartedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
-			NextBillingDate:    timestamppb.New(nextBilling),
-			BillingPeriodStart: timestamppb.New(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())),
-			BillingPeriodEnd:   timestamppb.New(nextBilling),
-			CreatedAt:          timestamppb.New(now.Add(-30 * 24 * time.Hour)),
-			UpdatedAt:          timestamppb.Now(),
+			Id:                  "sub_demo_123",
+			TenantId:            DemoTenantID,
+			TierId:              "tier_demo_developer",
+			Status:              "active",
+			BillingEmail:        "demo@frameworks.network",
+			StartedAt:           timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			NextBillingDate:     timestamppb.New(nextBilling),
+			BillingPeriodStart:  timestamppb.New(time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())),
+			BillingPeriodEnd:    timestamppb.New(nextBilling),
+			PresentmentCurrency: DemoPresentmentCurrency,
+			CreatedAt:           timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			UpdatedAt:           timestamppb.Now(),
 			// Demo subscriptions leave per-tenant overrides empty so the tier's
 			// own pricing rules and entitlements apply.
 			PricingOverrides:     []*purserpb.PricingRule{},
 			EntitlementOverrides: map[string]string{},
 			CustomFeatures: &purserpb.BillingFeatures{
-				Recording:      true,
-				Analytics:      true,
-				CustomBranding: true,
-				ApiAccess:      true,
-				SupportLevel:   "priority",
-				Sla:            true,
+				SupportLevel:           "priority",
+				Sla:                    true,
+				ProcessingCustomizable: true,
 			},
 		},
 		Tier: &purserpb.BillingTier{
@@ -624,12 +640,8 @@ func GenerateBillingStatus() *purserpb.BillingStatusResponse {
 			PricingRules:  demoPricingRulesForTier("developer"),
 			Entitlements:  map[string]string{"recording_retention_days": "0"},
 			Features: &purserpb.BillingFeatures{
-				Recording:      true,
-				Analytics:      true,
-				CustomBranding: true,
-				ApiAccess:      true,
-				SupportLevel:   "priority",
-				Sla:            true,
+				SupportLevel: "priority",
+				Sla:          true,
 			},
 			SupportLevel:         "priority",
 			SlaLevel:             "99.9%",
@@ -808,6 +820,49 @@ func GenerateTenant() *quartermasterpb.Tenant {
 		MonitoringEnabled:     true,
 		CreatedAt:             timestamppb.New(now.Add(-180 * 24 * time.Hour)),
 		UpdatedAt:             timestamppb.New(now.Add(-1 * 24 * time.Hour)),
+	}
+}
+
+// GenerateCapabilities creates the demo enforced-gate readout: a tenant on a
+// capped-retention tier without processing overrides, holding a published
+// subdomain, on the two demo clusters.
+func GenerateCapabilities() *model.Capabilities {
+	maxDays := 30
+	return &model.Capabilities{
+		Tenant: &model.TenantCapabilities{
+			PlatformOperator:       false,
+			RecordingRetention:     &model.RecordingRetentionCap{Capped: true, MaxDays: &maxDays},
+			ProcessingCustomizable: false,
+			CustomSubdomain:        true,
+			CustomDomain:           false,
+		},
+		Clusters: []*quartermasterpb.TenantClusterCapability{
+			{
+				ClusterId:   "cluster_demo_us_west",
+				ClusterName: "US West Demo Cluster",
+				Role:        "preferred",
+				AccessLevel: "shared",
+				Media: &quartermasterpb.ClusterMediaCapabilities{
+					Ingest:     true,
+					Playback:   true,
+					Storage:    true,
+					Processing: true,
+				},
+			},
+			{
+				ClusterId:   "cluster_demo_eu_west",
+				ClusterName: "EU West Demo Cluster",
+				Role:        "subscribed",
+				AccessLevel: "shared",
+				Media: &quartermasterpb.ClusterMediaCapabilities{
+					Ingest:     false,
+					Playback:   true,
+					Storage:    true,
+					Processing: false,
+				},
+			},
+		},
+		ObservedAt: time.Now(),
 	}
 }
 
@@ -4270,6 +4325,163 @@ func GenerateConversationSubscriptionEvents(conversationID string) []*model.Conv
 			UpdatedAt: now.Add(-30 * time.Second),
 		},
 	}
+}
+
+// DemoClipHash is the artifact ID of the clip in the demo tenant events.
+const DemoClipHash = "5eedc11b0000000000000000000c1001"
+
+// GenerateTenantEvents returns demo public events for the tenantEvents
+// subscription: the demo stream going live, a clip of it being requested and
+// becoming ready, and the demo upload becoming ready.
+func GenerateTenantEvents() []*signalmanpb.TenantEvent {
+	now := time.Now()
+	clip := &publicv1.Artifact{
+		ArtifactId: DemoClipHash,
+		Kind:       publicv1.ArtifactKind_ARTIFACT_KIND_CLIP,
+		StreamId:   DemoStreamID,
+		PlaybackId: "clip_demo_001",
+	}
+	upload := &publicv1.Artifact{
+		ArtifactId: DemoVodHash,
+		Kind:       publicv1.ArtifactKind_ARTIFACT_KIND_UPLOAD,
+		PlaybackId: DemoVodPlaybackID,
+	}
+	entries := []struct {
+		eventType string
+		subject   string
+		data      proto.Message
+	}{
+		{"stream.connected", "streams/" + DemoStreamID, &publicv1.StreamConnected{StreamId: DemoStreamID, Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP}},
+		{"stream.live", "streams/" + DemoStreamID, &publicv1.StreamLive{StreamId: DemoStreamID}},
+		{"clip.requested", "artifacts/" + DemoClipHash, &publicv1.ClipRequested{Artifact: clip, DurationMs: 30000}},
+		{"clip.ready", "artifacts/" + DemoClipHash, &publicv1.ClipReady{Artifact: clip, DurationMs: 30000, SizeBytes: 4_812_345}},
+		{"upload.ready", "artifacts/" + DemoVodHash, &publicv1.UploadReady{Artifact: upload, DurationMs: 4000, SizeBytes: 149099}},
+	}
+	out := make([]*signalmanpb.TenantEvent, 0, len(entries))
+	for i, entry := range entries {
+		data, err := anypb.New(entry.data)
+		if err != nil {
+			continue
+		}
+		out = append(out, &signalmanpb.TenantEvent{
+			Id:      fmt.Sprintf("0192f000-0000-7000-8000-%012d", i+1),
+			Type:    entry.eventType,
+			Time:    timestamppb.New(now.Add(time.Duration(i-len(entries)) * time.Second)),
+			Subject: entry.subject,
+			Data:    data,
+		})
+	}
+	return out
+}
+
+// Demo webhook endpoint and delivery IDs.
+const (
+	DemoWebhookEndpointID         = "demo_webhook_endpoint_001"
+	DemoWebhookEndpointDisabledID = "demo_webhook_endpoint_002"
+)
+
+// GenerateWebhookEndpoints returns an enabled endpoint subscribed to stream
+// and clip events, and an endpoint disabled after failing.
+func GenerateWebhookEndpoints() []*bosunpb.WebhookEndpoint {
+	now := time.Now()
+	return []*bosunpb.WebhookEndpoint{
+		{
+			Id:                  DemoWebhookEndpointID,
+			Url:                 "https://hooks.example.com/frameworks",
+			Description:         "Production receiver",
+			EventTypes:          []string{"stream.live", "stream.idle", "clip.ready", "recording.ready", "upload.ready"},
+			ApiVersion:          "v1",
+			Status:              bosunpb.WebhookEndpointStatus_WEBHOOK_ENDPOINT_STATUS_ENABLED,
+			ConsecutiveFailures: 1,
+			FailingSince:        timestamppb.New(now.Add(-4 * time.Minute)),
+			LastSuccessAt:       timestamppb.New(now.Add(-12 * time.Minute)),
+			LastFailureAt:       timestamppb.New(now.Add(-4 * time.Minute)),
+			CreatedAt:           timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			UpdatedAt:           timestamppb.New(now.Add(-2 * 24 * time.Hour)),
+		},
+		{
+			Id:                  DemoWebhookEndpointDisabledID,
+			Url:                 "https://staging.example.com/webhooks",
+			Description:         "Staging receiver",
+			EventTypes:          []string{"*"},
+			ApiVersion:          "v1",
+			Status:              bosunpb.WebhookEndpointStatus_WEBHOOK_ENDPOINT_STATUS_DISABLED,
+			DisabledReason:      bosunpb.WebhookEndpointDisabledReason_WEBHOOK_ENDPOINT_DISABLED_REASON_FAILING,
+			DisabledAt:          timestamppb.New(now.Add(-26 * time.Hour)),
+			ConsecutiveFailures: 23,
+			FailingSince:        timestamppb.New(now.Add(-6 * 24 * time.Hour)),
+			LastSuccessAt:       timestamppb.New(now.Add(-6 * 24 * time.Hour)),
+			LastFailureAt:       timestamppb.New(now.Add(-26 * time.Hour)),
+			CreatedAt:           timestamppb.New(now.Add(-20 * 24 * time.Hour)),
+			UpdatedAt:           timestamppb.New(now.Add(-26 * time.Hour)),
+		},
+	}
+}
+
+// GenerateWebhookDeliveries returns demo deliveries newest first: a pending
+// retry, a success, a delivery that exhausted its retries, and one skipped
+// when its endpoint was disabled.
+func GenerateWebhookDeliveries() []*bosunpb.WebhookDelivery {
+	now := time.Now()
+	delivery := func(id, endpointID, eventType, eventID string, st bosunpb.WebhookDeliveryStatus, attempts, code int32, errorClass string, age time.Duration) *bosunpb.WebhookDelivery {
+		d := &bosunpb.WebhookDelivery{
+			Id:             id,
+			EndpointId:     endpointID,
+			EventId:        eventID,
+			EventType:      eventType,
+			Kind:           bosunpb.WebhookDeliveryKind_WEBHOOK_DELIVERY_KIND_EVENT,
+			Status:         st,
+			Attempts:       attempts,
+			LastStatusCode: code,
+			LastErrorClass: errorClass,
+			CreatedAt:      timestamppb.New(now.Add(-age)),
+			UpdatedAt:      timestamppb.New(now.Add(-age).Add(time.Duration(attempts) * time.Minute)),
+		}
+		switch st {
+		case bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_SUCCEEDED:
+			d.DeliveredAt = d.UpdatedAt
+		case bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_PENDING:
+			d.NextAttemptAt = timestamppb.New(now.Add(90 * time.Second))
+		}
+		return d
+	}
+	return []*bosunpb.WebhookDelivery{
+		delivery("demo_webhook_delivery_001", DemoWebhookEndpointID, "stream.idle", "0192f000-0000-7000-8000-000000000011",
+			bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_PENDING, 1, 503, "http_status", 4*time.Minute),
+		delivery("demo_webhook_delivery_002", DemoWebhookEndpointID, "clip.ready", "0192f000-0000-7000-8000-000000000004",
+			bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_SUCCEEDED, 1, 200, "", 12*time.Minute),
+		delivery("demo_webhook_delivery_003", DemoWebhookEndpointID, "recording.ready", "0192f000-0000-7000-8000-000000000009",
+			bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_FAILED, 12, 0, "timeout", 4*24*time.Hour),
+		delivery("demo_webhook_delivery_004", DemoWebhookEndpointDisabledID, "stream.live", "0192f000-0000-7000-8000-000000000002",
+			bosunpb.WebhookDeliveryStatus_WEBHOOK_DELIVERY_STATUS_SKIPPED, 3, 0, "connection", 27*time.Hour),
+	}
+}
+
+// GenerateWebhookDeliveryAttempts returns the attempt history matching a demo
+// delivery's attempt count and last result, oldest first.
+func GenerateWebhookDeliveryAttempts(d *bosunpb.WebhookDelivery) []*bosunpb.WebhookDeliveryAttempt {
+	n := int(d.GetAttempts())
+	out := make([]*bosunpb.WebhookDeliveryAttempt, 0, n)
+	for i := 1; i <= n; i++ {
+		a := &bosunpb.WebhookDeliveryAttempt{
+			Id:            fmt.Sprintf("%s_attempt_%02d", d.GetId(), i),
+			AttemptNumber: int32(i),
+			StatusCode:    d.GetLastStatusCode(),
+			ErrorClass:    d.GetLastErrorClass(),
+			LatencyMs:     int32(80 + 15*i),
+			AttemptedAt:   timestamppb.New(d.GetCreatedAt().AsTime().Add(time.Duration(i-1) * time.Minute)),
+		}
+		switch {
+		case a.GetStatusCode() == 200:
+			a.ResponseExcerpt = `{"received":true}`
+		case a.GetStatusCode() >= 500:
+			a.ResponseExcerpt = "Service Unavailable"
+		case a.GetErrorClass() == "timeout":
+			a.LatencyMs = 10000
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // GenerateAPIUsageConnection creates demo API usage records

@@ -14,6 +14,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -275,6 +276,12 @@ func finalizeChapterArtifactTx(
 	// cascade (which soft-deletes the child artifact) must NOT resurrect it to 'ready' — those
 	// guards make it an ignored no-op instead. A missing row (chapter/artifact gone) is transient.
 	qtx := foghorndb.New(tx)
+	// The recording.chapter_ready event advances the parent recording's revision. Taking the
+	// parent lock first keeps the lock order of the recording-delete cascade (parent, then
+	// chapter artifacts), so the two cannot deadlock.
+	if lockErr := qtx.LockChapterParentRecording(ctx, chapterID); lockErr != nil {
+		return "", lockErr
+	}
 	locked, lockErr := qtx.LockChapterFinalizeArtifact(ctx, chapterID)
 	if lockErr != nil {
 		return "", lockErr
@@ -367,7 +374,18 @@ func finalizeChapterArtifactTx(
 	if outputPath != "" {
 		vodData.FilePath = &outputPath
 	}
-	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+	recording, ctxErr := qtx.GetChapterRecordingContext(ctx, chapterID)
+	if ctxErr != nil {
+		return "", fmt.Errorf("read chapter recording context: %w", ctxErr)
+	}
+	chapterReady := &internalv1.RecordingChapterReady{
+		Artifact:  artifactoutbox.RecordingArtifact(recording.RecordingHash, recording.StreamID),
+		ChapterId: chapterID,
+		StartMs:   recording.StartMs,
+		EndMs:     recording.EndMs,
+		SizeBytes: max(sizeBytes, 0),
+	}
+	if enqErr := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, chapterReady); enqErr != nil {
 		return "", enqErr
 	}
 

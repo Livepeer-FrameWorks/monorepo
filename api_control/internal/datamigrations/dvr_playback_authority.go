@@ -49,7 +49,8 @@ WITH batch AS (
 )
 SELECT (SELECT COUNT(*) FROM batch), (SELECT COUNT(*) FROM updated)`
 
-func Register() {
+// Register adds Commodore's data migrations to the datamigrate registry.
+func Register(fieldEncryption FieldEncryptionSettings) {
 	datamigrate.Register(datamigrate.Migration{
 		ID: DVRPlaybackAuthorityID, Service: "commodore", IntroducedIn: "v0.3.0",
 		RequiredBeforePhase: "postdeploy",
@@ -58,7 +59,7 @@ func Register() {
 		Verify:              verifyDVRPlaybackAuthority,
 	})
 	registerChapterPlaybackAuthority()
-	registerFieldEncryption()
+	registerFieldEncryption(fieldEncryption)
 }
 
 func runDVRPlaybackAuthority(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {

@@ -7,22 +7,23 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_dns/internal/appconfig"
 	"frameworks/api_dns/internal/logic"
 	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
 	"frameworks/api_dns/internal/store"
 	"frameworks/api_dns/internal/worker"
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -99,20 +100,26 @@ func main() {
 
 	logger.Info("Starting Navigator (Public DNS Manager and Certificate Authority)")
 
-	// Service token for service-to-service authentication
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-
-	dbURL := config.RequireEnv("DATABASE_URL")
+	configOptions := config.Options{Service: "navigator", Logger: logger}
+	cfg, err := config.Load[appconfig.Navigator](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	cfg.ApplyLogLevel(logger)
+	metadataPolicy, err := middleware.ParseMetadataPolicy(cfg.MetadataPolicy)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
+	}
+	liveConfig := config.NewLive(cfg, configOptions)
 
 	// === Database Connection ===
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "navigator"
-	dbConfig.URL = dbURL
+	dbConfig.URL = cfg.DatabaseURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
-	encKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
-	keyEncryptor, err := fieldcrypt.DeriveFieldEncryptor([]byte(encKey), "navigator-private-keys")
+	keyEncryptor, err := fieldcrypt.DeriveFieldEncryptor([]byte(cfg.FieldEncryptionKey), "navigator-private-keys")
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to derive field encryption key")
 	}
@@ -120,92 +127,113 @@ func main() {
 	// Initialize Store
 	certStore := store.NewStore(db, keyEncryptor)
 
-	// === Configuration Loading ===
-	// Cloudflare config
-	cfConfig, err := cloudflare.LoadConfig()
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to load Cloudflare configuration")
-	}
-	configureCloudflareACMETokenAlias()
-	cfClient := cloudflare.NewClientFromConfig(cfConfig)
-	bunnyClient := bunny.NewClientFromConfig(bunny.LoadConfig())
+	// === Provider Clients ===
+	configureCloudflareACMETokenAlias(cfg)
+	cfClient := cloudflare.NewClientFromConfig(&cloudflare.Config{
+		APIToken:  cfg.CloudflareAPIToken,
+		ZoneID:    cfg.CloudflareZoneID,
+		AccountID: cfg.CloudflareAccountID,
+	})
+	bunnyClient := bunny.NewClientFromConfig(bunny.NewConfig(cfg.BunnyAPIKey, cfg.BunnyAPIBaseURL))
 	if bunnyClient == nil {
 		logger.WithField("services", pkgdns.BunnyManagedServiceTypes()).Warn("BUNNY_API_KEY not configured; media cluster DNS will use explicit Cloudflare fallback")
 	}
 
 	// Quartermaster gRPC client
-	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      qmGRPCAddr,
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
 		Timeout:       10 * time.Second,
 		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterGRPCTLSServerName,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
 	}
 	defer qmClient.Close()
 
-	// === Logic Initialization ===
-	rootDomain := config.RequireEnv("BRAND_DOMAIN")
-	acmeEmail := config.RequireEnv("ACME_EMAIL")
-
-	recordTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_A_RECORD", 60)
-	lbTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_LB", 60)
-	staleSeconds := config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300)
-	monitorConfig := logic.MonitorConfig{
-		Interval: config.GetEnvInt("NAVIGATOR_CF_MONITOR_INTERVAL", 60),
-		Timeout:  config.GetEnvInt("NAVIGATOR_CF_MONITOR_TIMEOUT", 5),
-		Retries:  config.GetEnvInt("NAVIGATOR_CF_MONITOR_RETRIES", 2),
+	// Decklog receives the custom domain events Navigator commits to its
+	// domain event outbox.
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        cfg.DecklogGRPCAddr,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.DecklogGRPCTLSServerName,
+		Timeout:       5 * time.Second,
+		Source:        store.DomainEventSource,
+		ServiceToken:  cfg.ServiceToken,
+		ClusterID:     cfg.ClusterID,
+		SourceRegion:  cfg.Region,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Decklog gRPC client")
 	}
-	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
+	defer func() { _ = decklogClient.Close() }()
+	relay, err := eventoutbox.NewRelay(db, store.DomainEventSchema, decklogClient, logger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create the domain event relay")
+	}
+
+	// === Logic Initialization ===
+	rootDomain := cfg.RootDomain
+	acmeEmail := cfg.ACMEEmail
+
+	staleSeconds := cfg.DNSHealthStaleSeconds
+	monitorConfig := logic.MonitorConfig{
+		Interval: cfg.LoadBalancerMonitorInterval,
+		Timeout:  cfg.LoadBalancerMonitorTimeout,
+		Retries:  cfg.LoadBalancerMonitorRetries,
+	}
+	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, cfg.DNSRecordTTLSeconds, cfg.DNSLoadBalancerTTLSeconds, time.Duration(staleSeconds)*time.Second, monitorConfig)
+	dnsManager.SetProxyServices(cfg.ProxyServices)
 	dnsManager.SetBunnyClient(bunnyClient)
 	certManager := logic.NewCertManager(certStore)
+	certManager.SetIssuanceSettings(func() logic.IssuanceSettings { return issuanceSettings(liveConfig.Get()) })
 	if bunnyClient != nil {
 		certManager.UseBunnyForClusterZones(rootDomain)
 	}
 	internalCAManager := logic.NewInternalCAManager(certStore, qmClient, logger, rootDomain)
 	dnsManager.SetCertChecker(certManager)
-	if err := internalCAManager.EnsureCA(context.Background()); err != nil {
-		logger.WithError(err).Fatal("Failed to initialize internal CA")
+	if caErr := internalCAManager.EnsureCA(context.Background(), internalCAMaterial(cfg)); caErr != nil {
+		logger.WithError(caErr).Fatal("Failed to initialize internal CA")
 	}
 
 	// === Background Workers ===
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger, rootDomain, acmeEmail)
 	go renewalWorker.Start(context.Background())
-	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
-	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
-	dnsRecordsEnabled := config.GetEnvBool("NAVIGATOR_DNS_RECORDS_ENABLED", true)
-	reconciler.SetDNSRecordsEnabled(dnsRecordsEnabled)
+	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(cfg.DNSReconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
+	reconciler.SetDNSRecordsEnabled(cfg.DNSRecordsEnabled)
 	go reconciler.Start(context.Background())
-	if !dnsRecordsEnabled {
+	if !cfg.DNSRecordsEnabled {
 		logger.Info("Public DNS record reconciliation disabled; certificate management remains active")
 	}
 
 	// Tenant alias worker reconciles DNS from Navigator's durable
 	// per-edge ACK state. Foghorn reports ACKs through Navigator gRPC.
 	tenantZoneLabel := logic.TenantAliasZoneLabel
-	aliasWorkerIntervalSeconds := config.GetEnvInt("NAVIGATOR_ALIAS_APPLY_STATE_INTERVAL_SECONDS", 15)
 	aliasWorker := worker.NewAliasApplyStateWorker(
 		certStore,
 		bunnyClient,
 		quartermasterEdgeResolver{qm: qmClient},
 		logger,
-		time.Duration(aliasWorkerIntervalSeconds)*time.Second,
+		time.Duration(cfg.AliasApplyStateIntervalSeconds)*time.Second,
 		rootDomain,
 		tenantZoneLabel,
 		staleSeconds,
 	)
-	if dnsRecordsEnabled {
+	if cfg.DNSRecordsEnabled {
 		go aliasWorker.Start(context.Background())
 	}
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("navigator", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("navigator", version.Version, version.GitCommit)
+	// Readiness covers only Navigator's own database; Quartermaster and the
+	// DNS providers are remote dependencies that must not gate serving.
+	readiness := monitoring.NewReadinessChecker("navigator", version.Version)
+	readiness.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 
 	// Create gRPC server metrics
 	serverMetrics := &ServerMetrics{
@@ -222,7 +250,7 @@ func main() {
 		Quartermaster:      qmClient,
 		TenantClusters:     certManager,
 		Reconciler:         reconciler,
-		DNSRecordsDisabled: !dnsRecordsEnabled,
+		DNSRecordsDisabled: !cfg.DNSRecordsEnabled,
 		Logger:             logger,
 		Metrics:            serverMetrics,
 		RootDomain:         rootDomain,
@@ -243,42 +271,36 @@ func main() {
 	})
 
 	// === gRPC Server ===
-	go func() {
-		grpcPort := config.RequireEnv("NAVIGATOR_GRPC_PORT")
+	// Staging the internal-CA certificate and waiting for the TLS files can take
+	// up to 2 minutes, so the server builds in the background while HTTP health
+	// already serves.
+	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken:   cfg.ServiceToken,
+		MetadataPolicy: metadataPolicy,
+		Logger:         logger,
+		SkipMethods: []string{
+			"/grpc.health.v1.Health/Check",
+			"/grpc.health.v1.Health/Watch",
+		},
+	})
 
-		lis, err := net.Listen("tcp", ":"+grpcPort)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen for gRPC")
-		}
-
-		// Auth interceptor for service-to-service calls
-		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-			ServiceToken: serviceToken,
-			Logger:       logger,
-			SkipMethods: []string{
-				"/grpc.health.v1.Health/Check",
-				"/grpc.health.v1.Health/Watch",
-			},
-		})
-
-		grpcCertFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_CERT_PATH", ""))
-		grpcKeyFile := strings.TrimSpace(config.GetEnv("GRPC_TLS_KEY_PATH", ""))
+	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
 		tlsCfg := grpcutil.ServerTLSConfig{
-			CertFile:      grpcCertFile,
-			KeyFile:       grpcKeyFile,
-			AllowInsecure: grpcCertFile == "" && grpcKeyFile == "",
+			CertFile:      cfg.CertPath,
+			KeyFile:       cfg.KeyPath,
+			AllowInsecure: cfg.CertPath == "" && cfg.KeyPath == "",
 		}
-		if caErr := internalCAManager.EnsureLocalServerCertificate(context.Background(), "navigator", grpcCertFile, grpcKeyFile); caErr != nil {
-			logger.WithError(caErr).Fatal("Failed to stage Navigator bootstrap gRPC certificate")
+		if caErr := internalCAManager.EnsureLocalServerCertificate(ctx, "navigator", cfg.CertPath, cfg.KeyPath); caErr != nil {
+			return nil, caErr
 		}
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+		waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer waitCancel()
 		if waitErr := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, logger); waitErr != nil {
-			logger.WithError(waitErr).Fatal("Timed out waiting for Navigator gRPC TLS files")
+			return nil, waitErr
 		}
-		grpcTLSOpt, err := grpcutil.ServerTLS(tlsCfg, logger)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to configure Navigator gRPC TLS")
+		grpcTLSOpt, tlsErr := grpcutil.ServerTLS(tlsCfg, logger)
+		if tlsErr != nil {
+			return nil, tlsErr
 		}
 		if grpcTLSOpt == nil {
 			logger.Warn("Navigator gRPC is running without TLS; private keys require a private network path.")
@@ -305,30 +327,32 @@ func main() {
 		hs := health.NewServer()
 		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 		hs.SetServingStatus(dnspb.NavigatorService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
-		grpc_health_v1.RegisterHealthServer(grpcServer, hs)
+		server.RegisterHealthServer(grpcServer, hs)
 		reflection.Register(grpcServer)
-
-		logger.WithField("port", grpcPort).Info("Navigator gRPC server starting...")
-		if err := grpcServer.Serve(lis); err != nil {
-			logger.WithError(err).Fatal("Navigator gRPC server failed")
-		}
-	}()
+		return grpcServer, nil
+	}
 
 	// === HTTP Server ===
-	serverConfig := server.DefaultConfig("navigator", config.RequireEnv("NAVIGATOR_PORT"))
-	serverConfig.TLSCertFile = config.GetEnv("NAVIGATOR_HTTP_TLS_CERT_FILE", "")
-	serverConfig.TLSKeyFile = config.GetEnv("NAVIGATOR_HTTP_TLS_KEY_FILE", "")
-
-	app := server.SetupServiceRouter(logger, "navigator", healthChecker, metricsCollector)
+	app := server.NewServiceRouter(server.RouterSpec{
+		Service:            "navigator",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return liveConfig.Get() },
+		DebugConfigOptions: configOptions,
+	})
 	app.GET("/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "running", "version": version.Version})
 	})
 	app.GET("/internal/tls-bundles/:bundleID", func(c *gin.Context) {
-		if !requirePrivateInternalRequest(c) {
+		if !server.RequirePrivateClient(c) {
 			return
 		}
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
-		if authz != "Bearer "+serviceToken {
+		if authz != "Bearer "+cfg.ServiceToken {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
@@ -355,50 +379,101 @@ func main() {
 		})
 	})
 
-	// Best-effort service registration in Quartermaster
+	// Best-effort service registration in Quartermaster. The registration
+	// has never carried a health endpoint.
 	go func() {
-		grpcPortStr := config.GetEnv("NAVIGATOR_GRPC_PORT", "19004")
-		grpcPortInt, err := strconv.Atoi(grpcPortStr)
-		if err != nil || grpcPortInt <= 0 || grpcPortInt > 65535 {
-			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+		req, reqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+			ServiceType:        "navigator",
+			Protocol:           "grpc",
+			Port:               cfg.GRPCPort,
+			AdvertiseHost:      cfg.AdvertiseHost,
+			ClusterID:          cfg.ClusterID,
+			NodeID:             cfg.NodeID,
+			OmitHealthEndpoint: true,
+		})
+		if reqErr != nil {
+			logger.WithError(reqErr).Warn("Quartermaster bootstrap skipped")
 			return
 		}
-		advertiseHost := config.GetEnv("NAVIGATOR_HOST", "navigator")
-		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &quartermasterpb.BootstrapServiceRequest{
-			Type:          "navigator",
-			Version:       version.Version,
-			Protocol:      "grpc",
-			Port:          int32(grpcPortInt),
-			AdvertiseHost: &advertiseHost,
-			ClusterId: func() *string {
-				if clusterID != "" {
-					return &clusterID
-				}
-				return nil
-			}(),
-		}
-		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
-			req.NodeId = &nodeID
-		}
-		if _, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("navigator")); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (navigator) failed")
+		if _, bootstrapErr := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, req, logger, qmbootstrap.DefaultRetryConfig("navigator")); bootstrapErr != nil {
+			logger.WithError(bootstrapErr).Warn("Quartermaster bootstrap (navigator) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (navigator) ok")
 		}
 	}()
 
+	// The domain event relay publishes committed navigator.domain_event_outbox
+	// rows to Decklog. It stops after the listeners, so events committed
+	// during shutdown stay in the outbox for the next process.
+	relayCtx, stopRelay := context.WithCancel(context.Background())
+	relayDone := make(chan struct{})
+	go func() {
+		defer close(relayDone)
+		relay.Run(relayCtx)
+	}()
+	stopRelayOnShutdown := func(shutdownCtx context.Context) {
+		stopRelay()
+		select {
+		case <-relayDone:
+		case <-shutdownCtx.Done():
+		}
+	}
+
 	server.RegisterEnvFileReload("navigator", logger)
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.WithError(err).Fatal("Navigator HTTP server failed")
+	if runErr := server.Run(context.Background(), server.RunSpec{
+		Service: "navigator",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP: []server.HTTPListener{{
+			Name:        "http",
+			Port:        cfg.ListenHTTPPort(),
+			Handler:     app,
+			TLSCertFile: cfg.HTTPTLSCertFile,
+			TLSKeyFile:  cfg.HTTPTLSKeyFile,
+		}},
+		GRPC:       []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: buildGRPCServer}},
+		OnReload:   []server.ReloadCallback{liveConfig.Reload},
+		OnShutdown: []func(context.Context){stopRelayOnShutdown},
+	}); runErr != nil {
+		logger.WithError(runErr).Fatal("Navigator server failed")
 	}
 }
 
-func configureCloudflareACMETokenAlias() {
-	if os.Getenv("CLOUDFLARE_DNS_API_TOKEN") != "" || os.Getenv("CLOUDFLARE_API_TOKEN") == "" {
+// configureCloudflareACMETokenAlias exports CLOUDFLARE_API_TOKEN as
+// CLOUDFLARE_DNS_API_TOKEN when the latter is empty, because the lego
+// Cloudflare DNS-01 provider reads its token from the process environment.
+func configureCloudflareACMETokenAlias(cfg *appconfig.Navigator) {
+	if cfg.CloudflareDNSAPIToken != "" || cfg.CloudflareAPIToken == "" {
 		return
 	}
-	_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", os.Getenv("CLOUDFLARE_API_TOKEN"))
+	_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", cfg.CloudflareAPIToken)
+}
+
+// issuanceSettings projects the certificate issuance settings from a
+// configuration snapshot.
+func issuanceSettings(cfg *appconfig.Navigator) logic.IssuanceSettings {
+	return logic.IssuanceSettings{
+		ACMEEnv:                 cfg.ACMEEnv,
+		CAOrder:                 cfg.ACMECAOrder,
+		GoogleTrustDirectoryURL: cfg.GoogleTrustDirectoryURL,
+		GoogleTrustEABKeyID:     cfg.GoogleTrustEABKeyID,
+		GoogleTrustEABHMACKey:   cfg.GoogleTrustEABHMACKey,
+		AllowedSuffixes:         cfg.CertAllowedSuffixes,
+		RootDomain:              cfg.RootDomain,
+	}
+}
+
+// internalCAMaterial projects the managed internal CA import settings.
+func internalCAMaterial(cfg *appconfig.Navigator) logic.InternalCAMaterial {
+	return logic.InternalCAMaterial{
+		RootCertFile:           cfg.InternalCARootCertFile,
+		IntermediateCertFile:   cfg.InternalCAIntermediateCertFile,
+		IntermediateKeyFile:    cfg.InternalCAIntermediateKeyFile,
+		RootCertPEMB64:         cfg.InternalCARootCertPEMB64,
+		IntermediateCertPEMB64: cfg.InternalCAIntermediateCertPEMB64,
+		IntermediateKeyPEMB64:  cfg.InternalCAIntermediateKeyPEMB64,
+		RequireManaged:         cfg.IsProduction(),
+	}
 }
 
 func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {
@@ -412,32 +487,12 @@ func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
 			host = splitHost
 		}
-		if !isPrivateClientIP(host) {
+		if !server.IsPrivateClientIP(host) {
 			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
 		}
 
 		return handler(ctx, req)
 	}
-}
-
-func requirePrivateInternalRequest(c *gin.Context) bool {
-	host := c.Request.RemoteAddr
-	if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
-		host = splitHost
-	}
-	if isPrivateClientIP(host) {
-		return true
-	}
-	c.JSON(http.StatusForbidden, gin.H{"error": "private network access required"})
-	return false
-}
-
-func isPrivateClientIP(raw string) bool {
-	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
 // SyncDNS implements the gRPC SyncDNS method. Cluster-scoped requests publish

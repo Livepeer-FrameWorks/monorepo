@@ -30,13 +30,14 @@ const maxPeerWatchers = 512
 // carries no peer data: a woken subscriber re-reads its own peer set, so a
 // subscriber can never be handed another cluster's census.
 type peerWatchHub struct {
+	ctx     context.Context
 	mu      sync.Mutex
 	next    uint64
 	waiters map[uint64]chan struct{}
 }
 
 func newPeerWatchHub() *peerWatchHub {
-	return &peerWatchHub{waiters: make(map[uint64]chan struct{})}
+	return &peerWatchHub{ctx: context.Background(), waiters: make(map[uint64]chan struct{})}
 }
 
 // subscribe registers a waiter. The channel has room for one pending wake, so a
@@ -44,6 +45,9 @@ func newPeerWatchHub() *peerWatchHub {
 func (hub *peerWatchHub) subscribe() (uint64, chan struct{}, error) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	if hub.ctx.Err() != nil {
+		return 0, nil, status.Error(codes.Unavailable, "peer watch is draining")
+	}
 	if len(hub.waiters) >= maxPeerWatchers {
 		return 0, nil, status.Error(codes.ResourceExhausted, "peer watch capacity reached")
 	}
@@ -148,9 +152,34 @@ func (s *QuartermasterServer) WatchPeers(req *quartermasterpb.ListPeersRequest, 
 	}
 	defer s.peerWatch.unsubscribe(id)
 
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+	stop := context.AfterFunc(s.peerWatch.ctx, cancel)
+	defer stop()
+	// Returning the handler closes its transport stream, releasing a Send blocked
+	// by client flow control. Cancelling only a derived context cannot do that.
+	done := make(chan error, 1)
+	go func() { done <- s.watchPeers(ctx, req, stream, wake) }()
+	select {
+	case <-s.peerWatch.ctx.Done():
+		return status.Error(codes.Unavailable, "peer watch is draining")
+	case <-stream.Context().Done():
+		return stream.Context().Err()
+	case err := <-done:
+		if s.peerWatch.ctx.Err() != nil {
+			return status.Error(codes.Unavailable, "peer watch is draining")
+		}
+		return err
+	}
+}
+
+func (s *QuartermasterServer) watchPeers(ctx context.Context, req *quartermasterpb.ListPeersRequest, stream quartermasterpb.ClusterService_WatchPeersServer, wake <-chan struct{}) error {
 	var last *quartermasterpb.ListPeersResponse
 	send := func() error {
-		current, listErr := s.ListPeers(stream.Context(), req)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, listErr := s.ListPeers(ctx, req)
 		if listErr != nil {
 			return listErr
 		}
@@ -170,8 +199,8 @@ func (s *QuartermasterServer) WatchPeers(req *quartermasterpb.ListPeersRequest, 
 	}
 	for {
 		select {
-		case <-stream.Context().Done():
-			return stream.Context().Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-wake:
 			if err := send(); err != nil {
 				return err

@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+
+	"frameworks/api_balancing/internal/appconfig"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"os"
@@ -22,7 +24,7 @@ func setMockValidator(t *testing.T, resp *quartermasterpb.ValidateBootstrapToken
 
 func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -81,14 +83,16 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 
 func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 	tmpDir := t.TempDir()
 	caPath := filepath.Join(tmpDir, "ca.crt")
 	want := "-----BEGIN CERTIFICATE-----\nTEST-CA\n-----END CERTIFICATE-----\n"
 	if err := os.WriteFile(caPath, []byte(want), 0o600); err != nil {
 		t.Fatalf("failed to write temp ca bundle: %v", err)
 	}
-	t.Setenv("GRPC_TLS_CA_PATH", caPath)
+	caSettings := &appconfig.Foghorn{PlatformRootDomain: "example.com"}
+	caSettings.CAPath = caPath
+	useFoghornConfig(t, caSettings)
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -187,7 +191,7 @@ func TestPreRegisterEdge_NoValidatorNoQM(t *testing.T) {
 
 func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	os.Unsetenv("CLUSTER_ID")
-	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "frameworks.network"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -216,7 +220,7 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 
 func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "env-cluster")
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -239,7 +243,7 @@ func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 
 func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "test")
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
@@ -264,7 +268,7 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 
 func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "eu_west_1")
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
@@ -290,7 +294,7 @@ func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 }
 
 func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.T) {
-	t.Setenv("BRAND_DOMAIN", "example.com")
+	useFoghornConfig(t, &appconfig.Foghorn{PlatformRootDomain: "example.com"})
 
 	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/domainevents"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
@@ -104,6 +105,9 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 	if err != nil {
 		return false, fmt.Errorf("claim DVR stop on retire: %w", err)
 	}
+	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+		return false, idleErr
+	}
 	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return false, err
@@ -149,6 +153,9 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
 	if err != nil {
 		return "", false, err
+	}
+	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+		return "", false, idleErr
 	}
 	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
@@ -301,15 +308,19 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 		}
 		qtx := foghorndb.New(tx)
 		if err = qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(candidate.tenant, candidate.stream)); err == nil {
-			var nodeID string
-			nodeID, err = qtx.RetireNeverProjectedIngestSession(ctx, foghorndb.RetireNeverProjectedIngestSessionParams{
+			var ended foghorndb.RetireNeverProjectedIngestSessionRow
+			ended, err = qtx.RetireNeverProjectedIngestSession(ctx, foghorndb.RetireNeverProjectedIngestSessionParams{
 				SessionID: candidate.id, TenantID: candidate.tenant, OlderThanMs: olderThan.Milliseconds(),
 			})
+			nodeID := ended.NodeID
 			if errors.Is(err, sql.ErrNoRows) {
 				err = nil
 			} else if err == nil {
+				err = domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID)
 				var revision int64
-				revision, err = nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)
+				if err == nil {
+					revision, err = nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)
+				}
 				if err == nil {
 					err = enqueueOfflineEffectTx(ctx, tx, candidate.tenant, candidate.stream, nodeID, candidate.id, revision, OfflineEffectIntent{})
 				}

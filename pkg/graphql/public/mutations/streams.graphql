@@ -1,0 +1,75 @@
+mutation CreateStream($input: CreateStreamInput!) {
+  createStream(input: $input) {
+    __typename
+    ...StreamFields
+    ...ValidationErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
+  updateStream(id: $id, input: $input) {
+    __typename
+    ...StreamFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation DeleteStream($id: ID!) {
+  deleteStream(id: $id) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation RefreshStreamKey($id: ID!) {
+  refreshStreamKey(id: $id) {
+    __typename
+    ...StreamFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
+  createStreamKey(streamId: $streamId, input: $input) {
+    __typename
+    ...StreamKeyFields
+    ...ValidationErrorFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
+  deleteStreamKey(streamId: $streamId, keyId: $keyId) {
+    __typename
+    ...DeleteSuccessFields
+    ...NotFoundErrorFields
+    ...AuthErrorFields
+  }
+}
+
+# Push targets return the target itself; failures arrive as GraphQL errors.
+mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
+  createPushTarget(streamId: $streamId, input: $input) {
+    ...PushTargetFields
+  }
+}
+
+mutation UpdatePushTarget($id: ID!, $input: UpdatePushTargetInput!) {
+  updatePushTarget(id: $id, input: $input) {
+    ...PushTargetFields
+  }
+}
+
+mutation DeletePushTarget($id: ID!) {
+  deletePushTarget(id: $id) {
+    ...DeleteSuccessFields
+  }
+}

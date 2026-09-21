@@ -10,17 +10,21 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 
+	"frameworks/api_billing/internal/appconfig"
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
 	"frameworks/api_billing/internal/pricing"
@@ -29,8 +33,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklog "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -385,6 +389,7 @@ type JobManager struct {
 	thresholdEnforcer *ThresholdEnforcer
 	tierReconciler    TierReconciler
 	billing           *Service
+	fxSyncer          *fx.Syncer
 }
 
 // TierReconciler is the subset of tieraccess.Reconciler used by the downgrade
@@ -397,13 +402,14 @@ type TierReconciler interface {
 }
 
 // NewJobManager creates a new job manager
-func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient, tierReconciler TierReconciler, billing *Service) *JobManager {
+func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient, tierReconciler TierReconciler, billing *Service, geoipReader *geoip.Reader) *JobManager {
 	// Initialize Kafka consumer
-	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
-	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
-	clientID := config.GetEnv("KAFKA_CLIENT_ID", "purser")
-	groupID := config.GetEnv("KAFKA_GROUP_ID", "purser-ingest")
-	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
+	rt := appconfig.Runtime()
+	brokers := rt.KafkaBrokers
+	clusterID := rt.KafkaClusterID
+	clientID := rt.KafkaClientID
+	groupID := rt.KafkaGroupID
+	billingTopic := rt.BillingKafkaTopic
 	kLogger := logrus.New() // Adapt logger
 
 	// Consumer group for billing reports
@@ -414,19 +420,23 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		// Don't fatal here, allow API to start without consumer if needed
 	}
 
-	includeTestnets := config.X402IncludeTestnetsEnabled()
+	includeTestnets := rt.X402IncludeTestnets
 	emailSvc := NewEmailService(log)
-	x402Submitter := NewX402Handler(database, log, NewHDWallet(database, log), NewRPCClient(), commodoreClient)
+	x402Submitter := NewX402Handler(database, log, NewHDWallet(database, log), NewRPCClient(), commodoreClient, geoipReader)
 	var purserMetrics *PurserMetrics
 	if billing != nil {
 		purserMetrics = billing.metrics
 	}
+	var fxAgeGauge *prometheus.GaugeVec
+	if purserMetrics != nil {
+		fxAgeGauge = purserMetrics.FXRateReferenceAge
+	}
 
-	return &JobManager{
+	jm := &JobManager{
 		db:                database,
 		logger:            log,
 		emailService:      emailSvc,
-		cryptoMonitor:     NewCryptoMonitorWithMetrics(database, log, decklogSvc, purserMetrics),
+		cryptoMonitor:     NewCryptoMonitorWithMetrics(database, log, decklogSvc, purserMetrics, geoipReader),
 		gasWalletMonitor:  NewGasWalletMonitor(log),
 		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets, x402Submitter),
 		kafkaConsumer:     consumer,
@@ -437,7 +447,19 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc, billing, tierReconciler),
 		tierReconciler:    tierReconciler,
 		billing:           billing,
+		fxSyncer:          fx.NewSyncer(database, log, fx.HTTPFetcher(&http.Client{}), fxAgeGauge),
 	}
+	if billing != nil {
+		wireAdvanceBilling(billing, jm)
+	}
+	return jm
+}
+
+// wireAdvanceBilling gives the webhook service the job manager's advance
+// billing steps, which activation paths run after a tenant changes tier.
+func wireAdvanceBilling(billing *Service, jm *JobManager) {
+	billing.chargeAdvanceBaseFee = jm.ChargeAdvanceBaseFee
+	billing.closeAdvanceBilledPeriod = jm.CloseAdvanceBilledPeriod
 }
 
 // Start begins all background jobs
@@ -487,9 +509,17 @@ func (jm *JobManager) Start(ctx context.Context) {
 	// Start Mollie observation drain backstop.
 	go jm.runMollieObservationDrain(ctx)
 
+	// Fill card settlements that were not settled when the payment succeeded.
+	go jm.runProviderSettlementRetry(ctx)
+
 	// Start deployment-tier sweep (Purser is the authority for
 	// quartermaster.tenants.deployment_tier).
 	go jm.runDeploymentTierSweep(ctx)
+
+	// Keep ECB reference rates current for presentment-currency conversions.
+	if jm.fxSyncer != nil {
+		go jm.fxSyncer.Start(ctx, jm.stopCh)
+	}
 }
 
 // runDeploymentTierSweep converges quartermaster.tenants.deployment_tier with
@@ -762,7 +792,7 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 	}
 	currency := tier.Currency
 	if currency == "" {
-		currency = billing.DefaultCurrency()
+		currency = billing.LedgerCurrency
 	}
 	rules := tier.Rules
 	if summary.ClusterID != "" && jm.pricingResolver() != nil {
@@ -863,7 +893,7 @@ func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []ra
 		Currency: currency, BasePrice: decimal.Zero, Rules: rules,
 		Usage: usage, Quantities: quantities,
 		PeriodStart: periodStart, PeriodEnd: periodEnd,
-		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
 	})
 	if err != nil {
 		return decimal.Zero, err
@@ -926,10 +956,10 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 
 	currency := tier.Currency
 	if currency == "" {
-		currency = billing.DefaultCurrency()
+		currency = billing.LedgerCurrency
 	}
-	if currency != billing.DefaultCurrency() {
-		return fmt.Errorf("prepaid balance currency %s cannot settle usage priced in %s", billing.DefaultCurrency(), currency)
+	if currency != billing.LedgerCurrency {
+		return fmt.Errorf("prepaid balance currency %s cannot settle usage priced in %s", billing.LedgerCurrency, currency)
 	}
 	if len(acceptedUsage) == 0 {
 		return nil
@@ -1088,8 +1118,8 @@ func (jm *JobManager) rateCumulativePrepaidUsage(
 				currency = resolved.Currency
 			}
 		}
-		if currency != billing.DefaultCurrency() {
-			return decimal.Zero, fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", clusterID, currency, billing.DefaultCurrency())
+		if currency != billing.LedgerCurrency {
+			return decimal.Zero, fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", clusterID, currency, billing.LedgerCurrency)
 		}
 		amount, err := ratePrepaidQuantities(currency, rules, quantities, periodStart, periodEnd)
 		if err != nil {
@@ -1115,7 +1145,7 @@ func (jm *JobManager) rateCumulativePrepaidUsage(
 // Used by invoice draft/finalization so the credit deduction commits or rolls
 // back together with the invoice header and line items.
 func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, requestCents int64, description string, referenceID *string) (newBalance, appliedCents int64, isDuplicate bool, err error) {
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	referenceType := "invoice_credit"
 	queries := purserdb.New(tx)
 
@@ -1256,7 +1286,7 @@ const microPerCent = int64(10_000)
 // Idempotency is keyed on (tenant_id, reference_type='usage_summary', reference_id);
 // duplicate calls return applied=false.
 func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, tenantID string, amountMicro int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	tx, err := jm.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1331,7 +1361,7 @@ func applyPrepaidBalanceForUsageMicroLocked(
 		BalanceCents:          newBalance,
 		BalanceRemainderMicro: newRemainder,
 		TenantID:              tenantID,
-		Currency:              billing.DefaultCurrency(),
+		Currency:              billing.LedgerCurrency,
 	}); updErr != nil {
 		return 0, 0, false, updErr
 	}
@@ -1342,7 +1372,7 @@ func applyPrepaidBalanceForUsageMicroLocked(
 // deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
 func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID string, amountCents int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
 	var newBalance int64
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 
 	tx, err := jm.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1406,7 +1436,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 //
 //nolint:unused
 func (jm *JobManager) getPrepaidBalance(ctx context.Context, tenantID string) (int64, error) {
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	balanceCents, err := purserdb.New(jm.db).GetPrepaidBalanceForJobs(ctx, purserdb.GetPrepaidBalanceForJobsParams{
 		TenantID: tenantID,
 		Currency: currency,
@@ -1521,6 +1551,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 
 	now := time.Now()
 	defer jm.applyDuePendingDowngrades(ctx, now)
+	defer jm.chargeDueAdvanceBaseFees(ctx, now)
 
 	// Identify tenants due for billing. Pricing rules / entitlements are loaded
 	// per-tenant via LoadEffectiveTier so this query stays narrow.
@@ -1532,6 +1563,21 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		}).Error("Failed to fetch tenant subscriptions for invoice generation")
 		return
 	}
+	invoicesGenerated := jm.finalizeSubscriptionPeriods(ctx, dueSubscriptions, now, time.Time{})
+	jm.logger.WithFields(logging.Fields{
+		"invoices_generated": invoicesGenerated,
+	}).Info("Monthly invoice generation completed")
+}
+
+// finalizeSubscriptionPeriods rates and finalizes each subscription's usage
+// invoice for its period and returns how many it finalized. With a zero
+// closeAt the period is the subscription's current one, finalized once it has
+// ended, after which the subscription moves to its next period, a scheduled
+// downgrade applies, and the next advance base fee is charged. A non-zero
+// closeAt closes the current period early at that time: the invoice covers
+// [period start, closeAt) and the caller starts the next period.
+func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscriptions []purserdb.ListSubscriptionsDueForInvoiceRow, now, closeAt time.Time) int {
+	closingEarly := !closeAt.IsZero()
 	var invoicesGenerated int
 	for _, subscription := range dueSubscriptions {
 		tenantID := subscription.TenantID
@@ -1545,6 +1591,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		stripeSubID := subscription.StripeSubscriptionID
 		mollieSubID := subscription.MollieSubscriptionID
 		paymentMethod := subscription.PaymentMethod
+		presentmentCurrency := strings.ToUpper(strings.TrimSpace(subscription.PresentmentCurrency))
 
 		tier, tierErr := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
 		if tierErr != nil {
@@ -1556,7 +1603,14 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		meteringEnabled := tier.MeteringEnabled
 
 		var periodStart, periodEnd time.Time
-		if mollieNextPaymentDate.Valid {
+		if closingEarly {
+			if !billingPeriodStart.Valid || !closeAt.After(billingPeriodStart.Time) {
+				jm.logger.WithField("tenant_id", tenantID).Error("Cannot close a billing period that has no start before the close time")
+				continue
+			}
+			periodStart = billingPeriodStart.Time
+			periodEnd = closeAt
+		} else if mollieNextPaymentDate.Valid {
 			periodEnd = time.Date(mollieNextPaymentDate.Time.Year(), mollieNextPaymentDate.Time.Month(), mollieNextPaymentDate.Time.Day(), 0, 0, 0, 0, time.UTC)
 			periodStart = periodEnd.AddDate(0, -1, 0)
 		} else if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
@@ -1631,8 +1685,19 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		}
 		usageData := flattenUsageAcrossClusters(perClusterUsage)
 
-		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid
-		collectionProvider, providerErr := resolveInvoiceCollectionProvider(paymentMethod.String, stripeSubID.Valid, mollieSubID.Valid)
+		// The base fee is outside the period's usage invoice when a provider
+		// subscription collects it or Purser charged it in advance on a
+		// base-fee invoice for this period.
+		baseFeeInvoiced, baseFeeErr := purserdb.New(jm.db).BaseFeeInvoiceExistsForPeriod(ctx, purserdb.BaseFeeInvoiceExistsForPeriodParams{
+			TenantID: tenantID, PeriodStart: periodStart,
+		})
+		if baseFeeErr != nil {
+			jm.logger.WithError(baseFeeErr).WithField("tenant_id", tenantID).Error("Failed to check advance base-fee invoice")
+			continue
+		}
+		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid || baseFeeInvoiced
+		collectionProvider, providerErr := resolveInvoiceCollectionProvider(paymentMethod.String, stripeSubID.Valid, mollieSubID.Valid,
+			subscription.StripeCustomerID.Valid && subscription.StripeCustomerID.String != "", subscription.HasMollieCustomer)
 		if providerErr != nil {
 			jm.logger.WithError(providerErr).WithField("tenant_id", tenantID).Error("Invoice finalization blocked by ambiguous collection provider")
 			continue
@@ -1723,6 +1788,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// in the same transaction so a finalized invoice cannot leave the
 		// subscription pointing at the already-billed period.
 		var collectionDecision *invoiceCollectionDecision
+		var presentment fx.Record
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
 			queries := purserdb.New(tx)
 			var txErr error
@@ -1741,7 +1807,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 				totalDec = totalDec.Round(2)
 				if collectionProvider != "" {
 					decision, decisionErr := applyInvoiceCollectionMinimumTx(
-						ctx, tx, tenantID, collectionProvider, currency,
+						ctx, tx, tenantID, collectionProvider, billing.LedgerCurrency,
 						totalDec.Mul(decimal.NewFromInt(100)).IntPart(),
 					)
 					if decisionErr != nil {
@@ -1819,6 +1885,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			if txErr != nil {
 				return txErr
 			}
+			// A finalized invoice is presented in the tenant's presentment
+			// currency at the ECB rate of the finalization date. Without a
+			// usable rate the whole finalization rolls back and the next run
+			// retries it.
+			if status != "manual_review" {
+				presentment, txErr = finalizeInvoicePresentmentTx(ctx, tx, invoiceID, tenantID, presentmentCurrency, totalDec, time.Now().UTC())
+				if txErr != nil {
+					return txErr
+				}
+			}
 			if collectionDecision != nil {
 				txErr = persistInvoiceCollectionDecisionTx(ctx, tx, invoiceID, tenantID, *collectionDecision)
 				if txErr != nil {
@@ -1854,10 +1930,16 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			if txErr != nil {
 				return fmt.Errorf("enqueue invoice email: %w", txErr)
 			}
+			txErr = enqueueInvoiceCreatedTx(ctx, tx, tenantID, invoiceID, status,
+				totalDec.Round(2).Shift(2).IntPart(), periodStart, periodEnd, dueDate)
+			if txErr != nil {
+				return fmt.Errorf("enqueue invoice_created: %w", txErr)
+			}
 			// manual_review: do not advance the subscription period.
 			// Resolution flow is ops fixes pricing → re-finalize → side
-			// effects fire once on the corrected total.
-			if status == "manual_review" {
+			// effects fire once on the corrected total. A period closed
+			// early is replaced by the caller.
+			if status == "manual_review" || closingEarly {
 				return nil
 			}
 			rowsAffected, txErr := queries.AdvanceSubscriptionBillingPeriod(ctx, purserdb.AdvanceSubscriptionBillingPeriodParams{
@@ -1919,23 +2001,13 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// provider switch cannot cause a second charge. Webhook reconciliation
 		// uses the shared partial-payment-aware settlement path regardless of
 		// provider.
-		providerChargeDec := totalDec
-		if status == "pending" && providerChargeDec.GreaterThan(decimal.Zero) {
-			switch collectionProvider {
-			case "mollie":
-				if chargeErr := jm.chargeMollieOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
-					jm.logger.WithError(chargeErr).WithFields(logging.Fields{
-						"tenant_id":  tenantID,
-						"invoice_id": invoiceID,
-					}).Warn("Failed to trigger Mollie overage charge")
-				}
-			case "stripe":
-				if chargeErr := jm.chargeStripeOverage(ctx, tenantID, invoiceID, providerChargeDec, currency); chargeErr != nil {
-					jm.logger.WithError(chargeErr).WithFields(logging.Fields{
-						"tenant_id":  tenantID,
-						"invoice_id": invoiceID,
-					}).Warn("Failed to trigger Stripe off-session overage charge")
-				}
+		if status == "pending" && presentment.OriginalMinor > 0 {
+			if chargeErr := jm.chargeInvoice(ctx, collectionProvider, tenantID, invoiceID, presentment.OriginalMinor, presentment.OriginalCurrency); chargeErr != nil {
+				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"invoice_id": invoiceID,
+					"provider":   collectionProvider,
+				}).Warn("Failed to trigger off-session invoice charge")
 			}
 		}
 
@@ -1944,13 +2016,17 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// on partial failure: flip tier first, reconcile cluster access second,
 		// clear pending_* last. Pending stays set on any error so the next
 		// cron tick retries.
-		if status != "manual_review" {
+		if status != "manual_review" && !closingEarly {
 			jm.applyPendingDowngrade(ctx, tenantID)
+			// The next period's base fee, at the tier that period runs on, is
+			// charged in advance when Purser rather than a provider
+			// subscription collects it.
+			if baseErr := jm.chargeAdvanceBaseFee(ctx, tenantID, now); baseErr != nil {
+				jm.logger.WithError(baseErr).WithField("tenant_id", tenantID).Warn("Failed to charge advance base fee; retrying next run")
+			}
 		}
 	}
-	jm.logger.WithFields(logging.Fields{
-		"invoices_generated": invoicesGenerated,
-	}).Info("Monthly invoice generation completed")
+	return invoicesGenerated
 }
 
 func finalizedInvoiceStatus(total decimal.Decimal) string {
@@ -1961,7 +2037,7 @@ func finalizedInvoiceStatus(total decimal.Decimal) string {
 }
 
 func meteringCompletenessRequired(meteringEnabled bool) bool {
-	return meteringEnabled && !config.WaiveUsageChargesEnabled()
+	return meteringEnabled && !appconfig.Runtime().WaiveUsageCharges
 }
 
 func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {
@@ -2103,12 +2179,21 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(intentKey)).String()
 	intentPlaceholder := "stripe-overage-intent:" + paymentID
 
+	paymentFX, quoteErr := InvoicePaymentFX(ctx, jm.db, tenantID, invoiceID, currency, amountCents)
+	if quoteErr != nil {
+		return fmt.Errorf("record Stripe charge in EUR: %w", quoteErr)
+	}
 	existingPayment, insertErr := queries.UpsertPendingProviderBillingPayment(ctx, purserdb.UpsertPendingProviderBillingPaymentParams{
-		PaymentID: paymentID,
-		InvoiceID: invoiceID,
-		Amount:    amountStr,
-		Currency:  currency,
-		TxID:      sql.NullString{String: intentPlaceholder, Valid: true},
+		PaymentID:           paymentID,
+		InvoiceID:           invoiceID,
+		Amount:              amountStr,
+		Currency:            strings.ToUpper(currency),
+		TxID:                sql.NullString{String: intentPlaceholder, Valid: true},
+		OriginalAmountCents: paymentFX.OriginalMinor,
+		EurAmountCents:      paymentFX.EURMinor,
+		FxUnitsPerEur:       paymentFX.UnitsText(),
+		FxSource:            paymentFX.Source,
+		FxReferenceDate:     paymentFX.ReferenceDate,
 	})
 	if insertErr != nil {
 		return fmt.Errorf("insert pending billing_payment: %w", insertErr)
@@ -2271,7 +2356,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// and the customer pays it in the billing UI, where hosted Checkout
 		// performs the authentication. Direct them there; dunning reminders also
 		// cover the invoice if they do not act.
-		actionURL := strings.TrimSpace(config.GetEnv("WEBAPP_PUBLIC_URL", ""))
+		actionURL := appconfig.Runtime().WebAppURL
 		if actionURL != "" {
 			actionURL = strings.TrimRight(actionURL, "/") + "/account/billing?invoice=" + url.QueryEscape(invoiceID)
 		}
@@ -2281,7 +2366,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 			"payment_intent_id": result.PaymentIntentID,
 			"action_url":        actionURL,
 		}).Warn("Stripe off-session overage requires customer authentication (SCA); directing customer to on-session invoice payment")
-		go jm.billing.sendTenantActionRequiredEmail(tenantID, invoiceID, float64(amountCents)/100, currency, actionURL)
+		go jm.billing.sendTenantActionRequiredEmail(tenantID, invoiceID, paymentID, float64(amountCents)/100, currency, actionURL)
 		return nil
 
 	case result.Status == "failed":
@@ -2445,12 +2530,21 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	paymentID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(idemKey)).String()
 	intentID := "mollie-overage-intent:" + paymentID
 
+	paymentFX, quoteErr := InvoicePaymentFX(ctx, jm.db, tenantID, invoiceID, currency, amountCents)
+	if quoteErr != nil {
+		return fmt.Errorf("record Mollie charge in EUR: %w", quoteErr)
+	}
 	existingPayment, insertErr := queries.UpsertPendingProviderBillingPayment(ctx, purserdb.UpsertPendingProviderBillingPaymentParams{
-		PaymentID: paymentID,
-		InvoiceID: invoiceID,
-		Amount:    amountStr,
-		Currency:  currency,
-		TxID:      sql.NullString{String: intentID, Valid: true},
+		PaymentID:           paymentID,
+		InvoiceID:           invoiceID,
+		Amount:              amountStr,
+		Currency:            strings.ToUpper(currency),
+		TxID:                sql.NullString{String: intentID, Valid: true},
+		OriginalAmountCents: paymentFX.OriginalMinor,
+		EurAmountCents:      paymentFX.EURMinor,
+		FxUnitsPerEur:       paymentFX.UnitsText(),
+		FxSource:            paymentFX.Source,
+		FxReferenceDate:     paymentFX.ReferenceDate,
 	})
 	if insertErr != nil {
 		return fmt.Errorf("insert pending billing_payment: %w", insertErr)
@@ -2508,7 +2602,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	}
 
 	webhookURL := ""
-	if base := config.GetGatewayPublicURL(); base != "" {
+	if base := appconfig.Runtime().GatewayPublicBaseURL(); base != "" {
 		webhookURL = base + "/webhooks/billing/mollie"
 	}
 
@@ -3233,7 +3327,13 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("read provider sub ids for draft: %w", scanErr)
 	}
-	baseProviderManaged := providerIDs.StripeSubscriptionID.Valid || providerIDs.MollieSubscriptionID.Valid
+	baseFeeInvoiced, baseFeeErr := purserdb.New(jm.db).BaseFeeInvoiceExistsForPeriod(ctx, purserdb.BaseFeeInvoiceExistsForPeriodParams{
+		TenantID: tenantID, PeriodStart: periodStart,
+	})
+	if baseFeeErr != nil {
+		return fmt.Errorf("check advance base-fee invoice for draft: %w", baseFeeErr)
+	}
+	baseProviderManaged := providerIDs.StripeSubscriptionID.Valid || providerIDs.MollieSubscriptionID.Valid || baseFeeInvoiced
 
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns

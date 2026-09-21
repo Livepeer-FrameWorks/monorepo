@@ -8,6 +8,7 @@ package ipcpb
 
 import (
 	common "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	events "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -1425,8 +1426,14 @@ type ServiceEvent struct {
 	SchemaVersion         int32  `protobuf:"varint,54,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	CorrelationId         string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
 	CausationId           string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Actor of the request that produced the event, in the same form as the
+	// domain event actor (events.Actor): auth type ("jwt", "api_token",
+	// "wallet", "service") and, for API tokens, the keyed token hash Bridge
+	// records in api_request_batch.token_hashes, so audit rows join usage.
+	ActorAuthType  string `protobuf:"bytes,57,opt,name=actor_auth_type,json=actorAuthType,proto3" json:"actor_auth_type,omitempty"`
+	ActorTokenHash uint64 `protobuf:"varint,58,opt,name=actor_token_hash,json=actorTokenHash,proto3" json:"actor_token_hash,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ServiceEvent) Reset() {
@@ -1668,6 +1675,20 @@ func (x *ServiceEvent) GetCausationId() string {
 		return x.CausationId
 	}
 	return ""
+}
+
+func (x *ServiceEvent) GetActorAuthType() string {
+	if x != nil {
+		return x.ActorAuthType
+	}
+	return ""
+}
+
+func (x *ServiceEvent) GetActorTokenHash() uint64 {
+	if x != nil {
+		return x.ActorTokenHash
+	}
+	return 0
 }
 
 type isServiceEvent_Payload interface {
@@ -19505,8 +19526,13 @@ type APIRequestAggregate struct {
 	LlmOutputTokens uint64                 `protobuf:"varint,13,opt,name=llm_output_tokens,json=llmOutputTokens,proto3" json:"llm_output_tokens,omitempty"` // Exact provider-reported output tokens
 	Model           string                 `protobuf:"bytes,14,opt,name=model,proto3" json:"model,omitempty"`                                               // Provider model identifier
 	Provider        string                 `protobuf:"bytes,15,opt,name=provider,proto3" json:"provider,omitempty"`                                         // LLM provider identifier
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Sorted, distinct GraphQL root field names the aggregate's requests
+	// resolved (field names, not aliases). operation_name is client-chosen;
+	// root_fields names the API surface actually used. Empty for MCP tool calls,
+	// whose operation_name is the server-defined tool name.
+	RootFields    []string `protobuf:"bytes,16,rep,name=root_fields,json=rootFields,proto3" json:"root_fields,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *APIRequestAggregate) Reset() {
@@ -19642,6 +19668,13 @@ func (x *APIRequestAggregate) GetProvider() string {
 		return x.Provider
 	}
 	return ""
+}
+
+func (x *APIRequestAggregate) GetRootFields() []string {
+	if x != nil {
+		return x.RootFields
+	}
+	return nil
 }
 
 // Helmsman sends to Foghorn; Foghorn validates via Commodore (API token) or JWT verification.
@@ -21080,12 +21113,12 @@ var File_ipc_proto protoreflect.FileDescriptor
 
 const file_ipc_proto_rawDesc = "" +
 	"\n" +
-	"\tipc.proto\x12\x0fhelmsmancontrol\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\"F\n" +
+	"\tipc.proto\x12\x0fhelmsmancontrol\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\x15events/envelope.proto\"F\n" +
 	"\tGeoBucket\x12\x19\n" +
 	"\bh3_index\x18\x01 \x01(\x04R\ah3Index\x12\x1e\n" +
 	"\n" +
 	"resolution\x18\x02 \x01(\rR\n" +
-	"resolution\"\x90\v\n" +
+	"resolution\"\xe2\v\n" +
 	"\fServiceEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -21115,7 +21148,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x18stream_origin_cluster_id\x185 \x01(\tR\x15streamOriginClusterId\x12%\n" +
 	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
 	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
-	"\fcausation_id\x188 \x01(\tR\vcausationIdB\t\n" +
+	"\fcausation_id\x188 \x01(\tR\vcausationId\x12&\n" +
+	"\x0factor_auth_type\x189 \x01(\tR\ractorAuthType\x12(\n" +
+	"\x10actor_token_hash\x18: \x01(\x04R\x0eactorTokenHashB\t\n" +
 	"\apayload\"\xc9\x01\n" +
 	"\tAuthEvent\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
@@ -23610,7 +23645,7 @@ const file_ipc_proto_rawDesc = "" +
 	"sourceNode\x12D\n" +
 	"\n" +
 	"aggregates\x18\x03 \x03(\v2$.helmsmancontrol.APIRequestAggregateR\n" +
-	"aggregates\"\xa4\x04\n" +
+	"aggregates\"\xc5\x04\n" +
 	"\x13APIRequestAggregate\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tauth_type\x18\x02 \x01(\tR\bauthType\x12%\n" +
@@ -23629,7 +23664,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10llm_input_tokens\x18\f \x01(\x04R\x0ellmInputTokens\x12*\n" +
 	"\x11llm_output_tokens\x18\r \x01(\x04R\x0fllmOutputTokens\x12\x14\n" +
 	"\x05model\x18\x0e \x01(\tR\x05model\x12\x1a\n" +
-	"\bprovider\x18\x0f \x01(\tR\bprovider\"0\n" +
+	"\bprovider\x18\x0f \x01(\tR\bprovider\x12\x1f\n" +
+	"\vroot_fields\x18\x10 \x03(\tR\n" +
+	"rootFields\"0\n" +
 	"\x18ValidateEdgeTokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\x9d\x01\n" +
 	"\x19ValidateEdgeTokenResponse\x12\x14\n" +
@@ -23856,11 +23893,12 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1aREPLICATION_LOOP_PREVENTED\x10\t2\xba\x01\n" +
 	"\x0fHelmsmanControl\x12O\n" +
 	"\aConnect\x12\x1f.helmsmancontrol.ControlMessage\x1a\x1f.helmsmancontrol.ControlMessage(\x010\x01\x12V\n" +
-	"\x0fResolveClipHash\x12 .helmsmancontrol.ClipHashRequest\x1a!.helmsmancontrol.ClipHashResponse2\xf6\x01\n" +
+	"\x0fResolveClipHash\x12 .helmsmancontrol.ClipHashRequest\x1a!.helmsmancontrol.ClipHashResponse2\xe2\x02\n" +
 	"\x0eDecklogService\x12A\n" +
 	"\tSendEvent\x12\x1c.helmsmancontrol.MistTrigger\x1a\x16.google.protobuf.Empty\x12I\n" +
 	"\x10SendServiceEvent\x12\x1d.helmsmancontrol.ServiceEvent\x1a\x16.google.protobuf.Empty\x12V\n" +
-	"\x14SendGatewayTelemetry\x12&.helmsmancontrol.GatewayTelemetryEvent\x1a\x16.google.protobuf.EmptyB=Z;github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc;ipcpbb\x06proto3"
+	"\x14SendGatewayTelemetry\x12&.helmsmancontrol.GatewayTelemetryEvent\x1a\x16.google.protobuf.Empty\x12j\n" +
+	"\x13PublishDomainEvents\x12#.frameworks.events.DomainEventBatch\x1a..frameworks.events.PublishDomainEventsResponseB=Z;github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc;ipcpbb\x06proto3"
 
 var (
 	file_ipc_proto_rawDescOnce sync.Once
@@ -24066,7 +24104,9 @@ var file_ipc_proto_goTypes = []any{
 	(*common.SignupAttribution)(nil),                // 186: common.SignupAttribution
 	(*structpb.Struct)(nil),                         // 187: google.protobuf.Struct
 	(*common.EdgeTelemetryConfig)(nil),              // 188: common.EdgeTelemetryConfig
-	(*emptypb.Empty)(nil),                           // 189: google.protobuf.Empty
+	(*events.DomainEventBatch)(nil),                 // 189: frameworks.events.DomainEventBatch
+	(*emptypb.Empty)(nil),                           // 190: google.protobuf.Empty
+	(*events.PublishDomainEventsResponse)(nil),      // 191: frameworks.events.PublishDomainEventsResponse
 }
 var file_ipc_proto_depIdxs = []int32{
 	185, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
@@ -24300,13 +24340,15 @@ var file_ipc_proto_depIdxs = []int32{
 	63,  // 228: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
 	23,  // 229: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
 	170, // 230: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	33,  // 231: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	70,  // 232: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	189, // 233: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	189, // 234: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	189, // 235: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	231, // [231:236] is the sub-list for method output_type
-	226, // [226:231] is the sub-list for method input_type
+	189, // 231: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
+	33,  // 232: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	70,  // 233: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	190, // 234: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	190, // 235: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	190, // 236: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	191, // 237: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
+	232, // [232:238] is the sub-list for method output_type
+	226, // [226:232] is the sub-list for method input_type
 	226, // [226:226] is the sub-list for extension type_name
 	226, // [226:226] is the sub-list for extension extendee
 	0,   // [0:226] is the sub-list for field type_name

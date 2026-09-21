@@ -87,6 +87,7 @@ func verifyPrivateClusterOwnershipLimitSerializes(t *testing.T, db *sql.DB) {
 		t.Fatal(err)
 	}
 	s := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	s.SetEventTokenHasher(testEventTokenHasher(t))
 	ownedClusters := func(tenantID string) int {
 		t.Helper()
 		var count int

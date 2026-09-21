@@ -144,7 +144,12 @@ func (q *Queries) CryptoWalletTransactionExists(ctx context.Context, arg CryptoW
 const listCompletedCryptoTopupsMissingInvoice = `-- name: ListCompletedCryptoTopupsMissingInvoice :many
 SELECT wallet.tenant_id::text AS tenant_id, wallet.credited_amount_cents,
        wallet.credited_amount_currency,
-       COALESCE(wallet.quoted_usd_to_eur_rate::text, '')::text AS quoted_usd_to_eur_rate,
+       COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(wallet.original_currency, '')::text AS original_currency,
+       COALESCE(wallet.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(wallet.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(wallet.fx_source, '')::text AS fx_source,
+       COALESCE(wallet.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
        wallet.tx_hash, COALESCE(wallet.client_ip, '')::text AS client_ip, wallet.network
 FROM purser.crypto_wallets wallet
 WHERE wallet.purpose = 'prepaid' AND wallet.status IN ('completed', 'swept')
@@ -169,7 +174,12 @@ type ListCompletedCryptoTopupsMissingInvoiceRow struct {
 	TenantID               string         `db:"tenant_id" json:"tenant_id"`
 	CreditedAmountCents    sql.NullInt64  `db:"credited_amount_cents" json:"credited_amount_cents"`
 	CreditedAmountCurrency sql.NullString `db:"credited_amount_currency" json:"credited_amount_currency"`
-	QuotedUsdToEurRate     string         `db:"quoted_usd_to_eur_rate" json:"quoted_usd_to_eur_rate"`
+	OriginalAmountCents    int64          `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency       string         `db:"original_currency" json:"original_currency"`
+	EurAmountCents         int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur          string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource               string         `db:"fx_source" json:"fx_source"`
+	FxReferenceDate        time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
 	TxHash                 sql.NullString `db:"tx_hash" json:"tx_hash"`
 	ClientIp               string         `db:"client_ip" json:"client_ip"`
 	Network                string         `db:"network" json:"network"`
@@ -188,7 +198,12 @@ func (q *Queries) ListCompletedCryptoTopupsMissingInvoice(ctx context.Context) (
 			&i.TenantID,
 			&i.CreditedAmountCents,
 			&i.CreditedAmountCurrency,
-			&i.QuotedUsdToEurRate,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 			&i.TxHash,
 			&i.ClientIp,
 			&i.Network,
@@ -213,7 +228,12 @@ SELECT wallet.id::text AS id, wallet.tenant_id::text AS tenant_id, wallet.purpos
        wallet.status, COALESCE(wallet.tx_hash, '')::text AS tx_hash,
        COALESCE(wallet.expected_amount_base_units::text, '')::text AS expected_amount_base_units,
        COALESCE(wallet.quoted_price_usd::text, '')::text AS quoted_price_usd,
-       COALESCE(wallet.quoted_usd_to_eur_rate::text, '')::text AS quoted_usd_to_eur_rate,
+       COALESCE(wallet.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(wallet.original_currency, '')::text AS original_currency,
+       COALESCE(wallet.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(wallet.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(wallet.fx_source, '')::text AS fx_source,
+       COALESCE(wallet.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date,
        COALESCE(wallet.quote_source, '')::text AS quote_source,
        COALESCE(wallet.credited_amount_currency, '')::text AS credited_amount_currency,
        COALESCE(wallet.client_ip, '')::text AS client_ip, wallet.expires_at,
@@ -240,7 +260,12 @@ type ListPendingCryptoWalletsRow struct {
 	TxHash                  string        `db:"tx_hash" json:"tx_hash"`
 	ExpectedAmountBaseUnits string        `db:"expected_amount_base_units" json:"expected_amount_base_units"`
 	QuotedPriceUsd          string        `db:"quoted_price_usd" json:"quoted_price_usd"`
-	QuotedUsdToEurRate      string        `db:"quoted_usd_to_eur_rate" json:"quoted_usd_to_eur_rate"`
+	OriginalAmountCents     int64         `db:"original_amount_cents" json:"original_amount_cents"`
+	OriginalCurrency        string        `db:"original_currency" json:"original_currency"`
+	EurAmountCents          int64         `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur           string        `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxSource                string        `db:"fx_source" json:"fx_source"`
+	FxReferenceDate         time.Time     `db:"fx_reference_date" json:"fx_reference_date"`
 	QuoteSource             string        `db:"quote_source" json:"quote_source"`
 	CreditedAmountCurrency  string        `db:"credited_amount_currency" json:"credited_amount_currency"`
 	ClientIp                string        `db:"client_ip" json:"client_ip"`
@@ -271,7 +296,12 @@ func (q *Queries) ListPendingCryptoWallets(ctx context.Context) ([]ListPendingCr
 			&i.TxHash,
 			&i.ExpectedAmountBaseUnits,
 			&i.QuotedPriceUsd,
-			&i.QuotedUsdToEurRate,
+			&i.OriginalAmountCents,
+			&i.OriginalCurrency,
+			&i.EurAmountCents,
+			&i.FxUnitsPerEur,
+			&i.FxSource,
+			&i.FxReferenceDate,
 			&i.QuoteSource,
 			&i.CreditedAmountCurrency,
 			&i.ClientIp,

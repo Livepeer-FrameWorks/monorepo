@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
@@ -28,24 +29,28 @@ type ingestSubscription struct {
 type ingestTopics struct {
 	analytics     string
 	serviceEvents string
+	domainEvents  string
 	rawTriggers   string
 }
 
 type ingestHandlers struct {
 	analytics     messageHandler
 	serviceEvents messageHandler
+	domainEvents  messageHandler
 	rawTriggers   messageHandler
 }
 
 // ingestSubscriptions returns the local topics Periscope-Ingest consumes.
-// Analytics and service events dead-letter poison messages. Raw final triggers
-// retry instead: final facts and metering are projected from them, so a
-// ClickHouse outage must never commit an offset past an unprojected final. An
-// empty or "-" raw topic disables the raw journal on this instance.
+// Analytics, service, and domain events dead-letter poison messages; a
+// transient dependency failure is retried in place by both wrappers. Raw final
+// triggers never dead-letter: final facts and metering are projected from them,
+// so a ClickHouse outage must never commit an offset past an unprojected
+// final. An empty or "-" raw topic disables the raw journal on this instance.
 func ingestSubscriptions(topics ingestTopics, handlers ingestHandlers, withDLQ, retryOnly handlerWrapper) []ingestSubscription {
 	subs := []ingestSubscription{
 		{topic: topics.analytics, name: "periscope-ingest-analytics", handler: handlers.analytics, wrap: withDLQ},
 		{topic: topics.serviceEvents, name: "periscope-ingest-service", handler: handlers.serviceEvents, wrap: withDLQ},
+		{topic: topics.domainEvents, name: "periscope-ingest-domain", handler: handlers.domainEvents, wrap: withDLQ},
 	}
 	if raw := strings.TrimSpace(topics.rawTriggers); raw != "" && raw != "-" {
 		subs = append(subs, ingestSubscription{
@@ -56,6 +61,29 @@ func ingestSubscriptions(topics ingestTopics, handlers ingestHandlers, withDLQ, 
 		})
 	}
 	return subs
+}
+
+// dlqHeaders returns the headers of the DLQ record for msg: the consumer and
+// original topic, plus the tenant and event type when msg carries them. A
+// domain.events record names its type in ce_type and has no event_type header,
+// so ce_type is lifted into event_type.
+func dlqHeaders(consumerName string, msg kafka.Message) map[string]string {
+	headers := map[string]string{
+		"source":         consumerName,
+		"original_topic": msg.Topic,
+	}
+	if tenantID, ok := msg.Headers[events.HeaderTenantID]; ok {
+		headers["tenant_id"] = tenantID
+	}
+	if eventType, ok := msg.Headers["event_type"]; ok {
+		headers["event_type"] = eventType
+	} else if eventType, ok := msg.Headers[events.HeaderType]; ok {
+		headers["event_type"] = eventType
+	}
+	if eventID, ok := msg.Headers[events.HeaderID]; ok {
+		headers[events.HeaderID] = eventID
+	}
+	return headers
 }
 
 // registerIngestSubscriptions subscribes to every local topic and to the copy
@@ -76,16 +104,4 @@ func registerIngestSubscriptions(reg handlerRegistrar, subs []ingestSubscription
 		}
 	}
 	return topics
-}
-
-// splitMirrorPrefixes parses MIRROR_REGION_PREFIXES, a comma-separated list of
-// MirrorMaker2 source cluster aliases.
-func splitMirrorPrefixes(raw string) []string {
-	var prefixes []string
-	for prefix := range strings.SplitSeq(raw, ",") {
-		if prefix = strings.TrimSpace(prefix); prefix != "" {
-			prefixes = append(prefixes, prefix)
-		}
-	}
-	return prefixes
 }

@@ -406,7 +406,12 @@ func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *comm
 	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
 		params.ApplyClip, params.ClipDays = true, value
 	}
-	execErr := commodoredb.New(s.db).UpsertTenantMediaRetentionPolicy(ctx, params)
+	execErr := s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if upsertErr := commodoredb.New(tx).UpsertTenantMediaRetentionPolicy(ctx, params); upsertErr != nil {
+			return upsertErr
+		}
+		return s.enqueueEventTx(ctx, tx, s.buildRetentionPolicyEvent(tenantID, userID, column), nil)
+	})
 	if execErr != nil {
 		return nil, status.Errorf(codes.Internal, "policy write failed: %v", execErr)
 	}
@@ -419,7 +424,6 @@ func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *comm
 		"clear":      clear,
 		"updated_by": updatedBy,
 	}).Info("Media retention policy updated")
-	s.emitRetentionPolicyEvent(ctx, tenantID, userID, column)
 
 	policy, err := s.GetMediaRetentionPolicy(ctx, &commodorepb.GetMediaRetentionPolicyRequest{TenantId: tenantID})
 	if err != nil {
@@ -663,7 +667,7 @@ func (t *assetRetentionTarget) readRetentionUntil(ctx context.Context, db *sql.D
 	}
 }
 
-func (t *assetRetentionTarget) applyRetentionState(ctx context.Context, db *sql.DB, tenantID, source string, overrideDays sql.NullInt32, overrideUntil, retentionUntil sql.NullTime) error {
+func (t *assetRetentionTarget) applyRetentionState(ctx context.Context, db commodoredb.DBTX, tenantID, source string, overrideDays sql.NullInt32, overrideUntil, retentionUntil sql.NullTime) error {
 	queries := commodoredb.New(db)
 	params := commodoredb.ApplyDVRRetentionStateParams{
 		OverrideDays:    overrideDays,
@@ -789,8 +793,13 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodo
 	}
 
 	retentionState := sql.NullTime{Time: retentionUntil, Valid: !keepForever}
-	execErr := target.applyRetentionState(ctx, s.db, tenantID, retentionSourceAsset,
-		sql.NullInt32{Int32: retentionDays, Valid: !keepForever}, retentionState, retentionState)
+	execErr := s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if applyErr := target.applyRetentionState(ctx, tx, tenantID, retentionSourceAsset,
+			sql.NullInt32{Int32: retentionDays, Valid: !keepForever}, retentionState, retentionState); applyErr != nil {
+			return applyErr
+		}
+		return s.enqueueEventTx(ctx, tx, s.buildRetentionArtifactEvent(eventRetentionOverrideApplied, tenantID, userID, target, retentionUntil, keepForever), nil)
+	})
 	if execErr != nil {
 		s.restoreFoghornRetention(ctx, foghornClient, tenantID, target, previousUntil)
 		return nil, status.Errorf(codes.Internal, "override write failed: %v", execErr)
@@ -803,7 +812,6 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodo
 		"retention_days": retentionDays,
 		"keep_forever":   keepForever,
 	}).Info("Per-asset retention override applied")
-	s.emitRetentionArtifactEvent(ctx, eventRetentionOverrideApplied, tenantID, userID, target, retentionUntil, keepForever)
 
 	out := &commodorepb.UpdateAssetRetentionResponse{
 		TargetId:      target.hash,
@@ -906,13 +914,17 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodor
 		retentionDays = daysUntil(newUntil)
 	}
 
-	execErr := target.applyRetentionState(ctx, s.db, tenantID, source, sql.NullInt32{}, sql.NullTime{},
-		sql.NullTime{Time: newUntil, Valid: !keepForever})
+	execErr := s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if applyErr := target.applyRetentionState(ctx, tx, tenantID, source, sql.NullInt32{}, sql.NullTime{},
+			sql.NullTime{Time: newUntil, Valid: !keepForever}); applyErr != nil {
+			return applyErr
+		}
+		return s.enqueueEventTx(ctx, tx, s.buildRetentionArtifactEvent(eventRetentionOverrideReset, tenantID, userID, target, newUntil, keepForever), nil)
+	})
 	if execErr != nil {
 		s.restoreFoghornRetention(ctx, foghornClient, tenantID, target, previousUntil)
 		return nil, status.Errorf(codes.Internal, "override clear failed: %v", execErr)
 	}
-	s.emitRetentionArtifactEvent(ctx, eventRetentionOverrideReset, tenantID, userID, target, newUntil, keepForever)
 
 	out := &commodorepb.UpdateAssetRetentionResponse{
 		TargetId:      target.hash,
@@ -925,11 +937,11 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodor
 	return out, nil
 }
 
-func (s *CommodoreServer) emitRetentionPolicyEvent(ctx context.Context, tenantID, userID, column string) {
-	event := &ipcpb.ServiceEvent{
+func (s *CommodoreServer) buildRetentionPolicyEvent(tenantID, userID, column string) *ipcpb.ServiceEvent {
+	return &ipcpb.ServiceEvent{
 		EventType:    eventRetentionPolicyChanged,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "tenant",
@@ -939,17 +951,13 @@ func (s *CommodoreServer) emitRetentionPolicyEvent(ctx context.Context, tenantID
 			ChangedFields: []string{column},
 		}},
 	}
-	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitRetentionArtifactEvent(ctx context.Context, eventType, tenantID, userID string, target *assetRetentionTarget, retentionUntil time.Time, keepForever bool) {
-	if target == nil {
-		return
-	}
+func (s *CommodoreServer) buildRetentionArtifactEvent(eventType, tenantID, userID string, target *assetRetentionTarget, retentionUntil time.Time, keepForever bool) *ipcpb.ServiceEvent {
 	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
-		Source:       "commodore",
+		Source:       commodoreEventSource,
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "artifact",
@@ -964,7 +972,7 @@ func (s *CommodoreServer) emitRetentionArtifactEvent(ctx context.Context, eventT
 		expiresAt := retentionUntil.Unix()
 		event.GetArtifactEvent().ExpiresAt = &expiresAt
 	}
-	s.emitServiceEvent(ctx, event)
+	return event
 }
 
 func retentionArtifactType(t string) ipcpb.ArtifactEvent_ArtifactType {

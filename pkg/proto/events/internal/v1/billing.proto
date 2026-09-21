@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package frameworks.events.internal.v1;
+
+// Go reserves "internal" path elements, so the generated package lives in
+// events/internalv1 where every service can import it.
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
+
+import "events/options.proto";
+import "events/public/v1/common.proto";
+
+message PaymentCreated {
+  option (frameworks.events.event) = {type: "billing.payment_created", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "payments"};
+  string payment_id = 1;
+  string invoice_id = 2;
+  frameworks.events.public.v1.Money amount = 3;
+  // provider is the payment rail, for example "stripe", "mollie", or "crypto".
+  string provider = 4;
+  // provider_reference_id is the provider's identifier for a payment Purser
+  // holds no payment row for (the Mollie payment ID of a Mollie first
+  // payment); set only when payment_id is empty.
+  string provider_reference_id = 5;
+}
+
+message SubscriptionCreated {
+  option (frameworks.events.event) = {type: "billing.subscription_created", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "subscriptions"};
+  string subscription_id = 1;
+  string tier_id = 2;
+  string status = 3;
+}
+
+message SubscriptionUpdated {
+  option (frameworks.events.event) = {type: "billing.subscription_updated", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "subscriptions"};
+  string subscription_id = 1;
+  string tier_id = 2;
+  string status = 3;
+  repeated string changed_fields = 4;
+}

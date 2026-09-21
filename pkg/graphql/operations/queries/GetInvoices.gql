@@ -10,6 +10,11 @@ query GetInvoices($first: Int = 50, $after: String) {
         grossMeteredAmount
         prepaidCreditApplied
         currency
+        presentmentAmountCents
+        presentmentCurrency
+        presentmentUnitsPerEur
+        presentmentReferenceDate
+        finalizedAt
         status
         dueDate
         createdAt

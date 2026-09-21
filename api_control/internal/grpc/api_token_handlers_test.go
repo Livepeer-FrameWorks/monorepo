@@ -41,10 +41,11 @@ func TestCreateAPIToken(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		var storedToken string
+		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO commodore.api_tokens").
 			WithArgs(
 				sqlmock.AnyArg(), // id
-				"t1",             // tenant_id
+				testTenantID,     // tenant_id
 				"u1",             // user_id
 				captureArg{&storedToken},
 				sqlmock.AnyArg(), // token_name
@@ -52,9 +53,10 @@ func TestCreateAPIToken(t *testing.T) {
 				sqlmock.AnyArg(), // expires_at
 			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		expectOutboxInsert(mock)
+		expectDualEventInsert(mock, "api_token.created", eventTokenCreated)
+		mock.ExpectCommit()
 
-		resp, err := s.CreateAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.CreateAPITokenRequest{})
+		resp, err := s.CreateAPIToken(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateAPITokenRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -81,7 +83,7 @@ func TestCreateAPIToken(t *testing.T) {
 	t.Run("delegated_api_token_cannot_mint_credentials", func(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
-		ctx := context.WithValue(ctxAs("u1", "t1", "owner"), ctxkeys.KeyAuthType, "api_token")
+		ctx := context.WithValue(ctxAs("u1", testTenantID, "owner"), ctxkeys.KeyAuthType, "api_token")
 		_, err := s.CreateAPIToken(ctx, &commodorepb.CreateAPITokenRequest{Permissions: []string{"streams:write"}})
 		wantCode(t, err, codes.PermissionDenied)
 	})
@@ -91,7 +93,7 @@ func TestCreateAPIToken(t *testing.T) {
 			t.Run(permission, func(t *testing.T) {
 				s, _, done := newMockServer(t)
 				defer done()
-				_, err := s.CreateAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.CreateAPITokenRequest{Permissions: []string{permission}})
+				_, err := s.CreateAPIToken(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateAPITokenRequest{Permissions: []string{permission}})
 				wantCode(t, err, codes.InvalidArgument)
 			})
 		}
@@ -137,15 +139,15 @@ func TestListAPITokens(t *testing.T) {
 		defer done()
 		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		mock.ExpectQuery("SELECT COUNT").
-			WithArgs("u1", true, "t1").
+			WithArgs("u1", true, testTenantID).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectQuery("FROM commodore.api_tokens").
-			WithArgs("u1", true, "t1", int32(51)).
+			WithArgs("u1", true, testTenantID, int32(51)).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "token_name", "permissions", "status", "last_used_at", "expires_at", "created_at",
 			}).AddRow("tok1", "ci", "{read,write}", "active", nil, nil, now))
 
-		resp, err := s.ListAPITokens(ctxAs("u1", "t1", "owner"), &commodorepb.ListAPITokensRequest{})
+		resp, err := s.ListAPITokens(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListAPITokensRequest{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -179,10 +181,12 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("not_found", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
-			WithArgs("tok1", "u1", false, "t1").
+			WithArgs("tok1", "u1", false, testTenantID).
 			WillReturnError(sql.ErrNoRows)
-		_, err := s.RevokeAPIToken(ctxAs("u1", "t1", "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
+		mock.ExpectRollback()
+		_, err := s.RevokeAPIToken(ctxAs("u1", testTenantID, "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -192,12 +196,14 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("happy_path_deactivates_and_emits", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
-			WithArgs("tok1", "u1", false, "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"token_name"}).AddRow("ci"))
-		expectOutboxInsert(mock)
+			WithArgs("tok1", "u1", false, testTenantID).
+			WillReturnRows(sqlmock.NewRows([]string{"token_name", "was_active"}).AddRow("ci", true))
+		expectDualEventInsert(mock, "api_token.revoked", eventTokenRevoked)
+		mock.ExpectCommit()
 
-		resp, err := s.RevokeAPIToken(ctxAs("u1", "t1", "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
+		resp, err := s.RevokeAPIToken(ctxAs("u1", testTenantID, "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -212,17 +218,36 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("tenant_manager_can_revoke_another_users_token", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
-			WithArgs("tok2", "owner1", true, "t1").
-			WillReturnRows(sqlmock.NewRows([]string{"token_name"}).AddRow("departed-user-token"))
-		expectOutboxInsert(mock)
+			WithArgs("tok2", "owner1", true, testTenantID).
+			WillReturnRows(sqlmock.NewRows([]string{"token_name", "was_active"}).AddRow("departed-user-token", true))
+		expectDualEventInsert(mock, "api_token.revoked", eventTokenRevoked)
+		mock.ExpectCommit()
 
-		resp, err := s.RevokeAPIToken(ctxAs("owner1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok2"})
+		resp, err := s.RevokeAPIToken(ctxAs("owner1", testTenantID, "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok2"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if resp.GetTokenName() != "departed-user-token" {
 			t.Fatalf("token name = %q", resp.GetTokenName())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("expectations: %v", err)
+		}
+	})
+
+	t.Run("repeated_revoke_records_no_event", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectBegin()
+		mock.ExpectQuery("UPDATE commodore.api_tokens").
+			WithArgs("tok1", "u1", false, testTenantID).
+			WillReturnRows(sqlmock.NewRows([]string{"token_name", "was_active"}).AddRow("ci", false))
+		mock.ExpectCommit()
+
+		if _, err := s.RevokeAPIToken(ctxAs("u1", testTenantID, "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)

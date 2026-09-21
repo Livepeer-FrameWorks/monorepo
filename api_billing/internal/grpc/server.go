@@ -6,15 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/pricing"
@@ -25,12 +27,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -45,6 +48,7 @@ import (
 	sharedx402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
@@ -53,7 +57,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -61,7 +64,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
+	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 )
 
 // loadTierPricingRules reads pricing rules for a tier and converts them into
@@ -156,55 +163,34 @@ func billingTierFromGetRow(row purserdb.GetBillingTierByIDRow) *purserpb.Billing
 	}
 }
 
-// scanBillingFeatures scans a JSONB column into BillingFeatures proto
+// scanBillingFeatures decodes a features JSONB column through
+// models.BillingFeatures, the single shape Purser reads and writes.
 func scanBillingFeatures(data []byte) *purserpb.BillingFeatures {
 	if len(data) == 0 {
 		return nil
 	}
-	var raw struct {
-		Recording              bool   `json:"recording"`
-		Analytics              bool   `json:"analytics"`
-		CustomBranding         bool   `json:"custom_branding"`
-		APIAccess              bool   `json:"api_access"`
-		SupportLevel           string `json:"support_level"`
-		SLA                    bool   `json:"sla"`
-		ProcessingCustomizable bool   `json:"processing_customizable"`
-	}
+	var raw models.BillingFeatures
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
 	return &purserpb.BillingFeatures{
-		Recording:              raw.Recording,
-		Analytics:              raw.Analytics,
-		CustomBranding:         raw.CustomBranding,
-		ApiAccess:              raw.APIAccess,
 		SupportLevel:           raw.SupportLevel,
 		Sla:                    raw.SLA,
 		ProcessingCustomizable: raw.ProcessingCustomizable,
 	}
 }
 
-// marshalBillingFeatures converts BillingFeatures proto to JSONB bytes
+// marshalBillingFeatures encodes the proto through models.BillingFeatures so
+// every key scanBillingFeatures reads is also written.
 func marshalBillingFeatures(bf *purserpb.BillingFeatures) ([]byte, error) {
 	if bf == nil {
 		return []byte("{}"), nil
 	}
-	raw := struct {
-		Recording      bool   `json:"recording"`
-		Analytics      bool   `json:"analytics"`
-		CustomBranding bool   `json:"custom_branding"`
-		APIAccess      bool   `json:"api_access"`
-		SupportLevel   string `json:"support_level"`
-		SLA            bool   `json:"sla"`
-	}{
-		Recording:      bf.Recording,
-		Analytics:      bf.Analytics,
-		CustomBranding: bf.CustomBranding,
-		APIAccess:      bf.ApiAccess,
-		SupportLevel:   bf.SupportLevel,
-		SLA:            bf.Sla,
-	}
-	return json.Marshal(raw)
+	return json.Marshal(models.BillingFeatures{
+		SupportLevel:           bf.GetSupportLevel(),
+		SLA:                    bf.GetSla(),
+		ProcessingCustomizable: bf.GetProcessingCustomizable(),
+	})
 }
 
 // mapToProtoStruct converts a map[string]any to protobuf Struct
@@ -237,6 +223,7 @@ type ServerMetrics struct {
 type stripeBillingClient interface {
 	CreateOrGetCustomer(ctx context.Context, info stripe.CustomerInfo) (*stripelib.Customer, error)
 	CreateCheckoutSession(ctx context.Context, params stripe.CheckoutSessionParams) (*stripelib.CheckoutSession, error)
+	CreateSetupCheckoutSession(ctx context.Context, params stripe.SetupCheckoutParams) (*stripelib.CheckoutSession, error)
 	ExpireCheckoutSession(ctx context.Context, sessionID string) error
 	CreateBillingPortalSession(ctx context.Context, customerID, returnURL string) (*stripelib.BillingPortalSession, error)
 	GetSubscription(ctx context.Context, subscriptionID string) (*stripelib.Subscription, error)
@@ -287,6 +274,19 @@ type PurserServer struct {
 	tierReconciler      tierAccessReconciler
 	billing             *handlers.Service
 	invoiceCardCheckout invoiceCardCheckoutFunc
+	// tokenHasher attributes domain events to the calling API token with
+	// Bridge's usage hash, so audit rows join API usage rows.
+	tokenHasher *events.TokenHasher
+}
+
+// domainActor is the caller of the current RPC as domain events record it.
+// Without a token hasher the actor keeps its auth type and user but no token
+// hash; NewGRPCServer refuses to start without one.
+func (s *PurserServer) domainActor(ctx context.Context) events.Actor {
+	if s.tokenHasher == nil {
+		return events.Actor{AuthType: ctxkeys.GetAuthType(ctx), UserID: ctxkeys.GetUserID(ctx)}
+	}
+	return events.ActorFromContext(ctx, s.tokenHasher)
 }
 
 type invoiceCardCheckoutFunc func(ctx context.Context, paymentID, invoiceID, tenantID string, amount decimal.Decimal, currency, requestedReturnURL string) (paymentURL, providerID string, err error)
@@ -296,7 +296,7 @@ type commercialQuartermasterClient interface {
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	GetClusterAsService(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
-	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits, actor *commonpb.RequestActor) error
 	MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error
 	RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) error
 }
@@ -312,9 +312,9 @@ type serviceEventSender interface {
 }
 
 // NewPurserServer creates a new Purser gRPC server
-func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, stripeClient *stripe.Client, mollieClient *mollie.Client, qmClient *qmclient.GRPCClient, commodoreClient handlers.CommodoreClient, decklogClient *decklogclient.BatchedClient, billing *handlers.Service) *PurserServer {
+func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, stripeClient *stripe.Client, mollieClient *mollie.Client, qmClient *qmclient.GRPCClient, commodoreClient handlers.CommodoreClient, decklogClient *decklogclient.BatchedClient, billing *handlers.Service, geoipReader *geoip.Reader) *PurserServer {
 	hdwallet := handlers.NewHDWallet(db, logger)
-	if created, err := hdwallet.EnsureState(context.Background(), os.Getenv("HD_WALLET_XPUB")); err != nil {
+	if created, err := hdwallet.EnsureState(context.Background(), appconfig.Runtime().HDWalletXpub); err != nil {
 		logger.WithError(err).Warn("HD wallet state not initialized; crypto deposits disabled until configured")
 	} else if created {
 		logger.Info("Initialized HD wallet state from HD_WALLET_XPUB")
@@ -342,7 +342,7 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		hdwallet:            hdwallet,
 		rpcClient:           rpcClient,
 		priceFeed:           priceFeed,
-		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
+		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient, geoipReader),
 		decklogClient:       eventSender,
 		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil, billing, tierReconciler),
 		tierReconciler:      tierReconciler,
@@ -586,7 +586,7 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 		var queryErr error
 		row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(queryCtx, purserdb.GetTenantAdmissionStatusParams{
 			TenantID: tenantID,
-			Currency: billing.DefaultCurrency(),
+			Currency: billing.LedgerCurrency,
 		})
 		return queryErr
 	})
@@ -618,7 +618,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	var billingStatus purserdb.GetTenantBillingStatusRow
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
@@ -1226,8 +1226,9 @@ func tenantSubscriptionFromCurrentRow(row purserdb.GetCurrentTenantSubscriptionR
 		Id: row.ID.String(), TenantId: row.TenantID.String(), TierId: row.TierID.String(), Status: row.Status,
 		StartedAt: timestamppb.New(row.StartedAt), CreatedAt: timestamppb.New(row.CreatedAt.Time),
 		UpdatedAt: timestamppb.New(row.UpdatedAt.Time), BillingModel: row.BillingModel,
-		CustomFeatures: scanBillingFeatures([]byte(row.CustomFeaturesText)),
-		BillingAddress: scanBillingAddress([]byte(row.BillingAddressText)),
+		CustomFeatures:      scanBillingFeatures([]byte(row.CustomFeaturesText)),
+		BillingAddress:      scanBillingAddress([]byte(row.BillingAddressText)),
+		PresentmentCurrency: strings.TrimSpace(row.PresentmentCurrency),
 	}
 	if row.BillingEmail.Valid {
 		sub.BillingEmail = row.BillingEmail.String
@@ -1352,6 +1353,10 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
 
+	// The request carries no billing country, so the subscription starts in
+	// the presentment currency of an unknown country; UpdateBillingDetails
+	// derives it again once the billing address is known.
+	presentmentCurrency := billing.PresentmentCurrencyForCountry("")
 	if err = purserdb.New(tx).InsertTenantSubscription(ctx, purserdb.InsertTenantSubscriptionParams{
 		ID: subUUID, TenantID: tenantID, TierID: tierID,
 		BillingEmail: sql.NullString{String: billingEmail, Valid: true}, BillingModel: billingModel,
@@ -1360,15 +1365,22 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 		BillingPeriodStart: sql.NullTime{Time: periodStart, Valid: true},
 		BillingPeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
 		PaymentMethod:      req.GetPaymentMethod(), CustomFeatures: featuresJSON,
+		PresentmentCurrency: presentmentCurrency,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
 	}
 
+	createdEvent, err := billingevents.New(tenantID, subID, &internalv1.SubscriptionCreated{
+		SubscriptionId: subID, TierId: tierID, Status: "active",
+	}, s.domainActor(ctx))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "build subscription_created: %v", err)
+	}
 	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &ipcpb.BillingEvent{
 		SubscriptionId: subID,
 		Status:         "active",
 		Provider:       req.GetPaymentMethod(),
-	}); err != nil {
+	}, createdEvent); err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue subscription_created: %v", err)
 	}
 
@@ -1377,17 +1389,18 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 	}
 
 	sub := &purserpb.TenantSubscription{
-		Id:                 subID,
-		TenantId:           tenantID,
-		TierId:             tierID,
-		Status:             "active",
-		BillingEmail:       billingEmail,
-		BillingModel:       billingModel,
-		StartedAt:          timestamppb.New(now),
-		BillingPeriodStart: timestamppb.New(periodStart),
-		BillingPeriodEnd:   timestamppb.New(periodEnd),
-		CreatedAt:          timestamppb.New(now),
-		UpdatedAt:          timestamppb.New(now),
+		Id:                  subID,
+		TenantId:            tenantID,
+		TierId:              tierID,
+		Status:              "active",
+		BillingEmail:        billingEmail,
+		BillingModel:        billingModel,
+		StartedAt:           timestamppb.New(now),
+		BillingPeriodStart:  timestamppb.New(periodStart),
+		BillingPeriodEnd:    timestamppb.New(periodEnd),
+		CreatedAt:           timestamppb.New(now),
+		UpdatedAt:           timestamppb.New(now),
+		PresentmentCurrency: presentmentCurrency,
 	}
 	if trialEndsAt.Valid {
 		sub.TrialEndsAt = timestamppb.New(trialEndsAt.Time)
@@ -1408,6 +1421,38 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 // purser.subscription_entitlement_overrides. The header update and override
 // writes commit in a single transaction so a partial failure cannot leave
 // custom_features / tier / status touched while overrides rolled back.
+// updatedSubscriptionFields lists the subscription fields an update request
+// writes, by API name, for the internal billing.subscription_updated event.
+// tier_id is absent: UpdateSubscription only accepts the current tier.
+func updatedSubscriptionFields(req *purserpb.UpdateSubscriptionRequest) []string {
+	var fields []string
+	if req.BillingEmail != nil {
+		fields = append(fields, "billing_email")
+	}
+	if req.PaymentMethod != nil {
+		fields = append(fields, "payment_method")
+	}
+	if req.Status != nil {
+		fields = append(fields, "status")
+	}
+	if req.BillingPeriodStart != nil {
+		fields = append(fields, "billing_period_start")
+	}
+	if req.BillingPeriodEnd != nil {
+		fields = append(fields, "billing_period_end")
+	}
+	if req.CustomFeatures != nil {
+		fields = append(fields, "custom_features")
+	}
+	if req.GetClearPricingOverrides() || len(req.GetPricingOverrides()) > 0 {
+		fields = append(fields, "pricing_overrides")
+	}
+	if req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 {
+		fields = append(fields, "entitlement_overrides")
+	}
+	return fields
+}
+
 func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -1499,11 +1544,18 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 
 	if eventState, scanErr := purserdb.New(tx).GetUpdatedSubscriptionEventState(ctx, tenantID); scanErr == nil {
 		updatedSubID := eventState.ID.String()
+		updatedEvent, buildErr := billingevents.New(tenantID, updatedSubID, &internalv1.SubscriptionUpdated{
+			SubscriptionId: updatedSubID, TierId: eventState.TierID, Status: eventState.Status,
+			ChangedFields: updatedSubscriptionFields(req),
+		}, s.domainActor(ctx))
+		if buildErr != nil {
+			return nil, status.Errorf(codes.Internal, "build subscription_updated: %v", buildErr)
+		}
 		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &ipcpb.BillingEvent{
 			SubscriptionId: updatedSubID,
 			Status:         eventState.Status,
 			Provider:       eventState.PaymentMethod,
-		}); enqErr != nil {
+		}, updatedEvent); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue subscription_updated: %v", enqErr)
 		}
 	}
@@ -1712,10 +1764,16 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.Can
 
 	if subscriptionID != uuid.Nil {
 		subscriptionIDText := subscriptionID.String()
+		cancelledEvent, buildErr := billingevents.New(tenantID, subscriptionIDText, &internalv1.SubscriptionUpdated{
+			SubscriptionId: subscriptionIDText, Status: "cancelled", ChangedFields: []string{"status"},
+		}, s.domainActor(ctx))
+		if buildErr != nil {
+			return nil, status.Errorf(codes.Internal, "build subscription_updated: %v", buildErr)
+		}
 		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionIDText, &ipcpb.BillingEvent{
 			SubscriptionId: subscriptionIDText,
 			Status:         "cancelled",
-		}); enqErr != nil {
+		}, cancelledEvent); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue subscription_canceled: %v", enqErr)
 		}
 	}
@@ -1771,6 +1829,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *purserpb.GetInvoiceR
 		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		GrossMeteredAmount: row.GrossMeteredAmount,
 	}
+	invoicePresentment(&invoice, row.PresentmentAmountCents, row.PresentmentCurrency, row.PresentmentUnitsPerEur, row.PresentmentReferenceDate, row.FinalizedAt)
 	if row.PaidAt.Valid {
 		invoice.PaidAt = timestamppb.New(row.PaidAt.Time)
 	}
@@ -1868,6 +1927,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *purserpb.ListInvoi
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 			GrossMeteredAmount: row.GrossMeteredAmount,
 		}
+		invoicePresentment(&inv, row.PresentmentAmountCents, row.PresentmentCurrency, row.PresentmentUnitsPerEur, row.PresentmentReferenceDate, row.FinalizedAt)
 		if row.PaidAt.Valid {
 			inv.PaidAt = timestamppb.New(row.PaidAt.Time)
 		}
@@ -1978,6 +2038,7 @@ func (s *PurserServer) GetPayment(ctx context.Context, req *purserpb.GetPaymentR
 		Id: row.ID, InvoiceId: row.InvoiceID, Method: row.Method,
 		Amount: row.Amount, Currency: row.Currency, Status: row.Status,
 		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		Fx: fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate),
 	}
 	if row.TxID.Valid {
 		payment.TxId = row.TxID.String
@@ -2056,6 +2117,7 @@ func (s *PurserServer) ListPayments(ctx context.Context, req *purserpb.ListPayme
 			Id: row.ID, InvoiceId: row.InvoiceID, Method: row.Method,
 			Amount: row.Amount, Currency: row.Currency, Status: row.Status,
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+			Fx: fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate),
 		}
 		if row.TxID.Valid {
 			payment.TxId = row.TxID.String
@@ -2169,6 +2231,13 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 	expiresAt := time.Now().Add(30 * time.Minute)
 	createdAt := time.Now()
 	var txID string
+	// A payment records its share of the invoice's EUR amount at the rate the
+	// invoice was presented at; a crypto quote carries the same record.
+	invoiceFX, invoiceFXErr := handlers.InvoicePaymentFX(ctx, dbTx, ctxTenantID, invoiceID, balance.Currency, balance.AmountDueMinor)
+	if invoiceFXErr != nil {
+		return nil, status.Errorf(codes.Internal, "record payment in EUR: %v", invoiceFXErr)
+	}
+	paymentFX := &invoiceFX
 	resp := &purserpb.PaymentResponse{
 		Id:        paymentID,
 		Amount:    decimalFloat(balance.AmountDue),
@@ -2180,10 +2249,14 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 	}
 
 	if asset, ok := strings.CutPrefix(method, "crypto_"); ok {
-		plan, planErr := s.prepareCryptoPayment(ctx, invoiceID, ctxTenantID, strings.ToUpper(asset), balance.AmountDue, balance.Currency, expiresAt)
+		plan, planErr := s.prepareCryptoPayment(ctx, invoiceID, ctxTenantID, strings.ToUpper(asset), balance.AmountDueMinor, balance.Currency, expiresAt)
 		if planErr != nil {
+			if errors.Is(planErr, fx.ErrUnavailable) {
+				return nil, fxStatus(planErr)
+			}
 			return nil, status.Errorf(codes.Internal, "prepare crypto payment: %v", planErr)
 		}
+		plan.Params.Quote.FX = invoiceFX
 		details, walletErr := s.createCryptoPaymentTx(ctx, dbTx, plan)
 		if walletErr != nil {
 			return nil, status.Errorf(codes.Internal, "create crypto payment: %v", walletErr)
@@ -2192,16 +2265,29 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 		txID = details.WalletAddress
 	}
 
+	resp.Fx = fxRecordProto(*paymentFX)
 	if err = purserdb.New(dbTx).CreatePendingInvoicePayment(ctx, purserdb.CreatePendingInvoicePaymentParams{
-		PaymentID: paymentID,
-		InvoiceID: invoiceID,
-		Method:    method,
-		Amount:    balance.AmountDue.StringFixed(2),
-		Currency:  balance.Currency,
-		TxID:      txID,
-		CreatedAt: sql.NullTime{Time: createdAt, Valid: true},
+		PaymentID:           paymentID,
+		InvoiceID:           invoiceID,
+		Method:              method,
+		Amount:              balance.AmountDue.StringFixed(2),
+		Currency:            balance.Currency,
+		TxID:                txID,
+		CreatedAt:           sql.NullTime{Time: createdAt, Valid: true},
+		OriginalAmountCents: paymentFX.OriginalMinor,
+		EurAmountCents:      paymentFX.EURMinor,
+		FxUnitsPerEur:       paymentFX.UnitsText(),
+		FxSource:            paymentFX.Source,
+		FxReferenceDate:     paymentFX.ReferenceDate,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "store pending payment: %v", err)
+	}
+	paymentEvent, err := billingevents.New(ctxTenantID, paymentID, &internalv1.PaymentCreated{
+		PaymentId: paymentID, InvoiceId: invoiceID,
+		Amount: billingevents.EUR(paymentFX.EURMinor), Provider: paymentProviderName(method),
+	}, s.domainActor(ctx))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "build payment_created: %v", err)
 	}
 	if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, ctxTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
 		PaymentId: paymentID,
@@ -2210,7 +2296,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 		Currency:  balance.Currency,
 		Provider:  method,
 		Status:    "pending",
-	}); err != nil {
+	}, paymentEvent); err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue payment_created: %v", err)
 	}
 	if err = dbTx.Commit(); err != nil {
@@ -2268,29 +2354,30 @@ func (s *PurserServer) hasHDWalletXpub(ctx context.Context) bool {
 }
 
 func (s *PurserServer) cryptoDepositReadiness(ctx context.Context) error {
-	if !config.CryptoDepositsEnabled() {
+	rt := appconfig.Runtime()
+	if !rt.CryptoDepositsEnabled {
 		return fmt.Errorf("new crypto deposits are temporarily disabled")
 	}
 	if !s.hasHDWalletXpub(ctx) {
 		return fmt.Errorf("HD wallet xpub is not initialized")
 	}
-	if config.IsProduction() {
-		if strings.TrimSpace(os.Getenv("SUPPLIER_NAME")) == "" ||
-			strings.TrimSpace(os.Getenv("SUPPLIER_ADDRESS")) == "" ||
-			strings.TrimSpace(os.Getenv("SUPPLIER_VAT_NUMBER")) == "" ||
-			strings.TrimSpace(os.Getenv("SUPPLIER_REGISTRATION_NUMBER")) == "" ||
-			len(countries.Normalize(os.Getenv("SUPPLIER_COUNTRY"))) != 2 {
+	if rt.IsProduction() {
+		if rt.SupplierName == "" ||
+			rt.SupplierAddress == "" ||
+			rt.SupplierVATNumber == "" ||
+			rt.SupplierRegistrationNumber == "" ||
+			len(countries.Normalize(rt.SupplierCountry)) != 2 {
 			return fmt.Errorf("complete supplier invoice configuration is required")
 		}
 	}
-	for _, network := range handlers.DepositNetworks(config.X402IncludeTestnetsEnabled()) {
+	for _, network := range handlers.DepositNetworks(rt.X402IncludeTestnets) {
 		if network.GetRPCEndpointWithDefault() == "" {
 			return fmt.Errorf("%s is required", network.RPCEndpointEnv)
 		}
 		if err := handlers.ValidateCryptoScannerStart(network.Name); err != nil {
 			return err
 		}
-		if config.IsProduction() {
+		if rt.IsProduction() {
 			for _, asset := range []string{"ETH", "USDC"} {
 				if err := handlers.ValidateCryptoCustodyNetwork(ctx, s.rpcClient, network, asset); err != nil {
 					return err
@@ -2314,12 +2401,30 @@ func (s *PurserServer) cryptoDepositReadiness(ctx context.Context) error {
 	return nil
 }
 
-func configuredInvoiceCardProvider() (handlers.CheckoutProvider, error) {
-	webappReady := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")) != ""
-	stripeReady := webappReady && strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")) != "" && strings.TrimSpace(os.Getenv("STRIPE_WEBHOOK_SECRET")) != ""
-	mollieReady := webappReady && strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL")) != "" && strings.TrimSpace(os.Getenv("MOLLIE_API_KEY")) != ""
+// paymentProviderName is the payment rail of an invoice payment method as
+// billing.payment_created records it: the configured card provider for card
+// payments, crypto for every crypto asset, and the method itself otherwise.
+func paymentProviderName(method string) string {
+	switch {
+	case method == "card":
+		if provider, err := configuredInvoiceCardProvider(); err == nil {
+			return string(provider)
+		}
+		return method
+	case strings.HasPrefix(method, "crypto_"):
+		return "crypto"
+	default:
+		return method
+	}
+}
 
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("PAYMENT_CARD_PROVIDER"))) {
+func configuredInvoiceCardProvider() (handlers.CheckoutProvider, error) {
+	rt := appconfig.Runtime()
+	webappReady := rt.WebAppURL != ""
+	stripeReady := webappReady && rt.StripeSecretKey != "" && rt.StripeWebhookSecret != ""
+	mollieReady := webappReady && rt.GatewayPublicURL != "" && rt.MollieAPIKey != ""
+
+	switch strings.ToLower(rt.PaymentCardProvider) {
 	case "stripe":
 		if !stripeReady {
 			return "", fmt.Errorf("stripe invoice payments require STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and WEBAPP_PUBLIC_URL")
@@ -2402,7 +2507,7 @@ func invoiceAmountMinorUnits(amount decimal.Decimal, currency string) (int64, er
 }
 
 func invoicePaymentReturnURLs(requestedReturnURL string) (string, string, error) {
-	webappBase := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
+	webappBase := appconfig.Runtime().WebAppURL
 	if webappBase == "" {
 		return "", "", fmt.Errorf("WEBAPP_PUBLIC_URL is required")
 	}
@@ -2475,11 +2580,14 @@ func lockInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID string) err
 	return purserdb.New(tx).LockInvoicePaymentCreation(ctx, invoiceID)
 }
 
+// invoiceBalance is the outstanding amount of an invoice in the currency it
+// was presented in.
 type invoiceBalance struct {
-	InvoiceID string
-	TenantID  string
-	Currency  string
-	AmountDue decimal.Decimal
+	InvoiceID      string
+	TenantID       string
+	Currency       string
+	AmountDue      decimal.Decimal
+	AmountDueMinor int64
 }
 
 func loadInvoiceBalanceTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID string) (*invoiceBalance, error) {
@@ -2490,23 +2598,16 @@ func loadInvoiceBalanceTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID s
 	if err != nil {
 		return nil, err
 	}
-	total, err := decimal.NewFromString(row.TotalAmount)
-	if err != nil {
-		return nil, fmt.Errorf("parse invoice total: %w", err)
-	}
-	netPaid, err := decimal.NewFromString(row.NetPaid)
-	if err != nil {
-		return nil, fmt.Errorf("parse confirmed payment total: %w", err)
-	}
-	amountDue := total.Sub(netPaid).Round(2)
-	if amountDue.IsNegative() {
-		amountDue = decimal.Zero
+	dueMinor := row.TotalCents - row.NetPaidCents
+	if dueMinor < 0 {
+		dueMinor = 0
 	}
 	return &invoiceBalance{
-		InvoiceID: invoiceID,
-		TenantID:  row.TenantID,
-		Currency:  row.Currency,
-		AmountDue: amountDue,
+		InvoiceID:      invoiceID,
+		TenantID:       row.TenantID,
+		Currency:       row.Currency,
+		AmountDue:      decimal.New(dueMinor, -2),
+		AmountDueMinor: dueMinor,
 	}, nil
 }
 
@@ -2524,6 +2625,7 @@ type activeInvoicePayment struct {
 	URL         sql.NullString
 	CreatedAt   time.Time
 	ActiveCount int
+	FX          *purserpb.FxConversion
 }
 
 func loadActiveInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID string) (*activeInvoicePayment, error) {
@@ -2542,6 +2644,7 @@ func loadActiveInvoicePaymentTx(ctx context.Context, tx *sql.Tx, invoiceID, tena
 		ID: row.ID, Method: row.Method, Amount: amount, Currency: row.Currency,
 		TxID: row.TxID, URL: row.PaymentUrl, CreatedAt: row.CreatedAt.Time,
 		ActiveCount: int(row.ActiveCount),
+		FX:          fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate),
 	}, nil
 }
 
@@ -2553,6 +2656,7 @@ func (s *PurserServer) resumeInvoicePayment(ctx context.Context, req *purserpb.P
 		Status:    "pending",
 		Method:    payment.Method,
 		CreatedAt: timestamppb.New(payment.CreatedAt),
+		Fx:        payment.FX,
 	}
 	if asset, ok := strings.CutPrefix(payment.Method, "crypto_"); ok {
 		details, err := s.loadInvoiceCryptoPaymentQuote(ctx, balance.InvoiceID, balance.TenantID, strings.ToUpper(asset))
@@ -2639,7 +2743,7 @@ func (s *PurserServer) expireStaleInvoiceCryptoPayments(ctx context.Context, inv
 }
 
 // prepareCryptoPayment locks the invoice's token quote before any database writes.
-func (s *PurserServer) prepareCryptoPayment(ctx context.Context, invoiceID, tenantID, asset string, amount decimal.Decimal, currency string, expiresAt time.Time) (*cryptoPaymentPlan, error) {
+func (s *PurserServer) prepareCryptoPayment(ctx context.Context, invoiceID, tenantID, asset string, amountCents int64, currency string, expiresAt time.Time) (*cryptoPaymentPlan, error) {
 	switch asset {
 	case "ETH", "USDC":
 	default:
@@ -2647,10 +2751,9 @@ func (s *PurserServer) prepareCryptoPayment(ctx context.Context, invoiceID, tena
 	}
 
 	normalizedCurrency := strings.ToUpper(currency)
-	if normalizedCurrency != "USD" && normalizedCurrency != "EUR" {
+	if !fx.Supported(normalizedCurrency) {
 		return nil, fmt.Errorf("unsupported invoice currency for crypto payment: %s", normalizedCurrency)
 	}
-	amountCents := amount.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
 	if amountCents <= 0 {
 		return nil, fmt.Errorf("invoice amount must be positive")
 	}
@@ -2798,7 +2901,7 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBi
 	if billingStatus == "" {
 		billingStatus = "none"
 	}
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	if tier.GetCurrency() != "" {
 		currency = tier.GetCurrency()
 	}
@@ -2833,11 +2936,12 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBi
 
 func (s *PurserServer) getAvailablePostpaidProviders() []string {
 	providers := make([]string, 0, 2)
-	webappReady := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")) != ""
-	if s.stripeClient != nil && webappReady && strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")) != "" && strings.TrimSpace(os.Getenv("STRIPE_WEBHOOK_SECRET")) != "" {
+	rt := appconfig.Runtime()
+	webappReady := rt.WebAppURL != ""
+	if s.stripeClient != nil && webappReady && rt.StripeSecretKey != "" && rt.StripeWebhookSecret != "" {
 		providers = append(providers, "stripe")
 	}
-	if s.mollieClient != nil && webappReady && strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_URL")) != "" && strings.TrimSpace(os.Getenv("MOLLIE_API_KEY")) != "" {
+	if s.mollieClient != nil && webappReady && rt.GatewayPublicURL != "" && rt.MollieAPIKey != "" {
 		providers = append(providers, "mollie")
 	}
 	return providers
@@ -2917,6 +3021,7 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 			Currency: row.Currency, Status: row.Status, DueDate: timestamppb.New(row.DueDate),
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
+		invoicePresentment(inv, row.PresentmentAmountCents, row.PresentmentCurrency, row.PresentmentUnitsPerEur, row.PresentmentReferenceDate, row.FinalizedAt)
 		if row.PaidAt.Valid {
 			inv.PaidAt = timestamppb.New(row.PaidAt.Time)
 		}
@@ -2957,6 +3062,7 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 			Id: row.ID.String(), InvoiceId: row.InvoiceID.String(), Method: row.Method,
 			Amount: row.Amount, Currency: row.Currency, Status: row.Status,
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+			Fx: fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate),
 		}
 		if row.TxID.Valid {
 			pay.TxId = row.TxID.String
@@ -3092,7 +3198,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 	// surface — a broken effective-tier load or rating call must NOT silently
 	// return a zero-cost response that would mask billing breakage.
 	tier, err := billingpkg.LoadEffectiveTier(ctx, s.db, tenantID)
-	currency := billing.DefaultCurrency()
+	currency := billing.LedgerCurrency
 	resp := &purserpb.TenantUsageResponse{
 		TenantId:      tenantID,
 		BillingPeriod: startDate + " to " + endDate,
@@ -3508,12 +3614,16 @@ func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID 
 	}
 }
 
+// grantClusterAccessForKind grants access on the caller's behalf: the caller
+// of this RPC is named on the Quartermaster request, so the access events
+// Quartermaster records name that caller rather than Purser.
 func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, clusterID string, kind commercialClusterKind) error {
 	if s.quartermasterClient == nil {
 		return status.Error(codes.FailedPrecondition, "quartermaster client not configured")
 	}
+	actor := events.RequestActor(s.domainActor(ctx))
 	if kind == commercialKindPlatformOfficial {
-		if err := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID, nil); err != nil {
+		if err := s.quartermasterClient.BootstrapClusterAccess(ctx, tenantID, clusterID, nil, actor); err != nil {
 			return status.Errorf(codes.Internal, "grant platform cluster access: %v", err)
 		}
 		return nil
@@ -3525,6 +3635,7 @@ func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, 
 	if err := s.quartermasterClient.MaterializeClusterAccess(ctx, &quartermasterpb.MaterializeClusterAccessRequest{
 		TenantId: tenantID, ClusterId: clusterID, AccessSource: accessSource,
 		AuthorizationReference: "purser:" + string(kind),
+		Actor:                  actor,
 	}); err != nil {
 		return status.Errorf(codes.Internal, "materialize cluster access: %v", err)
 	}
@@ -3540,6 +3651,7 @@ func (s *PurserServer) requestMarketplaceApproval(ctx context.Context, tenantID,
 		AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
 		AuthorizationReference: "purser:marketplace-approval",
 		SubscriptionStatus:     "pending_approval",
+		Actor:                  events.RequestActor(s.domainActor(ctx)),
 	}); err != nil {
 		return status.Errorf(codes.Internal, "record marketplace approval request: %v", err)
 	}
@@ -3942,6 +4054,38 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		resp.Status = "active"
 
 	case "monthly":
+		// A tenant presented outside EUR has no Stripe subscriptions: the
+		// cluster's monthly fee is a line on its Purser invoices, collected
+		// with the payment method its tier activation saved.
+		clusterPresentment, presentmentErr := s.tenantPresentmentCurrency(ctx, tenantID)
+		if presentmentErr != nil {
+			return nil, presentmentErr
+		}
+		if clusterPresentment != billing.LedgerCurrency {
+			profile, profileErr := purserdb.New(s.db).GetTenantCollectionProfile(ctx, tenantID)
+			if profileErr != nil {
+				return nil, status.Errorf(codes.Internal, "load collection profile: %v", profileErr)
+			}
+			if profile.PaymentMethod.String != "stripe" && profile.PaymentMethod.String != "mollie" {
+				return nil, status.Error(codes.FailedPrecondition, "add a card payment method before subscribing to a monthly cluster")
+			}
+			if grantErr := s.grantClusterAccessForKind(ctx, tenantID, clusterID, kind); grantErr != nil {
+				return nil, grantErr
+			}
+			subscriptionID, activateErr := purserdb.New(s.db).ActivatePurserInvoicedClusterSubscription(ctx, purserdb.ActivatePurserInvoicedClusterSubscriptionParams{
+				TenantID: tenantID, ClusterID: clusterID,
+			})
+			if errors.Is(activateErr, sql.ErrNoRows) {
+				return nil, status.Error(codes.FailedPrecondition, "cluster already has a Stripe subscription")
+			}
+			if activateErr != nil {
+				return nil, status.Errorf(codes.Internal, "record cluster subscription: %v", activateErr)
+			}
+			resp.SubscriptionId = subscriptionID
+			resp.Status = "active"
+			break
+		}
+
 		// For paid monthly clusters, create Stripe checkout session
 		if s.stripeClient == nil {
 			s.logger.Warn("Stripe client not configured for monthly cluster subscription")
@@ -3961,7 +4105,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		// cluster collapse to one intent row.
 		clusterCurrency := strings.ToUpper(pricing.GetCurrency())
 		if clusterCurrency == "" {
-			clusterCurrency = billing.DefaultCurrency()
+			clusterCurrency = billing.LedgerCurrency
 		}
 		intentKey := fmt.Sprintf("stripe-cluster-checkout:%s:%s", tenantID, clusterID)
 		clusterIntentID, intentErr := purserdb.New(s.db).UpsertStripeClusterCheckoutIntent(ctx, purserdb.UpsertStripeClusterCheckoutIntentParams{
@@ -4002,7 +4146,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		// Create checkout session
 		successURL := req.GetSuccessUrl()
 		if successURL == "" {
-			webappURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
+			webappURL := appconfig.Runtime().WebAppURL
 			if webappURL == "" {
 				return nil, status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL is required")
 			}
@@ -4010,7 +4154,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		}
 		cancelURL := req.GetCancelUrl()
 		if cancelURL == "" {
-			webappURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
+			webappURL := appconfig.Runtime().WebAppURL
 			if webappURL == "" {
 				return nil, status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL is required")
 			}
@@ -4104,6 +4248,24 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purse
 	}
 
 	if pricing.PricingModel == "monthly" {
+		invoiced, cancelErr := purserdb.New(s.db).CancelPurserInvoicedClusterSubscription(ctx, purserdb.CancelPurserInvoicedClusterSubscriptionParams{
+			TenantID: tenantID, ClusterID: clusterID,
+		})
+		if cancelErr != nil {
+			return nil, status.Errorf(codes.Internal, "cancel cluster subscription: %v", cancelErr)
+		}
+		if invoiced == 1 {
+			if s.quartermasterClient != nil {
+				if revokeErr := s.quartermasterClient.RevokeMaterializedClusterAccess(ctx, &quartermasterpb.RevokeMaterializedClusterAccessRequest{
+					TenantId: tenantID, ClusterId: clusterID,
+					AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+					AuthorizationReference: "purser:cancel",
+				}); revokeErr != nil {
+					s.logger.WithError(revokeErr).Warn("Failed to revoke cluster access for Purser-invoiced monthly cluster")
+				}
+			}
+			return &emptypb.Empty{}, nil
+		}
 		if s.stripeClient == nil {
 			return nil, status.Error(codes.Unavailable, "Stripe not configured")
 		}
@@ -4288,6 +4450,8 @@ type GRPCServerConfig struct {
 	Logger              logging.Logger
 	ServiceToken        string
 	JWTSecret           []byte
+	MetadataPolicy      middleware.ServiceTokenMetadataPolicy
+	GeoIPReader         *geoip.Reader
 	Metrics             *ServerMetrics
 	StripeClient        *stripe.Client
 	MollieClient        *mollie.Client
@@ -4295,6 +4459,7 @@ type GRPCServerConfig struct {
 	CommodoreClient     handlers.CommodoreClient
 	DecklogClient       *decklogclient.BatchedClient
 	Billing             *handlers.Service
+	TokenHasher         *events.TokenHasher
 	CertFile            string
 	KeyFile             string
 	AllowInsecure       bool
@@ -4318,6 +4483,7 @@ func purserAuthConfig(cfg GRPCServerConfig) middleware.GRPCAuthConfig {
 		ServiceToken:         cfg.ServiceToken,
 		JWTSecret:            cfg.JWTSecret,
 		DelegatedJWTAudience: "purser",
+		MetadataPolicy:       cfg.MetadataPolicy,
 		Logger:               cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
@@ -4345,8 +4511,9 @@ func purserUnaryInterceptors(cfg GRPCServerConfig) []grpc.UnaryServerInterceptor
 	}
 }
 
-// NewGRPCServer creates a new gRPC server for Purser
-func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
+// NewGRPCServer creates the Purser gRPC server. It waits up to two minutes for
+// the gRPC TLS files, and returns early when ctx is cancelled.
+func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	// GRPCMetricsInterceptor sits outermost so Unauthenticated / PermissionDenied
 	// rejections from the auth interceptor still show up in
 	// purser_grpc_requests_total.
@@ -4362,21 +4529,25 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 		KeyFile:       cfg.KeyFile,
 		AllowInsecure: cfg.AllowInsecure,
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := grpcutil.WaitForServerTLSFiles(waitCtx, tlsCfg, cfg.Logger); err != nil {
-		cfg.Logger.WithError(err).Fatal("Timed out waiting for Purser gRPC TLS files")
+		return nil, fmt.Errorf("wait for Purser gRPC TLS files: %w", err)
 	}
 	tlsOpt, err := grpcutil.ServerTLS(tlsCfg, cfg.Logger)
 	if err != nil {
-		cfg.Logger.WithError(err).Fatal("Failed to configure Purser gRPC TLS")
+		return nil, fmt.Errorf("configure Purser gRPC TLS: %w", err)
 	}
 	if tlsOpt != nil {
 		opts = append(opts, tlsOpt)
 	}
 
+	if cfg.TokenHasher == nil {
+		return nil, errors.New("purser gRPC server needs the usage token hasher for domain event actors")
+	}
 	server := grpc.NewServer(opts...)
-	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient, cfg.Billing)
+	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient, cfg.Billing, cfg.GeoIPReader)
+	purserServer.tokenHasher = cfg.TokenHasher
 
 	// Drain worker for purser.billing_event_outbox. Replaces the prior
 	// async decklogClient.SendServiceEvent path so Decklog outages don't
@@ -4403,10 +4574,10 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(server, hs)
+	fwserver.RegisterHealthServer(server, hs)
 	reflection.Register(server)
 
-	return server
+	return server, nil
 }
 
 // unaryInterceptor logs gRPC requests
@@ -4434,13 +4605,8 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetP
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
-
 	row, err := purserdb.New(s.db).GetPrepaidBalance(ctx, purserdb.GetPrepaidBalanceParams{
-		TenantID: tenantID, Currency: currency,
+		TenantID: tenantID, Currency: billing.LedgerCurrency,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
@@ -4477,10 +4643,7 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *purser
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
+	currency := billing.LedgerCurrency
 
 	threshold := req.GetLowBalanceThresholdCents()
 	if threshold == 0 {
@@ -4503,7 +4666,6 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *purser
 	// Fetch and return the balance (could be existing if ON CONFLICT hit)
 	return s.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{
 		TenantId: tenantID,
-		Currency: currency,
 	})
 }
 
@@ -4576,10 +4738,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
+	currency := billing.LedgerCurrency
 
 	subscriptionID := uuid.New()
 	balanceID := uuid.New()
@@ -4743,10 +4902,7 @@ func (s *PurserServer) TopupBalance(ctx context.Context, req *purserpb.TopupBala
 		return nil, status.Error(codes.InvalidArgument, "amount_cents must be positive")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
+	currency := billing.LedgerCurrency
 
 	return s.recordBalanceTransaction(ctx, tenantID, currency, amountCents, "topup", req.GetDescription(), req.ReferenceId, req.ReferenceType)
 }
@@ -4763,10 +4919,7 @@ func (s *PurserServer) DeductBalance(ctx context.Context, req *purserpb.DeductBa
 		return nil, status.Error(codes.InvalidArgument, "amount_cents must be positive")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
+	currency := billing.LedgerCurrency
 
 	// Deduction is stored as negative
 	return s.recordBalanceTransaction(ctx, tenantID, currency, -amountCents, "usage", req.GetDescription(), req.ReferenceId, req.ReferenceType)
@@ -4784,10 +4937,7 @@ func (s *PurserServer) AdjustBalance(ctx context.Context, req *purserpb.AdjustBa
 		return nil, status.Error(codes.InvalidArgument, "description is required for adjustments")
 	}
 
-	currency := req.GetCurrency()
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
+	currency := billing.LedgerCurrency
 
 	txType := "adjustment"
 	if req.GetAmountCents() > 0 {
@@ -4937,12 +5087,22 @@ func (s *PurserServer) recordBalanceTransaction(
 		if referenceID != nil {
 			topupID = *referenceID
 		}
+		creditedTopupID := topupID
+		if creditedTopupID == "" {
+			creditedTopupID = txID
+		}
+		creditedEvent, buildErr := billingevents.New(tenantID, creditedTopupID, &publicv1.TopupCredited{
+			TopupId: creditedTopupID, Amount: &publicv1.Money{AmountMinor: amountCents, Currency: currency},
+		}, s.domainActor(ctx))
+		if buildErr != nil {
+			return nil, status.Errorf(codes.Internal, "build topup_credited: %v", buildErr)
+		}
 		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &ipcpb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
 			Status:   "credited",
-		}); enqErr != nil {
+		}, creditedEvent); enqErr != nil {
 			s.logger.WithError(enqErr).Error("Failed to enqueue topup_credited event")
 			return nil, status.Error(codes.Internal, "failed to enqueue topup credited event")
 		}
@@ -5068,7 +5228,6 @@ func balanceTransactionFromListRow(row purserdb.ListBalanceTransactionsRow) *pur
 func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.CreateCardTopupRequest) (*purserpb.CreateCardTopupResponse, error) {
 	tenantID := req.GetTenantId()
 	amountCents := req.GetAmountCents()
-	currency := req.GetCurrency()
 	provider := req.GetProvider()
 	successURL := req.GetSuccessUrl()
 	cancelURL := req.GetCancelUrl()
@@ -5083,10 +5242,12 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 	if provider != "stripe" && provider != "mollie" {
 		return nil, status.Error(codes.InvalidArgument, "provider must be 'stripe' or 'mollie'")
 	}
-	if currency == "" {
-		currency = billing.DefaultCurrency()
+	// The top-up is charged in the tenant's presentment currency; the EUR
+	// amount it credits is fixed at the ECB rate when the checkout is created.
+	currency, currencyErr := s.tenantPresentmentCurrency(ctx, tenantID)
+	if currencyErr != nil {
+		return nil, currencyErr
 	}
-	currency = strings.ToUpper(currency)
 	minimumCents, minimumErr := billing.FiatTopupMinimumCents(provider, currency)
 	if minimumErr != nil {
 		return nil, status.Error(codes.InvalidArgument, minimumErr.Error())
@@ -5099,6 +5260,11 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 	}
 	if detailsErr := s.requireCompleteBillingDetails(ctx, tenantID); detailsErr != nil {
 		return nil, detailsErr
+	}
+
+	topupFX, quoteErr := fx.QuoteToEUR(ctx, s.db, currency, amountCents, time.Now().UTC())
+	if quoteErr != nil {
+		return nil, fxStatus(quoteErr)
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -5120,7 +5286,9 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 		AmountCents: amountCents, Currency: currency, ExpiresAt: provisionalExpiresAt,
 		BillingEmail: sqlNullString(req.BillingEmail), BillingName: sqlNullString(req.BillingName),
 		BillingCompany: sqlNullString(req.BillingCompany), BillingVatNumber: sqlNullString(req.BillingVatNumber),
-		IntentID: providerIntentID,
+		IntentID:       providerIntentID,
+		EurAmountCents: topupFX.EURMinor, FxUnitsPerEur: topupFX.UnitsText(),
+		FxSource: topupFX.Source, FxReferenceDate: topupFX.ReferenceDate,
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create pending topup")
@@ -5162,7 +5330,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 			Currency: currency,
 			Provider: provider,
 			Status:   "failed",
-		}); enqErr != nil {
+		}, nil); enqErr != nil {
 			s.logger.WithError(enqErr).WithField("topup_id", topupID).Warn("Failed to enqueue topup_failed event")
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
@@ -5198,7 +5366,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 		Currency: currency,
 		Provider: provider,
 		Status:   "pending",
-	}); err != nil {
+	}, nil); err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue topup_created: %v", err)
 	}
 	if err := createdTx.Commit(); err != nil {
@@ -5213,6 +5381,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 		AmountCents: amountCents,
 		Currency:    currency,
 		ExpiresAt:   timestamppb.New(result.ExpiresAt),
+		Fx:          fxRecordProto(topupFX),
 	}, nil
 }
 
@@ -5226,6 +5395,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *purserpb.GetPen
 		row, err = queries.GetPendingTopupByID(ctx, req.GetTopupId())
 		topup = pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
 			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt)
+		topup.Fx = fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
 	} else if req.GetCheckoutId() != "" && req.GetProvider() != "" {
 		var row purserdb.GetPendingTopupByCheckoutRow
 		row, err = queries.GetPendingTopupByCheckout(ctx, purserdb.GetPendingTopupByCheckoutParams{
@@ -5233,6 +5403,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *purserpb.GetPen
 		})
 		topup = pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
 			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt)
+		topup.Fx = fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "topup_id or (provider + checkout_id) required")
 	}
@@ -5264,8 +5435,10 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *purserpb.List
 	}
 	topups := make([]*purserpb.PendingTopup, 0, len(rows))
 	for _, row := range rows {
-		topups = append(topups, pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
-			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt))
+		topup := pendingTopupFromFields(row.ID, row.TenantID, row.Provider, row.CheckoutID, row.AmountCents,
+			row.Currency, row.Status, row.ExpiresAt, row.CompletedAt, row.BalanceTransactionID, row.CreatedAt, row.UpdatedAt)
+		topup.Fx = fxConversionProto(row.OriginalAmountCents, row.OriginalCurrency, row.EurAmountCents, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate)
+		topups = append(topups, topup)
 	}
 
 	return &purserpb.ListPendingTopupsResponse{
@@ -5314,7 +5487,50 @@ func defaultNetworkForAsset(asset string) string {
 	}
 }
 
-func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.NetworkConfig, asset, currency string, amountCents int64, tokenDecimals int32) (*handlers.DepositQuote, *big.Int, error) {
+// cryptoQuoteRates returns the rate that converts amounts in currency to EUR
+// and the USD rate that prices crypto assets, both on one ECB reference date.
+// EUR takes the identity rate on the USD rate's reference date.
+func (s *PurserServer) cryptoQuoteRates(ctx context.Context, currency string, on time.Time) (fx.Rate, fx.Rate, error) {
+	usdRate, err := fx.Lookup(ctx, s.db, fx.USD, on)
+	if err != nil {
+		return fx.Rate{}, fx.Rate{}, fmt.Errorf("%w: %w", fx.ErrUnavailable, err)
+	}
+	switch currency {
+	case fx.EUR:
+		return fx.Identity(usdRate.ReferenceDate), usdRate, nil
+	case fx.USD:
+		return usdRate, usdRate, nil
+	}
+	presentmentRate, err := fx.Lookup(ctx, s.db, currency, on)
+	if err != nil {
+		return fx.Rate{}, fx.Rate{}, fmt.Errorf("%w: %w", fx.ErrUnavailable, err)
+	}
+	if !presentmentRate.ReferenceDate.Equal(usdRate.ReferenceDate) {
+		return fx.Rate{}, fx.Rate{}, fmt.Errorf("%w: %s and USD reference dates differ", fx.ErrUnavailable, currency)
+	}
+	return presentmentRate, usdRate, nil
+}
+
+// buildDepositQuote prices amountMinor of currency in asset units: currency
+// to EUR for the credit and to USD for the asset price, on one ECB reference
+// date.
+func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.NetworkConfig, asset, currency string, amountMinor int64, tokenDecimals int32) (*handlers.DepositQuote, *big.Int, error) {
+	presentmentRate, usdRate, err := s.cryptoQuoteRates(ctx, currency, time.Now().UTC())
+	if err != nil {
+		return nil, nil, err
+	}
+	record, err := fx.RecordToEUR(amountMinor, presentmentRate)
+	if err != nil {
+		return nil, nil, err
+	}
+	usdCentsMinor, err := fx.Cross(amountMinor, presentmentRate, usdRate)
+	if err != nil {
+		return nil, nil, err
+	}
+	if record.EURMinor <= 0 || usdCentsMinor <= 0 {
+		return nil, nil, fmt.Errorf("computed deposit amount is zero")
+	}
+
 	priceQuote, err := s.priceFeed.GetAssetUSDPrice(ctx, network, asset)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
@@ -5324,18 +5540,7 @@ func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.N
 		return nil, nil, fmt.Errorf("price feed unavailable for %s: %w", asset, err)
 	}
 
-	rate, rateErr := handlers.GetEurUsdRate(s.logger)
-	if rateErr != nil {
-		return nil, nil, fmt.Errorf("EUR rate unavailable: %w", rateErr)
-	}
-	rateDec := decimal.NewFromFloat(rate)
-	quotedUSDToEURRate := &rateDec
-	usdCents := decimal.NewFromInt(amountCents)
-	if currency == "EUR" {
-		usdCents = decimal.NewFromInt(amountCents).Div(rateDec)
-	}
-
-	amountUSD := usdCents.Div(decimal.NewFromInt(100))
+	amountUSD := decimal.NewFromInt(usdCentsMinor).Div(decimal.NewFromInt(100))
 	amountToken := amountUSD.Div(priceQuote.PriceUSD)
 	expectedBaseUnitsDec := amountToken.Mul(decimal.New(1, tokenDecimals))
 	expectedBaseUnits := expectedBaseUnitsDec.Ceil().BigInt()
@@ -5346,11 +5551,33 @@ func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.N
 	return &handlers.DepositQuote{
 		ExpectedAmountBaseUnits: expectedBaseUnits,
 		QuotedPriceUSD:          priceQuote.PriceUSD,
-		QuotedUSDToEURRate:      quotedUSDToEURRate,
+		FX:                      record,
 		QuotedAt:                time.Now(),
 		QuoteSource:             priceQuote.Source,
-		CreditedAmountCurrency:  currency,
+		CreditedAmountCurrency:  billing.LedgerCurrency,
 	}, expectedBaseUnits, nil
+}
+
+// tenantPresentmentCurrency returns the currency the tenant is presented and
+// charged in.
+func (s *PurserServer) tenantPresentmentCurrency(ctx context.Context, tenantID string) (string, error) {
+	profile, err := purserdb.New(s.db).GetTenantCollectionProfile(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", status.Error(codes.FailedPrecondition, "tenant has no billing subscription")
+	}
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "load presentment currency: %v", err)
+	}
+	return strings.ToUpper(strings.TrimSpace(profile.PresentmentCurrency)), nil
+}
+
+// fxStatus maps a conversion failure to a gRPC status; a missing or stale ECB
+// reference rate is Unavailable so the caller retries later.
+func fxStatus(err error) error {
+	if errors.Is(err, fx.ErrUnavailable) || errors.Is(err, fx.ErrNoRate) || errors.Is(err, fx.ErrStaleRate) {
+		return status.Errorf(codes.Unavailable, "ECB reference rate unavailable: %v", err)
+	}
+	return status.Errorf(codes.Internal, "currency conversion failed: %v", err)
 }
 
 // CreateCryptoTopup generates an HD-derived deposit address for prepaid balance top-up.
@@ -5361,13 +5588,12 @@ func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.N
 // `received_amount × locked_price` when the deposit confirms. The user is
 // quoted an exact token amount to send.
 func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.CreateCryptoTopupRequest) (*purserpb.CreateCryptoTopupResponse, error) {
-	if !config.CryptoDepositsEnabled() {
+	if !appconfig.Runtime().CryptoDepositsEnabled {
 		return nil, status.Error(codes.Unavailable, "new crypto deposits are temporarily disabled; existing deposits continue reconciling")
 	}
 	tenantID := req.GetTenantId()
 	expectedAmountCents := req.GetExpectedAmountCents()
 	asset := req.GetAsset()
-	currency := req.GetCurrency()
 
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5378,12 +5604,11 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 	if expectedAmountCents > billing.MaximumTopupCents {
 		return nil, status.Errorf(codes.InvalidArgument, "maximum top-up is %d cents", billing.MaximumTopupCents)
 	}
-	if currency == "" {
-		currency = billing.DefaultCurrency()
-	}
-	normalizedCurrency := strings.ToUpper(currency)
-	if normalizedCurrency != "USD" && normalizedCurrency != "EUR" {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported prepaid currency for crypto top-up: %s (USD or EUR only)", normalizedCurrency)
+	// The expected amount is denominated in the tenant's presentment currency
+	// and always credits the EUR ledger.
+	normalizedCurrency, currencyErr := s.tenantPresentmentCurrency(ctx, tenantID)
+	if currencyErr != nil {
+		return nil, currencyErr
 	}
 	userID := middleware.GetUserID(ctx)
 
@@ -5419,13 +5644,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	amountEurCents := expectedAmountCents
-	if normalizedCurrency == "USD" {
-		if quote.QuotedUSDToEURRate == nil {
-			return nil, status.Error(codes.Unavailable, "EUR tax conversion rate unavailable")
-		}
-		amountEurCents = decimal.NewFromInt(expectedAmountCents).Mul(*quote.QuotedUSDToEURRate).Round(0).IntPart()
-	}
+	amountEurCents := quote.FX.EURMinor
 	documentRequirement, requirementErr := s.x402handler.GetCryptoDocumentRequirement(ctx, tenantID, amountEurCents)
 	if requirementErr != nil {
 		return nil, status.Errorf(codes.Unavailable, "determine crypto tax-document requirement: %v", requirementErr)
@@ -5472,7 +5691,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 		Status:   "pending",
 		Asset:    assetStr,
 		Network:  networkName,
-	}); err != nil {
+	}, nil); err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue crypto topup_created: %v", err)
 	}
 
@@ -5505,6 +5724,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 		QuoteSource:             quote.QuoteSource,
 		QuotedAt:                timestamppb.New(quote.QuotedAt),
 		Network:                 networkName,
+		Fx:                      fxRecordProto(quote.FX),
 	}, nil
 }
 
@@ -5552,7 +5772,7 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 		topup.Asset = purserpb.CryptoAsset_CRYPTO_ASSET_LPT
 	}
 
-	topup.Currency = billing.DefaultCurrency()
+	topup.Currency = billing.LedgerCurrency
 	if row.CreditedAmountCurrency.Valid && row.CreditedAmountCurrency.String != "" {
 		topup.Currency = row.CreditedAmountCurrency.String
 		topup.CreditedAmountCurrency = row.CreditedAmountCurrency.String
@@ -5576,6 +5796,9 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 	}
 	if row.Network != "" {
 		topup.Network = row.Network
+	}
+	if row.OriginalAmountCents.Valid && row.EurAmountCents.Valid && row.FxReferenceDate.Valid {
+		topup.Fx = fxConversionProto(row.OriginalAmountCents.Int64, row.OriginalCurrency, row.EurAmountCents.Int64, row.FxUnitsPerEur, row.FxSource, row.FxReferenceDate.Time)
 	}
 	if row.DetectedAt.Valid {
 		topup.DetectedAt = timestamppb.New(row.DetectedAt.Time)
@@ -5662,7 +5885,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	}
 
 	canonical, err := purserdb.New(s.db).GetCanonicalPromotedSubscription(ctx, purserdb.GetCanonicalPromotedSubscriptionParams{
-		Currency: billing.DefaultCurrency(), TenantID: tenantID,
+		Currency: billing.LedgerCurrency, TenantID: tenantID,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "promotion committed but canonical subscription read failed: %v", err)
@@ -6006,12 +6229,23 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 		s.logger.WithError(err).Error("Failed to get billing tier")
 		return nil, status.Error(codes.Internal, "failed to get billing tier")
 	}
-	if tier.PriceID == "" {
+	// Tenants presented outside EUR have no Stripe subscription: a Stripe
+	// price is fixed in EUR, so Checkout only saves a card and Purser charges
+	// the base fee off-session at the ECB rate of each period start.
+	presentmentCurrency, presentmentErr := s.tenantPresentmentCurrency(ctx, tenantID)
+	if presentmentErr != nil {
+		return nil, presentmentErr
+	}
+	setupMode := presentmentCurrency != billing.LedgerCurrency
+	if tier.PriceID == "" && !setupMode {
 		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tier.TierName, billingPeriod)
 	}
 	currency := strings.ToUpper(tier.Currency)
 	if currency == "" {
-		currency = billing.DefaultCurrency()
+		currency = billing.LedgerCurrency
+	}
+	if setupMode {
+		currency = presentmentCurrency
 	}
 
 	// Preflight: confirm a tenant_subscriptions row exists and isn't holding
@@ -6057,6 +6291,9 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	// idempotency_key is deterministic on (tenant, tier) so repeated calls
 	// for the same target tier collapse to one intent row.
 	intentKey := fmt.Sprintf("stripe-tenant-checkout:%s:%s", tenantID, tierID)
+	if setupMode {
+		intentKey = fmt.Sprintf("stripe-tenant-setup:%s:%s:%s", tenantID, tierID, presentmentCurrency)
+	}
 	intentID, intentErr := queries.UpsertStripeTenantCheckoutIntent(ctx, purserdb.UpsertStripeTenantCheckoutIntentParams{
 		TenantID: tenantID, TierID: tierID, Currency: currency, IdempotencyKey: intentKey,
 	})
@@ -6086,18 +6323,31 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	}
 
 	// Create checkout session
-	sess, err := s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
-		CustomerID:     customer.ID,
-		TenantID:       tenantID,
-		TierID:         tierID,
-		Purpose:        "subscription",
-		ReferenceID:    tierID,
-		PriceID:        tier.PriceID,
-		Currency:       currency,
-		SuccessURL:     successURL,
-		CancelURL:      cancelURL,
-		IdempotencyKey: intentKey,
-	})
+	var sess *stripelib.CheckoutSession
+	if setupMode {
+		sess, err = s.stripeClient.CreateSetupCheckoutSession(ctx, stripe.SetupCheckoutParams{
+			CustomerID:     customer.ID,
+			TenantID:       tenantID,
+			TierID:         tierID,
+			Currency:       currency,
+			SuccessURL:     successURL,
+			CancelURL:      cancelURL,
+			IdempotencyKey: intentKey,
+		})
+	} else {
+		sess, err = s.stripeClient.CreateCheckoutSession(ctx, stripe.CheckoutSessionParams{
+			CustomerID:     customer.ID,
+			TenantID:       tenantID,
+			TierID:         tierID,
+			Purpose:        "subscription",
+			ReferenceID:    tierID,
+			PriceID:        tier.PriceID,
+			Currency:       currency,
+			SuccessURL:     successURL,
+			CancelURL:      cancelURL,
+			IdempotencyKey: intentKey,
+		})
+	}
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create Stripe checkout session")
 		s.markProviderIntentFailed(ctx, intentID, "checkout_session_create_failed", err)
@@ -6295,10 +6545,32 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		return nil, status.Error(codes.Internal, "failed to parse billing tier price")
 	}
 
+	// A tenant presented outside EUR gets no Mollie subscription: a zero-amount
+	// card payment creates the mandate, and Purser charges the base fee on it
+	// at the ECB rate of each period start.
+	presentmentCurrency, presentmentErr := s.tenantPresentmentCurrency(ctx, tenantID)
+	if presentmentErr != nil {
+		return nil, presentmentErr
+	}
+	// The intent records the currency the payment is created in, which is the
+	// presentment currency: the Mollie webhook activates advance billing by it.
+	if presentmentCurrency == billing.LedgerCurrency && !strings.EqualFold(tier.Currency, billing.LedgerCurrency) {
+		return nil, status.Errorf(codes.FailedPrecondition, "tier %s is priced in %s, not the %s price list", tierID, tier.Currency, billing.LedgerCurrency)
+	}
+	firstPaymentCurrency := billing.LedgerCurrency
+	firstPaymentAmount := basePrice.Round(2)
 	firstPaymentIntentKey := fmt.Sprintf("mollie-first-payment:%s:%s", tenantID, tierID)
+	if presentmentCurrency != billing.LedgerCurrency {
+		if method != "creditcard" {
+			return nil, status.Errorf(codes.InvalidArgument, "tenants billed in %s set up a creditcard mandate", presentmentCurrency)
+		}
+		firstPaymentCurrency = presentmentCurrency
+		firstPaymentAmount = decimal.Zero
+		firstPaymentIntentKey = fmt.Sprintf("mollie-mandate-setup:%s:%s:%s", tenantID, tierID, presentmentCurrency)
+	}
 	firstPaymentIntentID, intentErr := queries.UpsertMollieFirstPaymentIntent(ctx, purserdb.UpsertMollieFirstPaymentIntentParams{
-		TenantID: tenantID, TierID: tierID, Currency: tier.Currency,
-		AmountCents: basePrice.Round(2).Shift(2).IntPart(), IdempotencyKey: firstPaymentIntentKey,
+		TenantID: tenantID, TierID: tierID, Currency: firstPaymentCurrency,
+		AmountCents: firstPaymentAmount.Shift(2).IntPart(), IdempotencyKey: firstPaymentIntentKey,
 	})
 	if intentErr != nil {
 		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
@@ -6367,7 +6639,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 	}
 
 	// Build webhook URL (routed through Gateway)
-	webhookBaseURL := config.GetGatewayPublicURL()
+	webhookBaseURL := appconfig.Runtime().GatewayPublicBaseURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
@@ -6378,7 +6650,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		CustomerID:     mollieCustomerID,
 		TenantID:       tenantID,
 		TierID:         tierID,
-		Amount:         mollie.Amount(basePrice.Round(2).StringFixed(2), tier.Currency),
+		Amount:         mollie.Amount(firstPaymentAmount.StringFixed(2), firstPaymentCurrency),
 		Description:    fmt.Sprintf("Subscription setup: %s", tier.TierName),
 		Method:         getMolliePaymentMethod(method),
 		RedirectURL:    redirectURL,
@@ -6390,12 +6662,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "first_payment_create_failed", err)
 		return nil, status.Error(codes.Internal, "failed to create first payment")
 	}
-	if payment != nil && payment.ID != "" {
-		if updateErr := queries.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{
-			PaymentID: sql.NullString{String: payment.ID, Valid: true}, IntentID: firstPaymentIntentID,
-		}); updateErr != nil {
-			s.logger.WithError(updateErr).WithField("intent_id", firstPaymentIntentID).Warn("Failed to record first-payment provider_payment_id")
-		}
+	if payment == nil || payment.ID == "" {
+		s.markProviderIntentFailed(ctx, firstPaymentIntentID, "first_payment_missing_id", errors.New("mollie returned no payment id"))
+		return nil, status.Error(codes.Internal, "failed to create first payment")
+	}
+	if recordErr := s.recordMollieFirstPaymentOpen(ctx, tenantID, firstPaymentIntentID, payment.ID,
+		&publicv1.Money{AmountMinor: firstPaymentAmount.Shift(2).IntPart(), Currency: firstPaymentCurrency}); recordErr != nil {
+		s.logger.WithError(recordErr).WithField("intent_id", firstPaymentIntentID).Error("Failed to record Mollie first payment")
+		return nil, status.Error(codes.Internal, "failed to record first payment")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -6427,6 +6701,15 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	}
 	if err := s.requireCompleteBillingDetails(ctx, tenantID); err != nil {
 		return nil, err
+	}
+	// A Mollie subscription charges a fixed amount; outside EUR the base fee
+	// must follow the ECB rate, so Purser charges it on the mandate instead.
+	presentmentCurrency, presentmentErr := s.tenantPresentmentCurrency(ctx, tenantID)
+	if presentmentErr != nil {
+		return nil, presentmentErr
+	}
+	if presentmentCurrency != billing.LedgerCurrency {
+		return nil, status.Errorf(codes.FailedPrecondition, "tenants billed in %s have no Mollie subscription; the base fee is charged on the mandate", presentmentCurrency)
 	}
 
 	// Precondition: a tenant_subscriptions row must exist before we ask
@@ -6499,7 +6782,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	}
 
 	// Build webhook URL
-	webhookBaseURL := config.GetGatewayPublicURL()
+	webhookBaseURL := appconfig.Runtime().GatewayPublicBaseURL()
 	webhookURL := ""
 	if webhookBaseURL != "" {
 		webhookURL = webhookBaseURL + "/webhooks/billing/mollie"
@@ -6578,7 +6861,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// customer isn't charged for a sub Purser doesn't know about. The
 	// preflight earlier in the RPC catches the no-row case; this guard
 	// covers transient DB failures and concurrent deletes.
-	rows, err := queries.ActivateMollieTenantSubscription(ctx, purserdb.ActivateMollieTenantSubscriptionParams{
+	rows, err := s.activateMollieSubscription(ctx, purserdb.ActivateMollieTenantSubscriptionParams{
 		SubscriptionID:  sql.NullString{String: sub.ID, Valid: true},
 		NextPaymentDate: nextPaymentDate,
 		PeriodStart:     sql.NullTime{Time: periodStart, Valid: true},
@@ -6737,8 +7020,9 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetB
 	}
 
 	details := &purserpb.BillingDetails{
-		TenantId:  tenantID,
-		UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		TenantId:            tenantID,
+		UpdatedAt:           timestamppb.New(row.UpdatedAt.Time),
+		PresentmentCurrency: strings.TrimSpace(row.PresentmentCurrency),
 	}
 
 	if row.BillingEmail.Valid {
@@ -6798,7 +7082,65 @@ func cryptoBillingProfileRequirementMessage(requirement handlers.CryptoDocumentR
 	return reason + "; add a legal name, billing email, and postal address before paying"
 }
 
+const presentmentCurrencyLockedReason = "PRESENTMENT_CURRENCY_LOCKED"
+
+func presentmentCurrencyLockedError(current, desired string) error {
+	message := fmt.Sprintf("%s: the billing country would change the presentment currency from %s to %s, which is not allowed while a provider subscription, an open invoice, or a pending first payment exists",
+		presentmentCurrencyLockedReason, current, desired)
+	st := status.New(codes.FailedPrecondition, message)
+	withDetails, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason: presentmentCurrencyLockedReason,
+		Domain: "billing.frameworks.network",
+		Metadata: map[string]string{
+			"presentment_currency": current,
+			"requested_currency":   desired,
+		},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+// isPresentmentCurrencyLockedDBError reports whether the tenant_subscriptions
+// presentment currency trigger refused an update.
+func isPresentmentCurrencyLockedDBError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), presentmentCurrencyLockedReason)
+}
+
 // UpdateBillingDetails updates billing details for a tenant
+// changedBillingDetailFields returns the billing detail fields, by API name,
+// whose requested value differs from the stored one. addressJSON is the
+// normalized address the update writes.
+func changedBillingDetailFields(before purserdb.GetTenantBillingDetailsForUpdateRow, req *purserpb.UpdateBillingDetailsRequest, addressJSON []byte) ([]string, error) {
+	var fields []string
+	if req.Email != nil && *req.Email != before.BillingEmail {
+		fields = append(fields, "email")
+	}
+	if req.Name != nil && *req.Name != before.BillingName {
+		fields = append(fields, "name")
+	}
+	if req.Company != nil && *req.Company != before.BillingCompany {
+		fields = append(fields, "company")
+	}
+	if req.VatNumber != nil && *req.VatNumber != before.TaxID {
+		fields = append(fields, "vat_number")
+	}
+	if req.Address != nil {
+		var updated map[string]string
+		if err := json.Unmarshal(addressJSON, &updated); err != nil {
+			return nil, fmt.Errorf("decode requested address: %w", err)
+		}
+		// A stored address that is not a flat string object differs from any
+		// address this RPC writes.
+		var stored map[string]string
+		if err := json.Unmarshal(before.BillingAddress, &stored); err != nil || !maps.Equal(stored, updated) {
+			fields = append(fields, "address")
+		}
+	}
+	return fields, nil
+}
+
 func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.UpdateBillingDetailsRequest) (*purserpb.BillingDetails, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -6809,9 +7151,10 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 		return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
 	}
 	addressJSON := []byte(`{}`)
+	countryCode := ""
 	if req.Address != nil {
 		// Validate and normalize country code
-		countryCode := countries.Normalize(req.Address.Country)
+		countryCode = countries.Normalize(req.Address.Country)
 		if !countries.IsValid(countryCode) {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid country code %q: must be a valid ISO 3166-1 alpha-2 code (e.g., US, DE, NL)", req.Address.Country)
 		}
@@ -6829,7 +7172,50 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 			return nil, status.Errorf(codes.Internal, "failed to serialize address: %v", err)
 		}
 	}
-	rowsAffected, err := purserdb.New(s.db).UpdateTenantBillingDetails(ctx, purserdb.UpdateTenantBillingDetailsParams{
+
+	// The billing country sets the presentment currency. The subscription row
+	// stays locked from the lock check to the update so a provider
+	// subscription created meanwhile cannot slip between them; the database
+	// trigger refuses the change if one does.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	queries := purserdb.New(tx)
+	current, err := queries.LockTenantPresentmentCurrency(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "no active subscription found for tenant")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	before, err := queries.GetTenantBillingDetailsForUpdate(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	changedFields, err := changedBillingDetailFields(before, req, addressJSON)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "compare billing details: %v", err)
+	}
+	if req.Address != nil {
+		desired := billing.PresentmentCurrencyForCountry(countryCode)
+		if desired != current.PresentmentCurrency {
+			if current.PresentmentLocked {
+				return nil, presentmentCurrencyLockedError(current.PresentmentCurrency, desired)
+			}
+			if _, setErr := queries.SetTenantPresentmentCurrency(ctx, purserdb.SetTenantPresentmentCurrencyParams{
+				PresentmentCurrency: desired, TenantID: tenantID,
+			}); setErr != nil {
+				if isPresentmentCurrencyLockedDBError(setErr) {
+					return nil, presentmentCurrencyLockedError(current.PresentmentCurrency, desired)
+				}
+				return nil, status.Errorf(codes.Internal, "database error: %v", setErr)
+			}
+			changedFields = append(changedFields, "presentment_currency")
+		}
+	}
+	rowsAffected, err := queries.UpdateTenantBillingDetails(ctx, purserdb.UpdateTenantBillingDetailsParams{
 		SetEmail: req.Email != nil, Email: derefString(req.Email),
 		SetName: req.Name != nil, Name: derefString(req.Name),
 		SetCompany: req.Company != nil, Company: derefString(req.Company),
@@ -6842,6 +7228,19 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 
 	if rowsAffected == 0 {
 		return nil, status.Error(codes.NotFound, "no active subscription found for tenant")
+	}
+	if len(changedFields) > 0 {
+		if err := billingevents.NewAndEnqueue(ctx, tx, tenantID, tenantID, &publicv1.BillingDetailsUpdated{
+			ChangedFields: changedFields,
+		}, s.domainActor(ctx)); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue billing.details_updated: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		if isPresentmentCurrencyLockedDBError(err) {
+			return nil, presentmentCurrencyLockedError(current.PresentmentCurrency, billing.PresentmentCurrencyForCountry(countryCode))
+		}
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Billing details updated")
@@ -6860,7 +7259,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.U
 //
 //nolint:nilerr // x402 advertises protocol failures in the response document, not as gRPC transport errors.
 func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb.GetPaymentRequirementsRequest) (*purserpb.PaymentRequirements, error) {
-	if !config.X402PaymentsEnabled() {
+	if !appconfig.Runtime().X402PaymentsEnabled {
 		return &purserpb.PaymentRequirements{
 			X402Version: 2,
 			Error:       "x402 payments are temporarily disabled",
@@ -6917,7 +7316,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb
 	resource := req.GetResource()
 
 	resourceURL := x402ResourceURL(resource)
-	if config.IsProduction() && config.GetGatewayPublicURL() == "" {
+	if rt := appconfig.Runtime(); rt.IsProduction() && rt.GatewayPublicBaseURL() == "" {
 		return &purserpb.PaymentRequirements{
 			X402Version: 2,
 			Error:       "x402 not ready: GATEWAY_PUBLIC_URL",
@@ -6999,7 +7398,7 @@ func x402ResourceURL(resource string) string {
 	if parsed, err := url.Parse(resource); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
 		return parsed.String()
 	}
-	base := config.GetGatewayPublicURL()
+	base := appconfig.Runtime().GatewayPublicBaseURL()
 	if base == "" {
 		base = "http://localhost:18005"
 	}
@@ -7014,7 +7413,7 @@ func x402ResourceURL(resource string) string {
 
 // VerifyX402Payment verifies a tenant-bound x402 payment without settling.
 func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *purserpb.VerifyX402PaymentRequest) (*purserpb.VerifyX402PaymentResponse, error) {
-	if !config.X402PaymentsEnabled() {
+	if !appconfig.Runtime().X402PaymentsEnabled {
 		return nil, status.Error(codes.Unavailable, "x402 payments are temporarily disabled; submitted settlements continue reconciling")
 	}
 	if err := s.x402handler.Readiness(ctx); err != nil {
@@ -7081,7 +7480,7 @@ func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *purserpb.Veri
 
 // SettleX402Payment settles a tenant-bound x402 payment and credits the balance.
 func (s *PurserServer) SettleX402Payment(ctx context.Context, req *purserpb.SettleX402PaymentRequest) (*purserpb.SettleX402PaymentResponse, error) {
-	if !config.X402PaymentsEnabled() {
+	if !appconfig.Runtime().X402PaymentsEnabled {
 		return nil, status.Error(codes.Unavailable, "x402 payments are temporarily disabled; submitted settlements continue reconciling")
 	}
 	if err := s.x402handler.Readiness(ctx); err != nil {

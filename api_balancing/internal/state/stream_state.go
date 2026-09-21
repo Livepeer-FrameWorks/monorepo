@@ -711,12 +711,12 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 
 	// Update basic fields
 	state.BufferState = bufferState
-	state.Playable = nativeBufferStatePlayable(bufferState)
+	state.Playable = NativeBufferStatePlayable(bufferState)
 	state.Status = "live" // Set to live when buffer is available
 	state.LastUpdate = now
 
 	inst.BufferState = bufferState
-	inst.Playable = nativeBufferStatePlayable(bufferState)
+	inst.Playable = NativeBufferStatePlayable(bufferState)
 	inst.Status = "live"
 	inst.LastUpdate = now
 	state.Playable = sm.anyPlayableInstanceLocked(internalName)
@@ -777,7 +777,9 @@ func (sm *StreamStateManager) deriveUnionStatsLocked(internalName string, s *Str
 	s.BytesDown = bytesDown
 }
 
-func nativeBufferStatePlayable(bufferState string) bool {
+// NativeBufferStatePlayable reports whether a Mist STREAM_BUFFER state means
+// the stream can be played.
+func NativeBufferStatePlayable(bufferState string) bool {
 	switch bufferState {
 	case "FULL", "DRY", "RECOVER":
 		return true

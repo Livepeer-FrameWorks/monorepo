@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,10 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_balancing/internal/appconfig"
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/domainevents"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/identity"
@@ -45,7 +46,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
@@ -139,6 +139,7 @@ type Processor struct {
 	metrics                   *ProcessorMetrics
 	nodeID                    string
 	clusterID                 string
+	systemTenantID            uuid.UUID
 	ownerTenantID             string
 	viewerClusterAccess       func(clusterID, tenantID, officialClusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool
 	mediaAuthorityStore       *localauthority.Store
@@ -336,8 +337,9 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		decklogClient:             decklogClient,
 		loadBalancer:              loadBalancer,
 		geoipClient:               geoipClient,
-		nodeID:                    os.Getenv("NODE_ID"),
-		clusterID:                 os.Getenv("CLUSTER_ID"),
+		nodeID:                    appconfig.Current().NodeID,
+		clusterID:                 appconfig.Current().ClusterID,
+		systemTenantID:            appconfig.Current().SystemTenantUUID(),
 		viewerClusterAccess:       control.ClusterServeAccessibleForTenantEnvelope,
 		sendDeactivatePushTargets: control.SendDeactivatePushTargets,
 		marshalAdmissionEffect:    proto.Marshal,
@@ -591,7 +593,7 @@ func (p *Processor) ApplyLivepeerWorkload(processesJSON, workload string) string
 // vod Livepeer configs, overridable via LIVEPEER_VOD_DEADLINE_MS so operators
 // can retune without a code deploy when gateway/orchestrator behavior shifts.
 func livepeerVODDeadlineMs() int {
-	if raw := os.Getenv("LIVEPEER_VOD_DEADLINE_MS"); raw != "" {
+	if raw := appconfig.Current().LivepeerVODDeadlineMS; raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
 			return v
 		}
@@ -602,7 +604,7 @@ func livepeerVODDeadlineMs() int {
 // livepeerVODMinSpeed is the minimum sustained speed factor stamped onto vod
 // Livepeer configs, overridable via LIVEPEER_VOD_MIN_SPEED.
 func livepeerVODMinSpeed() float64 {
-	if raw := os.Getenv("LIVEPEER_VOD_MIN_SPEED"); raw != "" {
+	if raw := appconfig.Current().LivepeerVODMinSpeed; raw != "" {
 		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
 			return v
 		}
@@ -612,7 +614,7 @@ func livepeerVODMinSpeed() float64 {
 
 func streamCacheSWR() time.Duration {
 	swr := 30 * time.Second
-	if raw := os.Getenv("STREAM_CACHE_SWR"); raw != "" {
+	if raw := appconfig.Current().StreamCacheSWR; raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil {
 			return parsed
 		}
@@ -622,7 +624,7 @@ func streamCacheSWR() time.Duration {
 
 func billingCacheSWR() time.Duration {
 	swr := 5 * time.Minute
-	if raw := os.Getenv("BILLING_CACHE_SWR"); raw != "" {
+	if raw := appconfig.Current().BillingCacheSWR; raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil {
 			return parsed
 		}
@@ -631,7 +633,7 @@ func billingCacheSWR() time.Duration {
 }
 
 func billingDeniedTTL() time.Duration {
-	if raw := os.Getenv("BILLING_DENIED_CACHE_TTL"); raw != "" {
+	if raw := appconfig.Current().BillingDeniedCacheTTL; raw != "" {
 		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
 			return parsed
 		}
@@ -2050,7 +2052,16 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "local ingest authority snapshot unavailable")
 			}
 			mintCtx, mintCancel := context.WithTimeout(admissionCtx, 3*time.Second)
-			sid, outcome, sErr := control.CreateIngestSession(mintCtx, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), pushRewrite.GetTriggerUnixMillis(), dvrIntent, ingestClusterID, p.logger, authoritySnapshot...)
+			mintReq := control.IngestSessionRequest{
+				TenantID: streamValidation.TenantId, NodeID: trigger.GetNodeId(), InternalName: streamValidation.InternalName,
+				StreamID: streamValidation.StreamId, Protocol: domainevents.IngestProtocol(protocol),
+				ConnectorPID: connectorPID, TriggerUUID: pushRewrite.GetTriggerUuid(), StartedAtMillis: pushRewrite.GetTriggerUnixMillis(),
+				DVRIntent: dvrIntent, IngestClusterID: ingestClusterID,
+			}
+			if len(authoritySnapshot) > 0 {
+				mintReq.Authority = &authoritySnapshot[0]
+			}
+			sid, outcome, sErr := control.MintIngestSession(mintCtx, mintReq, p.logger)
 			mintCancel()
 			if sErr != nil {
 				p.logger.WithError(sErr).WithFields(logging.Fields{
@@ -2111,7 +2122,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			}()
 			// PROJECT the confirmed DB winner onto the registry — but ONLY if this session is STILL the
 			// active one under the (tenant, stream) advisory lock. This goroutine can be descheduled
-			// between CreateIngestSession and here; if in that window this session's own close ended it
+			// between MintIngestSession and here; if in that window this session's own close ended it
 			// and a newer publisher was admitted + projected, projecting now would clobber the live
 			// publisher and drain it as a phantom "prior owner". ProjectSourceIfCurrent drops such a
 			// stale projection and reports applied=false — the connection this push belongs to is no
@@ -3456,12 +3467,7 @@ func (p *Processor) recordPullSourceEvent(resp *commodorepb.ResolvePullSourceByI
 	if control.CommodoreClient == nil || internalName == "" || kind == "" {
 		return
 	}
-	systemTenantID, tenantErr := tenants.RuntimeSystemTenantID()
-	if tenantErr != nil {
-		p.logger.WithError(tenantErr).Error("Cannot record pull-source lifecycle event")
-		return
-	}
-	tenantID := systemTenantID.String()
+	tenantID := p.systemTenantID.String()
 	streamID := ""
 	if resp != nil {
 		if resp.GetTenantId() != "" {
@@ -3654,7 +3660,7 @@ func safeRollingDVRProcessConfig(processesJSON string) (string, error) {
 }
 
 func stampSignedLivepeerJob(processesJSON string, claims control.TranscodeJobClaims) (string, error) {
-	return control.StampTranscodeJobConfigFromEnvironment(processesJSON, claims, time.Now())
+	return control.StampTranscodeJobConfigWithConfiguredSecret(processesJSON, claims, time.Now())
 }
 
 func (p *Processor) livepeerLiveProcessConfig(streamName, internalName, requestingNodeID, cachedConfig string) (string, error) {
@@ -4137,7 +4143,7 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 
 	// Forward to Decklog for audit. Periscope must NOT use this event to
 	// mutate stream_state_current — ingest session ownership stays with
-	// the DB-confirmed source projection (ProjectSource after CreateIngestSession).
+	// the DB-confirmed source projection (ProjectSource after MintIngestSession).
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"internal_name":  internalName,
@@ -4505,6 +4511,19 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 		RuntimeName: streamBuffer.GetStreamName(), BufferPID: streamBuffer.GetBufferPid(),
 		State: streamBuffer.GetBufferState(), EventID: trigger.GetTriggerUuid(), EventUnixMillis: trigger.GetTriggerUnixMillis(),
 	})
+
+	// stream.live: the first playable buffer of the active ingest session, matched only from the
+	// session's own node. STREAM_BUFFER is best-effort, so a failed write loses this session's
+	// stream.live rather than blocking the trigger.
+	if state.NativeBufferStatePlayable(streamBuffer.GetBufferState()) {
+		liveCtx, cancelLive := context.WithTimeout(context.Background(), 3*time.Second)
+		if _, liveErr := control.MarkIngestSessionPlayable(liveCtx, info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis()); liveErr != nil {
+			p.logger.WithError(liveErr).WithFields(logging.Fields{
+				"internal_name": internalName, "node_id": trigger.GetNodeId(),
+			}).Warn("Failed to record the ingest session's first playable buffer")
+		}
+		cancelLive()
+	}
 
 	// Forward original StreamBufferTrigger to Decklog (preserves all track data and health metrics)
 	// Helmsman already enriched it with has_issues, issues_description, quality_tier, etc.
@@ -7379,8 +7398,10 @@ func freeTierAllowanceState(allowances []*meteringpb.MeterAllowance) (isFreeTier
 	return
 }
 
-func envFloatInRange(key string, fallback, min, max float64) float64 {
-	raw := strings.TrimSpace(os.Getenv(key))
+// floatInRange parses raw as a number strictly between min and max, returning
+// fallback for an empty, unparseable, or out-of-range value.
+func floatInRange(raw string, fallback, min, max float64) float64 {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return fallback
 	}
@@ -7398,9 +7419,10 @@ func envFloatInRange(key string, fallback, min, max float64) float64 {
 // Configurable via FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD and
 // FOGHORN_INGEST_REJECT_FREE_LOAD.
 func ingestLoadThresholds() loadThresholds {
+	settings := appconfig.Current()
 	return loadThresholds{
-		rejectOverAllowance: envFloatInRange("FOGHORN_INGEST_REJECT_OVER_ALLOWANCE_LOAD", 0.5, 0, 1),
-		rejectAnyFree:       envFloatInRange("FOGHORN_INGEST_REJECT_FREE_LOAD", 0.95, 0, 1),
+		rejectOverAllowance: floatInRange(settings.IngestRejectOverAllowanceLoad, 0.5, 0, 1),
+		rejectAnyFree:       floatInRange(settings.IngestRejectFreeLoad, 0.95, 0, 1),
 	}
 }
 
@@ -7411,9 +7433,10 @@ func ingestLoadThresholds() loadThresholds {
 // Viewers are cheaper individually but multiply faster than ingest, so the
 // over-allowance reject point is higher than ingest's 50%.
 func viewerLoadThresholds() loadThresholds {
+	settings := appconfig.Current()
 	return loadThresholds{
-		rejectOverAllowance: envFloatInRange("FOGHORN_VIEWER_REJECT_OVER_ALLOWANCE_LOAD", 0.8, 0, 1),
-		rejectAnyFree:       envFloatInRange("FOGHORN_VIEWER_REJECT_FREE_LOAD", 0.95, 0, 1),
+		rejectOverAllowance: floatInRange(settings.ViewerRejectOverAllowanceLoad, 0.8, 0, 1),
+		rejectAnyFree:       floatInRange(settings.ViewerRejectFreeLoad, 0.95, 0, 1),
 	}
 }
 

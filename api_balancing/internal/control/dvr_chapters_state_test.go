@@ -159,9 +159,17 @@ func TestSoftDeleteDVRAndChapters(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
+	// The requested deletion's artifact_deleted service event, attributed to the requester.
+	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'`).
+		WithArgs("dvr-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "user_id", "stream_id", "stream_internal_name", "retention_until", "started_at"}).
+			AddRow("tenant-1", "", "stream-1", "live+s", nil, nil))
+	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
+		WithArgs("artifact_deleted", "tenant-1", "stream-1", "dvr-1", jsonContains(`"userId":"user-1"`)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1")
+	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1", "user-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +204,7 @@ func TestSoftDeleteDVRAndChapters_AlreadyDeletedNoReemit(t *testing.T) {
 	// No per-child events, and crucially NO DVR-deleted event.
 	mock.ExpectCommit()
 
-	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1")
+	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1", "user-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +239,7 @@ func TestSoftDeleteDVRAndChapters_RepairsLegacyChildren(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1")
+	hashes, transitioned, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "tenant-1", "user-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +257,7 @@ func TestSoftDeleteDVRAndChapters_RepairsLegacyChildren(t *testing.T) {
 // Tenant is required: a cascade with no tenant must refuse rather than run an unscoped delete.
 func TestSoftDeleteDVRAndChapters_RequiresTenant(t *testing.T) {
 	_ = setupChapterTest(t)
-	if _, _, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", ""); err == nil {
+	if _, _, err := SoftDeleteDVRAndChapters(context.Background(), "dvr-1", "", "user-1"); err == nil {
 		t.Fatal("expected error when tenant_id empty")
 	}
 }

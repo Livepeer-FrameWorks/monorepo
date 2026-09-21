@@ -14,6 +14,7 @@ import (
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -320,7 +321,10 @@ func (j *CompletingVodRecoveryJob) convergeToProcessing(ctx context.Context, r c
 			data.SizeBytes = &sz
 		}
 		moved = true
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, data)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, data, &publicv1.UploadCompleted{
+			Artifact:  artifactoutbox.UploadArtifact(r.artifactHash),
+			SizeBytes: r.sizeBytes,
+		})
 	})
 	if err != nil {
 		j.logger.WithError(err).WithField("artifact_hash", r.artifactHash).Warn("Completing-VOD recovery: convergence to processing failed; row stays 'completing' for a later pass")
@@ -362,7 +366,10 @@ func (j *CompletingVodRecoveryJob) convergeToFailed(ctx context.Context, r compl
 		if r.userID != "" {
 			data.UserId = &r.userID
 		}
-		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, data)
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, data, &publicv1.UploadFailed{
+			Artifact: artifactoutbox.UploadArtifact(r.artifactHash),
+			Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_STORAGE_FAILED,
+		})
 	})
 	if err != nil {
 		j.logger.WithError(err).WithField("artifact_hash", r.artifactHash).Warn("Completing-VOD recovery: convergence to failed failed")

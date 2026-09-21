@@ -1,0 +1,47 @@
+# Viewer and ingest resolution are public; the playback JWT, when the content
+# has a JWT policy, travels in the X-Frameworks-Playback-JWT request header.
+
+query ResolveViewerEndpoint($contentId: String!, $protocol: MediaViewerProtocol) {
+  resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {
+    primary {
+      ...ViewerEndpointFields
+    }
+    fallbacks {
+      ...ViewerEndpointFields
+    }
+    metadata {
+      contentType
+      contentId
+      title
+      description
+      durationSeconds
+      status
+      isLive
+      viewers
+      recordingSizeBytes
+      clipSource
+      createdAt
+      telemetryToken
+      thumbnailAssets {
+        ...ThumbnailAssetsFields
+      }
+    }
+  }
+}
+
+query ResolveIngestEndpoint($streamKey: String!, $protocol: MediaIngestProtocol) {
+  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {
+    primary {
+      ...IngestEndpointFields
+    }
+    fallbacks {
+      ...IngestEndpointFields
+    }
+    metadata {
+      streamId
+      streamKey
+      tenantId
+      recordingEnabled
+    }
+  }
+}

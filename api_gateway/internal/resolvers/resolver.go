@@ -12,7 +12,6 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -52,35 +51,69 @@ type Resolver struct {
 	// LocalClusterID is this deployment's cluster, used as the serving cluster for
 	// locally-resolved edges where the endpoint carries no explicit cluster_id.
 	LocalClusterID string
+	// Streaming supplies the streamingConfig ports and root domain on each
+	// request, so an env-file reload takes effect without a restart.
+	Streaming func() StreamingSettings
+	// capabilityCache holds the capabilities query's per-tenant sections. It
+	// describes enforcement to clients; no enforcement path reads it.
+	capabilityCache capabilitySections
+}
+
+// StreamingSettings are the values the streamingConfig query reads on each
+// request.
+type StreamingSettings struct {
+	SRTPort  int
+	RTMPPort int
+	// RootDomain builds global streaming host names when cluster routing
+	// carries no base URL.
+	RootDomain string
+}
+
+// ResolverConfig is the configuration NewResolver needs.
+type ResolverConfig struct {
+	ServiceToken string
+	// SignalmanAddr is the required local-region Signalman service alias. The
+	// raw comma-separated SignalmanAddrs value optionally lists replica targets
+	// used instead of it.
+	SignalmanAddr  string
+	SignalmanAddrs string
+	// MaxSubscriptionsPerTenant caps concurrent GraphQL subscriptions per tenant
+	// on this Bridge replica; zero disables the cap.
+	MaxSubscriptionsPerTenant int
+	// SignalmanDial configures the pooled Signalman connections at startup.
+	SignalmanDial SignalmanDialSettings
+
+	PeriscopeCache       cache.Options
+	PeriscopeLoadTimeout time.Duration
+
+	TelemetrySecret []byte
+	LocalClusterID  string
+	// Streaming is read on each streamingConfig request.
+	Streaming func() StreamingSettings
 }
 
 // NewResolver creates a new GraphQL resolver
-func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, serviceToken string) *Resolver {
+func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, cfg ResolverConfig) *Resolver {
 	// Bridge serves every GraphQL subscription from its own region's Signalman.
-	// SIGNALMAN_GRPC_ADDRS optionally lists replica targets; otherwise the
-	// required SIGNALMAN_GRPC_ADDR service alias spreads streams across the local
-	// replicas.
-	signalmanAddrs := parseSignalmanAddrs(config.GetEnv("SIGNALMAN_GRPC_ADDRS", ""))
-	if signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR"); len(signalmanAddrs) == 0 {
-		signalmanAddrs = []string{signalmanAddr}
+	// SignalmanAddrs optionally lists replica targets; otherwise the required
+	// SignalmanAddr service alias spreads streams across the local replicas.
+	signalmanAddrs := parseSignalmanAddrs(cfg.SignalmanAddrs)
+	if len(signalmanAddrs) == 0 {
+		signalmanAddrs = []string{cfg.SignalmanAddr}
 	}
 	subManager := NewSubscriptionManager(logger, SubscriptionManagerConfig{
 		SignalmanAddrs:            signalmanAddrs,
-		ServiceToken:              serviceToken,
-		MaxSubscriptionsPerTenant: config.GetEnvInt("WS_MAX_SUBSCRIPTIONS_PER_TENANT", 100),
+		ServiceToken:              cfg.ServiceToken,
+		MaxSubscriptionsPerTenant: cfg.MaxSubscriptionsPerTenant,
 		Metrics:                   metrics,
+		Dial:                      cfg.SignalmanDial,
 	})
 
-	periscopeTTL := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_TTL_SECONDS", 30)) * time.Second
-	periscopeSWR := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_SWR_SECONDS", 15)) * time.Second
-	periscopeNeg := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_NEG_TTL_SECONDS", 5)) * time.Second
-	periscopeMax := config.GetEnvInt("PERISCOPE_CACHE_MAX", 5000)
-	periscopeLoadTimeout := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_LOAD_TIMEOUT_SECONDS", 30)) * time.Second
-	periscopeCache := cache.New(cache.Options{TTL: periscopeTTL, StaleWhileRevalidate: periscopeSWR, NegativeTTL: periscopeNeg, MaxEntries: periscopeMax}, cache.MetricsHooks{})
+	periscopeCache := cache.New(cfg.PeriscopeCache, cache.MetricsHooks{})
 
 	fetcher := datafetcher.New(datafetcher.Config{
 		Logger:      logger,
-		LoadTimeout: periscopeLoadTimeout,
+		LoadTimeout: cfg.PeriscopeLoadTimeout,
 		Caches: map[datafetcher.Service]*cache.Cache{
 			datafetcher.ServicePeriscope: periscopeCache,
 		},
@@ -105,9 +138,19 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 		SubManager:      subManager,
 		Metrics:         metrics,
 		Fetcher:         fetcher,
-		TelemetrySecret: []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", "")),
-		LocalClusterID:  config.GetEnv("CLUSTER_ID", ""),
+		TelemetrySecret: cfg.TelemetrySecret,
+		LocalClusterID:  cfg.LocalClusterID,
+		Streaming:       cfg.Streaming,
 	}
+}
+
+// streamingSettings returns the current streamingConfig values. A resolver
+// built without a Streaming getter reports zero ports and no root domain.
+func (r *Resolver) streamingSettings() StreamingSettings {
+	if r == nil || r.Streaming == nil {
+		return StreamingSettings{}
+	}
+	return r.Streaming()
 }
 
 // Shutdown gracefully shuts down the resolver and its resources

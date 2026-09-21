@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -20,8 +20,10 @@ const (
 // valid destination. Callers should retry it; it is not a policy rejection.
 var ErrDestinationResolution = errors.New("destination resolution unavailable")
 
-// DestinationPolicy is the operator-controlled network boundary for outbound
-// restream connections. CIDR exceptions are explicit and apply to private,
+// DestinationPolicy is the network boundary for tenant-supplied outbound
+// destinations: restream push targets, where operators may add CIDR
+// exceptions, and outbound webhook endpoints, which use the zero policy with
+// no exceptions. CIDR exceptions are explicit and apply to private,
 // loopback, and link-local destinations; unspecified, multicast, and cloud
 // metadata endpoints are never valid destinations.
 type DestinationPolicy struct {
@@ -31,31 +33,44 @@ type DestinationPolicy struct {
 	LookupIP     func(context.Context, string) ([]net.IP, error)
 }
 
-func DestinationPolicyFromEnvironment() (DestinationPolicy, error) {
+// DestinationPolicyFromValues builds the policy from the raw values of
+// RESTREAM_ALLOW_PRIVATE_DESTINATIONS, RESTREAM_ALLOWED_PRIVATE_CIDRS, and
+// RESTREAM_DENIED_CIDRS. allowPrivate is true only for "true" (any case) or "1".
+func DestinationPolicyFromValues(allowPrivate, allowedCIDRs, deniedCIDRs string) (DestinationPolicy, error) {
+	allowPrivate = strings.TrimSpace(allowPrivate)
 	policy := DestinationPolicy{
-		AllowPrivate: strings.EqualFold(strings.TrimSpace(os.Getenv(allowPrivateEnv)), "true") || strings.TrimSpace(os.Getenv(allowPrivateEnv)) == "1",
+		AllowPrivate: strings.EqualFold(allowPrivate, "true") || allowPrivate == "1",
 	}
 	var err error
-	policy.AllowedCIDRs, err = parseCIDRs(os.Getenv(allowedCIDRsEnv), allowedCIDRsEnv)
+	policy.AllowedCIDRs, err = parseCIDRs(allowedCIDRs, allowedCIDRsEnv)
 	if err != nil {
 		return DestinationPolicy{}, err
 	}
-	policy.DeniedCIDRs, err = parseCIDRs(os.Getenv(deniedCIDRsEnv), deniedCIDRsEnv)
+	policy.DeniedCIDRs, err = parseCIDRs(deniedCIDRs, deniedCIDRsEnv)
 	if err != nil {
 		return DestinationPolicy{}, err
 	}
-	policy.LookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
-		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]net.IP, 0, len(addresses))
-		for _, address := range addresses {
-			out = append(out, address.IP)
-		}
-		return out, nil
-	}
+	policy.LookupIP = systemLookupIP
 	return policy, nil
+}
+
+// PublicDestinationPolicy is the policy for tenant-supplied webhook endpoints:
+// public destinations only, with no operator exceptions, and hostnames
+// resolved by the system resolver.
+func PublicDestinationPolicy() DestinationPolicy {
+	return DestinationPolicy{LookupIP: systemLookupIP}
+}
+
+func systemLookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]net.IP, 0, len(addresses))
+	for _, address := range addresses {
+		out = append(out, address.IP)
+	}
+	return out, nil
 }
 
 func parseCIDRs(raw, envName string) ([]*net.IPNet, error) {
@@ -148,16 +163,106 @@ func (p DestinationPolicy) validateIP(ip net.IP) error {
 	if containsIP(p.DeniedCIDRs, ip) {
 		return errors.New("destination is denied by operator policy")
 	}
+	// A NAT64 or 6to4 address reaches the IPv4 address it embeds, so that
+	// address decides, unless the operator excepted the IPv6 form itself.
+	if embedded := translatedIPv4(ip); embedded != nil && !p.allowedByCIDR(ip) {
+		return p.validateIP(embedded)
+	}
 	if p.allowedByCIDR(ip) {
 		return nil
 	}
 	if ip.IsPrivate() && p.AllowPrivate {
 		return nil
 	}
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || !ip.IsGlobalUnicast() {
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || !ip.IsGlobalUnicast() || containsIP(nonPublicRanges, ip) {
 		return errors.New("private or non-public destinations require an explicit operator policy")
 	}
 	return nil
+}
+
+// nonPublicRanges are ranges Go classifies as global unicast that are not
+// reachable public destinations. IPv4: "this network", carrier-grade NAT
+// shared address space (which overlay and VPN meshes use), IETF protocol
+// assignments, documentation, benchmarking, and the reserved 240.0.0.0/4.
+// IPv6: IPv4-compatible addresses (::a.b.c.d), the local-use NAT64 prefix,
+// whose IPv4 position depends on a prefix length the address does not carry,
+// deprecated site-local, Teredo, benchmarking, documentation, and discard-only.
+// An operator CIDR exception still applies to them.
+var nonPublicRanges = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, cidr := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15",
+		"198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"::/96", "64:ff9b:1::/48", "fec0::/10", "2001::/32", "2001:2::/48", "2001:db8::/32",
+		"3fff::/20", "100::/64",
+	} {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, network)
+	}
+	return out
+}()
+
+var (
+	nat64WellKnown = mustCIDR("64:ff9b::/96")
+	sixToFour      = mustCIDR("2002::/16")
+)
+
+func mustCIDR(cidr string) *net.IPNet {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		panic(err)
+	}
+	return network
+}
+
+// translatedIPv4 returns the IPv4 address a NAT64 well-known-prefix
+// (64:ff9b::/96, RFC 6052) or 6to4 (2002::/16, RFC 3056) address reaches, or
+// nil for any other address.
+func translatedIPv4(ip net.IP) net.IP {
+	if len(ip) != net.IPv6len || ip.To4() != nil {
+		return nil
+	}
+	switch {
+	case nat64WellKnown.Contains(ip):
+		return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4()
+	case sixToFour.Contains(ip):
+		return net.IPv4(ip[2], ip[3], ip[4], ip[5]).To4()
+	}
+	return nil
+}
+
+// ValidateIP applies the policy to one resolved address.
+func (p DestinationPolicy) ValidateIP(ip net.IP) error {
+	return p.validateIP(ip)
+}
+
+// ErrDialBlocked marks a connection refused at dial time because the address
+// the name resolved to is forbidden by the policy.
+var ErrDialBlocked = errors.New("dial blocked by destination policy")
+
+// DialControl returns a net.Dialer Control hook that applies the policy to the
+// address actually being connected, after DNS resolution. ValidateURI checks a
+// resolution that may differ from the one the dialer makes, so a host that
+// answers with a public address at validation and a forbidden one at connect
+// time (DNS rebinding) is refused only here.
+func (p DestinationPolicy) DialControl() func(network, address string, c syscall.RawConn) error {
+	return func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrDialBlocked, err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return fmt.Errorf("%w: %q is not an address", ErrDialBlocked, host)
+		}
+		if err := p.validateIP(ip); err != nil {
+			return fmt.Errorf("%w: %w", ErrDialBlocked, err)
+		}
+		return nil
+	}
 }
 
 func (p DestinationPolicy) allowedByCIDR(ip net.IP) bool {

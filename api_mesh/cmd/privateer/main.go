@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/api_mesh/internal/agent"
+	"frameworks/api_mesh/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
@@ -30,12 +30,14 @@ func main() {
 	// Load environment variables
 	config.LoadEnv(logger)
 
-	// Validate required config
-	privateKeyFile := os.Getenv("MESH_PRIVATE_KEY_FILE")
-	if privateKeyFile == "" {
-		logger.Fatal("MESH_PRIVATE_KEY_FILE is required")
+	configOptions := config.Options{Service: "privateer", Logger: logger}
+	cfg, err := config.Load[appconfig.Privateer](configOptions)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid configuration")
 	}
-	dataDir := os.Getenv("PRIVATEER_DATA_DIR")
+	cfg.ApplyLogLevel(logger)
+	privateKeyFile := cfg.PrivateKeyFile
+	dataDir := cfg.DataDir
 
 	// Enrollment: if no key on disk and a join token is present, generate
 	// locally, register with the control plane, and persist the assigned
@@ -43,7 +45,7 @@ func main() {
 	// persisted enrollment state below fills in what env would otherwise
 	// need to provide.
 	enrollCtx, enrollCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	enrolled, enrollErr := tryEnrollIfNeeded(enrollCtx, logger, privateKeyFile, dataDir)
+	enrolled, enrollErr := tryEnrollIfNeeded(enrollCtx, logger, cfg)
 	enrollCancel()
 	if enrollErr != nil {
 		logger.WithError(enrollErr).Fatal("Enrollment failed")
@@ -59,7 +61,7 @@ func main() {
 		persisted = enrolled
 	}
 
-	qmGRPCAddr := os.Getenv("QUARTERMASTER_GRPC_ADDR")
+	qmGRPCAddr := cfg.QuartermasterGRPCAddr
 	if qmGRPCAddr == "" && persisted != nil {
 		qmGRPCAddr = persisted.QuartermasterGRPCAddr
 	}
@@ -67,16 +69,11 @@ func main() {
 		logger.Fatal("QUARTERMASTER_GRPC_ADDR is required (set env or enroll via `frameworks mesh join`)")
 	}
 
-	serviceToken := os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		logger.Fatal("SERVICE_TOKEN is required — on seed nodes it's rendered by Ansible; on enrolled nodes `frameworks mesh join` writes it into /etc/privateer/privateer.env")
-	}
-
-	staticPeersFile := os.Getenv("PRIVATEER_STATIC_PEERS_FILE")
+	staticPeersFile := cfg.StaticPeersFile
 	if staticPeersFile == "" && persisted != nil {
 		staticPeersFile = persisted.StaticPeersFile
 	}
-	meshWireguardIP := os.Getenv("MESH_WIREGUARD_IP")
+	meshWireguardIP := cfg.WireguardIP
 	if meshWireguardIP == "" && persisted != nil {
 		meshWireguardIP = persisted.WireguardIP
 	}
@@ -84,70 +81,23 @@ func main() {
 		logger.Fatal("MESH_WIREGUARD_IP is required")
 	}
 
-	dnsPort := 53
-	if p := os.Getenv("DNS_PORT"); p != "" {
-		if port, err := strconv.Atoi(p); err == nil {
-			dnsPort = port
-		}
-	}
-
 	listenPort := 51820
-	if p := os.Getenv("MESH_LISTEN_PORT"); p != "" {
-		if port, parseErr := strconv.Atoi(p); parseErr == nil {
-			listenPort = port
-		}
+	if cfg.WireguardListenPort != 0 {
+		listenPort = cfg.WireguardListenPort
 	} else if persisted != nil && persisted.WireguardPort > 0 {
 		listenPort = persisted.WireguardPort
 	}
 
-	syncInterval := 30 * time.Second
-	if d := os.Getenv("PRIVATEER_SYNC_INTERVAL"); d != "" {
-		if parsed, err := time.ParseDuration(d); err == nil {
-			syncInterval = parsed
-		}
-	}
-
-	syncTimeout := 10 * time.Second
-	if d := os.Getenv("PRIVATEER_SYNC_TIMEOUT"); d != "" {
-		if parsed, err := time.ParseDuration(d); err == nil {
-			syncTimeout = parsed
-		}
-	}
-
-	nodeType := os.Getenv("MESH_NODE_TYPE")
-	nodeName := os.Getenv("MESH_NODE_NAME")
-	nodeID := os.Getenv("NODE_ID")
+	nodeID := cfg.NodeID
 	if nodeID == "" && persisted != nil {
 		nodeID = persisted.NodeID
 	}
-	clusterID := os.Getenv("CLUSTER_ID")
+	clusterID := cfg.ClusterID
 	if clusterID == "" && persisted != nil {
 		clusterID = persisted.ClusterID
 	}
 	if clusterID == "" {
 		logger.Fatal("CLUSTER_ID is required")
-	}
-	externalIP := os.Getenv("MESH_EXTERNAL_IP")
-	internalIP := os.Getenv("MESH_INTERNAL_IP")
-
-	var dnsUpstreams []string
-	if raw := os.Getenv("UPSTREAM_DNS"); raw != "" {
-		for _, s := range strings.Split(raw, ",") {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			_, _, splitErr := net.SplitHostPort(s)
-			if splitErr != nil {
-				// No port: could be IPv4 (1.1.1.1) or IPv6 (2001:db8::1).
-				if net.ParseIP(s) != nil && strings.Contains(s, ":") {
-					s = "[" + s + "]:53"
-				} else {
-					s += ":53"
-				}
-			}
-			dnsUpstreams = append(dnsUpstreams, s)
-		}
 	}
 
 	// Setup monitoring
@@ -179,31 +129,31 @@ func main() {
 	}
 
 	// Config
-	bootstrapInternalCABundleFromEnv(config.GetEnv("GRPC_TLS_CA_PATH", ""))
-	cfg := agent.Config{
+	bootstrapInternalCABundle(cfg.GRPCTLSCAPath, cfg.InternalCARootCertPEMB64, cfg.InternalCAIntermediateCertPEMB64)
+	agentConfig := agent.Config{
 		QuartermasterGRPCAddr:   qmGRPCAddr,
-		NavigatorGRPCAddr:       os.Getenv("NAVIGATOR_GRPC_ADDR"),
-		ServiceToken:            serviceToken,
+		NavigatorGRPCAddr:       cfg.NavigatorGRPCAddr,
+		ServiceToken:            cfg.ServiceToken,
 		ClusterID:               clusterID,
-		CertIssueToken:          os.Getenv("CERT_ISSUANCE_TOKEN"),
-		AllowInsecure:           config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:              config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		QuartermasterServerName: config.GetServiceGRPCTLSServerName("quartermaster"),
-		NavigatorServerName:     config.GetServiceGRPCTLSServerName("navigator"),
-		PKIBasePath:             config.GetEnv("GRPC_TLS_PKI_DIR", "/etc/frameworks/pki"),
-		ExpectedServiceTypes:    parseExpectedServiceTypes(os.Getenv("EXPECTED_INTERNAL_GRPC_SERVICES")),
-		CertSyncInterval:        parseDurationOrDefault(os.Getenv("PRIVATEER_CERT_SYNC_INTERVAL"), 5*time.Minute),
-		SyncInterval:            syncInterval,
-		SyncTimeout:             syncTimeout,
-		InterfaceName:           os.Getenv("MESH_INTERFACE"), // Defaults to wg0
-		NodeType:                nodeType,
-		NodeName:                nodeName,
+		CertIssueToken:          cfg.CertIssuanceToken,
+		AllowInsecure:           cfg.GRPCAllowInsecure,
+		CACertFile:              cfg.GRPCTLSCAPath,
+		QuartermasterServerName: cfg.QuartermasterGRPCTLSServerName,
+		NavigatorServerName:     cfg.NavigatorGRPCTLSServerName,
+		PKIBasePath:             cfg.PKIDir,
+		ExpectedServiceTypes:    parseExpectedServiceTypes(cfg.ExpectedInternalGRPCServices),
+		CertSyncInterval:        cfg.CertSyncInterval,
+		SyncInterval:            cfg.SyncInterval,
+		SyncTimeout:             cfg.SyncTimeout,
+		InterfaceName:           cfg.InterfaceName, // Defaults to wg0
+		NodeType:                cfg.NodeType,
+		NodeName:                cfg.NodeName,
 		NodeID:                  nodeID,
-		ExternalIP:              externalIP,
-		InternalIP:              internalIP,
+		ExternalIP:              cfg.ExternalIP,
+		InternalIP:              cfg.InternalIP,
 		ListenPort:              listenPort,
-		DNSPort:                 dnsPort,
-		DNSUpstreams:            dnsUpstreams,
+		DNSPort:                 cfg.DNSPort,
+		DNSUpstreams:            normalizeDNSUpstreams(cfg.UpstreamDNS),
 		StaticPeersFile:         staticPeersFile,
 		PrivateKeyFile:          privateKeyFile,
 		WireguardIP:             meshWireguardIP,
@@ -213,7 +163,7 @@ func main() {
 	}
 
 	// Create Agent
-	a, err := agent.New(cfg)
+	a, err := agent.New(agentConfig)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize agent")
 	}
@@ -232,39 +182,77 @@ func main() {
 		return monitoring.CheckResult{Status: "unhealthy", Message: "internal certificate sync repeatedly failing"}
 	})
 
-	// Start Agent in background
+	// Readiness reports only local startup: the WireGuard interface, the
+	// startup mesh layer, and the DNS server. Quartermaster and Navigator
+	// reachability stay in the liveness checks so a control plane outage
+	// never marks the mesh agent unready.
+	readiness := monitoring.NewReadinessChecker("privateer", version.Version)
+	readiness.AddCheck("agent_started", func() monitoring.CheckResult {
+		if a.Started() {
+			return monitoring.CheckResult{Status: monitoring.StatusHealthy, Message: "agent started"}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusUnhealthy, Message: "agent starting"}
+	})
+
+	// Start Agent in background. The agent handles SIGINT and SIGTERM itself
+	// and stops its DNS server and sync loops as soon as the signal arrives.
 	go func() {
 		if err := a.Start(); err != nil {
 			logger.WithError(err).Fatal("Agent failed")
 		}
 	}()
 
-	// Start HTTP server for health/metrics (standard pattern)
-	router := server.SetupServiceRouter(logger, "privateer", healthChecker, metricsCollector)
-	serverConfig := server.DefaultConfig("privateer", config.GetEnv("PRIVATEER_PORT", "18012"))
-	if err := server.Start(serverConfig, router, logger); err != nil {
+	// Serve health, readiness, and metrics over HTTP.
+	router := server.NewServiceRouter(server.RouterSpec{
+		Service:            "privateer",
+		Logger:             logger,
+		Health:             healthChecker,
+		Ready:              readiness,
+		Metrics:            metricsCollector,
+		Runtime:            cfg.HTTPRuntime,
+		DebugToken:         cfg.ServiceToken,
+		DebugConfig:        func() any { return cfg },
+		DebugConfigOptions: configOptions,
+	})
+	if err := server.Run(context.Background(), server.RunSpec{
+		Service: "privateer",
+		Logger:  logger,
+		Ready:   readiness,
+		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.ListenHTTPPort(), Handler: router}},
+		// Stop is idempotent: after a signal it waits for the agent's own
+		// stop to finish, and after a listener failure it stops the agent.
+		OnShutdown: []func(context.Context){func(context.Context) { a.Stop() }},
+	}); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
 }
 
-func parseDurationOrDefault(raw string, fallback time.Duration) time.Duration {
-	if raw == "" {
-		return fallback
+// normalizeDNSUpstreams appends the default DNS port to resolver entries that
+// have none, bracketing bare IPv6 addresses.
+func normalizeDNSUpstreams(entries []string) []string {
+	var upstreams []string
+	for _, s := range entries {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, _, splitErr := net.SplitHostPort(s); splitErr != nil {
+			// No port: could be IPv4 (1.1.1.1) or IPv6 (2001:db8::1).
+			if net.ParseIP(s) != nil && strings.Contains(s, ":") {
+				s = "[" + s + "]:53"
+			} else {
+				s += ":53"
+			}
+		}
+		upstreams = append(upstreams, s)
 	}
-	parsed, err := time.ParseDuration(raw)
-	if err != nil {
-		return fallback
-	}
-	return parsed
+	return upstreams
 }
 
-func parseExpectedServiceTypes(raw string) []string {
-	if raw == "" {
-		return nil
-	}
+func parseExpectedServiceTypes(entries []string) []string {
 	seen := make(map[string]struct{})
 	var serviceTypes []string
-	for _, part := range strings.Split(raw, ",") {
+	for _, part := range entries {
 		serviceType := strings.TrimSpace(part)
 		if serviceType == "" {
 			continue
@@ -279,7 +267,9 @@ func parseExpectedServiceTypes(raw string) []string {
 	return serviceTypes
 }
 
-func bootstrapInternalCABundleFromEnv(caPath string) {
+// bootstrapInternalCABundle writes the internal root and intermediate
+// certificates into caPath when that file is missing or empty.
+func bootstrapInternalCABundle(caPath, rootPEMB64, intermediatePEMB64 string) {
 	caPath = strings.TrimSpace(caPath)
 	if caPath == "" {
 		return
@@ -288,11 +278,11 @@ func bootstrapInternalCABundleFromEnv(caPath string) {
 		return
 	}
 
-	rootPEM, ok := decodePEMEnv("NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64")
+	rootPEM, ok := decodePEMBase64(rootPEMB64)
 	if !ok {
 		return
 	}
-	intermediatePEM, ok := decodePEMEnv("NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64")
+	intermediatePEM, ok := decodePEMBase64(intermediatePEMB64)
 	if !ok {
 		return
 	}
@@ -305,8 +295,8 @@ func bootstrapInternalCABundleFromEnv(caPath string) {
 	}
 }
 
-func decodePEMEnv(key string) (string, bool) {
-	value := strings.TrimSpace(os.Getenv(key))
+func decodePEMBase64(value string) (string, bool) {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", false
 	}

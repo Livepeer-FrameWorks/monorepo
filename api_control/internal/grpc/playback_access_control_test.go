@@ -3,8 +3,9 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"net/netip"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,13 +72,21 @@ func TestValidateWebhookURL(t *testing.T) {
 		name    string
 		url     string
 		wantErr string // substring match; empty means must succeed
-		skipDNS bool   // skip if the URL would do a real DNS lookup we can't predict
 	}{
 		{
 			name:    "https public host",
 			url:     "https://customer.example.com/playback-access",
 			wantErr: "",
-			skipDNS: true, // depends on real DNS
+		},
+		{
+			name:    "cloud metadata hostname rejected",
+			url:     "https://metadata.google/latest",
+			wantErr: "not a public destination",
+		},
+		{
+			name:    "loopback literal rejected",
+			url:     "https://127.0.0.1/hook",
+			wantErr: "not a public destination",
 		},
 		{
 			name:    "http rejected",
@@ -115,15 +125,13 @@ func TestValidateWebhookURL(t *testing.T) {
 		},
 	}
 
+	policy := resolvingPolicy("93.184.216.34")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.skipDNS && testing.Short() {
-				t.Skip("skip DNS-dependent case in -short")
-			}
-			err := validateWebhookURL(context.Background(), tc.url)
+			err := validateWebhookURL(context.Background(), policy, tc.url)
 			if tc.wantErr == "" {
-				if err != nil && !isDNSResolutionFailure(err) {
-					t.Errorf("expected ok or DNS-related error, got %v", err)
+				if err != nil {
+					t.Errorf("want accepted, got %v", err)
 				}
 				return
 			}
@@ -137,57 +145,83 @@ func TestValidateWebhookURL(t *testing.T) {
 	}
 }
 
-// isDNSResolutionFailure recognizes errors from real DNS lookups inside the
-// validator so the "happy path" test doesn't fail on a sandbox without
-// network access.
-func isDNSResolutionFailure(err error) bool {
-	if err == nil {
-		return false
+// Literal addresses need no DNS, so these run against the real validator: a
+// NAT64 or 6to4 address embedding a private, loopback, or metadata IPv4
+// address, the local-use NAT64 prefix, and documentation or benchmarking
+// ranges are not public destinations.
+func TestValidateWebhookURLRejectsTranslatedAndNonPublicLiterals(t *testing.T) {
+	for _, raw := range []string{
+		"https://[64:ff9b::7f00:1]/hook",    // NAT64 of 127.0.0.1
+		"https://[64:ff9b::a00:1]/hook",     // NAT64 of 10.0.0.1
+		"https://[64:ff9b::a9fe:a9fe]/hook", // NAT64 of 169.254.169.254
+		"https://[2002:c0a8:101::1]/hook",   // 6to4 of 192.168.1.1
+		"https://[64:ff9b:1::a00:1]/hook",   // local-use NAT64 prefix
+		"https://192.0.2.10/hook",           // documentation
+		"https://198.18.0.1/hook",           // benchmarking
+		"https://[2001:db8::1]/hook",        // documentation
+	} {
+		if err := validateWebhookURL(context.Background(), restream.PublicDestinationPolicy(), raw); err == nil {
+			t.Errorf("validateWebhookURL(%q) accepted a non-public destination", raw)
+		}
 	}
-	s := err.Error()
-	return strings.Contains(s, "dns lookup failed") || strings.Contains(s, "no such host")
 }
 
-func TestIsBlockedIP(t *testing.T) {
-	cases := []struct {
-		addr    string
-		blocked bool
-	}{
-		// Public — must allow
-		{"8.8.8.8", false},
-		{"2606:4700:4700::1111", false},
+// resolvingPolicy is the webhook policy with DNS answering every name with
+// the given addresses.
+func resolvingPolicy(addrs ...string) restream.DestinationPolicy {
+	return restream.DestinationPolicy{LookupIP: func(context.Context, string) ([]net.IP, error) {
+		out := make([]net.IP, 0, len(addrs))
+		for _, a := range addrs {
+			out = append(out, net.ParseIP(a))
+		}
+		return out, nil
+	}}
+}
 
-		// Loopback / link-local / private
-		{"127.0.0.1", true},
-		{"::1", true},
-		{"169.254.169.254", true},
-		{"10.0.0.1", true},
-		{"192.168.1.1", true},
-		{"172.20.0.1", true},
-
-		// CGNAT
-		{"100.64.0.1", true},
-
-		// 0/8
-		{"0.1.2.3", true},
-
-		// IPv6 ULA
-		{"fc00::1", true},
-
-		// IPv4-mapped private
-		{"::ffff:10.0.0.1", true},
+// A hostname is accepted only when every address it resolves to is public,
+// including through NAT64 and 6to4 translation, and a resolver failure is
+// reported as a lookup failure rather than a policy rejection.
+func TestValidateWebhookURLResolvedAddresses(t *testing.T) {
+	const raw = "https://hooks.customer.example/playback"
+	for _, answer := range [][]string{
+		{"10.0.0.8"},
+		{"93.184.216.34", "192.168.1.5"},
+		{"64:ff9b::a00:8"},
+		{"2002:a9fe:a9fe::1"},
+		{"::ffff:100.64.0.1"},
+		{"fd12::1"},
+	} {
+		err := validateWebhookURL(context.Background(), resolvingPolicy(answer...), raw)
+		if err == nil || !strings.Contains(err.Error(), "not a public destination") {
+			t.Errorf("host resolving to %v: err = %v, want a public-destination rejection", answer, err)
+		}
 	}
+	if err := validateWebhookURL(context.Background(), resolvingPolicy("2606:4700:4700::1111", "64:ff9b::5db8:d822"), raw); err != nil {
+		t.Fatalf("host resolving to public addresses rejected: %v", err)
+	}
+	failing := restream.DestinationPolicy{LookupIP: func(context.Context, string) ([]net.IP, error) {
+		return nil, errors.New("SERVFAIL")
+	}}
+	if err := validateWebhookURL(context.Background(), failing, raw); err == nil || !strings.Contains(err.Error(), "dns lookup failed") {
+		t.Fatalf("resolver failure: err = %v, want dns lookup failed", err)
+	}
+}
 
-	for _, tc := range cases {
-		t.Run(tc.addr, func(t *testing.T) {
-			ip, err := netip.ParseAddr(tc.addr)
-			if err != nil {
-				t.Fatalf("parse %q: %v", tc.addr, err)
-			}
-			if got := isBlockedIP(ip); got != tc.blocked {
-				t.Errorf("isBlockedIP(%s) = %v, want %v", tc.addr, got, tc.blocked)
-			}
-		})
+// SetPlaybackPolicy validates the webhook URL with the server's webhook
+// policy before it opens a transaction, and rejects a private answer.
+func TestSetPlaybackPolicyRejectsWebhookResolvingPrivate(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	s.webhookDestinationPolicy = resolvingPolicy("64:ff9b::a00:8")
+
+	_, err := s.SetPlaybackPolicy(ctxAs("u1", "t1", "owner"), &commodorepb.SetPlaybackPolicyRequest{
+		StreamId: "stream-1",
+		Type:     "webhook",
+		Webhook:  &commodorepb.PlaybackWebhookPolicy{Url: "https://hooks.customer.example/playback", SecretPt: "s"},
+	})
+	wantCode(t, err, codes.InvalidArgument)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
 	}
 }
 

@@ -60,9 +60,12 @@ func TestGetRecentPaymentsMapsRows(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"id", "invoice_id", "method", "amount", "currency",
 		"tx_id", "status", "confirmed_at", "created_at", "updated_at",
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 	}).
-		AddRow(firstPaymentID, firstInvoiceID, "card", 12.50, "USD", "tx-abc", "confirmed", now, now, now).
-		AddRow(secondPaymentID, secondInvoiceID, "crypto_eth", 5.00, "USD", nil, "pending", nil, now, now)
+		AddRow(firstPaymentID, firstInvoiceID, "card", 12.50, "USD", "tx-abc", "confirmed", now, now, now,
+			int64(1250), "USD", int64(1136), "1.1000000000", "ecb", now).
+		AddRow(secondPaymentID, secondInvoiceID, "crypto_eth", 5.00, "USD", nil, "pending", nil, now, now,
+			int64(500), "USD", int64(455), "1.1000000000", "ecb", now)
 
 	mock.ExpectQuery(`FROM purser\.billing_payments bp\s+JOIN purser\.billing_invoices`).
 		WithArgs(tenantID, int32(10)).
@@ -77,6 +80,10 @@ func TestGetRecentPaymentsMapsRows(t *testing.T) {
 	}
 	if got[0].TxId != "tx-abc" || got[0].ConfirmedAt == nil {
 		t.Fatalf("confirmed payment mapping wrong: %+v", got[0])
+	}
+	if fx := got[0].GetFx(); fx.GetOriginalAmountCents() != 1250 || fx.GetOriginalCurrency() != "USD" || fx.GetEurAmountCents() != 1136 ||
+		fx.GetUnitsPerEur() != "1.1" || fx.GetSource() != "ecb" || fx.GetReferenceDate() != now.UTC().Format(time.DateOnly) {
+		t.Fatalf("payment FX mapping wrong: %+v", fx)
 	}
 	// NULL tx_id stays "" and NULL confirmed_at stays unset (nil timestamp).
 	if got[1].TxId != "" || got[1].ConfirmedAt != nil {
@@ -136,11 +143,13 @@ func TestGetPendingInvoicesMapsRowsAndLineItems(t *testing.T) {
 		"prepaid_credit_applied", "currency", "status", "due_date", "paid_at",
 		"usage_details", "created_at", "updated_at", "period_start", "period_end",
 		"gross_metered_amount",
+		"presentment_amount_cents", "presentment_currency", "presentment_units_per_eur", "presentment_reference_date", "finalized_at",
 	}).AddRow(
 		invoiceID, tenantID, 30.0, 20.0, 10.0,
 		0.0, "USD", "pending", now, nil,
 		[]byte(`{"k":"v"}`), now, now, now, now,
 		10.0,
+		int64(3300), "USD", "1.1000000000", now, now,
 	)
 	mock.ExpectQuery(`FROM purser\.billing_invoices bi\s+WHERE bi\.tenant_id = \$1::text::uuid\s+AND bi\.status IN`).
 		WithArgs(tenantID).
@@ -279,7 +288,7 @@ func TestGetBillingTierMapsRowAndSubqueries(t *testing.T) {
 		"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
 	}).AddRow(
 		tierID, "pro", "Pro", "Pro plan", 49.0, "USD", "monthly",
-		[]byte(`{"recording":true,"analytics":true}`), "priority", "gold", true,
+		[]byte(`{"sla":true,"processing_customizable":true}`), "priority", "gold", true,
 		true, int32(3), false,
 		now, now,
 		true, false,
@@ -304,7 +313,7 @@ func TestGetBillingTierMapsRowAndSubqueries(t *testing.T) {
 	if got.Id != tierID || got.TierName != "pro" || got.BasePrice != 49.0 || got.TierLevel != 3 {
 		t.Fatalf("tier identity mapped wrong: %+v", got)
 	}
-	if got.Features == nil || !got.Features.Recording || !got.Features.Analytics {
+	if got.Features == nil || !got.Features.Sla || !got.Features.ProcessingCustomizable {
 		t.Fatalf("features JSONB not decoded: %+v", got.Features)
 	}
 	// NULL process-mode columns stay empty strings.

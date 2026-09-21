@@ -20,8 +20,9 @@ type Interface interface {
 	ValidateTenant(ctx context.Context, tenantID, userID string) (*quartermasterpb.ValidateTenantResponse, error)
 	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
 	GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error)
+	GetTenantClusterCapabilities(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantClusterCapabilitiesResponse, error)
 	ResolveTenantAliases(ctx context.Context, aliases []string) (*quartermasterpb.ResolveTenantAliasesResponse, error)
-	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits, actor *commonpb.RequestActor) error
 	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
 	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
 	GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error)

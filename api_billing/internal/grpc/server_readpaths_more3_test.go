@@ -172,7 +172,7 @@ func TestGetPrepaidBalanceMapsAndComputesLowBalance(t *testing.T) {
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"drain"}).AddRow(int64(250)))
 
-	resp, err := s.GetPrepaidBalance(context.Background(), &purserpb.GetPrepaidBalanceRequest{TenantId: tenantID, Currency: "EUR"})
+	resp, err := s.GetPrepaidBalance(context.Background(), &purserpb.GetPrepaidBalanceRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("GetPrepaidBalance: %v", err)
 	}
@@ -210,6 +210,7 @@ func TestGetPendingTopupByIDAndNotFound(t *testing.T) {
 	topupCols := []string{
 		"id", "tenant_id", "provider", "checkout_id", "amount_cents", "currency",
 		"status", "expires_at", "completed_at", "balance_transaction_id", "created_at", "updated_at",
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 	}
 
 	t.Run("by id maps row", func(t *testing.T) {
@@ -220,7 +221,8 @@ func TestGetPendingTopupByIDAndNotFound(t *testing.T) {
 		mock.ExpectQuery(`FROM purser\.pending_topups\s+WHERE id = \$1`).
 			WithArgs(topupID).
 			WillReturnRows(sqlmock.NewRows(topupCols).
-				AddRow(topupID, tenantID, "stripe", "cs_1", int64(2000), "EUR", "pending", now, nil, nil, now, now))
+				AddRow(topupID, tenantID, "stripe", "cs_1", int64(2000), "USD", "pending", now, nil, nil, now, now,
+					int64(2000), "USD", int64(1818), "1.1000000000", "ecb", now))
 
 		resp, err := s.GetPendingTopup(context.Background(), &purserpb.GetPendingTopupRequest{Lookup: &purserpb.GetPendingTopupRequest_TopupId{TopupId: topupID}})
 		if err != nil {
@@ -231,6 +233,9 @@ func TestGetPendingTopupByIDAndNotFound(t *testing.T) {
 		}
 		if resp.CompletedAt != nil || resp.BalanceTransactionId != nil {
 			t.Fatalf("NULL fields should stay unset: %+v", resp)
+		}
+		if fx := resp.GetFx(); fx.GetOriginalAmountCents() != 2000 || fx.GetEurAmountCents() != 1818 || fx.GetReferenceDate() != now.UTC().Format(time.DateOnly) {
+			t.Fatalf("FX not mapped: %+v", fx)
 		}
 	})
 
@@ -263,6 +268,7 @@ func TestGetCryptoTopupExpiryFlipAndAssetEnum(t *testing.T) {
 		"status", "tx_hash", "confirmations", "received_amount_base_units", "credited_amount_cents",
 		"expires_at", "detected_at", "completed_at", "created_at",
 		"credited_amount_currency", "quote_source", "network",
+		"original_amount_cents", "original_currency", "eur_amount_cents", "fx_units_per_eur", "fx_source", "fx_reference_date",
 	}
 
 	t.Run("pending past expiry reads expired", func(t *testing.T) {
@@ -274,7 +280,8 @@ func TestGetCryptoTopupExpiryFlipAndAssetEnum(t *testing.T) {
 				AddRow("ct-1", "tenant-1", "0xabc", "ETH", int64(1000),
 					"pending", nil, int32(0), "", nil,
 					past, nil, nil, time.Now(),
-					nil, nil, ""))
+					nil, nil, "",
+					nil, "", nil, "", "", nil))
 
 		resp, err := s.GetCryptoTopup(serviceTestContext(), &purserpb.GetCryptoTopupRequest{TopupId: "ct-1"})
 		if err != nil {

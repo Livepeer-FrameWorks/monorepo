@@ -101,6 +101,29 @@ SET status = 'confirmed', provider_transaction_id = sqlc.arg(tx_hash),
 FROM purser.x402_nonces nonce
 WHERE nonce.id = sqlc.arg(nonce_id)::text::uuid AND quote.id = nonce.quote_id;
 
+-- name: RecordX402SettlementConfirmedAfterQuoteExpiry :exec
+-- The settlement keeps the amount fixed by its quote; confirming it after the
+-- quote expired is recorded for accounting review instead of re-pricing.
+INSERT INTO purser.crypto_accounting_anomalies (
+    tenant_id, kind, network, reference_type, reference_id,
+    amount_cents, currency, detail, evidence_json
+)
+SELECT nonce.tenant_id, 'x402_settlement_confirmed_after_quote_expiry', nonce.network,
+       'x402_nonce', nonce.id::text, nonce.amount_cents, quote.credit_currency,
+       'x402 settlement confirmed after its quote expired; credited at the quoted amount',
+       jsonb_build_object(
+           'quote_id', quote.id::text,
+           'quote_expires_at', quote.expires_at,
+           'usd_per_eur_rate', quote.fx_units_per_eur::text,
+           'fx_reference_date', quote.fx_reference_date,
+           'tx_hash', nonce.tx_hash
+       )
+FROM purser.x402_nonces nonce
+JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
+WHERE nonce.id = sqlc.arg(nonce_id)::text::uuid
+  AND quote.expires_at < NOW()
+ON CONFLICT (kind, reference_type, reference_id) DO NOTHING;
+
 -- name: ResetClaimingX402Quote :exec
 UPDATE purser.x402_payment_quotes
 SET status = 'offered', claim_token = NULL, claim_expires_at = NULL, updated_at = NOW()
@@ -225,7 +248,8 @@ INSERT INTO purser.crypto_invoices (
     invoice_number, tenant_id, reference_type, reference_id,
     gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
     vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-    currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
+    currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
+    fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
@@ -239,7 +263,9 @@ INSERT INTO purser.crypto_invoices (
     sqlc.arg(vat_amount_cents), sqlc.arg(vat_rate_bps),
     sqlc.arg(vat_rate_source), sqlc.arg(vat_rate_table_checked_on)::text::date,
     sqlc.arg(vat_rate_effective_from)::text::date, sqlc.arg(tax_validation_status),
-    sqlc.arg(currency), sqlc.arg(amount_eur_cents), sqlc.arg(ecb_rate),
+    sqlc.arg(currency), sqlc.arg(amount_eur_cents),
+    sqlc.arg(net_eur_cents)::bigint, sqlc.arg(vat_eur_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_reference_date)::date,
     sqlc.arg(fx_rate_source), sqlc.arg(fx_rate_observed_at),
     sqlc.arg(evidence_ip_country), sqlc.arg(evidence_wallet_network),
     sqlc.arg(evidence_billing_country), sqlc.arg(evidence_status),
@@ -257,7 +283,8 @@ INSERT INTO purser.simplified_invoices (
     invoice_number, tenant_id, reference_type, reference_id,
     gross_amount_cents, net_amount_cents, vat_amount_cents, vat_rate_bps,
     vat_rate_source, vat_rate_table_checked_on, vat_rate_effective_from, tax_validation_status,
-    currency, amount_eur_cents, ecb_rate, fx_rate_source, fx_rate_observed_at,
+    currency, amount_eur_cents, net_eur_cents, vat_eur_cents,
+    fx_units_per_eur, fx_reference_date, fx_rate_source, fx_rate_observed_at,
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
@@ -269,7 +296,9 @@ INSERT INTO purser.simplified_invoices (
     sqlc.arg(vat_amount_cents), sqlc.arg(vat_rate_bps),
     sqlc.arg(vat_rate_source), sqlc.arg(vat_rate_table_checked_on)::text::date,
     sqlc.arg(vat_rate_effective_from)::text::date, sqlc.arg(tax_validation_status),
-    sqlc.arg(currency), sqlc.arg(amount_eur_cents), sqlc.arg(ecb_rate),
+    sqlc.arg(currency), sqlc.arg(amount_eur_cents),
+    sqlc.arg(net_eur_cents)::bigint, sqlc.arg(vat_eur_cents)::bigint,
+    sqlc.arg(fx_units_per_eur)::text::numeric, sqlc.arg(fx_reference_date)::date,
     sqlc.arg(fx_rate_source), sqlc.arg(fx_rate_observed_at),
     sqlc.arg(evidence_ip_country), sqlc.arg(evidence_wallet_network),
     sqlc.arg(evidence_billing_country), sqlc.arg(evidence_status),
@@ -338,8 +367,13 @@ ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: GetX402TaxSnapshot :one
-SELECT quote.tax_document_kind, quote.tax_profile_snapshot,
-       quote.eur_per_usd_rate::text AS eur_per_usd_rate, quote.created_at
+SELECT quote.tax_document_kind, quote.tax_profile_snapshot, quote.created_at,
+       COALESCE(quote.original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(quote.original_currency, '')::text AS original_currency,
+       COALESCE(quote.eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(quote.fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(quote.fx_source, '')::text AS fx_source,
+       COALESCE(quote.fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.x402_nonces nonce
 JOIN purser.x402_payment_quotes quote ON quote.id = nonce.quote_id
 WHERE nonce.tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -348,8 +382,13 @@ ORDER BY nonce.settled_at DESC
 LIMIT 1;
 
 -- name: GetCryptoWalletTaxSnapshot :one
-SELECT tax_document_kind, tax_profile_snapshot,
-       quoted_usd_to_eur_rate::text AS quoted_usd_to_eur_rate, quoted_at
+SELECT tax_document_kind, tax_profile_snapshot, quoted_at,
+       COALESCE(original_amount_cents, 0)::bigint AS original_amount_cents,
+       COALESCE(original_currency, '')::text AS original_currency,
+       COALESCE(eur_amount_cents, 0)::bigint AS eur_amount_cents,
+       COALESCE(fx_units_per_eur::text, '')::text AS fx_units_per_eur,
+       COALESCE(fx_source, '')::text AS fx_source,
+       COALESCE(fx_reference_date, DATE '1970-01-01')::date AS fx_reference_date
 FROM purser.crypto_wallets
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND tx_hash = sqlc.arg(tx_hash)

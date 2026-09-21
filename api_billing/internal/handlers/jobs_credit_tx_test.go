@@ -40,7 +40,7 @@ func TestDeductPrepaidBalanceForCreditTx(t *testing.T) {
 			WithArgs(tenantID, -request, newBalance, "credit", ref, refType).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("UPDATE purser.prepaid_balances").
-			WithArgs(newBalance, tenantID, billing.DefaultCurrency()).
+			WithArgs(newBalance, tenantID, billing.LedgerCurrency).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
@@ -88,7 +88,7 @@ func TestDeductPrepaidBalanceForCreditTx(t *testing.T) {
 			WithArgs(tenantID, -balance, newBalance, "credit", ref, refType).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("UPDATE purser.prepaid_balances").
-			WithArgs(newBalance, tenantID, billing.DefaultCurrency()).
+			WithArgs(newBalance, tenantID, billing.LedgerCurrency).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
@@ -265,7 +265,7 @@ func TestApplyInvoicePrepaidCreditTx(t *testing.T) {
 			WithArgs(tenantID, -delta, newBalance, sqlmock.AnyArg(), sqlmock.AnyArg(), "invoice_credit").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("UPDATE purser.prepaid_balances").
-			WithArgs(newBalance, tenantID, billing.DefaultCurrency()).
+			WithArgs(newBalance, tenantID, billing.LedgerCurrency).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 

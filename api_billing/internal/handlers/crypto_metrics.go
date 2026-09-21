@@ -3,9 +3,9 @@ package handlers
 import (
 	"context"
 	"math/big"
-	"os"
 	"strings"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -38,9 +38,10 @@ func (cm *CryptoMonitor) refreshCryptoCustodyMetrics(ctx context.Context) {
 	}
 	if cm.metrics.CryptoRelayerBalanceETH != nil {
 		cm.metrics.CryptoRelayerBalanceETH.Reset()
+		rt := appconfig.Runtime()
 		for _, network := range DepositNetworks(cm.includeTestnets) {
 			keyName := cryptoNetworkEnvKey("CRYPTO_SWEEP_RELAYER_PRIVATE_KEY", network.Name)
-			key, err := crypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv(keyName)), "0x"))
+			key, err := crypto.HexToECDSA(strings.TrimPrefix(rt.NetworkSetting(keyName), "0x"))
 			if err != nil {
 				continue
 			}

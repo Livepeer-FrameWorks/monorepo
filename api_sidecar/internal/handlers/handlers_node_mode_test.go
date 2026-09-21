@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"frameworks/api_sidecar/internal/config"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -56,7 +55,7 @@ func TestHandleGetNodeMode(t *testing.T) {
 		{ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE, "maintenance"},
 	}
 	for _, tc := range cases {
-		config.ApplySeed(&ipcpb.ConfigSeed{TenantId: "tenant-mode", OperationalMode: tc.seed}, nil)
+		applyTriggerSeed(&ipcpb.ConfigSeed{TenantId: "tenant-mode", OperationalMode: tc.seed})
 
 		ctx, rec := newWebhookContext("")
 		HandleGetNodeMode(ctx)

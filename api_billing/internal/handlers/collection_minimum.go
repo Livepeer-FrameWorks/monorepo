@@ -24,16 +24,20 @@ type invoiceCollectionDecision struct {
 	Outcome             string
 }
 
-func resolveInvoiceCollectionProvider(paymentMethod string, hasStripeSubscription, hasMollieSubscription bool) (string, error) {
+// resolveInvoiceCollectionProvider selects the provider that collects an
+// invoice off-session. A selected provider needs a provider subscription or,
+// for tenants billed without one, the customer that holds the saved payment
+// method (Stripe) or mandate (Mollie).
+func resolveInvoiceCollectionProvider(paymentMethod string, hasStripeSubscription, hasMollieSubscription, hasStripeCustomer, hasMollieCustomer bool) (string, error) {
 	switch paymentMethod {
 	case "stripe":
-		if !hasStripeSubscription {
-			return "", fmt.Errorf("subscription selects Stripe without a Stripe subscription id")
+		if !hasStripeSubscription && !hasStripeCustomer {
+			return "", fmt.Errorf("subscription selects Stripe without a Stripe subscription or customer")
 		}
 		return "stripe", nil
 	case "mollie":
-		if !hasMollieSubscription {
-			return "", fmt.Errorf("subscription selects Mollie without a Mollie subscription id")
+		if !hasMollieSubscription && !hasMollieCustomer {
+			return "", fmt.Errorf("subscription selects Mollie without a Mollie subscription or customer")
 		}
 		return "mollie", nil
 	}

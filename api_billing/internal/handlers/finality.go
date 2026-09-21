@@ -3,8 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
+
+	"frameworks/api_billing/internal/appconfig"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -34,13 +35,14 @@ func ValidateCryptoCustodyNetwork(ctx context.Context, rpc *RPCClient, network N
 	if _, err := GetFinalityHead(ctx, rpc, network); err != nil {
 		return err
 	}
+	rt := appconfig.Runtime()
 	treasuryKey := cryptoNetworkEnvKey("CRYPTO_TREASURY", network.Name)
-	if treasury := strings.TrimSpace(os.Getenv(treasuryKey)); !common.IsHexAddress(treasury) || common.HexToAddress(treasury) == (common.Address{}) {
+	if treasury := rt.NetworkSetting(treasuryKey); !common.IsHexAddress(treasury) || common.HexToAddress(treasury) == (common.Address{}) {
 		return fmt.Errorf("%s must contain a valid non-zero EVM address", treasuryKey)
 	}
 	if strings.EqualFold(asset, "USDC") {
 		relayerKey := cryptoNetworkEnvKey("CRYPTO_SWEEP_RELAYER_PRIVATE_KEY", network.Name)
-		if _, err := crypto.HexToECDSA(strings.TrimPrefix(strings.TrimSpace(os.Getenv(relayerKey)), "0x")); err != nil {
+		if _, err := crypto.HexToECDSA(strings.TrimPrefix(rt.NetworkSetting(relayerKey), "0x")); err != nil {
 			return fmt.Errorf("%s must contain the dedicated gas-relayer key", relayerKey)
 		}
 	}

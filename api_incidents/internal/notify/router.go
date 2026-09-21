@@ -3,25 +3,25 @@
 package notify
 
 import (
-	"frameworks/api_incidents/internal/config"
 	"frameworks/api_incidents/internal/incidents"
 )
 
 // Router routes platform-scope incident notifications to the operator
-// channels whose destination is configured. It reads the environment on every
-// call so an env-file reload changes routing without a restart.
-type Router struct{}
+// channels whose destination is configured. It reads Settings on every call
+// so an env-file reload changes routing without a restart.
+type Router struct {
+	Settings SettingsSource
+}
 
 // Enabled reports whether a channel has a configured destination. Kafka is
 // always enabled because the topic is required infrastructure.
-func (Router) Enabled(channel string) bool {
+func (r Router) Enabled(channel string) bool {
+	settings := r.Settings.current()
 	switch channel {
 	case incidents.ChannelEmail:
-		return len(config.NotifyEmailRecipients()) > 0
-	case incidents.ChannelSlack:
-		return config.SlackWebhookURL() != ""
-	case incidents.ChannelDiscord:
-		return config.DiscordWebhookURL() != ""
+		return len(settings.EmailRecipients) > 0
+	case incidents.ChannelSlack, incidents.ChannelDiscord:
+		return settings.webhookURL(channel) != ""
 	case incidents.ChannelKafka:
 		return true
 	default:

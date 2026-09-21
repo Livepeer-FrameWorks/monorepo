@@ -26,6 +26,7 @@ const (
 	TenantService_ResolveTenant_FullMethodName                       = "/quartermaster.TenantService/ResolveTenant"
 	TenantService_ResolveTenantAliases_FullMethodName                = "/quartermaster.TenantService/ResolveTenantAliases"
 	TenantService_GetClusterRouting_FullMethodName                   = "/quartermaster.TenantService/GetClusterRouting"
+	TenantService_GetTenantClusterCapabilities_FullMethodName        = "/quartermaster.TenantService/GetTenantClusterCapabilities"
 	TenantService_ListTenants_FullMethodName                         = "/quartermaster.TenantService/ListTenants"
 	TenantService_CreateTenant_FullMethodName                        = "/quartermaster.TenantService/CreateTenant"
 	TenantService_UpdateTenant_FullMethodName                        = "/quartermaster.TenantService/UpdateTenant"
@@ -63,6 +64,11 @@ type TenantServiceClient interface {
 	// Resolve cluster routing for a tenant/stream
 	// Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
 	GetClusterRouting(ctx context.Context, in *GetClusterRoutingRequest, opts ...grpc.CallOption) (*ClusterRoutingResponse, error)
+	// Describe what the tenant can use now: custom subdomain and custom domain
+	// eligibility, and per entitled cluster the media verbs placement accepts.
+	// The cluster set is the GetClusterRouting peer set; media capabilities
+	// combine capacity-owner consent with fresh edge capability reports.
+	GetTenantClusterCapabilities(ctx context.Context, in *GetTenantClusterCapabilitiesRequest, opts ...grpc.CallOption) (*GetTenantClusterCapabilitiesResponse, error)
 	// List tenants (admin)
 	ListTenants(ctx context.Context, in *ListTenantsRequest, opts ...grpc.CallOption) (*ListTenantsResponse, error)
 	// Create tenant (admin)
@@ -149,6 +155,16 @@ func (c *tenantServiceClient) GetClusterRouting(ctx context.Context, in *GetClus
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClusterRoutingResponse)
 	err := c.cc.Invoke(ctx, TenantService_GetClusterRouting_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) GetTenantClusterCapabilities(ctx context.Context, in *GetTenantClusterCapabilitiesRequest, opts ...grpc.CallOption) (*GetTenantClusterCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantClusterCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, TenantService_GetTenantClusterCapabilities_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +314,11 @@ type TenantServiceServer interface {
 	// Resolve cluster routing for a tenant/stream
 	// Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
 	GetClusterRouting(context.Context, *GetClusterRoutingRequest) (*ClusterRoutingResponse, error)
+	// Describe what the tenant can use now: custom subdomain and custom domain
+	// eligibility, and per entitled cluster the media verbs placement accepts.
+	// The cluster set is the GetClusterRouting peer set; media capabilities
+	// combine capacity-owner consent with fresh edge capability reports.
+	GetTenantClusterCapabilities(context.Context, *GetTenantClusterCapabilitiesRequest) (*GetTenantClusterCapabilitiesResponse, error)
 	// List tenants (admin)
 	ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error)
 	// Create tenant (admin)
@@ -354,6 +375,9 @@ func (UnimplementedTenantServiceServer) ResolveTenantAliases(context.Context, *R
 }
 func (UnimplementedTenantServiceServer) GetClusterRouting(context.Context, *GetClusterRoutingRequest) (*ClusterRoutingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterRouting not implemented")
+}
+func (UnimplementedTenantServiceServer) GetTenantClusterCapabilities(context.Context, *GetTenantClusterCapabilitiesRequest) (*GetTenantClusterCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantClusterCapabilities not implemented")
 }
 func (UnimplementedTenantServiceServer) ListTenants(context.Context, *ListTenantsRequest) (*ListTenantsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTenants not implemented")
@@ -498,6 +522,24 @@ func _TenantService_GetClusterRouting_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantServiceServer).GetClusterRouting(ctx, req.(*GetClusterRoutingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_GetTenantClusterCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantClusterCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).GetTenantClusterCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_GetTenantClusterCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).GetTenantClusterCapabilities(ctx, req.(*GetTenantClusterCapabilitiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -744,6 +786,10 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClusterRouting",
 			Handler:    _TenantService_GetClusterRouting_Handler,
+		},
+		{
+			MethodName: "GetTenantClusterCapabilities",
+			Handler:    _TenantService_GetTenantClusterCapabilities_Handler,
 		},
 		{
 			MethodName: "ListTenants",

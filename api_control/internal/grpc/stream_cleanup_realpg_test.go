@@ -111,7 +111,7 @@ func TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG(t *testing.T) {
 		t.Fatalf("seed clip child: %v", err)
 	}
 
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	if err := server.enqueueStreamCleanupOutbox(ctx, conn, streamID, tenantID); err != nil {
 		t.Fatalf("enqueue obligation: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG(t *testing.T) {
 		t.Fatalf("seed stream: %v", err)
 	}
 
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	var mu sync.Mutex
 	dispatched := map[string]int{}
 	failUS := true // read-only within a dispatch; toggled only between passes (no concurrent write)
@@ -323,7 +323,7 @@ func TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG(t *testi
 	`, streamID, tenantID, userID); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	release := make(chan struct{})
 	var slowStarted, fastDone int32
 	server.streamThumbnailDeleteFn = func(_ context.Context, _, _, cl string) error {
@@ -378,7 +378,7 @@ func TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG(t *
 	`, streamID, tenantID, userID); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 
 	// JWT caller refused.
 	jwtCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
@@ -426,7 +426,7 @@ func TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG(t *testing.T
 	`, streamID, tenantID, userID); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 
 	// A JWT (non-service) caller is refused — it must not be able to poison cleanup ownership.
 	jwtCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
@@ -489,7 +489,7 @@ func TestRegisterVsDeleteStream_Linearizes_RealPG(t *testing.T) {
 		tenantID = "11111111-1111-1111-1111-111111111111"
 		userID   = "22222222-2222-2222-2222-222222222222"
 	)
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 
 	// Repeat to exercise both interleavings (register-first and delete-first).
 	for i := 0; i < 20; i++ {
@@ -550,7 +550,7 @@ func TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG(t *testing.T
 	`, streamID, tenantID, userID); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	if err := server.enqueueStreamCleanupOutbox(ctx, conn, streamID, tenantID); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestDeleteStream_RoutesToEveryServingCell_RealPG(t *testing.T) {
 		return n > 0
 	}
 
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	var mu sync.Mutex
 	dispatched := map[string]int{}
 	failUS := true // toggled only between DeleteStream calls (no concurrent write)
@@ -675,7 +675,7 @@ func TestDeleteStream_RoutesToEveryServingCell_RealPG(t *testing.T) {
 func TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG(t *testing.T) {
 	conn := startCommodoreRealPG(t)
 	ctx := context.Background()
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 
 	tenant := "11111111-1111-1111-1111-111111111111"
 	hash := "abcdef0123456789abcdef0123456799"
@@ -734,7 +734,7 @@ func TestClaimStreamCleanupOutboxBatch_TenantFencedLease_RealPG(t *testing.T) {
 		tenantID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 		streamID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	)
-	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server := &CommodoreServer{db: conn, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
 	if err := server.enqueueStreamCleanupOutbox(ctx, conn, streamID, tenantID); err != nil {
 		t.Fatalf("enqueue obligation: %v", err)
 	}

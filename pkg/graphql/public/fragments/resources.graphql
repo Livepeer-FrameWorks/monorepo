@@ -1,0 +1,235 @@
+fragment PlaybackPolicyFields on PlaybackPolicy {
+  type
+  jwt {
+    allowedKids
+    requiredAudience
+    requiredClaimsJson {
+      name
+      jsonValue
+    }
+  }
+  webhook {
+    url
+    timeoutMs
+    secretMasked
+  }
+}
+
+fragment StreamFields on Stream {
+  __typename
+  id
+  streamId
+  name
+  description
+  streamKey
+  playbackId
+  record
+  ingestMode
+  pullSource {
+    sourceUriRedacted
+    enabled
+    class
+  }
+  createdAt
+  updatedAt
+  dvrChapterMode
+  dvrChapterIntervalSeconds
+  monitoring
+  playbackPolicy {
+    ...PlaybackPolicyFields
+  }
+  metrics {
+    status
+    isLive
+    currentViewers
+    startedAt
+    updatedAt
+  }
+}
+
+fragment StreamKeyFields on StreamKey {
+  __typename
+  id
+  streamId
+  keyValue
+  keyName
+  isActive
+  lastUsedAt
+  createdAt
+}
+
+fragment PushTargetFields on PushTarget {
+  id
+  streamId
+  platform
+  name
+  targetUri
+  isEnabled
+  status
+  lastError
+  reasonCode
+  lastPushedAt
+  createdAt
+}
+
+fragment ClipFields on Clip {
+  __typename
+  id
+  clipHash
+  playbackId
+  streamId
+  title
+  description
+  startTime
+  duration
+  sizeBytes
+  status
+  clipMode
+  createdAt
+  updatedAt
+  expiresAt
+  isExpired
+  playbackPolicy {
+    ...PlaybackPolicyFields
+  }
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+  effectiveRetention {
+    ...EffectiveRetentionFields
+  }
+}
+
+fragment DVRRequestFields on DVRRequest {
+  __typename
+  id
+  dvrHash
+  playbackId
+  streamId
+  title
+  status
+  createdAt
+  updatedAt
+  startedAt
+  endedAt
+  expiresAt
+  isExpired
+  durationSeconds
+  sizeBytes
+  errorMessage
+}
+
+fragment DVRChapterRefFields on DVRChapterRef {
+  chapterId
+  mode
+  intervalSeconds
+  startMs
+  endMs
+  isCurrent
+  state
+  playbackId
+  hasGaps
+  segmentCount
+  lastFailureReason
+}
+
+fragment VodAssetFields on VodAsset {
+  __typename
+  id
+  artifactHash
+  playbackId
+  streamId
+  title
+  description
+  filename
+  status
+  sizeBytes
+  durationMs
+  resolution
+  videoCodec
+  audioCodec
+  bitrateKbps
+  createdAt
+  updatedAt
+  expiresAt
+  errorMessage
+  playbackPolicy {
+    ...PlaybackPolicyFields
+  }
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+  effectiveRetention {
+    ...EffectiveRetentionFields
+  }
+}
+
+fragment StorageArtifactFields on StorageArtifact {
+  key
+  kind
+  id
+  hash
+  playbackId
+  streamId
+  streamTitle
+  title
+  description
+  errorMessage
+  sizeBytes
+  status
+  createdAt
+  updatedAt
+  expiresAt
+  deleteId
+  durationSeconds
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+}
+
+fragment ViewerEndpointFields on ViewerEndpoint {
+  nodeId
+  baseUrl
+  protocol
+  url
+  geoDistance
+  loadScore
+  outputs
+}
+
+fragment IngestEndpointFields on IngestEndpoint {
+  nodeId
+  baseUrl
+  whipUrl
+  rtmpUrl
+  srtUrl
+  region
+  loadScore
+  kind
+  clusterId
+}
+
+fragment DeveloperTokenFields on DeveloperToken {
+  __typename
+  id
+  tokenName
+  tokenValue
+  permissions
+  status
+  lastUsedAt
+  expiresAt
+  createdAt
+}
+
+fragment SigningKeyFields on SigningKey {
+  __typename
+  id
+  kid
+  name
+  algorithm
+  publicKeyPem
+  status
+  createdAt
+  lastUsedAt
+  revokedAt
+}

@@ -15,12 +15,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"frameworks/api_billing/internal/appconfig"
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // pricedLine is one rating output line annotated with the cluster attribution
@@ -148,12 +147,13 @@ func flattenUsageAcrossClusters(perCluster map[string]map[string]float64) map[st
 //
 // Returns ManualReviewReasons set when any cluster's pricing fails
 // resolvably. The caller halts finalization in that case.
-// baseProviderManaged signals that the tier base fee is collected by an
-// external recurring subscription (Stripe / Mollie) rather than by Purser.
-// When true, rateInvoiceForTenant still emits a base line but priced at zero
-// and stamped with pricing_source = 'included_subscription' so the line
-// appears in the invoice ledger as an informational row without being charged
-// twice. Self-managed (free / prepaid-only / wire-transfer) subs pass false.
+// baseProviderManaged signals that the tier base fee is collected outside this
+// invoice: by an external recurring subscription (Stripe / Mollie) or on the
+// period's advance base-fee invoice. When true, rateInvoiceForTenant still
+// emits a base line but priced at zero and stamped with pricing_source =
+// 'included_subscription' so the line appears in the invoice ledger as an
+// informational row without being charged twice. Tenants whose base fee is
+// billed in arrears on this invoice pass false.
 func (jm *JobManager) rateInvoiceForTenant(
 	ctx context.Context,
 	tenantID string,
@@ -185,11 +185,10 @@ func (jm *JobManager) rateInvoiceForTenant(
 	}
 
 	// 1. Base subscription line — rated once, tenant-scoped (no cluster_id).
-	// For provider-managed subs the external provider (Stripe / Mollie) owns
-	// the recurring base charge, so the Purser invoice records a $0
-	// informational line tagged 'included_subscription' instead of double-
-	// billing the tenant. Description stays neutral because provider-managed
-	// subscriptions can be card, mandate, or bank-backed.
+	// When the base fee is collected elsewhere — by a provider subscription
+	// (Stripe / Mollie) or on Purser's advance base-fee invoice — the usage
+	// invoice records a zero informational line tagged 'included_subscription'
+	// instead of billing the base twice.
 	basePrice := decimal.Zero
 	if includeBasePrice && !baseProviderManaged && (tier.MeteringEnabled || !tier.BasePrice.IsZero()) {
 		basePrice = tier.BasePrice
@@ -197,7 +196,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 	baseDescription := "Base subscription"
 	basePricingSource := pricing.SourceTier
 	if baseProviderManaged {
-		baseDescription = "Base subscription (paid through your subscription)"
+		baseDescription = "Base subscription (billed separately)"
 		basePricingSource = pricing.SourceIncludedSubscription
 	}
 	out.BaseLine = pricedLine{
@@ -290,7 +289,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 			Quantities:        perClusterDimensioned[cid],
 			PeriodStart:       periodStart,
 			PeriodEnd:         periodEnd,
-			WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
+			WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
 		}
 		res, err := rating.Rate(input)
 		if err != nil {
@@ -347,6 +346,16 @@ func (jm *JobManager) rateInvoiceForTenant(
 		out.GrossUsageAmount = out.GrossUsageAmount.Add(res.GrossUsageAmount)
 	}
 
+	monthlyLines, monthlyErr := jm.purserInvoicedClusterMonthlyLines(ctx, tenantID, periodStart, periodEnd, tier, resolver, periodSuffix)
+	if monthlyErr != nil {
+		return nil, monthlyErr
+	}
+	for _, line := range monthlyLines {
+		out.UsageLines = append(out.UsageLines, line)
+		out.UsageAmount = out.UsageAmount.Add(line.Amount)
+		out.GrossUsageAmount = out.GrossUsageAmount.Add(line.Amount)
+	}
+
 	// Sort usage lines by LineKey for deterministic invoice output.
 	sort.Slice(out.UsageLines, func(i, j int) bool {
 		return out.UsageLines[i].LineKey < out.UsageLines[j].LineKey
@@ -354,6 +363,165 @@ func (jm *JobManager) rateInvoiceForTenant(
 
 	out.TotalAmount = out.BaseAmount.Add(out.UsageAmount)
 	return out, nil
+}
+
+// purserInvoicedClusterMonthlyLines prices the monthly cluster subscriptions
+// billed on Purser invoices instead of a Stripe subscription: one line per
+// subscription active during the period at the cluster's monthly price in
+// effect at the period start, attributed to the cluster for operator credit.
+// The price is prorated like the advance base fee: times the seconds the
+// subscription was active inside the period over the seconds of the month
+// starting at the period start, at most once, rounded half away from zero to
+// the cent. A period closed early by a tier change and the period starting at
+// the change therefore each carry only their share, and a subscription added,
+// cancelled, or reactivated inside a period pays for its active time.
+func (jm *JobManager) purserInvoicedClusterMonthlyLines(
+	ctx context.Context,
+	tenantID string,
+	periodStart, periodEnd time.Time,
+	tier *billingpkg.EffectiveTier,
+	resolver pricing.QuartermasterClient,
+	periodSuffix string,
+) ([]pricedLine, error) {
+	queries := purserdb.New(jm.db)
+	subscriptions, err := queries.ListPurserInvoicedClusterSubscriptionsForPeriod(ctx, purserdb.ListPurserInvoicedClusterSubscriptionsForPeriodParams{
+		TenantID: tenantID, PeriodStart: periodStart, PeriodEnd: periodEnd,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list Purser-invoiced cluster subscriptions: %w", err)
+	}
+	if len(subscriptions) == 0 {
+		return nil, nil
+	}
+	if resolver == nil {
+		return nil, errors.New("rateInvoiceForTenant: pricing resolver not configured but monthly cluster subscriptions require it")
+	}
+	type activeSpan struct {
+		from, until           time.Time
+		seconds, monthSeconds int64
+	}
+	spans := make(map[string]activeSpan)
+	for _, subscription := range subscriptions {
+		clusterID := subscription.ClusterID
+		cancelledAt := sql.NullTime{}
+		if subscription.Status == "cancelled" {
+			cancelledAt = subscription.CancelledAt
+		}
+		activeFrom, activeUntil, activeSeconds, monthSeconds := monthlyFeeOverlap(periodStart, periodEnd, subscription.ActiveFrom, cancelledAt)
+		if activeSeconds <= 0 {
+			continue
+		}
+		span, exists := spans[clusterID]
+		if !exists {
+			span = activeSpan{from: activeFrom, until: activeUntil, monthSeconds: monthSeconds}
+		}
+		if activeFrom.Before(span.from) {
+			span.from = activeFrom
+		}
+		if activeUntil.After(span.until) {
+			span.until = activeUntil
+		}
+		span.seconds += activeSeconds
+		spans[clusterID] = span
+	}
+	clusterIDs := make([]string, 0, len(spans))
+	for clusterID := range spans {
+		clusterIDs = append(clusterIDs, clusterID)
+	}
+	sort.Strings(clusterIDs)
+	lines := make([]pricedLine, 0, len(spans))
+	for _, clusterID := range clusterIDs {
+		span := spans[clusterID]
+		activeFrom, activeUntil := span.from, span.until
+		activeSeconds, monthSeconds := min(span.seconds, span.monthSeconds), span.monthSeconds
+		history, historyErr := queries.LoadClusterPricingHistory(ctx, purserdb.LoadClusterPricingHistoryParams{
+			ClusterID: clusterID, EffectiveFrom: periodStart,
+		})
+		if errors.Is(historyErr, sql.ErrNoRows) {
+			history, historyErr = queries.LoadClusterPricingHistory(ctx, purserdb.LoadClusterPricingHistoryParams{
+				ClusterID: clusterID, EffectiveFrom: periodEnd.Add(-time.Second),
+			})
+		}
+		if historyErr != nil {
+			return nil, fmt.Errorf("load monthly pricing for cluster %s: %w", clusterID, historyErr)
+		}
+		if pricing.Model(history.PricingModel) != pricing.ModelMonthly {
+			continue
+		}
+		monthlyPrice, parseErr := decimal.NewFromString(history.BasePrice)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse monthly price for cluster %s: %w", clusterID, parseErr)
+		}
+		price := monthlyPrice
+		description := "Cluster monthly fee"
+		if activeSeconds < monthSeconds {
+			price = monthlyPrice.Shift(2).Mul(decimal.NewFromInt(activeSeconds)).Div(decimal.NewFromInt(monthSeconds)).Round(0).Shift(-2)
+			description = fmt.Sprintf("Cluster monthly fee %s to %s", activeFrom.UTC().Format(time.DateOnly), activeUntil.UTC().Format(time.DateOnly))
+		}
+		resolved, resolveErr := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
+			DB: jm.db, QM: resolver, ConsumingTenantID: tenantID, ClusterID: clusterID,
+			AsOf: periodStart, TierRules: tier.Rules, TierCurrency: tier.Currency,
+		})
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve cluster %s for monthly fee: %w", clusterID, resolveErr)
+		}
+		if history.Currency != tier.Currency {
+			return nil, fmt.Errorf("cluster %s monthly price is in %s, not %s", clusterID, history.Currency, tier.Currency)
+		}
+		resolved.PricingSource = pricing.SourceClusterMonthly
+		operatorCreditCents, platformFeeCents, splitErr := jm.marketplaceLineSplitCents(ctx, price, resolved)
+		if splitErr != nil {
+			return nil, fmt.Errorf("compute marketplace split for cluster %s: %w", clusterID, splitErr)
+		}
+		clusterIDCopy := clusterID
+		kind := string(resolved.Kind)
+		versionID := history.VersionID
+		line := pricedLine{
+			LineItem: rating.LineItem{
+				LineKey:          clusterLineKey("cluster_monthly", clusterID, periodSuffix),
+				Description:      description,
+				Quantity:         decimal.NewFromInt(1),
+				IncludedQuantity: decimal.Zero,
+				BillableQuantity: decimal.NewFromInt(1),
+				UnitPrice:        price,
+				Amount:           price,
+				GrossAmount:      price,
+				Currency:         history.Currency,
+				Unit:             "month",
+			},
+			ClusterID:           &clusterIDCopy,
+			ClusterKind:         &kind,
+			PricingSource:       pricing.SourceClusterMonthly,
+			OperatorCreditCents: operatorCreditCents,
+			PlatformFeeCents:    platformFeeCents,
+			PriceVersionID:      &versionID,
+		}
+		if resolved.OwnerTenantID != nil {
+			owner := *resolved.OwnerTenantID
+			line.ClusterOwnerTenantID = &owner
+		}
+		lines = append(lines, line)
+	}
+	return lines, nil
+}
+
+// monthlyFeeOverlap is the part of [periodStart, periodEnd) a subscription
+// active from activeFrom until activeUntil (open when not valid) covers, its
+// length in whole seconds, and the seconds of the month starting at
+// periodStart. The covered seconds never exceed the month.
+func monthlyFeeOverlap(periodStart, periodEnd, activeFrom time.Time, activeUntil sql.NullTime) (from, until time.Time, activeSeconds, monthSeconds int64) {
+	from, until = periodStart, periodEnd
+	if activeFrom.After(from) {
+		from = activeFrom
+	}
+	if activeUntil.Valid && activeUntil.Time.Before(until) {
+		until = activeUntil.Time
+	}
+	monthSeconds = int64(periodStart.AddDate(0, 1, 0).Sub(periodStart) / time.Second)
+	if !until.After(from) {
+		return from, until, 0, monthSeconds
+	}
+	return from, until, min(int64(until.Sub(from)/time.Second), monthSeconds), monthSeconds
 }
 
 // usageMapFromAggregates derives the rating engine's per-meter usage map from

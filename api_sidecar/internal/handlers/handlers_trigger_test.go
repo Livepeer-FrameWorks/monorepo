@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -19,13 +21,32 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// triggerTestNodeID is the node the trigger tests run as and seed for.
+const triggerTestNodeID = "edge-trigger-test"
+
+// triggerSeedVersion numbers the seeds the package's tests apply. The config
+// manager is process-wide and refuses a seed older than the one it holds, so
+// every applied seed takes the next version.
+var triggerSeedVersion atomic.Uint64
+
+// applyTriggerSeed applies seed as the next seed version for the test node.
+func applyTriggerSeed(seed *ipcpb.ConfigSeed) {
+	seed.NodeId = triggerTestNodeID
+	seed.SeedVersion = triggerSeedVersion.Add(1)
+	config.ApplySeed(seed, nil)
+}
+
+// setupTriggerTest applies a seed for tenantID to the package's manager, with
+// durable state in a per-test directory.
 func setupTriggerTest(t *testing.T, tenantID string) {
 	t.Helper()
+	appconfigtest.Setenv(t, "NODE_ID", triggerTestNodeID)
+	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", t.TempDir())
 	gin.SetMode(gin.TestMode)
 	logger = logging.NewLoggerWithService("handlers-test")
 	metrics = nil
 	config.InitManager(logger)
-	config.ApplySeed(&ipcpb.ConfigSeed{TenantId: tenantID}, nil)
+	applyTriggerSeed(&ipcpb.ConfigSeed{TenantId: tenantID})
 }
 
 func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {

@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 )
 
@@ -75,7 +75,7 @@ func (h *X402Handler) validateVIESVAT(ctx context.Context, tenantID, countryCode
 	if err != nil {
 		return false, err
 	}
-	endpoint := strings.TrimSpace(os.Getenv("VIES_ENDPOINT"))
+	endpoint := appconfig.Runtime().VIESEndpoint
 	if endpoint == "" {
 		endpoint = defaultVIESEndpoint
 	}
