@@ -8,6 +8,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
@@ -120,10 +121,14 @@ func TestCompleteTenantDNSEntitlementHandoffReportsSerializableRetry(t *testing.
 	server, _, mock := newMockQuartermasterServer(t)
 	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(tenantDNSEntitlementHandoffKey).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COUNT\(\*\)::bigint AS tenant_count`).
-		WillReturnError(&pq.Error{Code: "40001", Message: "restart transaction"})
-	mock.ExpectRollback()
+	// The serializable transaction is replayed until the retry budget is spent;
+	// only then does the caller see Aborted.
+	for range database.DefaultRetryAttempts {
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT COUNT\(\*\)::bigint AS tenant_count`).
+			WillReturnError(&pq.Error{Code: "40001", Message: "restart transaction"})
+		mock.ExpectRollback()
+	}
 
 	_, err := server.CompleteTenantDNSEntitlementHandoff(serviceCtx(), &quartermasterpb.CompleteTenantDNSEntitlementHandoffRequest{SubscriptionCount: 3})
 	if status.Code(err) != codes.Aborted {

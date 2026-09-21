@@ -77,8 +77,10 @@ type QuartermasterServer struct {
 	quartermasterpb.UnimplementedMeshServiceServer
 	quartermasterpb.UnimplementedServiceRegistryServiceServer
 	quartermasterpb.UnimplementedIngressServiceServer
-	db                          *sql.DB
-	logger                      logging.Logger
+	db     *sql.DB
+	logger logging.Logger
+	// lookupHost resolves a service's advertised hostname to associate it with a node; nil uses the system resolver.
+	lookupHost                  func(ctx context.Context, host string) ([]string, error)
 	peerWatch                   *peerWatchHub
 	navigatorClient             *navigator.Client
 	decklogClient               *decklogclient.BatchedClient
@@ -760,38 +762,41 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	return &resp, nil
 }
 
-// ensureServiceExists atomically gets or creates a service catalog entry.
-// Uses pg_advisory_xact_lock to serialize concurrent callers for the same
-// service type, preventing the TOCTOU race where two instances both see
-// "no rows" and both try to INSERT.
+// ensureServiceExists atomically gets or creates a service catalog entry in its own retrying transaction.
 func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceType, protocol string) (string, error) {
 	var serviceID string
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		queries := quartermasterdb.New(tx)
-		// Advisory lock keyed on service type — second caller blocks until first commits
-		err := queries.LockServiceType(ctx, serviceType)
-		if err != nil {
-			return status.Errorf(codes.Internal, "failed to acquire advisory lock: %v", err)
-		}
-
-		serviceID, err = queries.FindServiceID(ctx, serviceType)
-
-		if errors.Is(err, sql.ErrNoRows) {
-			serviceID = serviceType
-			err = queries.CreateServiceCatalogEntry(ctx, quartermasterdb.CreateServiceCatalogEntryParams{
-				ServiceID: serviceID, Name: serviceType, ServiceType: serviceType, Protocol: protocol,
-			})
-			if err != nil {
-				s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
-				return status.Errorf(codes.Internal, "failed to create service: %v", err)
-			}
-		} else if err != nil {
-			return status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		return nil
+		var err error
+		serviceID, err = s.ensureServiceExistsTx(ctx, tx, serviceType, protocol)
+		return err
 	})
 	if err != nil {
 		return "", err
+	}
+	return serviceID, nil
+}
+
+// ensureServiceExistsTx gets or creates a service catalog entry inside the caller's transaction. A transaction-scoped
+// advisory lock keyed on the service type serializes concurrent callers, so two of them cannot both see no row and
+// both insert; the lock is held until the caller's transaction ends.
+func (s *QuartermasterServer) ensureServiceExistsTx(ctx context.Context, tx *sql.Tx, serviceType, protocol string) (string, error) {
+	queries := quartermasterdb.New(tx)
+	if err := queries.LockServiceType(ctx, serviceType); err != nil {
+		return "", txStatusErrorf(err, codes.Internal, "failed to acquire advisory lock: %v", err)
+	}
+	serviceID, err := queries.FindServiceID(ctx, serviceType)
+	if errors.Is(err, sql.ErrNoRows) {
+		serviceID = serviceType
+		if err = queries.CreateServiceCatalogEntry(ctx, quartermasterdb.CreateServiceCatalogEntryParams{
+			ServiceID: serviceID, Name: serviceType, ServiceType: serviceType, Protocol: protocol,
+		}); err != nil {
+			s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
+			return "", txStatusErrorf(err, codes.Internal, "failed to create service: %v", err)
+		}
+		return serviceID, nil
+	}
+	if err != nil {
+		return "", txStatusErrorf(err, codes.Internal, "database error: %v", err)
 	}
 	return serviceID, nil
 }
@@ -806,311 +811,327 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *quarter
 		return nil, status.Error(codes.InvalidArgument, "type required")
 	}
 
-	queries := quartermasterdb.New(s.db)
-	var tx *sql.Tx
 	token := req.GetToken()
-	if token != "" {
+
+	var (
+		clusterID                string
+		registrationClusterID    string
+		proto                    string
+		advHost                  string
+		serviceID                string
+		instanceID               string
+		port                     int32
+		isFoghornControlListener bool
+		resolvedNodeID           *string
+		ownerTenantID            sql.NullString
+	)
+	// register runs against the token transaction when a token is present
+	// (replayed as a whole on retryable errors) and against the pool otherwise,
+	// where tx is nil. Every value used after it returns is reassigned on each run.
+	register := func(queries *quartermasterdb.Queries, tx *sql.Tx) error {
+		// 1. Resolve cluster from token, request, or fallback (single cluster only)
+		var tokenBoundClusterID string
+
+		if token != "" {
+			tokenRow, err := queries.LockServiceBootstrapToken(ctx, hashBootstrapToken(token))
+			if errors.Is(err, sql.ErrNoRows) || tokenRow.Kind != "service" || time.Now().After(tokenRow.ExpiresAt) {
+				// A failed lookup leaves tokenRow zero-valued; keep its cause so a
+				// retryable database error replays instead of reading as a bad token.
+				return txStatusErrorf(err, codes.Unauthenticated, "invalid bootstrap token")
+			}
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+			}
+			tokenBoundClusterID = tokenRow.ClusterID
+		}
+
+		// Priority: token-bound cluster > request cluster_id > single active cluster fallback
+		requestClusterID := req.GetClusterId()
+
+		if tokenBoundClusterID != "" {
+			// Token is bound to a cluster - use it (and validate request match if provided)
+			if requestClusterID != "" && requestClusterID != tokenBoundClusterID {
+				return status.Errorf(codes.InvalidArgument, "request cluster_id '%s' does not match token-bound cluster '%s'", requestClusterID, tokenBoundClusterID)
+			}
+			clusterID = tokenBoundClusterID
+		} else if requestClusterID != "" {
+			// No token-bound cluster, but request provides cluster_id - validate it exists and is active
+			isActive, err := queries.GetClusterActiveState(ctx, requestClusterID)
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Errorf(codes.NotFound, "cluster '%s' not found", requestClusterID)
+			}
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+			}
+			if !isActive.Valid {
+				return status.Errorf(codes.Internal, "database error: cluster '%s' is_active is NULL", requestClusterID)
+			}
+			if !isActive.Bool {
+				return status.Errorf(codes.FailedPrecondition, "cluster '%s' is not active", requestClusterID)
+			}
+			clusterID = requestClusterID
+		} else {
+			// No token-bound cluster and no request cluster_id
+			// Fallback: only allow if exactly 1 active cluster exists (dev convenience)
+			activeClusters, err := queries.ListActiveClusterIDs(ctx)
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+			}
+			if len(activeClusters) == 0 {
+				return status.Error(codes.Unavailable, "no active cluster available")
+			}
+			if len(activeClusters) > 1 {
+				return status.Errorf(codes.InvalidArgument, "cluster_id required: multiple active clusters exist (%d)", len(activeClusters))
+			}
+			// Exactly 1 active cluster - use it (dev/single-cluster convenience)
+			clusterID = activeClusters[0]
+			s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
+		}
+
+		// 2. Derive protocol and advertise host
+		proto = strings.ToLower(strings.TrimSpace(req.GetProtocol()))
+		if proto == "" {
+			proto = "http"
+		}
+
+		var nodeIP string
+		registrationClusterID = clusterID
+		if req.NodeId == nil && dns.IsPoolAssignedServiceType(serviceType) {
+			return status.Errorf(codes.InvalidArgument, "node_id required for pool-assigned service %q", serviceType)
+		}
+		if req.NodeId != nil {
+			node, err := queries.GetNodeBootstrapLocation(ctx, *req.NodeId)
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Errorf(codes.NotFound, "node '%s' not found", *req.NodeId)
+			}
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+			}
+			nodeClusterID := node.ClusterID
+			nodeClusterActive, err := queries.GetClusterActiveState(ctx, nodeClusterID)
+			if errors.Is(err, sql.ErrNoRows) || (nodeClusterActive.Valid && !nodeClusterActive.Bool) {
+				return status.Errorf(codes.InvalidArgument, "node '%s' belongs to inactive or unknown cluster '%s'", *req.NodeId, nodeClusterID)
+			}
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+			}
+			if !nodeClusterActive.Valid {
+				return status.Errorf(codes.Internal, "database error: cluster '%s' is_active is NULL", nodeClusterID)
+			}
+			if !dns.IsPoolAssignedServiceType(serviceType) && nodeClusterID != clusterID {
+				return status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
+			}
+			if nodeClusterID != "" {
+				registrationClusterID = nodeClusterID
+			}
+			if node.NodeIP.Valid {
+				nodeIP = strings.TrimSpace(node.NodeIP.String)
+			}
+		}
+
+		requestedAdvertiseHost := req.GetAdvertiseHost()
+		if requestedAdvertiseHost == "" {
+			requestedAdvertiseHost = req.GetHost()
+		}
+
+		// Loopback node addresses are namespace-local; prefer an explicit service
+		// host so local Docker services remain reachable from Quartermaster.
+		if req.NodeId != nil && nodeIP != "" && !isLoopbackAddress(nodeIP) {
+			advHost = nodeIP
+		} else {
+			advHost = requestedAdvertiseHost
+		}
+		if advHost == "" {
+			advHost = nodeIP
+		}
+		if advHost == "" {
+			return status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered node address)")
+		}
+
+		// 3. Get or create service record (serialized via advisory lock to prevent TOCTOU races)
+		defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
+		if defaultProtocol == "" {
+			defaultProtocol = "http"
+		}
 		var err error
-		tx, err = s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+		if tx != nil {
+			serviceID, err = s.ensureServiceExistsTx(ctx, tx, serviceType, defaultProtocol)
+		} else {
+			serviceID, err = s.ensureServiceExists(ctx, serviceType, defaultProtocol)
 		}
-		queries = queries.WithTx(tx)
-		defer func() {
-			if tx != nil {
-				_ = tx.Rollback()
+		if err != nil {
+			return err
+		}
+
+		// 4. Normalize service ID for instance naming
+		sluggedID := strings.ToLower(strings.TrimSpace(serviceID))
+		sluggedID = strings.ReplaceAll(sluggedID, " ", "-")
+		sluggedID = strings.ReplaceAll(sluggedID, "_", "-")
+		instanceID = fmt.Sprintf("inst-%s-%s", sluggedID, uuid.NewString()[:8])
+
+		healthEndpoint := req.HealthEndpoint
+		port = req.GetPort()
+		metadataJSON, err := marshalStringMapJSON(req.GetMetadata())
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "invalid metadata: %v", err)
+		}
+		if req.GetClearMetadata() {
+			emptyMetadata := "{}"
+			metadataJSON = &emptyMetadata
+		}
+		metadata := req.GetMetadata()
+		isFoghornControlListener = serviceID == "foghorn" && proto == "grpc" && (port == foghornInternalGRPCPort || metadata["foghorn_listener"] == foghornListenerInternalControl)
+		requestedInstanceID := strings.TrimSpace(metadata["instance_id"])
+		if isFoghornControlListener && requestedInstanceID != "" {
+			instanceID = requestedInstanceID
+		}
+
+		// 5a. Auto-associate with node by IP when no explicit node_id provided.
+		// If advHost is a hostname, resolve it to an IP first.
+		resolvedNodeID = req.NodeId
+		if resolvedNodeID == nil && advHost != "" {
+			matchIP := advHost
+			if net.ParseIP(matchIP) == nil {
+				lookupHost := s.lookupHost
+				if lookupHost == nil {
+					lookupHost = net.DefaultResolver.LookupHost
+				}
+				if addrs, lookupErr := lookupHost(ctx, matchIP); lookupErr == nil && len(addrs) > 0 {
+					matchIP = addrs[0]
+				}
 			}
-		}()
-	}
-
-	// 1. Resolve cluster from token, request, or fallback (single cluster only)
-	var clusterID string
-	var tokenBoundClusterID string
-
-	if token != "" {
-		tokenRow, err := queries.LockServiceBootstrapToken(ctx, hashBootstrapToken(token))
-		if errors.Is(err, sql.ErrNoRows) || tokenRow.Kind != "service" || time.Now().After(tokenRow.ExpiresAt) {
-			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
-		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		tokenBoundClusterID = tokenRow.ClusterID
-	}
-
-	// Priority: token-bound cluster > request cluster_id > single active cluster fallback
-	requestClusterID := req.GetClusterId()
-
-	if tokenBoundClusterID != "" {
-		// Token is bound to a cluster - use it (and validate request match if provided)
-		if requestClusterID != "" && requestClusterID != tokenBoundClusterID {
-			return nil, status.Errorf(codes.InvalidArgument, "request cluster_id '%s' does not match token-bound cluster '%s'", requestClusterID, tokenBoundClusterID)
-		}
-		clusterID = tokenBoundClusterID
-	} else if requestClusterID != "" {
-		// No token-bound cluster, but request provides cluster_id - validate it exists and is active
-		isActive, err := queries.GetClusterActiveState(ctx, requestClusterID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.NotFound, "cluster '%s' not found", requestClusterID)
-		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		if !isActive.Valid {
-			return nil, status.Errorf(codes.Internal, "database error: cluster '%s' is_active is NULL", requestClusterID)
-		}
-		if !isActive.Bool {
-			return nil, status.Errorf(codes.FailedPrecondition, "cluster '%s' is not active", requestClusterID)
-		}
-		clusterID = requestClusterID
-	} else {
-		// No token-bound cluster and no request cluster_id
-		// Fallback: only allow if exactly 1 active cluster exists (dev convenience)
-		activeClusters, err := queries.ListActiveClusterIDs(ctx)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		if len(activeClusters) == 0 {
-			return nil, status.Error(codes.Unavailable, "no active cluster available")
-		}
-		if len(activeClusters) > 1 {
-			return nil, status.Errorf(codes.InvalidArgument, "cluster_id required: multiple active clusters exist (%d)", len(activeClusters))
-		}
-		// Exactly 1 active cluster - use it (dev/single-cluster convenience)
-		clusterID = activeClusters[0]
-		s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
-	}
-
-	// 2. Derive protocol and advertise host
-	proto := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
-	if proto == "" {
-		proto = "http"
-	}
-
-	var nodeIP string
-	registrationClusterID := clusterID
-	if req.NodeId == nil && dns.IsPoolAssignedServiceType(serviceType) {
-		return nil, status.Errorf(codes.InvalidArgument, "node_id required for pool-assigned service %q", serviceType)
-	}
-	if req.NodeId != nil {
-		node, err := queries.GetNodeBootstrapLocation(ctx, *req.NodeId)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.NotFound, "node '%s' not found", *req.NodeId)
-		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		nodeClusterID := node.ClusterID
-		nodeClusterActive, err := queries.GetClusterActiveState(ctx, nodeClusterID)
-		if errors.Is(err, sql.ErrNoRows) || (nodeClusterActive.Valid && !nodeClusterActive.Bool) {
-			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to inactive or unknown cluster '%s'", *req.NodeId, nodeClusterID)
-		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		if !nodeClusterActive.Valid {
-			return nil, status.Errorf(codes.Internal, "database error: cluster '%s' is_active is NULL", nodeClusterID)
-		}
-		if !dns.IsPoolAssignedServiceType(serviceType) && nodeClusterID != clusterID {
-			return nil, status.Errorf(codes.InvalidArgument, "node '%s' belongs to cluster '%s', not '%s'", *req.NodeId, nodeClusterID, clusterID)
-		}
-		if nodeClusterID != "" {
-			registrationClusterID = nodeClusterID
-		}
-		if node.NodeIP.Valid {
-			nodeIP = strings.TrimSpace(node.NodeIP.String)
-		}
-	}
-
-	requestedAdvertiseHost := req.GetAdvertiseHost()
-	if requestedAdvertiseHost == "" {
-		requestedAdvertiseHost = req.GetHost()
-	}
-
-	advHost := ""
-	// Loopback node addresses are namespace-local; prefer an explicit service
-	// host so local Docker services remain reachable from Quartermaster.
-	if req.NodeId != nil && nodeIP != "" && !isLoopbackAddress(nodeIP) {
-		advHost = nodeIP
-	} else {
-		advHost = requestedAdvertiseHost
-	}
-	if advHost == "" {
-		advHost = nodeIP
-	}
-	if advHost == "" {
-		return nil, status.Error(codes.InvalidArgument, "advertise_host or host required (or provide node_id with a registered node address)")
-	}
-
-	// 3. Get or create service record (serialized via advisory lock to prevent TOCTOU races)
-	defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
-	if defaultProtocol == "" {
-		defaultProtocol = "http"
-	}
-	serviceID, err := s.ensureServiceExists(ctx, serviceType, defaultProtocol)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Normalize service ID for instance naming
-	sluggedID := strings.ToLower(strings.TrimSpace(serviceID))
-	sluggedID = strings.ReplaceAll(sluggedID, " ", "-")
-	sluggedID = strings.ReplaceAll(sluggedID, "_", "-")
-	instanceID := fmt.Sprintf("inst-%s-%s", sluggedID, uuid.NewString()[:8])
-
-	healthEndpoint := req.HealthEndpoint
-	port := req.GetPort()
-	metadataJSON, err := marshalStringMapJSON(req.GetMetadata())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid metadata: %v", err)
-	}
-	if req.GetClearMetadata() {
-		emptyMetadata := "{}"
-		metadataJSON = &emptyMetadata
-	}
-	metadata := req.GetMetadata()
-	isFoghornControlListener := serviceID == "foghorn" && proto == "grpc" && (port == foghornInternalGRPCPort || metadata["foghorn_listener"] == foghornListenerInternalControl)
-	requestedInstanceID := strings.TrimSpace(metadata["instance_id"])
-	if isFoghornControlListener && requestedInstanceID != "" {
-		instanceID = requestedInstanceID
-	}
-
-	// 5a. Auto-associate with node by IP when no explicit node_id provided.
-	// If advHost is a hostname, resolve it to an IP first.
-	resolvedNodeID := req.NodeId
-	if resolvedNodeID == nil && advHost != "" {
-		matchIP := advHost
-		if net.ParseIP(matchIP) == nil {
-			if addrs, lookupErr := net.DefaultResolver.LookupHost(ctx, matchIP); lookupErr == nil && len(addrs) > 0 {
-				matchIP = addrs[0]
+			if net.ParseIP(matchIP) != nil {
+				matchedNodeID, matchErr := queries.FindNodeByClusterIP(ctx, quartermasterdb.FindNodeByClusterIPParams{
+					ClusterID: registrationClusterID, Ip: matchIP,
+				})
+				if matchErr != nil && !errors.Is(matchErr, sql.ErrNoRows) {
+					return txStatusErrorf(matchErr, codes.Internal, "auto-associate service with node: %v", matchErr)
+				}
+				if matchedNodeID != "" {
+					resolvedNodeID = &matchedNodeID
+					s.logger.WithFields(logging.Fields{
+						"service_type": serviceType,
+						"node_id":      matchedNodeID,
+						"advHost":      advHost,
+						"resolvedIP":   matchIP,
+					}).Debug("Auto-associated service with node via IP match")
+				}
 			}
 		}
-		if net.ParseIP(matchIP) != nil {
-			matchedNodeID, matchErr := queries.FindNodeByClusterIP(ctx, quartermasterdb.FindNodeByClusterIPParams{
-				ClusterID: registrationClusterID, Ip: matchIP,
+
+		// 5b. Idempotent registration: check for existing instance
+		var existingID, existingInstanceID string
+		var existingErr error
+		if isFoghornControlListener && requestedInstanceID != "" {
+			row, queryErr := queries.FindServiceInstanceByRequestedID(ctx, quartermasterdb.FindServiceInstanceByRequestedIDParams{
+				ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, InstanceID: requestedInstanceID,
 			})
-			if matchErr != nil && !errors.Is(matchErr, sql.ErrNoRows) {
-				s.logger.WithError(matchErr).WithField("cluster_id", registrationClusterID).Debug("Failed to auto-associate service with node")
+			existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
+		} else if resolvedNodeID != nil && isFoghornControlListener {
+			row, queryErr := queries.FindServiceInstanceByNodeHost(ctx, quartermasterdb.FindServiceInstanceByNodeHostParams{
+				ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port,
+				NodeID: *resolvedNodeID, AdvertiseHost: advHost,
+			})
+			existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
+		} else if resolvedNodeID != nil {
+			row, queryErr := queries.FindServiceInstanceByNode(ctx, quartermasterdb.FindServiceInstanceByNodeParams{
+				ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port, NodeID: *resolvedNodeID,
+			})
+			existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
+		} else {
+			row, queryErr := queries.FindServiceInstanceByHost(ctx, quartermasterdb.FindServiceInstanceByHostParams{
+				ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port, AdvertiseHost: advHost,
+			})
+			existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
+		}
+		if existingErr != nil && !errors.Is(existingErr, sql.ErrNoRows) {
+			return txStatusErrorf(existingErr, codes.Internal, "failed to lookup existing service instance: %v", existingErr)
+		}
+		registeredNodeID := ""
+		if resolvedNodeID != nil {
+			registeredNodeID = *resolvedNodeID
+		}
+
+		if existingID != "" {
+			// Update existing row
+			err = queries.UpdateBootstrappedServiceInstance(ctx, quartermasterdb.UpdateBootstrappedServiceInstanceParams{
+				AdvertiseHost: advHost, HealthEndpoint: healthEndpoint, Version: req.GetVersion(),
+				NodeID: resolvedNodeID, Metadata: metadataJSON, Protocol: proto, Port: port, ID: existingID,
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to update service instance")
+				return txStatusErrorf(err, codes.Internal, "failed to update service instance: %v", err)
 			}
-			if matchedNodeID != "" {
-				resolvedNodeID = &matchedNodeID
-				s.logger.WithFields(logging.Fields{
-					"service_type": serviceType,
-					"node_id":      matchedNodeID,
-					"advHost":      advHost,
-					"resolvedIP":   matchIP,
-				}).Debug("Auto-associated service with node via IP match")
+			instanceID = existingInstanceID
+			s.logger.WithFields(logging.Fields{
+				"service_type":     serviceType,
+				"service_id":       serviceID,
+				"instance_id":      instanceID,
+				"cluster_id":       registrationClusterID,
+				"logical_cluster":  clusterID,
+				"node_id":          registeredNodeID,
+				"protocol":         proto,
+				"advertise_host":   advHost,
+				"port":             port,
+				"health_endpoint":  req.GetHealthEndpoint(),
+				"registration_op":  "update",
+				"health_status":    "unknown",
+				"last_check_reset": true,
+			}).Info("Service instance registered")
+		} else {
+			// Insert new row
+			err = queries.CreateBootstrappedServiceInstance(ctx, quartermasterdb.CreateBootstrappedServiceInstanceParams{
+				InstanceID: instanceID, ClusterID: registrationClusterID, NodeID: resolvedNodeID,
+				ServiceID: serviceID, Protocol: proto, AdvertiseHost: advHost, HealthEndpoint: healthEndpoint,
+				Version: req.GetVersion(), Port: port, Metadata: metadataJSON,
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to create service instance")
+				return txStatusErrorf(err, codes.Internal, "failed to create service instance: %v", err)
+			}
+			s.logger.WithFields(logging.Fields{
+				"service_type":    serviceType,
+				"service_id":      serviceID,
+				"instance_id":     instanceID,
+				"cluster_id":      registrationClusterID,
+				"logical_cluster": clusterID,
+				"node_id":         registeredNodeID,
+				"protocol":        proto,
+				"advertise_host":  advHost,
+				"port":            port,
+				"health_endpoint": req.GetHealthEndpoint(),
+				"registration_op": "create",
+				"health_status":   "unknown",
+			}).Info("Service instance registered")
+		}
+
+		// 6. Look up cluster owner tenant for dual-tenant attribution
+		var ownerErr error
+		ownerTenantID, ownerErr = queries.GetClusterOwnerTenantID(ctx, clusterID)
+		if ownerErr != nil && !errors.Is(ownerErr, sql.ErrNoRows) {
+			return txStatusErrorf(ownerErr, codes.Internal, "resolve cluster owner for service attribution: %v", ownerErr)
+		}
+
+		if token != "" {
+			rowsAffected, err := queries.ConsumeServiceBootstrapToken(ctx, hashBootstrapToken(token))
+			if err != nil {
+				return txStatusErrorf(err, codes.Internal, "failed to consume bootstrap token: %v", err)
+			}
+			if rowsAffected != 1 {
+				return status.Error(codes.Unauthenticated, "invalid bootstrap token")
 			}
 		}
+		return nil
 	}
-
-	// 5b. Idempotent registration: check for existing instance
-	var existingID, existingInstanceID string
-	var existingErr error
-	if isFoghornControlListener && requestedInstanceID != "" {
-		row, queryErr := queries.FindServiceInstanceByRequestedID(ctx, quartermasterdb.FindServiceInstanceByRequestedIDParams{
-			ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, InstanceID: requestedInstanceID,
-		})
-		existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
-	} else if resolvedNodeID != nil && isFoghornControlListener {
-		row, queryErr := queries.FindServiceInstanceByNodeHost(ctx, quartermasterdb.FindServiceInstanceByNodeHostParams{
-			ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port,
-			NodeID: *resolvedNodeID, AdvertiseHost: advHost,
-		})
-		existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
-	} else if resolvedNodeID != nil {
-		row, queryErr := queries.FindServiceInstanceByNode(ctx, quartermasterdb.FindServiceInstanceByNodeParams{
-			ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port, NodeID: *resolvedNodeID,
-		})
-		existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
-	} else {
-		row, queryErr := queries.FindServiceInstanceByHost(ctx, quartermasterdb.FindServiceInstanceByHostParams{
-			ServiceID: serviceID, ClusterID: registrationClusterID, Protocol: proto, Port: port, AdvertiseHost: advHost,
-		})
-		existingID, existingInstanceID, existingErr = row.ID, row.InstanceID, queryErr
-	}
-	if existingErr != nil && !errors.Is(existingErr, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "failed to lookup existing service instance: %v", existingErr)
-	}
-	registeredNodeID := ""
-	if resolvedNodeID != nil {
-		registeredNodeID = *resolvedNodeID
-	}
-
-	if existingID != "" {
-		// Update existing row
-		err = queries.UpdateBootstrappedServiceInstance(ctx, quartermasterdb.UpdateBootstrappedServiceInstanceParams{
-			AdvertiseHost: advHost, HealthEndpoint: healthEndpoint, Version: req.GetVersion(),
-			NodeID: resolvedNodeID, Metadata: metadataJSON, Protocol: proto, Port: port, ID: existingID,
-		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to update service instance")
-			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
-		}
-		instanceID = existingInstanceID
-		s.logger.WithFields(logging.Fields{
-			"service_type":     serviceType,
-			"service_id":       serviceID,
-			"instance_id":      instanceID,
-			"cluster_id":       registrationClusterID,
-			"logical_cluster":  clusterID,
-			"node_id":          registeredNodeID,
-			"protocol":         proto,
-			"advertise_host":   advHost,
-			"port":             port,
-			"health_endpoint":  req.GetHealthEndpoint(),
-			"registration_op":  "update",
-			"health_status":    "unknown",
-			"last_check_reset": true,
-		}).Info("Service instance registered")
-	} else {
-		// Insert new row
-		err = queries.CreateBootstrappedServiceInstance(ctx, quartermasterdb.CreateBootstrappedServiceInstanceParams{
-			InstanceID: instanceID, ClusterID: registrationClusterID, NodeID: resolvedNodeID,
-			ServiceID: serviceID, Protocol: proto, AdvertiseHost: advHost, HealthEndpoint: healthEndpoint,
-			Version: req.GetVersion(), Port: port, Metadata: metadataJSON,
-		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to create service instance")
-			return nil, status.Errorf(codes.Internal, "failed to create service instance: %v", err)
-		}
-		s.logger.WithFields(logging.Fields{
-			"service_type":    serviceType,
-			"service_id":      serviceID,
-			"instance_id":     instanceID,
-			"cluster_id":      registrationClusterID,
-			"logical_cluster": clusterID,
-			"node_id":         registeredNodeID,
-			"protocol":        proto,
-			"advertise_host":  advHost,
-			"port":            port,
-			"health_endpoint": req.GetHealthEndpoint(),
-			"registration_op": "create",
-			"health_status":   "unknown",
-		}).Info("Service instance registered")
-	}
-
-	// 6. Look up cluster owner tenant for dual-tenant attribution
-	ownerTenantID, ownerErr := queries.GetClusterOwnerTenantID(ctx, clusterID)
-	if ownerErr != nil && !errors.Is(ownerErr, sql.ErrNoRows) {
-		s.logger.WithError(ownerErr).WithField("cluster_id", clusterID).Warn("Failed to resolve cluster owner for service attribution")
-	}
-
 	if token != "" {
-		rowsAffected, err := queries.ConsumeServiceBootstrapToken(ctx, hashBootstrapToken(token))
+		err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			return register(quartermasterdb.New(s.db).WithTx(tx), tx)
+		})
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", err)
+			return nil, retryableTxStatus(err, "failed to commit bootstrap transaction")
 		}
-		if rowsAffected != 1 {
-			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
-		}
-	}
-
-	if tx != nil {
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit bootstrap transaction: %v", err)
-		}
-		tx = nil
+	} else if err := register(quartermasterdb.New(s.db), nil); err != nil {
+		return nil, err
 	}
 
 	// Best-effort cleanup — runs outside the transaction so failures
@@ -2017,41 +2038,9 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	tenantID := uuid.New().String()
 	now := time.Now()
 
-	// Start a transaction to ensure atomicity for tenant creation and auto-subscription
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to begin transaction for tenant creation")
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	queries := quartermasterdb.New(tx)
-
 	provisioningKey := strings.TrimSpace(req.GetProvisioningKey())
 	if len(provisioningKey) > 255 {
 		return nil, status.Error(codes.InvalidArgument, "provisioning_key is too long")
-	}
-	if provisioningKey != "" {
-		// Serialize all replicas on the caller's durable idempotency identity.
-		// A retry after a lost response returns the original tenant rather than
-		// creating an orphan in this cross-service signup saga.
-		if lockErr := queries.LockTenantProvisioningKey(ctx, provisioningKey); lockErr != nil {
-			return nil, status.Errorf(codes.Internal, "lock tenant provisioning: %v", lockErr)
-		}
-		var existingTenantID string
-		existingTenantID, lookupErr := queries.FindTenantIDByProvisioningKey(ctx, validString(provisioningKey))
-		if lookupErr == nil {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				return nil, status.Errorf(codes.Internal, "finish tenant provisioning lookup: %v", rollbackErr)
-			}
-			existing, getErr := s.GetTenant(ctx, &quartermasterpb.GetTenantRequest{TenantId: existingTenantID})
-			if getErr != nil {
-				return nil, getErr
-			}
-			return &quartermasterpb.CreateTenantResponse{Tenant: existing.GetTenant()}, nil
-		}
-		if !errors.Is(lookupErr, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.Internal, "lookup tenant provisioning key: %v", lookupErr)
-		}
 	}
 
 	// Self-signup paths omit the tier; default to 'free' so the column never
@@ -2059,111 +2048,6 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	deploymentTier := strings.ToLower(strings.TrimSpace(req.GetDeploymentTier()))
 	if deploymentTier == "" {
 		deploymentTier = "free"
-	}
-
-	// 1. Insert into quartermaster.tenants
-	createParams := quartermasterdb.CreateTenantRecordParams{
-		ID: tenantID, Name: name, Subdomain: validString(subdomain), CustomDomain: optionalString(req.CustomDomain),
-		LogoUrl: optionalString(req.LogoUrl), PrimaryColor: validString(req.GetPrimaryColor()),
-		SecondaryColor: validString(req.GetSecondaryColor()), DeploymentTier: validString(deploymentTier),
-		DeploymentModel: validString(req.GetDeploymentModel()), CreatedAt: now,
-	}
-	if provisioningKey == "" {
-		err = queries.CreateTenantRecord(ctx, createParams)
-	} else {
-		err = queries.CreateTenantRecordWithProvisioningKey(ctx, quartermasterdb.CreateTenantRecordWithProvisioningKeyParams{
-			ID: createParams.ID, Name: createParams.Name, Subdomain: createParams.Subdomain,
-			CustomDomain: createParams.CustomDomain, LogoUrl: createParams.LogoUrl,
-			PrimaryColor: createParams.PrimaryColor, SecondaryColor: createParams.SecondaryColor,
-			DeploymentTier: createParams.DeploymentTier, DeploymentModel: createParams.DeploymentModel,
-			CreatedAt: createParams.CreatedAt, ProvisioningKey: validString(provisioningKey),
-		})
-	}
-
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create tenant")
-		return nil, status.Errorf(codes.Internal, "failed to create tenant: %v", err)
-	}
-
-	attribution := req.GetAttribution()
-	if attribution != nil && attribution.GetSignupChannel() != "" {
-		metadataJSON := attribution.GetMetadataJson()
-		if metadataJSON == "" || !json.Valid([]byte(metadataJSON)) {
-			metadataJSON = "{}"
-		}
-		err = queries.CreateTenantAttribution(ctx, quartermasterdb.CreateTenantAttributionParams{
-			TenantID: tenantID, SignupChannel: attribution.GetSignupChannel(), SignupMethod: validString(attribution.GetSignupMethod()),
-			UtmSource: validString(attribution.GetUtmSource()), UtmMedium: validString(attribution.GetUtmMedium()),
-			UtmCampaign: validString(attribution.GetUtmCampaign()), UtmContent: validString(attribution.GetUtmContent()),
-			UtmTerm: validString(attribution.GetUtmTerm()), HttpReferer: validString(attribution.GetHttpReferer()),
-			LandingPage: validString(attribution.GetLandingPage()), ReferralCode: validString(attribution.GetReferralCode()),
-			IsAgent: validBool(attribution.GetIsAgent()), Metadata: metadataJSON,
-		})
-		if err != nil {
-			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to insert tenant attribution")
-		}
-		if attribution.GetReferralCode() != "" {
-			if refErr := queries.IncrementReferralCodeUsage(ctx, attribution.GetReferralCode()); refErr != nil {
-				s.logger.WithError(refErr).WithField("referral_code", attribution.GetReferralCode()).Warn("Failed to increment referral code usage")
-			}
-		}
-	}
-
-	// 2. Find the default cluster for auto-subscription
-	var defaultClusterID sql.NullString
-	defaultCluster, defaultClusterErr := queries.GetDefaultActiveClusterID(ctx)
-	err = defaultClusterErr
-	if err == nil {
-		defaultClusterID = validString(defaultCluster)
-	}
-
-	if errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithField("tenant_id", tenantID).Warn("No default cluster found for auto-subscription. Tenant created without default cluster access.")
-		// This is not a fatal error for tenant creation, just a warning. Continue without subscription.
-	} else if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to query default cluster during tenant creation")
-		return nil, status.Errorf(codes.Internal, "failed to find default cluster for auto-subscription: %v", err)
-	} else if defaultClusterID.Valid {
-		// 3. Auto-subscribe the new tenant to the default cluster
-		err = queries.GrantDefaultClusterAccess(ctx, quartermasterdb.GrantDefaultClusterAccessParams{
-			TenantID: tenantID, ClusterID: defaultClusterID.String, CreatedAt: now,
-		})
-		if err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
-				"cluster_id": defaultClusterID.String,
-			}).Error("Failed to auto-subscribe tenant to default cluster")
-			return nil, status.Errorf(codes.Internal, "failed to auto-subscribe tenant to default cluster: %v", err)
-		}
-
-		// 4. Set official_cluster_id to the default cluster (billing-tier coverage)
-		if clusterErr := queries.SetTenantOfficialCluster(ctx, quartermasterdb.SetTenantOfficialClusterParams{
-			ClusterID: validString(defaultClusterID.String), TenantID: tenantID,
-		}); clusterErr != nil {
-			s.logger.WithError(clusterErr).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
-				"cluster_id": defaultClusterID.String,
-			}).Error("Failed to set official_cluster_id for new tenant")
-			return nil, status.Errorf(codes.Internal, "failed to set official_cluster_id: %v", clusterErr)
-		}
-	}
-
-	if domain := strings.TrimSpace(req.GetCustomDomain()); domain != "" {
-		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, "", domain); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
-		}
-	}
-
-	// Durable subdomain-alias ensure for paid+active tenants (no-op for free).
-	// The subdomain was generated/validated above; generate-if-missing covers
-	// the case a paid tenant was created without one.
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if defaultClusterID.Valid {
-		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, defaultClusterID.String); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-		}
 	}
 
 	changedFields := []string{"name"}
@@ -2189,18 +2073,170 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 		changedFields = append(changedFields, "deployment_model")
 	}
 
-	if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantCreated, tenantID, userID, changedFields, req.GetAttribution()); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant_created: %v", enqErr)
-	}
-	if defaultClusterID.Valid {
-		if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", ""); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
-		}
-	}
+	// Start a transaction to ensure atomicity for tenant creation and auto-subscription
+	var defaultClusterID sql.NullString
+	var existingTenantID string
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := quartermasterdb.New(tx)
+		defaultClusterID = sql.NullString{}
 
-	if err := tx.Commit(); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
-		return nil, status.Errorf(codes.Internal, "failed to commit tenant creation: %v", err)
+		if provisioningKey != "" {
+			// Serialize all replicas on the caller's durable idempotency identity.
+			// A retry after a lost response returns the original tenant rather than
+			// creating an orphan in this cross-service signup saga.
+			if lockErr := queries.LockTenantProvisioningKey(ctx, provisioningKey); lockErr != nil {
+				return txStatusErrorf(lockErr, codes.Internal, "lock tenant provisioning: %v", lockErr)
+			}
+			var lookupErr error
+			existingTenantID, lookupErr = queries.FindTenantIDByProvisioningKey(ctx, validString(provisioningKey))
+			if lookupErr == nil {
+				return errTenantProvisioningKeyExists
+			}
+			if !errors.Is(lookupErr, sql.ErrNoRows) {
+				return txStatusErrorf(lookupErr, codes.Internal, "lookup tenant provisioning key: %v", lookupErr)
+			}
+		}
+
+		// 1. Insert into quartermaster.tenants
+		createParams := quartermasterdb.CreateTenantRecordParams{
+			ID: tenantID, Name: name, Subdomain: validString(subdomain), CustomDomain: optionalString(req.CustomDomain),
+			LogoUrl: optionalString(req.LogoUrl), PrimaryColor: validString(req.GetPrimaryColor()),
+			SecondaryColor: validString(req.GetSecondaryColor()), DeploymentTier: validString(deploymentTier),
+			DeploymentModel: validString(req.GetDeploymentModel()), CreatedAt: now,
+		}
+		var err error
+		if provisioningKey == "" {
+			err = queries.CreateTenantRecord(ctx, createParams)
+		} else {
+			err = queries.CreateTenantRecordWithProvisioningKey(ctx, quartermasterdb.CreateTenantRecordWithProvisioningKeyParams{
+				ID: createParams.ID, Name: createParams.Name, Subdomain: createParams.Subdomain,
+				CustomDomain: createParams.CustomDomain, LogoUrl: createParams.LogoUrl,
+				PrimaryColor: createParams.PrimaryColor, SecondaryColor: createParams.SecondaryColor,
+				DeploymentTier: createParams.DeploymentTier, DeploymentModel: createParams.DeploymentModel,
+				CreatedAt: createParams.CreatedAt, ProvisioningKey: validString(provisioningKey),
+			})
+		}
+
+		if err != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create tenant")
+			return txStatusErrorf(err, codes.Internal, "failed to create tenant: %v", err)
+		}
+
+		attribution := req.GetAttribution()
+		if attribution != nil && attribution.GetSignupChannel() != "" {
+			metadataJSON := attribution.GetMetadataJson()
+			if metadataJSON == "" || !json.Valid([]byte(metadataJSON)) {
+				metadataJSON = "{}"
+			}
+			// Attribution is best effort: a failed insert must not block signup, and a savepoint keeps the
+			// transaction usable after it.
+			failed, abort := database.TryInSavepoint(ctx, tx, func() error {
+				return queries.CreateTenantAttribution(ctx, quartermasterdb.CreateTenantAttributionParams{
+					TenantID: tenantID, SignupChannel: attribution.GetSignupChannel(), SignupMethod: validString(attribution.GetSignupMethod()),
+					UtmSource: validString(attribution.GetUtmSource()), UtmMedium: validString(attribution.GetUtmMedium()),
+					UtmCampaign: validString(attribution.GetUtmCampaign()), UtmContent: validString(attribution.GetUtmContent()),
+					UtmTerm: validString(attribution.GetUtmTerm()), HttpReferer: validString(attribution.GetHttpReferer()),
+					LandingPage: validString(attribution.GetLandingPage()), ReferralCode: validString(attribution.GetReferralCode()),
+					IsAgent: validBool(attribution.GetIsAgent()), Metadata: metadataJSON,
+				})
+			})
+			if abort != nil {
+				return txStatusErrorf(abort, codes.Internal, "record tenant attribution: %v", abort)
+			}
+			if failed != nil {
+				s.logger.WithError(failed).WithField("tenant_id", tenantID).Warn("Failed to insert tenant attribution")
+			}
+			if attribution.GetReferralCode() != "" {
+				failed, abort = database.TryInSavepoint(ctx, tx, func() error {
+					return queries.IncrementReferralCodeUsage(ctx, attribution.GetReferralCode())
+				})
+				if abort != nil {
+					return txStatusErrorf(abort, codes.Internal, "record referral code usage: %v", abort)
+				}
+				if failed != nil {
+					s.logger.WithError(failed).WithField("referral_code", attribution.GetReferralCode()).Warn("Failed to increment referral code usage")
+				}
+			}
+		}
+
+		// 2. Find the default cluster for auto-subscription
+		defaultCluster, defaultClusterErr := queries.GetDefaultActiveClusterID(ctx)
+		err = defaultClusterErr
+		if err == nil {
+			defaultClusterID = validString(defaultCluster)
+		}
+
+		if errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithField("tenant_id", tenantID).Warn("No default cluster found for auto-subscription. Tenant created without default cluster access.")
+			// This is not a fatal error for tenant creation, just a warning. Continue without subscription.
+		} else if err != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to query default cluster during tenant creation")
+			return txStatusErrorf(err, codes.Internal, "failed to find default cluster for auto-subscription: %v", err)
+		} else if defaultClusterID.Valid {
+			// 3. Auto-subscribe the new tenant to the default cluster
+			err = queries.GrantDefaultClusterAccess(ctx, quartermasterdb.GrantDefaultClusterAccessParams{
+				TenantID: tenantID, ClusterID: defaultClusterID.String, CreatedAt: now,
+			})
+			if err != nil {
+				s.logger.WithError(err).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"cluster_id": defaultClusterID.String,
+				}).Error("Failed to auto-subscribe tenant to default cluster")
+				return txStatusErrorf(err, codes.Internal, "failed to auto-subscribe tenant to default cluster: %v", err)
+			}
+
+			// 4. Set official_cluster_id to the default cluster (billing-tier coverage)
+			if clusterErr := queries.SetTenantOfficialCluster(ctx, quartermasterdb.SetTenantOfficialClusterParams{
+				ClusterID: validString(defaultClusterID.String), TenantID: tenantID,
+			}); clusterErr != nil {
+				s.logger.WithError(clusterErr).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"cluster_id": defaultClusterID.String,
+				}).Error("Failed to set official_cluster_id for new tenant")
+				return txStatusErrorf(clusterErr, codes.Internal, "failed to set official_cluster_id: %v", clusterErr)
+			}
+		}
+
+		if domain := strings.TrimSpace(req.GetCustomDomain()); domain != "" {
+			if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, "", domain); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
+			}
+		}
+
+		// Durable subdomain-alias ensure for paid+active tenants (no-op for free).
+		// The subdomain was generated/validated above; generate-if-missing covers
+		// the case a paid tenant was created without one.
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if defaultClusterID.Valid {
+			if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, defaultClusterID.String); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+			}
+		}
+
+		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantCreated, tenantID, userID, changedFields, req.GetAttribution()); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_created: %v", enqErr)
+		}
+		if defaultClusterID.Valid {
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", ""); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errTenantProvisioningKeyExists) {
+		existing, getErr := s.GetTenant(ctx, &quartermasterpb.GetTenantRequest{TenantId: existingTenantID})
+		if getErr != nil {
+			return nil, getErr
+		}
+		return &quartermasterpb.CreateTenantResponse{Tenant: existing.GetTenant()}, nil
+	}
+	if err != nil {
+		if _, ok := status.FromError(err); !ok {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
+		}
+		return nil, retryableTxStatus(err, "failed to commit tenant creation")
 	}
 
 	tenant := &quartermasterpb.Tenant{
@@ -2221,6 +2257,10 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 
 	return &quartermasterpb.CreateTenantResponse{Tenant: tenant}, nil
 }
+
+// errTenantProvisioningKeyExists rolls back CreateTenant when the provisioning
+// key already names a tenant; the caller returns that tenant instead.
+var errTenantProvisioningKeyExists = errors.New("tenant provisioning key already used")
 
 // UpdateTenant updates a tenant's properties
 func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error) {
@@ -2301,76 +2341,74 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 	// Wrap the tenant UPDATE and its outbox emits in one transaction so a
 	// crash between mutation and emit can't leave the row updated without
 	// the corresponding service-event durable.
-	tx, err := s.db.BeginTx(ctx, nil)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := quartermasterdb.New(tx)
+		previousCustomDomain, previousSubdomain = sql.NullString{}, sql.NullString{}
+
+		// Read previous values FOR UPDATE inside the tx so concurrent updates to
+		// the same tenant serialize. Reading the previous subdomain before the
+		// transaction (and without a lock) would let a concurrent a->b and a->c
+		// race both observe "a", enqueuing a retire only for "a" and orphaning
+		// the intermediate label.
+		if req.CustomDomain != nil || req.Subdomain != nil {
+			previous, scanErr := queries.LockTenantPreviousValues(ctx, tenantID)
+			if scanErr == nil {
+				previousCustomDomain, previousSubdomain = previous.CustomDomain, previous.Subdomain
+			}
+			if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+				return txStatusErrorf(scanErr, codes.Internal, "previous-value lookup: %v", scanErr)
+			}
+		}
+
+		rows, err := queries.UpdateTenantFields(ctx, tenantID, tenantUpdate)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update tenant: %v", err)
+		}
+
+		if rows == 0 {
+			return status.Error(codes.NotFound, "tenant not found")
+		}
+
+		if len(changedFields) > 0 {
+			if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_updated: %v", enqErr)
+			}
+		}
+		// Custom-domain lifecycle hand-off is durable: enqueue the desired
+		// Navigator action inside the same tx as the tenants UPDATE so a
+		// Navigator outage cannot leave QM saying the tenant has a custom
+		// domain while Navigator has no verification/cert lifecycle row. Free
+		// tenants still skip; the drain worker will replay until Navigator
+		// accepts. Tear-down of an old domain rides the outbox too so it never
+		// stays mounted on Navigator after QM clears it.
+		if req.CustomDomain != nil {
+			if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, previousCustomDomain.String, strings.TrimSpace(*req.CustomDomain)); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
+			}
+		} else if req.IsActive != nil {
+			if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue navigator custom-domain desired state: %v", enqErr)
+			}
+		}
+
+		// Enqueue the desired Navigator alias action(s) in the same tx so a
+		// Navigator outage can't lose the intent. On a rename the old label is
+		// retired so its Bunny records are cleared (Navigator overwrites the alias
+		// label in place and keeps no memory of the old one).
+		if req.Subdomain != nil {
+			if enqErr := s.enqueueTenantAliasForSubdomainUpdate(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
+			}
+		} else if req.IsActive != nil {
+			downgrade := req.IsActive != nil && !*req.IsActive
+			if enqErr := s.enqueueTenantAliasForTierChange(ctx, tx, tenantID, downgrade); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias tier change: %v", enqErr)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := quartermasterdb.New(tx)
-
-	// Read previous values FOR UPDATE inside the tx so concurrent updates to
-	// the same tenant serialize. Reading the previous subdomain before the
-	// transaction (and without a lock) would let a concurrent a->b and a->c
-	// race both observe "a", enqueuing a retire only for "a" and orphaning
-	// the intermediate label.
-	if req.CustomDomain != nil || req.Subdomain != nil {
-		previous, scanErr := queries.LockTenantPreviousValues(ctx, tenantID)
-		if scanErr == nil {
-			previousCustomDomain, previousSubdomain = previous.CustomDomain, previous.Subdomain
-		}
-		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.Internal, "previous-value lookup: %v", scanErr)
-		}
-	}
-
-	rows, err := queries.UpdateTenantFields(ctx, tenantID, tenantUpdate)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update tenant: %v", err)
-	}
-
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-
-	if len(changedFields) > 0 {
-		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant_updated: %v", enqErr)
-		}
-	}
-	// Custom-domain lifecycle hand-off is durable: enqueue the desired
-	// Navigator action inside the same tx as the tenants UPDATE so a
-	// Navigator outage cannot leave QM saying the tenant has a custom
-	// domain while Navigator has no verification/cert lifecycle row. Free
-	// tenants still skip; the drain worker will replay until Navigator
-	// accepts. Tear-down of an old domain rides the outbox too so it never
-	// stays mounted on Navigator after QM clears it.
-	if req.CustomDomain != nil {
-		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, previousCustomDomain.String, strings.TrimSpace(*req.CustomDomain)); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
-		}
-	} else if req.IsActive != nil {
-		if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain desired state: %v", enqErr)
-		}
-	}
-
-	// Enqueue the desired Navigator alias action(s) in the same tx so a
-	// Navigator outage can't lose the intent. On a rename the old label is
-	// retired so its Bunny records are cleared (Navigator overwrites the alias
-	// label in place and keeps no memory of the old one).
-	if req.Subdomain != nil {
-		if enqErr := s.enqueueTenantAliasForSubdomainUpdate(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
-		}
-	} else if req.IsActive != nil {
-		downgrade := req.IsActive != nil && !*req.IsActive
-		if enqErr := s.enqueueTenantAliasForTierChange(ctx, tx, tenantID, downgrade); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias tier change: %v", enqErr)
-		}
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit tenant update: %v", commitErr)
+		return nil, retryableTxStatus(err, "commit tenant update")
 	}
 
 	// Fetch updated tenant
@@ -2401,63 +2439,68 @@ func (s *QuartermasterServer) ApplyTenantBillingEntitlements(ctx context.Context
 		return nil, status.Error(codes.InvalidArgument, "observed_at is too far in the future")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin billing entitlement transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := quartermasterdb.New(tx)
-	previous, err := queries.LockTenantBillingEntitlements(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "lock tenant billing entitlements: %v", err)
-	}
-	if observedAt.Before(previous.BillingEntitlementsObservedAt) {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := quartermasterdb.New(tx)
+		previous, err := queries.LockTenantBillingEntitlements(ctx, tenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "tenant not found")
+		}
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "lock tenant billing entitlements: %v", err)
+		}
+		if observedAt.Before(previous.BillingEntitlementsObservedAt) {
+			return errStaleBillingEntitlementObservation
+		}
+
+		changed := !previous.DeploymentTier.Valid || previous.DeploymentTier.String != tier ||
+			previous.CustomSubdomainEnabled != req.GetCustomSubdomainEnabled() ||
+			previous.CustomDomainEnabled != req.GetCustomDomainEnabled()
+		rows, err := queries.ApplyTenantBillingEntitlements(ctx, quartermasterdb.ApplyTenantBillingEntitlementsParams{
+			TenantID:               tenantID,
+			DeploymentTier:         validString(tier),
+			CustomSubdomainEnabled: req.GetCustomSubdomainEnabled(),
+			CustomDomainEnabled:    req.GetCustomDomainEnabled(),
+			ObservedAt:             observedAt,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "apply tenant billing entitlements: %v", err)
+		}
+		if rows == 0 {
+			return status.Error(codes.Internal, "apply tenant billing entitlements: locked tenant row was not updated")
+		}
+		if changed {
+			if req.GetCustomSubdomainEnabled() {
+				if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); err != nil {
+					return txStatusErrorf(err, codes.Internal, "enqueue entitled tenant alias: %v", err)
+				}
+			} else if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue tenant alias removal: %v", err)
+			}
+			if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue custom-domain desired state: %v", err)
+			}
+			fields := []string{"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled"}
+			if err := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, middleware.GetUserID(ctx), fields, nil); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue billing entitlement update: %v", err)
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errStaleBillingEntitlementObservation) {
 		if s.metrics != nil && s.metrics.BillingEntitlementStale != nil {
 			s.metrics.BillingEntitlementStale.WithLabelValues().Inc()
 		}
 		return &quartermasterpb.ApplyTenantBillingEntitlementsResponse{Applied: false}, nil
 	}
-
-	changed := !previous.DeploymentTier.Valid || previous.DeploymentTier.String != tier ||
-		previous.CustomSubdomainEnabled != req.GetCustomSubdomainEnabled() ||
-		previous.CustomDomainEnabled != req.GetCustomDomainEnabled()
-	rows, err := queries.ApplyTenantBillingEntitlements(ctx, quartermasterdb.ApplyTenantBillingEntitlementsParams{
-		TenantID:               tenantID,
-		DeploymentTier:         validString(tier),
-		CustomSubdomainEnabled: req.GetCustomSubdomainEnabled(),
-		CustomDomainEnabled:    req.GetCustomDomainEnabled(),
-		ObservedAt:             observedAt,
-	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "apply tenant billing entitlements: %v", err)
-	}
-	if rows == 0 {
-		return nil, status.Error(codes.Internal, "apply tenant billing entitlements: locked tenant row was not updated")
-	}
-	if changed {
-		if req.GetCustomSubdomainEnabled() {
-			if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); err != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue entitled tenant alias: %v", err)
-			}
-		} else if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant alias removal: %v", err)
-		}
-		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", err)
-		}
-		fields := []string{"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled"}
-		if err := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, middleware.GetUserID(ctx), fields, nil); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue billing entitlement update: %v", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit billing entitlements: %v", err)
+		return nil, retryableTxStatus(err, "commit billing entitlements")
 	}
 	return &quartermasterpb.ApplyTenantBillingEntitlementsResponse{Applied: true}, nil
 }
+
+// errStaleBillingEntitlementObservation rolls back an apply whose observed_at
+// predates the stored observation; the caller reports Applied=false.
+var errStaleBillingEntitlementObservation = errors.New("stale billing entitlement observation")
 
 // CompleteTenantDNSEntitlementHandoff records an immutable receipt after
 // Purser completes an error-free full subscription sweep. The v0.3.0
@@ -2480,43 +2523,96 @@ func (s *QuartermasterServer) CompleteTenantDNSEntitlementHandoff(ctx context.Co
 	// caller's paged count is deliberately not an equality fence: a tenant created
 	// above its descending cursor is already observed and fail-closed, and must not
 	// prevent the immutable handoff from completing.
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin DNS entitlement handoff: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := quartermasterdb.New(tx)
-	census, err := queries.GetTenantBillingEntitlementCensus(ctx)
-	if err != nil {
-		return nil, tenantDNSEntitlementHandoffDatabaseError("read tenant entitlement census", err)
-	}
-	if census.UnobservedCount != 0 {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"DNS entitlement handoff census incomplete: observed_by_sweep=%d tenants=%d unobserved=%d",
-			req.GetSubscriptionCount(), census.TenantCount, census.UnobservedCount)
-	}
-	rows, err := queries.CompleteBillingEntitlementHandoff(ctx, quartermasterdb.CompleteBillingEntitlementHandoffParams{
-		HandoffKey: tenantDNSEntitlementHandoffKey, SubscriptionCount: census.TenantCount,
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, &sql.TxOptions{Isolation: sql.LevelSerializable}, func(tx *sql.Tx) error {
+		queries := quartermasterdb.New(tx)
+		census, err := queries.GetTenantBillingEntitlementCensus(ctx)
+		if err != nil {
+			return &handoffDatabaseError{operation: "read tenant entitlement census", err: err}
+		}
+		if census.UnobservedCount != 0 {
+			return status.Errorf(codes.FailedPrecondition,
+				"DNS entitlement handoff census incomplete: observed_by_sweep=%d tenants=%d unobserved=%d",
+				req.GetSubscriptionCount(), census.TenantCount, census.UnobservedCount)
+		}
+		rows, err := queries.CompleteBillingEntitlementHandoff(ctx, quartermasterdb.CompleteBillingEntitlementHandoffParams{
+			HandoffKey: tenantDNSEntitlementHandoffKey, SubscriptionCount: census.TenantCount,
+		})
+		if err != nil {
+			return &handoffDatabaseError{operation: "record DNS entitlement handoff", err: err}
+		}
+		if rows < 0 || rows > 1 {
+			return status.Errorf(codes.Internal, "record DNS entitlement handoff: unexpected rows=%d", rows)
+		}
+		return nil
 	})
-	if err != nil {
-		return nil, tenantDNSEntitlementHandoffDatabaseError("record DNS entitlement handoff", err)
-	}
-	if rows < 0 || rows > 1 {
-		return nil, status.Errorf(codes.Internal, "record DNS entitlement handoff: unexpected rows=%d", rows)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, tenantDNSEntitlementHandoffDatabaseError("commit DNS entitlement handoff", err)
+	if txErr != nil {
+		if opErr, ok := errors.AsType[*handoffDatabaseError](txErr); ok {
+			return nil, tenantDNSEntitlementHandoffDatabaseError(opErr.operation, opErr.err)
+		}
+		if _, ok := status.FromError(txErr); ok {
+			return nil, txErr
+		}
+		return nil, tenantDNSEntitlementHandoffDatabaseError("commit DNS entitlement handoff", txErr)
 	}
 	// A zero row count means this immutable receipt already exists. Successful
 	// commit confirms both first-write and idempotent replay.
 	return &quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse{Recorded: true}, nil
 }
 
+// handoffDatabaseError keeps the raw driver error visible to the retry helper
+// (so SQLSTATE 40001 replays the serializable transaction) while carrying the
+// operation name used for the final gRPC status.
+type handoffDatabaseError struct {
+	operation string
+	err       error
+}
+
+func (e *handoffDatabaseError) Error() string { return e.operation + ": " + e.err.Error() }
+
+func (e *handoffDatabaseError) Unwrap() error { return e.err }
+
 func tenantDNSEntitlementHandoffDatabaseError(operation string, err error) error {
 	if database.IsRetryablePostgresError(err) {
 		return status.Errorf(codes.Aborted, "%s: retry transaction", operation)
 	}
 	return status.Errorf(codes.Internal, "%s: %v", operation, err)
+}
+
+// retryableTxStatus maps an error returned by database.WithRetryablePostgresTx
+// to a gRPC status. Callback failures already carry a status and pass through.
+// Cancellation, including while backing off between attempts, keeps its context
+// code. Begin and commit failures arrive as raw driver errors and are reported as
+// Internal, naming the transaction without claiming which of the two failed.
+func retryableTxStatus(err error, operation string) error {
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	label := strings.TrimPrefix(strings.TrimPrefix(operation, "failed to "), "commit")
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return status.Errorf(codes.Internal, "transaction failed: %v", err)
+	}
+	return status.Errorf(codes.Internal, "%s transaction failed: %v", label, err)
+}
+
+// txStatusError is a gRPC status whose database cause stays reachable through
+// Unwrap, so database.IsRetryablePostgresError can classify a statement-level
+// 40001/40P01 inside a retryable transaction callback while status.FromError
+// still reports the original code and message.
+type txStatusError struct {
+	st    *status.Status
+	cause error
+}
+
+func (e *txStatusError) Error() string              { return e.st.Err().Error() }
+func (e *txStatusError) GRPCStatus() *status.Status { return e.st }
+func (e *txStatusError) Unwrap() error              { return e.cause }
+
+func txStatusErrorf(cause error, code codes.Code, format string, args ...any) error {
+	return &txStatusError{st: status.Newf(code, format, args...), cause: cause}
 }
 
 // enqueueCustomDomainTransition writes the desired Navigator action(s) into
@@ -2760,52 +2856,49 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *quartermast
 
 	userID := middleware.GetUserID(ctx)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := quartermasterdb.New(tx)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := quartermasterdb.New(tx)
 
-	var previousCustomDomain sql.NullString
-	var previousSubdomain sql.NullString
-	// FOR UPDATE locks the tenant row so a concurrent UpdateTenant cannot
-	// commit a new custom_domain/ensure between this read and the teardown
-	// enqueue below — otherwise delete would tear down the stale domain only.
-	previous, scanErr := queries.LockActiveTenantDomains(ctx, tenantID)
-	if scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "tenant not found")
+		var previousCustomDomain sql.NullString
+		var previousSubdomain sql.NullString
+		// FOR UPDATE locks the tenant row so a concurrent UpdateTenant cannot
+		// commit a new custom_domain/ensure between this read and the teardown
+		// enqueue below — otherwise delete would tear down the stale domain only.
+		previous, scanErr := queries.LockActiveTenantDomains(ctx, tenantID)
+		if scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "tenant not found")
+			}
+			return txStatusErrorf(scanErr, codes.Internal, "lookup tenant domains: %v", scanErr)
 		}
-		return nil, status.Errorf(codes.Internal, "lookup tenant domains: %v", scanErr)
-	}
-	previousCustomDomain, previousSubdomain = previous.CustomDomain, previous.Subdomain
+		previousCustomDomain, previousSubdomain = previous.CustomDomain, previous.Subdomain
 
-	rows, err := queries.DeactivateTenant(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to delete tenant")
-		return nil, status.Errorf(codes.Internal, "failed to delete tenant: %v", err)
-	}
-
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-
-	if previousCustomDomain.Valid && strings.TrimSpace(previousCustomDomain.String) != "" {
-		if _, enqErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, previousCustomDomain.String, "remove"); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain removal: %v", enqErr)
+		rows, err := queries.DeactivateTenant(ctx, tenantID)
+		if err != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to delete tenant")
+			return txStatusErrorf(err, codes.Internal, "failed to delete tenant: %v", err)
 		}
-	}
-	// Tear the platform alias down too — the tenant is gone.
-	if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, strings.TrimSpace(previousSubdomain.String)); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue navigator tenant-alias removal: %v", enqErr)
-	}
-	if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantDeleted, tenantID, userID, nil, nil); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant_deleted: %v", enqErr)
-	}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit tenant delete: %v", commitErr)
+		if rows == 0 {
+			return status.Error(codes.NotFound, "tenant not found")
+		}
+
+		if previousCustomDomain.Valid && strings.TrimSpace(previousCustomDomain.String) != "" {
+			if _, enqErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, previousCustomDomain.String, "remove"); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue navigator custom-domain removal: %v", enqErr)
+			}
+		}
+		// Tear the platform alias down too — the tenant is gone.
+		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, strings.TrimSpace(previousSubdomain.String)); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue navigator tenant-alias removal: %v", enqErr)
+		}
+		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantDeleted, tenantID, userID, nil, nil); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_deleted: %v", enqErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, retryableTxStatus(err, "commit tenant delete")
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
@@ -2929,62 +3022,61 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *quar
 
 	// Mutation + outbox emits ride in one tx so a crash between them can't
 	// leave the cluster assignment durable without the corresponding event.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	txQueries := quartermasterdb.New(tx)
-	var rows int64
-	switch {
-	case req.PrimaryClusterId != nil && req.DeploymentModel != nil:
-		rows, err = txQueries.UpdateTenantClusterAndDeploymentModel(ctx, quartermasterdb.UpdateTenantClusterAndDeploymentModelParams{
-			PrimaryClusterID: validString(*req.PrimaryClusterId), DeploymentModel: validString(*req.DeploymentModel), TenantID: tenantID,
-		})
-	case req.PrimaryClusterId != nil:
-		rows, err = txQueries.UpdateTenantPrimaryCluster(ctx, quartermasterdb.UpdateTenantPrimaryClusterParams{
-			PrimaryClusterID: validString(*req.PrimaryClusterId), TenantID: tenantID,
-		})
-	default:
-		rows, err = txQueries.UpdateTenantDeploymentModel(ctx, quartermasterdb.UpdateTenantDeploymentModelParams{
-			DeploymentModel: validString(*req.DeploymentModel), TenantID: tenantID,
-		})
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update tenant cluster: %v", err)
-	}
-
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "tenant not found")
-	}
-
-	if len(changedFields) > 0 {
-		if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant_updated: %v", enqErr)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		var rows int64
+		var err error
+		switch {
+		case req.PrimaryClusterId != nil && req.DeploymentModel != nil:
+			rows, err = txQueries.UpdateTenantClusterAndDeploymentModel(ctx, quartermasterdb.UpdateTenantClusterAndDeploymentModelParams{
+				PrimaryClusterID: validString(*req.PrimaryClusterId), DeploymentModel: validString(*req.DeploymentModel), TenantID: tenantID,
+			})
+		case req.PrimaryClusterId != nil:
+			rows, err = txQueries.UpdateTenantPrimaryCluster(ctx, quartermasterdb.UpdateTenantPrimaryClusterParams{
+				PrimaryClusterID: validString(*req.PrimaryClusterId), TenantID: tenantID,
+			})
+		default:
+			rows, err = txQueries.UpdateTenantDeploymentModel(ctx, quartermasterdb.UpdateTenantDeploymentModelParams{
+				DeploymentModel: validString(*req.DeploymentModel), TenantID: tenantID,
+			})
 		}
-	}
-	if req.PrimaryClusterId != nil {
-		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
-		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", ""); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
-			}
-		} else if newCluster == "" && previousClusterID.Valid {
-			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", ""); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update tenant cluster: %v", err)
+		}
+
+		if rows == 0 {
+			return status.Error(codes.NotFound, "tenant not found")
+		}
+
+		if len(changedFields) > 0 {
+			if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, userID, changedFields, nil); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_updated: %v", enqErr)
 			}
 		}
-	}
-	if req.PrimaryClusterId != nil {
-		if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, false); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant alias after routing change: %v", err)
+		if req.PrimaryClusterId != nil {
+			newCluster := strings.TrimSpace(*req.PrimaryClusterId)
+			if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
+				if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", ""); enqErr != nil {
+					return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
+				}
+			} else if newCluster == "" && previousClusterID.Valid {
+				if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", ""); enqErr != nil {
+					return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
+				}
+			}
 		}
-		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue custom domain after routing change: %v", err)
+		if req.PrimaryClusterId != nil {
+			if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, false); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue tenant alias after routing change: %v", err)
+			}
+			if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue custom domain after routing change: %v", err)
+			}
 		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit tenant cluster update: %v", commitErr)
+		return nil
+	})
+	if err != nil {
+		return nil, retryableTxStatus(err, "commit tenant cluster update")
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
@@ -3587,51 +3679,49 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 		return nil, status.Error(codes.InvalidArgument, "no fields to update")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin cluster update: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	txQueries := quartermasterdb.New(tx)
-	if req.IsDefaultCluster != nil && *req.IsDefaultCluster {
-		if clearErr := txQueries.ClearDefaultCluster(ctx); clearErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", clearErr)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		if req.IsDefaultCluster != nil && *req.IsDefaultCluster {
+			if clearErr := txQueries.ClearDefaultCluster(ctx); clearErr != nil {
+				return txStatusErrorf(clearErr, codes.Internal, "failed to clear existing default cluster: %v", clearErr)
+			}
 		}
-	}
-	rows, err := txQueries.UpdateClusterFields(ctx, clusterID, clusterUpdate)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
-	}
+		rows, err := txQueries.UpdateClusterFields(ctx, clusterID, clusterUpdate)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update cluster: %v", err)
+		}
 
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "cluster not found")
-	}
-	if req.IsActive != nil {
-		tenantIDs, listErr := txQueries.ListTenantIDsForCluster(ctx, clusterID)
-		if listErr != nil {
-			return nil, status.Errorf(codes.Internal, "list cluster tenants for DNS convergence: %v", listErr)
+		if rows == 0 {
+			return status.Error(codes.NotFound, "cluster not found")
 		}
-		for _, tenantID := range tenantIDs {
-			if enqErr := s.enqueueTenantAliasDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant alias desired state: %v", enqErr)
+		if req.IsActive != nil {
+			tenantIDs, listErr := txQueries.ListTenantIDsForCluster(ctx, clusterID)
+			if listErr != nil {
+				return txStatusErrorf(listErr, codes.Internal, "list cluster tenants for DNS convergence: %v", listErr)
 			}
-			if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+			for _, tenantID := range tenantIDs {
+				if enqErr := s.enqueueTenantAliasDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+					return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant alias desired state: %v", enqErr)
+				}
+				if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+					return txStatusErrorf(enqErr, codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+				}
 			}
 		}
-	}
-	// cluster_updated names the owner after this update. Clearing the owner
-	// keeps the previous owner on the event; a cluster that never had one
-	// emits a platform-scoped event.
-	eventTenantID := ownerTenantID.String
-	if req.OwnerTenantId != nil && *req.OwnerTenantId != "" {
-		eventTenantID = *req.OwnerTenantId
-	}
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, eventTenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster_updated: %v", enqErr)
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit cluster update: %v", commitErr)
+		// cluster_updated names the owner after this update. Clearing the owner
+		// keeps the previous owner on the event; a cluster that never had one
+		// emits a platform-scoped event.
+		eventTenantID := ownerTenantID.String
+		if req.OwnerTenantId != nil && *req.OwnerTenantId != "" {
+			eventTenantID = *req.OwnerTenantId
+		}
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, eventTenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster_updated: %v", enqErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, retryableTxStatus(err, "commit cluster update")
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
@@ -3862,52 +3952,49 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quart
 
 	// Grant + durable alias ensure in one tx (ensure is gated, so it no-ops
 	// unless the tenant now warrants an alias).
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	txQueries := quartermasterdb.New(tx)
-	var oldState *structpb.Struct
-	if state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID}); stateErr == nil {
-		oldState, err = clusterAccessAuditState(state)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "decode prior access state: %v", err)
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		var oldState *structpb.Struct
+		if state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID}); stateErr == nil {
+			var decodeErr error
+			oldState, decodeErr = clusterAccessAuditState(state)
+			if decodeErr != nil {
+				return status.Errorf(codes.Internal, "decode prior access state: %v", decodeErr)
+			}
+		} else if !errors.Is(stateErr, sql.ErrNoRows) {
+			return txStatusErrorf(stateErr, codes.Internal, "load prior access state: %v", stateErr)
 		}
-	} else if !errors.Is(stateErr, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "load prior access state: %v", stateErr)
-	}
-	if err := txQueries.GrantTenantClusterAccess(ctx, quartermasterdb.GrantTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
-		ResourceLimits: resourceLimits, ExpiresAt: expiresAt,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to grant access: %v", err)
-	}
+		if err := txQueries.GrantTenantClusterAccess(ctx, quartermasterdb.GrantTenantClusterAccessParams{
+			TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
+			ResourceLimits: resourceLimits, ExpiresAt: expiresAt,
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to grant access: %v", err)
+		}
 
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-	state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID})
-	if stateErr != nil {
-		return nil, status.Errorf(codes.Internal, "load granted access state: %v", stateErr)
-	}
-	newState, stateErr := clusterAccessAuditState(state)
-	if stateErr != nil {
-		return nil, status.Errorf(codes.Internal, "decode granted access state: %v", stateErr)
-	}
-	auditEvent := s.buildClusterEvent(eventClusterAccessGranted, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", "", "")
-	auditEvent.GetClusterEvent().BeforeState = oldState
-	auditEvent.GetClusterEvent().AfterState = newState
-	if _, enqErr := s.EnqueueServiceEventTx(ctx, tx, auditEvent); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue access audit: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit grant access: %v", commitErr)
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+		}
+		state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID})
+		if stateErr != nil {
+			return txStatusErrorf(stateErr, codes.Internal, "load granted access state: %v", stateErr)
+		}
+		newState, stateErr := clusterAccessAuditState(state)
+		if stateErr != nil {
+			return status.Errorf(codes.Internal, "decode granted access state: %v", stateErr)
+		}
+		auditEvent := s.buildClusterEvent(eventClusterAccessGranted, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", "", "")
+		auditEvent.GetClusterEvent().BeforeState = oldState
+		auditEvent.GetClusterEvent().AfterState = newState
+		if _, enqErr := s.EnqueueServiceEventTx(ctx, tx, auditEvent); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue access audit: %v", enqErr)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, retryableTxStatus(txErr, "commit grant access")
 	}
 
 	return &emptypb.Empty{}, nil
@@ -4012,32 +4099,29 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 
 	// Wrap the access upsert and the durable alias ensure in one tx so a
 	// crash can't leave the tenant subscribed without an alias hand-off.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
 	resourceLimits := sql.NullString{}
 	if len(resourceLimitsJSON) > 0 {
 		resourceLimits = validString(string(resourceLimitsJSON))
 	}
-	if err := quartermasterdb.New(tx).BootstrapTenantClusterAccess(ctx, quartermasterdb.BootstrapTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID, ResourceLimits: resourceLimits,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
-	}
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if err := quartermasterdb.New(tx).BootstrapTenantClusterAccess(ctx, quartermasterdb.BootstrapTenantClusterAccessParams{
+			TenantID: tenantID, ClusterID: clusterID, ResourceLimits: resourceLimits,
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "upsert tenant_cluster_access: %v", err)
+		}
 
-	// Trigger Navigator alias provisioning durably. A Navigator outage MUST
-	// NOT block billing/tier mutations — the outbox replays until it lands.
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit bootstrap cluster access: %v", commitErr)
+		// Trigger Navigator alias provisioning durably. A Navigator outage MUST
+		// NOT block billing/tier mutations — the outbox replays until it lands.
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, retryableTxStatus(txErr, "commit bootstrap cluster access")
 	}
 
 	return &emptypb.Empty{}, nil
@@ -4122,35 +4206,33 @@ func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req 
 		}
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	changed, err := quartermasterdb.New(tx).MaterializeTenantClusterAccess(ctx, quartermasterdb.MaterializeTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID, AccessSource: accessSource, SubscriptionStatus: subscriptionStatus,
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		changed, err := quartermasterdb.New(tx).MaterializeTenantClusterAccess(ctx, quartermasterdb.MaterializeTenantClusterAccessParams{
+			TenantID: tenantID, ClusterID: clusterID, AccessSource: accessSource, SubscriptionStatus: subscriptionStatus,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "materialize tenant cluster access: %v", err)
+		}
+		if changed > 0 && subscriptionStatus == "active" {
+			if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+			}
+			if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+			}
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterAccessMaterialized, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue access materialization audit: %v", enqErr)
+			}
+		}
+		if changed > 0 && subscriptionStatus == "pending_approval" {
+			if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRequested, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_subscription", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue marketplace access request audit: %v", enqErr)
+			}
+		}
+		return nil
 	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "materialize tenant cluster access: %v", err)
-	}
-	if changed > 0 && subscriptionStatus == "active" {
-		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-		}
-		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-		}
-		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterAccessMaterialized, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue access materialization audit: %v", enqErr)
-		}
-	}
-	if changed > 0 && subscriptionStatus == "pending_approval" {
-		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRequested, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_subscription", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue marketplace access request audit: %v", enqErr)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit materialized cluster access: %v", err)
+	if txErr != nil {
+		return nil, retryableTxStatus(txErr, "commit materialized cluster access")
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -4181,45 +4263,43 @@ func (s *QuartermasterServer) RevokeMaterializedClusterAccess(ctx context.Contex
 		return nil, status.Error(codes.PermissionDenied, "revocation authorization proof invalid")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin revocation transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	txQueries := quartermasterdb.New(tx)
-	changed, err := txQueries.RevokeMaterializedTenantClusterAccess(ctx, quartermasterdb.RevokeMaterializedTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID, AccessSource: "marketplace_subscription",
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		changed, err := txQueries.RevokeMaterializedTenantClusterAccess(ctx, quartermasterdb.RevokeMaterializedTenantClusterAccessParams{
+			TenantID: tenantID, ClusterID: clusterID, AccessSource: "marketplace_subscription",
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "revoke materialized cluster access: %v", err)
+		}
+		if changed > 0 {
+			if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+				return txStatusErrorf(err, codes.Internal, "repoint tenant primary cluster: %v", err)
+			}
+			hasPaid, observed, accessErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+			if accessErr != nil {
+				return txStatusErrorf(accessErr, codes.Internal, "check paid cluster access: %v", accessErr)
+			}
+			if observed {
+				if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "marketplace_subscription_revoked"); err != nil {
+					return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+				}
+			}
+			if observed && !hasPaid {
+				if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
+					return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias remove: %v", err)
+				}
+			}
+			if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue custom-domain desired state: %v", err)
+			}
+			if err := s.emitClusterEventTx(ctx, tx, eventClusterAccessRevoked, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, "marketplace_subscription"); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue access revocation audit: %v", err)
+			}
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "revoke materialized cluster access: %v", err)
-	}
-	if changed > 0 {
-		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
-			return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
-		}
-		hasPaid, observed, accessErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
-		if accessErr != nil {
-			return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accessErr)
-		}
-		if observed {
-			if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "marketplace_subscription_revoked"); err != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-			}
-		}
-		if observed && !hasPaid {
-			if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", err)
-			}
-		}
-		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", err)
-		}
-		if err := s.emitClusterEventTx(ctx, tx, eventClusterAccessRevoked, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, "marketplace_subscription"); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue access revocation audit: %v", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit materialized access revocation: %v", err)
+		return nil, retryableTxStatus(err, "commit materialized access revocation")
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -4242,47 +4322,43 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 	// Legacy epoch tenants are not destructively changed until Purser's billing
 	// observation crosses the handoff fence; the DNS backstop removes stale
 	// cluster membership after that observation lands.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		changed, err := txQueries.DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
+			TenantID: tenantID, ClusterID: clusterID,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "deactivate tenant_cluster_access: %v", err)
+		}
+		if changed > 0 {
+			if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+				return txStatusErrorf(err, codes.Internal, "repoint tenant primary cluster: %v", err)
+			}
+		}
 
-	txQueries := quartermasterdb.New(tx)
-	changed, err := txQueries.DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID,
+		// If the tenant now has zero active paid cluster access rows, tear the
+		// full alias down too (enqueued after remove_cluster, so higher seq).
+		hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		if accErr != nil {
+			return txStatusErrorf(accErr, codes.Internal, "check paid cluster access: %v", accErr)
+		}
+		if changed > 0 && observed {
+			if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_access_deactivated"); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+			}
+		}
+		if observed && !hasPaid {
+			if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
+			}
+		}
+		if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "deactivate tenant_cluster_access: %v", err)
-	}
-	if changed > 0 {
-		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
-			return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
-		}
-	}
-
-	// If the tenant now has zero active paid cluster access rows, tear the
-	// full alias down too (enqueued after remove_cluster, so higher seq).
-	hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
-	if accErr != nil {
-		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
-	}
-	if changed > 0 && observed {
-		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_access_deactivated"); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-		}
-	}
-	if observed && !hasPaid {
-		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
-		}
-	}
-	if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit deactivate cluster access: %v", commitErr)
+		return nil, retryableTxStatus(err, "commit deactivate cluster access")
 	}
 
 	return &emptypb.Empty{}, nil
@@ -4466,49 +4542,47 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *q
 	// Deactivation + durable alias hand-off in one tx. Destructive work is
 	// emitted only after the access row proves an active subscription was
 	// actually observed and changed.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
+	var changed int64
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		changed, err = txQueries.UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
+			TenantID: tenantID, ClusterID: clusterID,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to unsubscribe: %v", err)
+		}
+		if changed == 0 {
+			return nil
+		}
+		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+			return txStatusErrorf(err, codes.Internal, "repoint tenant primary cluster: %v", err)
+		}
 
-	txQueries := quartermasterdb.New(tx)
-	changed, err := txQueries.UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
-		TenantID: tenantID, ClusterID: clusterID,
+		hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		if accErr != nil {
+			return txStatusErrorf(accErr, codes.Internal, "check paid cluster access: %v", accErr)
+		}
+		if observed {
+			if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_unsubscribed"); err != nil {
+				return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+			}
+		}
+		if observed && !hasPaid {
+			if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
+			}
+		}
+		if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to unsubscribe: %v", err)
-	}
-	if changed == 0 {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "commit unchanged unsubscribe: %v", commitErr)
+		if changed == 0 {
+			return nil, retryableTxStatus(err, "commit unchanged unsubscribe")
 		}
-		return &emptypb.Empty{}, nil
-	}
-	if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
-		return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
-	}
-
-	hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
-	if accErr != nil {
-		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
-	}
-	if observed {
-		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_unsubscribed"); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-		}
-	}
-	if observed && !hasPaid {
-		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
-		}
-	}
-	if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit unsubscribe: %v", commitErr)
+		return nil, retryableTxStatus(err, "commit unsubscribe")
 	}
 
 	return &emptypb.Empty{}, nil
@@ -5319,17 +5393,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 
 	var priorNodes map[string]nodeBefore
 	var priorInst map[string]instBefore
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-		if err != nil {
-			return fmt.Errorf("begin tx: %w", err)
-		}
-		defer func() {
-			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				s.logger.WithError(rbErr).Debug("ReportAliveNodes rollback")
-			}
-		}()
-
+	err := database.WithRetryablePostgresTx(ctx, s.db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 		// Pre-read prior node state (external_ip, cluster_id) so we can detect
 		// IP/cluster deltas that need Navigator wakeups even when health doesn't flip.
 		nodeIDs := make([]string, 0, len(updates))
@@ -5444,10 +5508,6 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 					return fmt.Errorf("mark edge instance unhealthy: %w", execErr)
 				}
 			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit: %w", err)
 		}
 		return nil
 	})
@@ -6339,190 +6399,172 @@ func deriveEdgeNodeID(hostname string) string {
 
 // BootstrapEdgeNode registers an edge node using a bootstrap token
 func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
-	var resp *quartermasterpb.BootstrapEdgeNodeResponse
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var err error
-		resp, err = s.bootstrapEdgeNodeOnce(ctx, req)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
 	token := req.GetToken()
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+	var (
+		tokenRow          quartermasterdb.LockedEnrollmentTokenRow
+		resolvedClusterID string
+		nodeID            string
+		rotatedIdentity   bool
+	)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		rotatedIdentity = false
+
+		// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		tokenRow, err = txQueries.LockEdgeEnrollmentToken(ctx, hashBootstrapToken(token))
+
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.Unauthenticated, "invalid or already used token")
 		}
-	}()
-
-	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
-	txQueries := quartermasterdb.New(tx)
-	tokenRow, err := txQueries.LockEdgeEnrollmentToken(ctx, hashBootstrapToken(token))
-
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Check expiration
-	if time.Now().After(tokenRow.ExpiresAt) {
-		return nil, status.Error(codes.Unauthenticated, "token expired")
-	}
-
-	clientIP := extractClientIP(ctx)
-	if !validateExpectedIP(tokenRow.ExpectedIP, clientIP) {
-		return nil, status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
-	}
-
-	// Validate tenant ID is present for edge_node tokens
-	if !tokenRow.TenantID.Valid || tokenRow.TenantID.String == "" {
-		return nil, status.Error(codes.InvalidArgument, "token missing tenant_id")
-	}
-
-	// Cluster enforcement: if token has a cluster_id binding, validate against caller's served set
-	targetClusterID := req.GetTargetClusterId()
-	tokenClusterID := tokenRow.ClusterID.String
-	servedClusters := req.GetServedClusterIds()
-
-	if tokenClusterID != "" && len(servedClusters) > 0 {
-		if !slices.Contains(servedClusters, tokenClusterID) {
-			return nil, status.Errorf(codes.PermissionDenied,
-				"token is bound to cluster %s, not served by this instance", tokenClusterID)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
 		}
-	}
 
-	// Cluster resolution priority: token binding > request target > fallback
-	resolvedClusterID := tokenClusterID
-	if resolvedClusterID == "" {
-		resolvedClusterID = targetClusterID
-	}
-	if resolvedClusterID == "" {
-		// Fallback: pick any active cluster
-		resolvedClusterID, err = txQueries.FirstActiveCluster(ctx)
-		if err != nil || resolvedClusterID == "" {
-			return nil, status.Error(codes.Unavailable, "no active cluster available")
+		// Check expiration
+		if time.Now().After(tokenRow.ExpiresAt) {
+			return status.Error(codes.Unauthenticated, "token expired")
 		}
-	}
 
-	hostname := strings.TrimSpace(req.GetHostname())
-	nodeID := deriveEdgeNodeID(hostname)
-	if nodeID == "" {
-		nodeID = "edge-" + uuid.New().String()[:12]
-	}
-	if hostname == "" {
-		hostname = nodeID
-	}
-
-	// Idempotent: if node already exists with same cluster, return it
-	existingClusterID, err := txQueries.GetNodeCluster(ctx, nodeID)
-	if err == nil {
-		if existingClusterID != resolvedClusterID {
-			return nil, status.Errorf(codes.FailedPrecondition,
-				"node %s already exists in cluster %s", nodeID, existingClusterID)
+		clientIP := extractClientIP(ctx)
+		if !validateExpectedIP(tokenRow.ExpectedIP, clientIP) {
+			return status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
 		}
-		binding, bindingErr := txQueries.GetEdgeNodeFingerprintBindingForUpdate(ctx, nodeID)
-		if bindingErr != nil {
-			if errors.Is(bindingErr, sql.ErrNoRows) {
-				return nil, status.Errorf(codes.FailedPrecondition, "node %s exists without an enrolled identity binding", nodeID)
+
+		// Validate tenant ID is present for edge_node tokens
+		if !tokenRow.TenantID.Valid || tokenRow.TenantID.String == "" {
+			return status.Error(codes.InvalidArgument, "token missing tenant_id")
+		}
+
+		// Cluster enforcement: if token has a cluster_id binding, validate against caller's served set
+		targetClusterID := req.GetTargetClusterId()
+		tokenClusterID := tokenRow.ClusterID.String
+		servedClusters := req.GetServedClusterIds()
+
+		if tokenClusterID != "" && len(servedClusters) > 0 {
+			if !slices.Contains(servedClusters, tokenClusterID) {
+				return status.Errorf(codes.PermissionDenied,
+					"token is bound to cluster %s, not served by this instance", tokenClusterID)
 			}
-			return nil, status.Errorf(codes.Internal, "load existing node identity binding: %v", bindingErr)
 		}
-		machineMatches := req.GetMachineIdSha256() != "" && binding.MachineIDSHA == req.GetMachineIdSha256()
-		macsMatch := req.GetMacsSha256() != "" && binding.MACsSHA == req.GetMacsSha256()
-		stableMismatch := (req.GetMachineIdSha256() != "" && !machineMatches) || (req.GetMacsSha256() != "" && !macsMatch)
-		if binding.TenantID != tokenRow.TenantID.String || stableMismatch || (!machineMatches && !macsMatch) {
-			return nil, status.Errorf(codes.PermissionDenied, "node %s identity binding does not match enrollment", nodeID)
+
+		// Cluster resolution priority: token binding > request target > fallback
+		resolvedClusterID = tokenClusterID
+		if resolvedClusterID == "" {
+			resolvedClusterID = targetClusterID
+		}
+		if resolvedClusterID == "" {
+			// Fallback: pick any active cluster
+			resolvedClusterID, err = txQueries.FirstActiveCluster(ctx)
+			if err != nil || resolvedClusterID == "" {
+				return txStatusErrorf(err, codes.Unavailable, "no active cluster available")
+			}
+		}
+
+		hostname := strings.TrimSpace(req.GetHostname())
+		nodeID = deriveEdgeNodeID(hostname)
+		if nodeID == "" {
+			nodeID = "edge-" + uuid.New().String()[:12]
+		}
+		if hostname == "" {
+			hostname = nodeID
+		}
+
+		// Idempotent: if node already exists with same cluster, return it
+		existingClusterID, err := txQueries.GetNodeCluster(ctx, nodeID)
+		if err == nil {
+			if existingClusterID != resolvedClusterID {
+				return status.Errorf(codes.FailedPrecondition,
+					"node %s already exists in cluster %s", nodeID, existingClusterID)
+			}
+			binding, bindingErr := txQueries.GetEdgeNodeFingerprintBindingForUpdate(ctx, nodeID)
+			if bindingErr != nil {
+				if errors.Is(bindingErr, sql.ErrNoRows) {
+					return status.Errorf(codes.FailedPrecondition, "node %s exists without an enrolled identity binding", nodeID)
+				}
+				return txStatusErrorf(bindingErr, codes.Internal, "load existing node identity binding: %v", bindingErr)
+			}
+			machineMatches := req.GetMachineIdSha256() != "" && binding.MachineIDSHA == req.GetMachineIdSha256()
+			macsMatch := req.GetMacsSha256() != "" && binding.MACsSHA == req.GetMacsSha256()
+			stableMismatch := (req.GetMachineIdSha256() != "" && !machineMatches) || (req.GetMacsSha256() != "" && !macsMatch)
+			if binding.TenantID != tokenRow.TenantID.String || stableMismatch || (!machineMatches && !macsMatch) {
+				return status.Errorf(codes.PermissionDenied, "node %s identity binding does not match enrollment", nodeID)
+			}
+			if len(req.GetNodeIdentityPublicKeyEd25519()) != ed25519.PublicKeySize {
+				return status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
+			}
+			keyMatches := bytes.Equal(binding.PublicKeyEd25519, req.GetNodeIdentityPublicKeyEd25519())
+			if !keyMatches && !req.GetRotateNodeIdentity() {
+				return status.Errorf(codes.PermissionDenied, "node %s identity key does not match enrollment; explicit rotation is required", nodeID)
+			}
+			if keyMatches {
+				if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
+					return upsertErr
+				}
+			} else {
+				if rotateErr := txQueries.RotateEdgeNodeIdentityKey(ctx, tokenRow.TenantID.String, nodeID, req.GetMachineIdSha256(), req.GetMacsSha256(), req.GetNodeIdentityPublicKeyEd25519()); rotateErr != nil {
+					return txStatusErrorf(rotateErr, codes.FailedPrecondition, "rotate node identity: %v", rotateErr)
+				}
+				if usageErr := txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID); usageErr != nil {
+					return txStatusErrorf(usageErr, codes.Internal, "record node identity rotation token use: %v", usageErr)
+				}
+				rotatedIdentity = true
+			}
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
 		}
 		if len(req.GetNodeIdentityPublicKeyEd25519()) != ed25519.PublicKeySize {
-			return nil, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
+			return status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
 		}
-		keyMatches := bytes.Equal(binding.PublicKeyEd25519, req.GetNodeIdentityPublicKeyEd25519())
-		if !keyMatches && !req.GetRotateNodeIdentity() {
-			return nil, status.Errorf(codes.PermissionDenied, "node %s identity key does not match enrollment; explicit rotation is required", nodeID)
-		}
-		if keyMatches {
-			if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
-				return nil, upsertErr
-			}
-		} else {
-			if rotateErr := txQueries.RotateEdgeNodeIdentityKey(ctx, tokenRow.TenantID.String, nodeID, req.GetMachineIdSha256(), req.GetMacsSha256(), req.GetNodeIdentityPublicKeyEd25519()); rotateErr != nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "rotate node identity: %v", rotateErr)
-			}
-			if usageErr := txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID); usageErr != nil {
-				return nil, status.Errorf(codes.Internal, "record node identity rotation token use: %v", usageErr)
-			}
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		if !keyMatches {
-			s.logger.WithFields(logging.Fields{
-				"node_id": nodeID, "tenant_id": tokenRow.TenantID.String, "cluster_id": resolvedClusterID,
-			}).Warn("Rotated edge node identity after token-authorized recovery")
-		}
-		return &quartermasterpb.BootstrapEdgeNodeResponse{
-			NodeId:    nodeID,
-			TenantId:  tokenRow.TenantID.String,
-			ClusterId: resolvedClusterID,
-		}, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if len(req.GetNodeIdentityPublicKeyEd25519()) != ed25519.PublicKeySize {
-		return nil, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
-	}
 
-	// Create node
-	var extIP any = nil
-	if ips := req.GetIps(); len(ips) > 0 {
-		extIP = ips[0]
-	}
-
-	var lat, lng any
-	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
-		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
-			geobucket.BucketGeoData(geo)
-			lat = geo.Latitude
-			lng = geo.Longitude
+		// Create node
+		var extIP any = nil
+		if ips := req.GetIps(); len(ips) > 0 {
+			extIP = ips[0]
 		}
-	}
 
-	err = txQueries.CreateEdgeNode(ctx, quartermasterdb.CreateEdgeNodeParams{
-		ID: uuid.New().String(), NodeID: nodeID, ClusterID: resolvedClusterID, Hostname: hostname,
-		ExternalIP: extIP, Latitude: lat, Longitude: lng,
+		var lat, lng any
+		if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
+			if geo := s.geoipReader.Lookup(ipStr); geo != nil {
+				geobucket.BucketGeoData(geo)
+				lat = geo.Latitude
+				lng = geo.Longitude
+			}
+		}
+
+		err = txQueries.CreateEdgeNode(ctx, quartermasterdb.CreateEdgeNodeParams{
+			ID: uuid.New().String(), NodeID: nodeID, ClusterID: resolvedClusterID, Hostname: hostname,
+			ExternalIP: extIP, Latitude: lat, Longitude: lng,
+		})
+
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to create node: %v", err)
+		}
+
+		if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
+			return upsertErr
+		}
+
+		// Update token usage
+		err = txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update token usage: %v", err)
+		}
+		return nil
 	})
-
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
+		return nil, retryableTxStatus(err, "failed to commit bootstrap")
 	}
-
-	if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
-		return nil, upsertErr
-	}
-
-	// Update token usage
-	err = txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
+	if rotatedIdentity {
+		s.logger.WithFields(logging.Fields{
+			"node_id": nodeID, "tenant_id": tokenRow.TenantID.String, "cluster_id": resolvedClusterID,
+		}).Warn("Rotated edge node identity after token-authorized recovery")
 	}
 
 	// DNS sync is handled by Navigator's periodic reconciler. Edge health
@@ -6550,104 +6592,209 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		return nil, status.Errorf(codes.InvalidArgument, "node_type must be one of [%s], got %q", strings.Join(models.NodeTypeValues(), ", "), nodeType)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	var (
+		replayResp        *quartermasterpb.BootstrapInfrastructureNodeResponse
+		tokenRow          quartermasterdb.LockedEnrollmentTokenRow
+		resolvedClusterID string
+		nodeID            string
+		existingNode      quartermasterdb.ExistingInfrastructureNodeRow
+		existingFound     bool
+		clusterMeshCIDR   sql.NullString
+		assignedIP        string
+		assignedPort      int32
+	)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		replayResp, existingFound = nil, false
+
+		// Replay short-circuit: if the caller supplies node_id + public_key and
+		// a matching row already exists for this token, this is a retry after a
+		// previous RPC committed server-side but the client failed to persist
+		// the response. Return the same assignment without re-checking the
+		// token's usage budget. Possession of the original token (by hash
+		// match, even if spent), the client-chosen node_id, and the locally-
+		// generated public_key together prove identity — none of which an
+		// attacker can forge without access to the original node.
+		if idRaw := strings.TrimSpace(req.GetNodeId()); idRaw != "" && req.WireguardPublicKey != nil {
+			pubRaw := strings.TrimSpace(*req.WireguardPublicKey)
+			if pubRaw != "" {
+				resp, replayErr := s.bootstrapReplay(ctx, tx, token, idRaw, pubRaw)
+				if replayErr != nil {
+					return replayErr
+				}
+				if resp != nil {
+					replayResp = resp
+					return errBootstrapInfrastructureReplay
+				}
+			}
+		}
+
+		// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		tokenRow, err = txQueries.LockInfrastructureEnrollmentToken(ctx, hashBootstrapToken(token))
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.Unauthenticated, "invalid or already used token")
+		}
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+		}
+
+		if time.Now().After(tokenRow.ExpiresAt) {
+			return status.Error(codes.Unauthenticated, "token expired")
+		}
+
+		clientIP := extractClientIP(ctx)
+		if !validateExpectedIP(tokenRow.ExpectedIP, clientIP) {
+			return status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
+		}
+
+		// Cluster enforcement: if token has a cluster_id binding, validate against target
+		targetClusterID := req.GetTargetClusterId()
+		tokenClusterID := tokenRow.ClusterID.String
+		if tokenClusterID != "" && targetClusterID != "" && tokenClusterID != targetClusterID {
+			return status.Errorf(codes.PermissionDenied,
+				"token is bound to cluster %s, cannot use for cluster %s", tokenClusterID, targetClusterID)
+		}
+
+		// Cluster resolution priority: token binding > request target > fallback
+		resolvedClusterID = tokenClusterID
+		if resolvedClusterID == "" {
+			resolvedClusterID = targetClusterID
+		}
+		if resolvedClusterID == "" {
+			resolvedClusterID, err = txQueries.FirstActiveCluster(ctx)
+			if err != nil || resolvedClusterID == "" {
+				return txStatusErrorf(err, codes.Unavailable, "no active cluster available")
+			}
+		}
+
+		nodeID = req.GetNodeId()
+		if nodeID == "" {
+			nodeID = "node-" + uuid.New().String()[:12]
+		}
+		hostname := req.GetHostname()
+		if hostname == "" {
+			hostname = nodeID
+		}
+
+		// Idempotent: if the node already exists we return its full assigned
+		// identity — not just the IDs — so a client recovering from a mid-flight
+		// failure can resume without needing to delete anything server-side.
+		existingNode, err = txQueries.GetExistingInfrastructureNode(ctx, nodeID)
+		if err == nil {
+			if existingNode.ClusterID != resolvedClusterID {
+				return status.Errorf(codes.FailedPrecondition, "node already exists in cluster %s", existingNode.ClusterID)
+			}
+			if strings.TrimSpace(tokenRow.Metadata) != "" && tokenRow.Metadata != "{}" {
+				if updateErr := txQueries.MergeInfrastructureNodeMetadata(ctx, nodeID, tokenRow.Metadata); updateErr != nil {
+					return txStatusErrorf(updateErr, codes.Internal, "update node metadata: %v", updateErr)
+				}
+			}
+			existingFound = true
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+		}
+
+		// Server never generates private keys. A new mesh enrollment must carry
+		// its own public key; the private half stays on the node.
+		wgPubStr := ""
+		if req.WireguardPublicKey != nil {
+			wgPubStr = strings.TrimSpace(*req.WireguardPublicKey)
+		}
+		if wgPubStr == "" {
+			return status.Error(codes.InvalidArgument, "wireguard_public_key required: the node must generate its keypair locally and send only the public half")
+		}
+
+		// Resolve cluster mesh config so we can assign an IP/port when the
+		// request omits them.
+		meshConfig, cfgErr := txQueries.GetClusterMeshConfig(ctx, resolvedClusterID)
+		if cfgErr != nil {
+			return txStatusErrorf(cfgErr, codes.Internal, "load cluster mesh config: %v", cfgErr)
+		}
+		var clusterWGPort sql.NullInt32
+		clusterMeshCIDR, clusterWGPort = meshConfig.CIDR, meshConfig.Port
+
+		// Determine the node's mesh IP. A client-supplied value is trusted (the
+		// GitOps-rendered seed path). Empty means allocate from the cluster CIDR.
+		assignedIP = ""
+		if req.WireguardIp != nil {
+			assignedIP = strings.TrimSpace(*req.WireguardIp)
+		}
+		if assignedIP == "" {
+			if !clusterMeshCIDR.Valid || clusterMeshCIDR.String == "" {
+				return status.Errorf(codes.FailedPrecondition, "cluster %q has no wg_mesh_cidr configured; run `frameworks cluster provision` to sync it from the manifest", resolvedClusterID)
+			}
+			_, cidr, parseErr := net.ParseCIDR(clusterMeshCIDR.String)
+			if parseErr != nil {
+				return status.Errorf(codes.Internal, "cluster has invalid wg_mesh_cidr %q: %v", clusterMeshCIDR.String, parseErr)
+			}
+			taken, takenErr := loadTakenMeshIPs(ctx, tx, resolvedClusterID)
+			if takenErr != nil {
+				return txStatusErrorf(takenErr, codes.Internal, "load taken mesh IPs: %v", takenErr)
+			}
+			allocated, allocErr := pkgmesh.AllocateMeshIP(resolvedClusterID, hostname, cidr, taken)
+			if allocErr != nil {
+				return status.Errorf(codes.ResourceExhausted, "allocate mesh IP: %v", allocErr)
+			}
+			assignedIP = allocated.String()
+		}
+
+		// Listen port: client-supplied > cluster default > 51820.
+		if req.WireguardPort != nil && *req.WireguardPort > 0 {
+			assignedPort = *req.WireguardPort
+		} else if clusterWGPort.Valid && clusterWGPort.Int32 > 0 {
+			assignedPort = clusterWGPort.Int32
+		} else {
+			assignedPort = 51820
+		}
+
+		// Create node with 'active' status
+		var extIP any = nil
+		if req.ExternalIp != nil && *req.ExternalIp != "" {
+			extIP = *req.ExternalIp
+		}
+		var intIP any = nil
+		if req.InternalIp != nil && *req.InternalIp != "" {
+			intIP = *req.InternalIp
+		}
+
+		var lat, lng any
+		if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
+			if geo := s.geoipReader.Lookup(ipStr); geo != nil {
+				geobucket.BucketGeoData(geo)
+				lat = geo.Latitude
+				lng = geo.Longitude
+			}
+		}
+
+		// New row via the token/enrollment path → enrollment_origin=runtime_enrolled.
+		// The idempotent early return above preserves existing origins.
+		err = txQueries.CreateInfrastructureNode(ctx, quartermasterdb.CreateInfrastructureNodeParams{
+			ID: uuid.New().String(), NodeID: nodeID, ClusterID: resolvedClusterID, Hostname: hostname, NodeType: nodeType,
+			ExternalIP: extIP, InternalIP: intIP, WireguardIP: assignedIP, WireguardPublicKey: wgPubStr,
+			WireguardPort: assignedPort, Latitude: lat, Longitude: lng, Metadata: tokenRow.Metadata,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to create node: %v", err)
+		}
+
+		// Update token usage
+		err = txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update token usage: %v", err)
+		}
+		return nil
+	})
+	if errors.Is(err, errBootstrapInfrastructureReplay) {
+		return replayResp, nil
+	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
-		}
-	}()
-
-	// Replay short-circuit: if the caller supplies node_id + public_key and
-	// a matching row already exists for this token, this is a retry after a
-	// previous RPC committed server-side but the client failed to persist
-	// the response. Return the same assignment without re-checking the
-	// token's usage budget. Possession of the original token (by hash
-	// match, even if spent), the client-chosen node_id, and the locally-
-	// generated public_key together prove identity — none of which an
-	// attacker can forge without access to the original node.
-	if idRaw := strings.TrimSpace(req.GetNodeId()); idRaw != "" && req.WireguardPublicKey != nil {
-		pubRaw := strings.TrimSpace(*req.WireguardPublicKey)
-		if pubRaw != "" {
-			replayResp, replayErr := s.bootstrapReplay(ctx, tx, token, idRaw, pubRaw)
-			if replayErr != nil {
-				return nil, replayErr
-			}
-			if replayResp != nil {
-				return replayResp, nil
-			}
-		}
+		return nil, retryableTxStatus(err, "failed to commit bootstrap")
 	}
 
-	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
-	txQueries := quartermasterdb.New(tx)
-	tokenRow, err := txQueries.LockInfrastructureEnrollmentToken(ctx, hashBootstrapToken(token))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	if time.Now().After(tokenRow.ExpiresAt) {
-		return nil, status.Error(codes.Unauthenticated, "token expired")
-	}
-
-	clientIP := extractClientIP(ctx)
-	if !validateExpectedIP(tokenRow.ExpectedIP, clientIP) {
-		return nil, status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
-	}
-
-	// Cluster enforcement: if token has a cluster_id binding, validate against target
-	targetClusterID := req.GetTargetClusterId()
-	tokenClusterID := tokenRow.ClusterID.String
-	if tokenClusterID != "" && targetClusterID != "" && tokenClusterID != targetClusterID {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"token is bound to cluster %s, cannot use for cluster %s", tokenClusterID, targetClusterID)
-	}
-
-	// Cluster resolution priority: token binding > request target > fallback
-	resolvedClusterID := tokenClusterID
-	if resolvedClusterID == "" {
-		resolvedClusterID = targetClusterID
-	}
-	if resolvedClusterID == "" {
-		resolvedClusterID, err = txQueries.FirstActiveCluster(ctx)
-		if err != nil || resolvedClusterID == "" {
-			return nil, status.Error(codes.Unavailable, "no active cluster available")
-		}
-	}
-
-	nodeID := req.GetNodeId()
-	if nodeID == "" {
-		nodeID = "node-" + uuid.New().String()[:12]
-	}
-	hostname := req.GetHostname()
-	if hostname == "" {
-		hostname = nodeID
-	}
-
-	// Idempotent: if the node already exists we return its full assigned
-	// identity — not just the IDs — so a client recovering from a mid-flight
-	// failure can resume without needing to delete anything server-side.
-	existingNode, err := txQueries.GetExistingInfrastructureNode(ctx, nodeID)
-	if err == nil {
-		if existingNode.ClusterID != resolvedClusterID {
-			return nil, status.Errorf(codes.FailedPrecondition, "node already exists in cluster %s", existingNode.ClusterID)
-		}
-		if strings.TrimSpace(tokenRow.Metadata) != "" && tokenRow.Metadata != "{}" {
-			if updateErr := txQueries.MergeInfrastructureNodeMetadata(ctx, nodeID, tokenRow.Metadata); updateErr != nil {
-				return nil, status.Errorf(codes.Internal, "update node metadata: %v", updateErr)
-			}
-		}
-		// Commit the tx so subsequent reads see a consistent view even
-		// though we didn't mutate anything.
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
-		}
-
+	if existingFound {
 		existingMeshCIDR, existingMeshPort := loadClusterMeshConfig(ctx, s.db, resolvedClusterID)
 		if existingNode.WireguardPort.Valid && existingNode.WireguardPort.Int32 > 0 {
 			existingMeshPort = existingNode.WireguardPort.Int32
@@ -6673,102 +6820,6 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 			resp.TenantId = &t
 		}
 		return resp, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Server never generates private keys. A new mesh enrollment must carry
-	// its own public key; the private half stays on the node.
-	wgPubStr := ""
-	if req.WireguardPublicKey != nil {
-		wgPubStr = strings.TrimSpace(*req.WireguardPublicKey)
-	}
-	if wgPubStr == "" {
-		return nil, status.Error(codes.InvalidArgument, "wireguard_public_key required: the node must generate its keypair locally and send only the public half")
-	}
-
-	// Resolve cluster mesh config so we can assign an IP/port when the
-	// request omits them.
-	meshConfig, cfgErr := txQueries.GetClusterMeshConfig(ctx, resolvedClusterID)
-	if cfgErr != nil {
-		return nil, status.Errorf(codes.Internal, "load cluster mesh config: %v", cfgErr)
-	}
-	clusterMeshCIDR, clusterWGPort := meshConfig.CIDR, meshConfig.Port
-
-	// Determine the node's mesh IP. A client-supplied value is trusted (the
-	// GitOps-rendered seed path). Empty means allocate from the cluster CIDR.
-	assignedIP := ""
-	if req.WireguardIp != nil {
-		assignedIP = strings.TrimSpace(*req.WireguardIp)
-	}
-	if assignedIP == "" {
-		if !clusterMeshCIDR.Valid || clusterMeshCIDR.String == "" {
-			return nil, status.Errorf(codes.FailedPrecondition, "cluster %q has no wg_mesh_cidr configured; run `frameworks cluster provision` to sync it from the manifest", resolvedClusterID)
-		}
-		_, cidr, parseErr := net.ParseCIDR(clusterMeshCIDR.String)
-		if parseErr != nil {
-			return nil, status.Errorf(codes.Internal, "cluster has invalid wg_mesh_cidr %q: %v", clusterMeshCIDR.String, parseErr)
-		}
-		taken, takenErr := loadTakenMeshIPs(ctx, tx, resolvedClusterID)
-		if takenErr != nil {
-			return nil, status.Errorf(codes.Internal, "load taken mesh IPs: %v", takenErr)
-		}
-		allocated, allocErr := pkgmesh.AllocateMeshIP(resolvedClusterID, hostname, cidr, taken)
-		if allocErr != nil {
-			return nil, status.Errorf(codes.ResourceExhausted, "allocate mesh IP: %v", allocErr)
-		}
-		assignedIP = allocated.String()
-	}
-
-	// Listen port: client-supplied > cluster default > 51820.
-	assignedPort := int32(0)
-	if req.WireguardPort != nil && *req.WireguardPort > 0 {
-		assignedPort = *req.WireguardPort
-	} else if clusterWGPort.Valid && clusterWGPort.Int32 > 0 {
-		assignedPort = clusterWGPort.Int32
-	} else {
-		assignedPort = 51820
-	}
-
-	// Create node with 'active' status
-	var extIP any = nil
-	if req.ExternalIp != nil && *req.ExternalIp != "" {
-		extIP = *req.ExternalIp
-	}
-	var intIP any = nil
-	if req.InternalIp != nil && *req.InternalIp != "" {
-		intIP = *req.InternalIp
-	}
-
-	var lat, lng any
-	if ipStr, ok := extIP.(string); ok && s.geoipReader != nil {
-		if geo := s.geoipReader.Lookup(ipStr); geo != nil {
-			geobucket.BucketGeoData(geo)
-			lat = geo.Latitude
-			lng = geo.Longitude
-		}
-	}
-
-	// New row via the token/enrollment path → enrollment_origin=runtime_enrolled.
-	// The idempotent early return above preserves existing origins.
-	err = txQueries.CreateInfrastructureNode(ctx, quartermasterdb.CreateInfrastructureNodeParams{
-		ID: uuid.New().String(), NodeID: nodeID, ClusterID: resolvedClusterID, Hostname: hostname, NodeType: nodeType,
-		ExternalIP: extIP, InternalIP: intIP, WireguardIP: assignedIP, WireguardPublicKey: wgPubStr,
-		WireguardPort: assignedPort, Latitude: lat, Longitude: lng, Metadata: tokenRow.Metadata,
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
-	}
-
-	// Update token usage
-	err = txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
 	}
 
 	var tenantResp *string
@@ -6807,6 +6858,10 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}, nil
 }
 
+// errBootstrapInfrastructureReplay rolls back the enrollment transaction when a
+// previously committed enrollment is replayed; the caller returns that response.
+var errBootstrapInfrastructureReplay = errors.New("bootstrap infrastructure node replay")
+
 func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID string, req *quartermasterpb.BootstrapEdgeNodeRequest) error {
 	machineIDSHA := req.GetMachineIdSha256()
 	macsSHA := req.GetMacsSha256()
@@ -6835,7 +6890,7 @@ func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID
 		PublicKeyEd25519: req.GetNodeIdentityPublicKeyEd25519(),
 	})
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to upsert node fingerprint: %v", err)
+		return txStatusErrorf(err, codes.Internal, "failed to upsert node fingerprint: %v", err)
 	}
 	return nil
 }
@@ -6860,38 +6915,37 @@ func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *
 		return nil, status.Errorf(codes.InvalidArgument, "enrollment_origin must be one of gitops_seed|runtime_enrolled|adopted_local, got %q", newOrigin)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	txQueries := quartermasterdb.New(tx)
-	current, err := txQueries.GetNodeEnrollmentOrigin(ctx, nodeID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.NotFound, "node %q not found", nodeID)
+	var current string
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		current, err = txQueries.GetNodeEnrollmentOrigin(ctx, nodeID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Errorf(codes.NotFound, "node %q not found", nodeID)
+			}
+			return txStatusErrorf(err, codes.Internal, "read current origin: %v", err)
 		}
-		return nil, status.Errorf(codes.Internal, "read current origin: %v", err)
-	}
 
-	if exp := strings.TrimSpace(req.GetExpectedCurrent()); exp != "" && exp != current {
-		return nil, status.Errorf(codes.FailedPrecondition, "node %q enrollment_origin is %q, not the expected %q", nodeID, current, exp)
-	}
+		if exp := strings.TrimSpace(req.GetExpectedCurrent()); exp != "" && exp != current {
+			return status.Errorf(codes.FailedPrecondition, "node %q enrollment_origin is %q, not the expected %q", nodeID, current, exp)
+		}
 
+		if current == newOrigin {
+			// Already at desired state; commit without writing.
+			return nil
+		}
+
+		if err := txQueries.UpdateNodeEnrollmentOrigin(ctx, nodeID, newOrigin); err != nil {
+			return txStatusErrorf(err, codes.Internal, "update origin: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, retryableTxStatus(err, "commit")
+	}
 	if current == newOrigin {
-		// Already at desired state; return success without writing.
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
-		}
 		return &quartermasterpb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: current}, nil
-	}
-
-	if err := txQueries.UpdateNodeEnrollmentOrigin(ctx, nodeID, newOrigin); err != nil {
-		return nil, status.Errorf(codes.Internal, "update origin: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit: %v", err)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -6924,7 +6978,7 @@ func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, t
 		return nil, nil
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "replay: token lookup: %v", err)
+		return nil, txStatusErrorf(err, codes.Internal, "replay: token lookup: %v", err)
 	}
 	if time.Now().After(tokenRow.ExpiresAt) {
 		return nil, status.Error(codes.Unauthenticated, "token expired")
@@ -6940,7 +6994,7 @@ func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, t
 		return nil, nil
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "replay: node lookup: %v", err)
+		return nil, txStatusErrorf(err, codes.Internal, "replay: node lookup: %v", err)
 	}
 
 	if !nodeRow.PublicKey.Valid || nodeRow.PublicKey.String != wgPub {
@@ -9196,22 +9250,18 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 	// Marketplace UPDATE + cluster_updated outbox emit ride one tx so the
 	// dashboard view and downstream consumers can't see a divergent state
 	// after a crash between mutation and emit.
-	tx, err := s.db.BeginTx(ctx, nil)
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if updateErr := quartermasterdb.New(tx).UpdateMarketplace(ctx, update); updateErr != nil {
+			return txStatusErrorf(updateErr, codes.Internal, "failed to update cluster: %v", updateErr)
+		}
+
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster_updated: %v", enqErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	if err = quartermasterdb.New(tx).UpdateMarketplace(ctx, update); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster_updated: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit cluster update: %v", commitErr)
+		return nil, retryableTxStatus(err, "commit cluster update")
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
@@ -9274,22 +9324,6 @@ type ownedPrivateClusterCreate struct {
 	tokenExpiresAt   time.Time
 }
 
-// txStatusError carries a gRPC status out of a retryable transaction body
-// while keeping the database cause reachable, so a 40001 inside the body
-// still replays the transaction.
-type txStatusError struct {
-	st    *status.Status
-	cause error
-}
-
-func (e *txStatusError) Error() string              { return e.st.Message() }
-func (e *txStatusError) Unwrap() error              { return e.cause }
-func (e *txStatusError) GRPCStatus() *status.Status { return e.st }
-
-func txStatusErrorf(code codes.Code, cause error, prefix string) error {
-	return &txStatusError{st: status.Newf(code, "%s: %v", prefix, cause), cause: cause}
-}
-
 // createOwnedPrivateCluster enforces the owner's max_owned_clusters limit and
 // writes every row that makes a private cluster usable in one retryable
 // transaction: the cluster row, the owner's tenant_cluster_access grant, the
@@ -9306,7 +9340,7 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 			return status.Error(codes.NotFound, "tenant not found")
 		}
 		if err != nil {
-			return txStatusErrorf(codes.Internal, err, "database error")
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
 		}
 		if !ownership.MaxOwnedClusters.Valid || !ownership.IsProvider.Valid {
 			return status.Error(codes.Internal, "database error: required tenant ownership field is NULL")
@@ -9314,7 +9348,7 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 		if !ownership.IsProvider.Bool {
 			owned, countErr := txQueries.CountTenantOwnedClusters(ctx, create.tenantID)
 			if countErr != nil {
-				return txStatusErrorf(codes.Internal, countErr, "database error")
+				return txStatusErrorf(countErr, codes.Internal, "database error: %v", countErr)
 			}
 			if owned >= int64(ownership.MaxOwnedClusters.Int32) {
 				return status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", ownership.MaxOwnedClusters.Int32)
@@ -9327,13 +9361,13 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 			RegionID: strings.TrimSpace(create.controlCell.regionID), ControlCellID: create.controlCell.controlCellID,
 			CreatedAt: create.createdAt,
 		}); err != nil {
-			return txStatusErrorf(codes.Internal, err, "failed to create cluster")
+			return txStatusErrorf(err, codes.Internal, "failed to create cluster: %v", err)
 		}
 
 		if err = txQueries.GrantPrivateClusterOwnerAccess(ctx, quartermasterdb.GrantPrivateClusterOwnerAccessParams{
 			TenantID: create.tenantID, ClusterID: create.clusterID,
 		}); err != nil {
-			return txStatusErrorf(codes.Internal, err, "failed to auto-subscribe owner to cluster")
+			return txStatusErrorf(err, codes.Internal, "failed to auto-subscribe owner to cluster: %v", err)
 		}
 
 		// Every running Foghorn of the control cell serves the new cluster, so
@@ -9341,7 +9375,7 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 		// reconciler keeps the set current as replicas join or leave the cell.
 		assigned, err := txQueries.AssignControlCellFoghornsToPrivateCluster(ctx, create.clusterID)
 		if err != nil {
-			return txStatusErrorf(codes.Internal, err, "failed to assign Foghorn to cluster")
+			return txStatusErrorf(err, codes.Internal, "failed to assign Foghorn to cluster: %v", err)
 		}
 		if assigned == 0 {
 			return status.Errorf(codes.Unavailable, "no running Foghorn in control cell %q", create.controlCell.controlCellID)
@@ -9352,20 +9386,20 @@ func (s *QuartermasterServer) createOwnedPrivateCluster(ctx context.Context, cre
 			Name: fmt.Sprintf("Bootstrap token for %s", create.clusterName), TenantID: create.tenantID,
 			ClusterID: validString(create.clusterID), ExpiresAt: create.tokenExpiresAt,
 		}); err != nil {
-			return txStatusErrorf(codes.Internal, err, "failed to create bootstrap token")
+			return txStatusErrorf(err, codes.Internal, "failed to create bootstrap token: %v", err)
 		}
 
 		if err = s.emitClusterEventTx(ctx, tx, eventClusterCreated, create.tenantID, create.userID, create.clusterID, "cluster", create.clusterID, "", "", ""); err != nil {
-			return txStatusErrorf(codes.Internal, err, "enqueue cluster_created")
+			return txStatusErrorf(err, codes.Internal, "enqueue cluster_created: %v", err)
 		}
 		if err = s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, create.tenantID, create.userID, create.clusterID, "cluster", create.clusterID, "", "", ""); err != nil {
-			return txStatusErrorf(codes.Internal, err, "enqueue tenant_cluster_assigned")
+			return txStatusErrorf(err, codes.Internal, "enqueue tenant_cluster_assigned: %v", err)
 		}
 		if err = s.enqueueTenantAliasEnsureTx(ctx, tx, create.tenantID, true); err != nil {
-			return txStatusErrorf(codes.Internal, err, "enqueue tenant-alias ensure")
+			return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias ensure: %v", err)
 		}
 		if err = s.enqueueTenantAliasClusterEnsureTx(ctx, tx, create.tenantID, create.clusterID); err != nil {
-			return txStatusErrorf(codes.Internal, err, "enqueue tenant-alias cluster authority")
+			return txStatusErrorf(err, codes.Internal, "enqueue tenant-alias cluster authority: %v", err)
 		}
 		return nil
 	})
@@ -10061,47 +10095,39 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 
 	now := time.Now()
 	id := uuid.New().String()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		if inviteID != "" {
+			if acceptErr := txQueries.AcceptClusterInviteRecord(ctx, inviteID); acceptErr != nil {
+				return txStatusErrorf(acceptErr, codes.Internal, "failed to accept invite: %v", acceptErr)
+			}
 		}
-	}()
-
-	txQueries := quartermasterdb.New(tx)
-	if inviteID != "" {
-		if err = txQueries.AcceptClusterInviteRecord(ctx, inviteID); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
+		accessSource, sourceErr := clusterSubscriptionAccessSource(tenantID, inviteID, policy.IsPlatformOfficial.Bool, policy.OwnerTenantID)
+		if sourceErr != nil {
+			return sourceErr
 		}
-	}
-	accessSource, sourceErr := clusterSubscriptionAccessSource(tenantID, inviteID, policy.IsPlatformOfficial.Bool, policy.OwnerTenantID)
-	if sourceErr != nil {
-		return nil, sourceErr
-	}
 
-	subscriptionID, err := txQueries.UpsertRequestedClusterSubscription(ctx, quartermasterdb.UpsertRequestedClusterSubscriptionParams{
-		ID: id, TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
-		AccessSource:       accessSource,
-		SubscriptionStatus: validString(subscriptionStatus), ResourceLimits: inviteResourceLimits,
-		RequestedAt: sql.NullTime{Time: now, Valid: true},
+		subscriptionID, upsertErr := txQueries.UpsertRequestedClusterSubscription(ctx, quartermasterdb.UpsertRequestedClusterSubscriptionParams{
+			ID: id, TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
+			AccessSource:       accessSource,
+			SubscriptionStatus: validString(subscriptionStatus), ResourceLimits: inviteResourceLimits,
+			RequestedAt: sql.NullTime{Time: now, Valid: true},
+		})
+		if upsertErr != nil {
+			return txStatusErrorf(upsertErr, codes.Internal, "failed to create subscription: %v", upsertErr)
+		}
+
+		eventType := eventClusterSubscriptionRequested
+		if subscriptionStatus == "active" {
+			eventType = eventClusterSubscriptionApproved
+		}
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventType, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, inviteID, subscriptionID, ""); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
-	}
-
-	eventType := eventClusterSubscriptionRequested
-	if subscriptionStatus == "active" {
-		eventType = eventClusterSubscriptionApproved
-	}
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventType, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, inviteID, subscriptionID, ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscription: %v", err)
+		return nil, retryableTxStatus(err, "commit subscription")
 	}
 
 	// Fetch the created subscription
@@ -10163,48 +10189,39 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 		return nil, inviteErr
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
-		}
-	}()
-
-	txQueries := quartermasterdb.New(tx)
-	if err = txQueries.AcceptClusterInviteRecord(ctx, inviteRow.ID); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
-	}
-
 	now := time.Now()
 	id := uuid.New().String()
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txQueries := quartermasterdb.New(tx)
+		if acceptErr := txQueries.AcceptClusterInviteRecord(ctx, inviteRow.ID); acceptErr != nil {
+			return txStatusErrorf(acceptErr, codes.Internal, "failed to accept invite: %v", acceptErr)
+		}
 
-	resourceLimits := sql.NullString{}
-	if len(inviteRow.ResourceLimits) > 0 {
-		resourceLimits = validString(string(inviteRow.ResourceLimits))
-	}
-	subscriptionID, err := txQueries.UpsertAcceptedClusterSubscription(ctx, quartermasterdb.UpsertAcceptedClusterSubscriptionParams{
-		ID: id, TenantID: tenantID, ClusterID: inviteRow.ClusterID, AccessLevel: inviteRow.AccessLevel,
-		ResourceLimits: resourceLimits, ApprovedAt: sql.NullTime{Time: now, Valid: true},
+		resourceLimits := sql.NullString{}
+		if len(inviteRow.ResourceLimits) > 0 {
+			resourceLimits = validString(string(inviteRow.ResourceLimits))
+		}
+		subscriptionID, upsertErr := txQueries.UpsertAcceptedClusterSubscription(ctx, quartermasterdb.UpsertAcceptedClusterSubscriptionParams{
+			ID: id, TenantID: tenantID, ClusterID: inviteRow.ClusterID, AccessLevel: inviteRow.AccessLevel,
+			ResourceLimits: resourceLimits, ApprovedAt: sql.NullTime{Time: now, Valid: true},
+		})
+		if upsertErr != nil {
+			return txStatusErrorf(upsertErr, codes.Internal, "failed to create subscription: %v", upsertErr)
+		}
+
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, inviteRow.ClusterID, "cluster_subscription", subscriptionID, inviteRow.ID, subscriptionID, ""); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, inviteRow.ClusterID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, inviteRow.ClusterID, "cluster_subscription", subscriptionID, inviteRow.ID, subscriptionID, ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, inviteRow.ClusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit invite acceptance: %v", err)
+		return nil, retryableTxStatus(err, "commit invite acceptance")
 	}
 
 	sub, err := s.getClusterSubscription(ctx, tenantID, inviteRow.ClusterID)
@@ -10297,61 +10314,55 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	}
 
 	userID := middleware.GetUserID(ctx)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+	var subscriptionRow quartermasterdb.GetSubscriptionOwnerPolicyRow
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		// Get subscription and verify ownership
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		subscriptionRow, err = txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 		}
-	}()
-
-	// Get subscription and verify ownership
-	txQueries := quartermasterdb.New(tx)
-	subscriptionRow, err := txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
-	}
-	if !subscriptionRow.SubscriptionStatus.Valid || !subscriptionRow.PricingModel.Valid || !subscriptionRow.IsPlatformOfficial.Valid {
-		return nil, status.Error(codes.Internal, "database error: required subscription policy field is NULL")
-	}
-	if subscriptionRow.SubscriptionStatus.String != "pending_approval" {
-		return nil, status.Error(codes.FailedPrecondition, "subscription is not pending approval")
-	}
-	if subscriptionRow.AccessSource == "marketplace_subscription" {
-		if subscriptionRow.IsPlatformOfficial.Bool || subscriptionRow.OwnerTenantID.String == subscriptionRow.TenantID || !marketplacePricingSupportsApproval(subscriptionRow.PricingModel.String) {
-			return nil, status.Error(codes.FailedPrecondition, "invalid marketplace approval request")
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
 		}
-	} else if commercialErr := rejectDirectCommercialClusterAccess(subscriptionRow.TenantID, subscriptionRow.IsPlatformOfficial.Bool, subscriptionRow.OwnerTenantID, subscriptionRow.PricingModel.String, "approved"); commercialErr != nil {
-		return nil, commercialErr
-	}
+		if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
+			return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
+		if !subscriptionRow.SubscriptionStatus.Valid || !subscriptionRow.PricingModel.Valid || !subscriptionRow.IsPlatformOfficial.Valid {
+			return status.Error(codes.Internal, "database error: required subscription policy field is NULL")
+		}
+		if subscriptionRow.SubscriptionStatus.String != "pending_approval" {
+			return status.Error(codes.FailedPrecondition, "subscription is not pending approval")
+		}
+		if subscriptionRow.AccessSource == "marketplace_subscription" {
+			if subscriptionRow.IsPlatformOfficial.Bool || subscriptionRow.OwnerTenantID.String == subscriptionRow.TenantID || !marketplacePricingSupportsApproval(subscriptionRow.PricingModel.String) {
+				return status.Error(codes.FailedPrecondition, "invalid marketplace approval request")
+			}
+		} else if commercialErr := rejectDirectCommercialClusterAccess(subscriptionRow.TenantID, subscriptionRow.IsPlatformOfficial.Bool, subscriptionRow.OwnerTenantID, subscriptionRow.PricingModel.String, "approved"); commercialErr != nil {
+			return commercialErr
+		}
 
-	err = txQueries.ApproveClusterSubscriptionRecord(ctx, quartermasterdb.ApproveClusterSubscriptionRecordParams{
-		ApprovedBy: ownerTenantID, SubscriptionID: subscriptionID,
+		err = txQueries.ApproveClusterSubscriptionRecord(ctx, quartermasterdb.ApproveClusterSubscriptionRecordParams{
+			ApprovedBy: ownerTenantID, SubscriptionID: subscriptionID,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to approve subscription: %v", err)
+		}
+
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, subscriptionRow.TenantID, userID, subscriptionRow.ClusterID, "cluster_subscription", subscriptionID, "", subscriptionID, ""); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, subscriptionRow.TenantID, true); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, subscriptionRow.TenantID, subscriptionRow.ClusterID); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to approve subscription: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, subscriptionRow.TenantID, userID, subscriptionRow.ClusterID, "cluster_subscription", subscriptionID, "", subscriptionID, ""); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, subscriptionRow.TenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, subscriptionRow.TenantID, subscriptionRow.ClusterID); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscription approval: %v", err)
+		return nil, retryableTxStatus(err, "commit subscription approval")
 	}
 
 	sub, err := s.getClusterSubscription(ctx, subscriptionRow.TenantID, subscriptionRow.ClusterID)
@@ -10384,49 +10395,43 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	}
 
 	userID := middleware.GetUserID(ctx)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin transaction: %v", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+	var subscriptionRow quartermasterdb.GetSubscriptionOwnerPolicyRow
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		// Get subscription and verify ownership
+		txQueries := quartermasterdb.New(tx)
+		var err error
+		subscriptionRow, err = txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 		}
-	}()
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "database error: %v", err)
+		}
+		if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
+			return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
+		if !subscriptionRow.SubscriptionStatus.Valid || subscriptionRow.SubscriptionStatus.String != "pending_approval" {
+			return status.Error(codes.FailedPrecondition, "subscription is not pending approval")
+		}
 
-	// Get subscription and verify ownership
-	txQueries := quartermasterdb.New(tx)
-	subscriptionRow, err := txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
-	}
-	if !subscriptionRow.SubscriptionStatus.Valid || subscriptionRow.SubscriptionStatus.String != "pending_approval" {
-		return nil, status.Error(codes.FailedPrecondition, "subscription is not pending approval")
-	}
+		reason := ""
+		if req.Reason != nil {
+			reason = *req.Reason
+		}
+		err = txQueries.RejectClusterSubscriptionRecord(ctx, quartermasterdb.RejectClusterSubscriptionRecordParams{
+			RejectionReason: validString(reason), SubscriptionID: subscriptionID,
+		})
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to reject subscription: %v", err)
+		}
 
-	reason := ""
-	if req.Reason != nil {
-		reason = *req.Reason
-	}
-	err = txQueries.RejectClusterSubscriptionRecord(ctx, quartermasterdb.RejectClusterSubscriptionRecordParams{
-		RejectionReason: validString(reason), SubscriptionID: subscriptionID,
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRejected, subscriptionRow.TenantID, userID, subscriptionRow.ClusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason); enqErr != nil {
+			return txStatusErrorf(enqErr, codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to reject subscription: %v", err)
-	}
-
-	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRejected, subscriptionRow.TenantID, userID, subscriptionRow.ClusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscription rejection: %v", err)
+		return nil, retryableTxStatus(err, "commit subscription rejection")
 	}
 
 	sub, err := s.getClusterSubscription(ctx, subscriptionRow.TenantID, subscriptionRow.ClusterID)

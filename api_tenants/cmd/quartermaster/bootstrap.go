@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"frameworks/api_tenants/internal/bootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -19,8 +18,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-const bootstrapTransactionMaxAttempts = 5
 
 // runBootstrapCommand handles `quartermaster bootstrap …` invocations. main()
 // dispatches here when argv[1] == "bootstrap"; the remaining argv (after the
@@ -100,68 +97,31 @@ func runBootstrapCommand(args []string) int {
 	return 0
 }
 
+// runBootstrapTransaction reconciles the desired state in one READ COMMITTED
+// transaction, replayed whole on retryable errors. Dry runs always roll back.
 func runBootstrapTransaction(ctx context.Context, db *sql.DB, qm bootstrap.QuartermasterSection, opts bootstrap.ReconcileOptions, dryRun bool) (*bootstrap.Sections, error) {
+	return runReconcileTransaction(ctx, db, dryRun, func(tx *sql.Tx) (*bootstrap.Sections, error) {
+		return bootstrap.ReconcileWithOptions(ctx, tx, qm, opts)
+	})
+}
+
+// runReconcileTransaction runs reconcile in a retrying Read Committed transaction and returns the sections of the
+// attempt that committed (or, for dryRun, of the attempt that was rolled back on purpose).
+func runReconcileTransaction(ctx context.Context, db *sql.DB, dryRun bool, reconcile func(*sql.Tx) (*bootstrap.Sections, error)) (*bootstrap.Sections, error) {
 	var out *bootstrap.Sections
-	for attempt := 1; attempt <= bootstrapTransactionMaxAttempts; attempt++ {
-		var err error
-		out, err = runBootstrapTransactionOnce(ctx, db, qm, opts, dryRun)
-		if err == nil {
-			return out, nil
-		}
-		if !isRetryableBootstrapTransactionError(err) || attempt == bootstrapTransactionMaxAttempts {
-			return out, err
-		}
-		if sleepErr := sleepBootstrapRetry(ctx, attempt); sleepErr != nil {
-			return out, sleepErr
-		}
+	body := func(tx *sql.Tx) error {
+		sections, err := reconcile(tx)
+		out = sections
+		return err
 	}
-	return out, nil
-}
-
-func runBootstrapTransactionOnce(ctx context.Context, db *sql.DB, qm bootstrap.QuartermasterSection, opts bootstrap.ReconcileOptions, dryRun bool) (*bootstrap.Sections, error) {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-
-	out, err := bootstrap.ReconcileWithOptions(ctx, tx, qm, opts)
-	if err != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
-		return out, err
-	}
-
+	txOpts := &sql.TxOptions{Isolation: sql.LevelReadCommitted}
+	var err error
 	if dryRun {
-		if err := tx.Rollback(); err != nil {
-			return out, fmt.Errorf("[dry-run] rollback: %w", err)
-		}
-		return out, nil
+		err = database.WithRetryablePostgresRollbackTx(ctx, db, txOpts, body)
+	} else {
+		err = database.WithRetryablePostgresTx(ctx, db, txOpts, body)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return out, fmt.Errorf("commit: %w", err)
-	}
-	return out, nil
-}
-
-func isRetryableBootstrapTransactionError(err error) bool {
-	switch database.SQLState(err) {
-	case "40001", "40P01":
-		return true
-	default:
-		return false
-	}
-}
-
-func sleepBootstrapRetry(ctx context.Context, attempt int) error {
-	delay := time.Duration(attempt*attempt) * 100 * time.Millisecond
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return out, err
 }
 
 func printSection(name string, r bootstrap.Result) {

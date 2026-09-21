@@ -2,10 +2,12 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"time"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 )
 
@@ -116,20 +118,23 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 		return false
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: begin tx failed")
-		return false
-	}
-	defer tx.Rollback() //nolint:errcheck
-	for _, a := range acts {
-		if _, enqErr := s.EnqueueNavigatorTenantAliasTx(ctx, tx, d.tenantID, a.subdomain, a.action, a.clusterID, a.reason); enqErr != nil {
-			s.logger.WithError(enqErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: enqueue failed")
-			return false
+	var enqueueErr error
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		enqueueErr = nil
+		for _, a := range acts {
+			if _, enqErr := s.EnqueueNavigatorTenantAliasTx(ctx, tx, d.tenantID, a.subdomain, a.action, a.clusterID, a.reason); enqErr != nil {
+				enqueueErr = enqErr
+				return enqErr
+			}
 		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		s.logger.WithError(commitErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: commit failed")
+		return nil
+	})
+	if txErr != nil {
+		if enqueueErr != nil {
+			s.logger.WithError(enqueueErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: enqueue failed")
+		} else {
+			s.logger.WithError(txErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: commit failed")
+		}
 		return false
 	}
 	if s.metrics != nil && s.metrics.DNSBackstopRepairs != nil {
@@ -217,17 +222,10 @@ func (s *QuartermasterServer) reconcileTenantCustomDomainsOnce(ctx context.Conte
 		if action == "" {
 			continue
 		}
-		tx, beginErr := s.db.BeginTx(ctx, nil)
-		if beginErr != nil {
-			continue
-		}
-		if _, enqueueErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, desired.tenantID, domain, action); enqueueErr != nil {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				s.logger.WithError(rollbackErr).Warn("custom-domain backstop rollback failed")
-			}
-			continue
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
+		if txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			_, enqueueErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, desired.tenantID, domain, action)
+			return enqueueErr
+		}); txErr != nil {
 			continue
 		}
 		if s.metrics != nil && s.metrics.DNSBackstopRepairs != nil {

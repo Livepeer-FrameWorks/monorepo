@@ -952,7 +952,7 @@ func startQuartermasterQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	if output, err := dockerpg.Run("run", "-d", "--name", name, "--hostname", name, "-P", image,
-		"bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)"`); err != nil {
+		"bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true`); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "5433/tcp")
