@@ -1,5 +1,5 @@
 # Real engines used only by schema compatibility tests.
 contract_engines:
   - name: yugabyte
-    image: yugabytedb/yugabyte:2025.2.3.0-b149
-    digest: sha256:5ffcc42ff3e6fa00a4b5aa1738744fd61bc14d9c94a608328555bffb24256a6e
+    image: yugabytedb/yugabyte:2026.1.1.2-b9
+    digest: sha256:bf2e1b9b6cca97bae418dda21010045f43da348c2722cc62f84d2961567e627c

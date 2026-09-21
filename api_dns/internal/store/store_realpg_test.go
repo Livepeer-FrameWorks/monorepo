@@ -1000,7 +1000,7 @@ func startNavigatorStoreRealYugabyte(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)"`); err != nil {
+	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true`); err != nil {
 		t.Fatalf("docker run: %v\n%s", err, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "5433/tcp")

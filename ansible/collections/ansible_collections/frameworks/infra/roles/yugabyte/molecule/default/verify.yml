@@ -29,7 +29,8 @@
 
     - name: Confirm yb-master binary is present and executable
       ansible.builtin.stat:
-        path: /opt/yugabyte/bin/yb-master
+        path: /opt/yugabyte/current/bin/yb-master
+        follow: true
       register: master_bin
 
     - name: Assert binary
@@ -43,8 +44,9 @@
         path: "{{ item }}"
       register: sentinels
       loop:
-        - /opt/yugabyte/.post_install_done
+        - /opt/yugabyte/current/.post_install_done
+        - /opt/yugabyte/current/.installed
 
     - name: Assert sentinels
       ansible.builtin.assert:
-        that: sentinels.results | map(attribute='stat.exists') | list == [true]
+        that: sentinels.results | map(attribute='stat.exists') | list == [true, true]
