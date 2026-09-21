@@ -206,9 +206,10 @@ func newDMRunCmd() *cobra.Command {
 			if scopeKind != "" {
 				remoteArgs = append(remoteArgs, "--scope-kind", scopeKind, "--scope-value", scopeValue)
 			}
-			return runDataMigrateRemote(cmd, rc, service, remoteArgs)
+			return runDataMigrateRun(cmd, rc, service, id, dryRun, remoteArgs)
 		},
 	}
+	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required for an irreversible migration")
 	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Batch size hint")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Run inside a read-only database transaction")
 	cmd.Flags().StringVar(&scopeKind, "scope-kind", "", "Scope partition kind")
@@ -274,6 +275,24 @@ func newDMResumeCmd() *cobra.Command {
 			return runDataMigrateRemote(cmd, rc, service, []string{"data-migrations", "resume", id})
 		},
 	}
+}
+
+// runDataMigrateRemoteFn invokes the service binary; tests substitute a recorder.
+var runDataMigrateRemoteFn = runDataMigrateRemote
+
+// runDataMigrateRun runs one data migration through the service binary. An irreversible migration first passes the
+// backup gate.
+func runDataMigrateRun(cmd *cobra.Command, rc *resolvedCluster, service, id string, dryRun bool, remoteArgs []string) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+	defer pool.Close()
+	if err := requireDataMigrationBackup(ctx, cmd, rc, pool, service, id, dryRun); err != nil {
+		return err
+	}
+	return runDataMigrateRemoteFn(cmd, rc, service, remoteArgs)
 }
 
 // runDataMigrateRemote SSHes into service's host, detects mode, and invokes

@@ -252,7 +252,8 @@ type EdgeRenderedFile struct {
 
 // RenderEdgeTemplates returns the full set of files the edge stack writes
 // into the target directory, keyed by relative path. No filesystem side
-// effects.
+// effects. It fails when the rendered stack would start Helmsman without a
+// variable the config schema requires.
 func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 	vars.SetModeDefaults()
 	// A typo'd mode must fail here, not silently render a container stack
@@ -430,6 +431,9 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 		})
 	}
 
+	if err := validateEdgeHelmsmanEnv(vars.Mode, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

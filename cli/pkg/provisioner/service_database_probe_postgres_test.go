@@ -14,7 +14,7 @@ import (
 // baseline, and a database whose service schema was populated by hand.
 func TestPostgresServiceDatabaseProbeQueries(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-service-db-probe"
+	name := uniqueContainerName("fw-sv-pg-service-db-probe")
 	pgStart(t, name)
 
 	query := func(db, sql string) string {

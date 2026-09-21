@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/format"
 	"maps"
 	"os"
 	"path/filepath"
@@ -103,6 +104,7 @@ type Feature struct {
 	DependsOn        []string              `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	Related          []string              `yaml:"related,omitempty" json:"related,omitempty"`
 	Aliases          []string              `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	EnforcedBy       []string              `yaml:"enforced_by,omitempty" json:"enforced_by,omitempty"`
 	Subitems         []Feature             `yaml:"subitems,omitempty" json:"subitems,omitempty"`
 
 	// Computed (not in YAML)
@@ -144,6 +146,55 @@ var pillarLabels = map[string]string{
 
 type Registry struct {
 	Features []Feature `yaml:"features" json:"features"`
+}
+
+// enforcementGate is a server-side gate a feature can name in enforced_by.
+// CapabilitiesField is the Type.field in schema.graphql that describes the
+// gate to clients; Enforcers are the repo-relative files that enforce it.
+type enforcementGate struct {
+	CapabilitiesField string
+	Enforcers         []string
+}
+
+// enforcementGates is the closed set of gates enforced_by may reference. Every
+// gate must keep a capabilities field in the schema and enforcer files on disk.
+var enforcementGates = map[string]enforcementGate{
+	"platform-operator": {
+		CapabilitiesField: "TenantCapabilities.platformOperator",
+		Enforcers:         []string{"api_gateway/internal/resolvers/platform_admin.go"},
+	},
+	"recording-retention": {
+		CapabilitiesField: "TenantCapabilities.recordingRetention",
+		Enforcers:         []string{"api_control/internal/grpc/media_retention.go"},
+	},
+	"processing-customizable": {
+		CapabilitiesField: "TenantCapabilities.processingCustomizable",
+		Enforcers:         []string{"api_control/internal/grpc/server.go"},
+	},
+	"custom-subdomain": {
+		CapabilitiesField: "TenantCapabilities.customSubdomain",
+		Enforcers:         []string{"api_tenants/internal/grpc/tenant_capabilities.go"},
+	},
+	"custom-domain": {
+		CapabilitiesField: "TenantCapabilities.customDomain",
+		Enforcers:         []string{"api_tenants/internal/grpc/tenant_capabilities.go"},
+	},
+	"cluster-media-ingest": {
+		CapabilitiesField: "ClusterMediaCapabilities.ingest",
+		Enforcers:         []string{"pkg/placement/consent.go", "api_balancing/internal/balancer/placement_authority.go"},
+	},
+	"cluster-media-playback": {
+		CapabilitiesField: "ClusterMediaCapabilities.playback",
+		Enforcers:         []string{"pkg/placement/consent.go", "api_balancing/internal/balancer/placement_authority.go"},
+	},
+	"cluster-media-storage": {
+		CapabilitiesField: "ClusterMediaCapabilities.storage",
+		Enforcers:         []string{"api_balancing/internal/control/resolver.go"},
+	},
+	"cluster-media-processing": {
+		CapabilitiesField: "ClusterMediaCapabilities.processing",
+		Enforcers:         []string{"api_balancing/internal/handlers/livepeer_auth.go"},
+	},
 }
 
 type validator struct {
@@ -203,6 +254,7 @@ func main() {
 		f.computeFamilySurfaces()
 	}
 	v.validateRelations(&reg)
+	v.validateEnforcement(&reg)
 
 	// Cross-cutting check: any reachable GraphQL field must be wired to a
 	// real resolver. gqlgen can regenerate panic stubs when resolver method
@@ -229,6 +281,10 @@ func main() {
 		if err != nil {
 			die("marshal json: %v", err)
 		}
+		featuresGo, err := renderPlatformFeaturesGo(shippedProductSlugs(productReg))
+		if err != nil {
+			die("format platform features: %v", err)
+		}
 
 		// Every generated artifact and its expected bytes. --check compares these against disk directly
 		// (never git), so it is correct even when the working tree already carries the intended new state.
@@ -239,6 +295,7 @@ func main() {
 			{filepath.Join(repoRoot, "website_application", "src", "lib", "features", "registry.json"), append(buf, '\n')},
 			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "feature-matrix.mdx"), []byte(renderMatrixMDX(productReg))},
 			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "platform-capabilities.mdx"), []byte(renderCapabilitiesMDX(reg))},
+			{filepath.Join(repoRoot, "pkg", "platformfeatures", "registry_gen.go"), featuresGo},
 		}
 
 		if checkOnly {
@@ -806,6 +863,87 @@ func (v *validator) validateFeature(f *Feature) {
 	default:
 		v.errf("%s: invalid status %q (must be shipped|partial|gap|roadmap)", f.Slug, f.Status)
 	}
+}
+
+// validateEnforcement checks every gate in the closed set against the schema
+// and the enforcer files, then rejects enforced_by entries outside the set.
+func (v *validator) validateEnforcement(reg *Registry) {
+	gates := make([]string, 0, len(enforcementGates))
+	for gate := range enforcementGates {
+		gates = append(gates, gate)
+	}
+	sort.Strings(gates)
+	for _, gate := range gates {
+		def := enforcementGates[gate]
+		if !v.schemaFields[def.CapabilitiesField] {
+			v.errf("enforcement gate %q: capabilities field %q not found in schema.graphql", gate, def.CapabilitiesField)
+		}
+		if len(def.Enforcers) == 0 {
+			v.errf("enforcement gate %q names no enforcer file", gate)
+		}
+		for _, enforcer := range def.Enforcers {
+			if !fileExists(filepath.Join(v.repoRoot, filepath.FromSlash(enforcer))) {
+				v.errf("enforcement gate %q: enforcer file %q does not exist", gate, enforcer)
+			}
+		}
+	}
+	check := func(f *Feature) {
+		seen := map[string]bool{}
+		for _, gate := range f.EnforcedBy {
+			if _, ok := enforcementGates[gate]; !ok {
+				v.errf("%s: enforced_by gate %q is not a known gate (%s)", f.Slug, gate, strings.Join(gates, ", "))
+			}
+			if seen[gate] {
+				v.errf("%s: enforced_by lists %q twice", f.Slug, gate)
+			}
+			seen[gate] = true
+		}
+	}
+	for i := range reg.Features {
+		check(&reg.Features[i])
+		for j := range reg.Features[i].Subitems {
+			check(&reg.Features[i].Subitems[j])
+		}
+	}
+}
+
+// shippedProductSlugs returns the sorted slugs of shipped rows, parents and
+// subitems alike, in an audience-filtered registry.
+func shippedProductSlugs(reg Registry) []string {
+	var slugs []string
+	for _, f := range reg.Features {
+		if f.Status == "shipped" {
+			slugs = append(slugs, f.Slug)
+		}
+		for _, s := range f.Subitems {
+			if s.Status == "shipped" {
+				slugs = append(slugs, s.Slug)
+			}
+		}
+	}
+	sort.Strings(slugs)
+	return slugs
+}
+
+// renderPlatformFeaturesGo emits pkg/platformfeatures/registry_gen.go, the
+// shipped product feature list serverInfo reports.
+func renderPlatformFeaturesGo(slugs []string) ([]byte, error) {
+	var b strings.Builder
+	b.WriteString("// Code generated by scripts/registry from docs/platform-features.yaml. DO NOT EDIT.\n\n")
+	b.WriteString("// Package platformfeatures lists the product features this build ships.\n")
+	b.WriteString("package platformfeatures\n\n")
+	b.WriteString("// shipped holds the sorted slugs of shipped product-audience features,\n")
+	b.WriteString("// subitems included.\n")
+	b.WriteString("var shipped = []string{\n")
+	for _, slug := range slugs {
+		fmt.Fprintf(&b, "\t%q,\n", slug)
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("// Shipped returns a copy of the sorted shipped product feature slugs.\n")
+	b.WriteString("func Shipped() []string {\n")
+	b.WriteString("\treturn append([]string(nil), shipped...)\n")
+	b.WriteString("}\n")
+	return format.Source([]byte(b.String()))
 }
 
 func (v *validator) validateConfigurability(f *Feature) {

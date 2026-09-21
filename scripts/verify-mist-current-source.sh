@@ -45,4 +45,32 @@ if [[ "$actual_revision" != "$revision" ]]; then
   exit 1
 fi
 echo "Mist source-contract image: $result_id ($result_tag)"
+
+# MIST_INSTALL_TREE_OUT=<file.tar.gz> also writes the build's install prefix as a
+# MistServer tree (bin/, lib/, share/) for make edge-dev-dist EDGE_DEV_MIST_TAR=<file>.
+# lib/ carries the shared libraries the binaries load from outside the C runtime, so
+# the tree runs on the edge image when the builder's glibc is not newer than Debian
+# bookworm's.
+if [[ -n "${MIST_INSTALL_TREE_OUT:-}" ]]; then
+  docker run --rm -i --network=none --entrypoint sh "$result_id" -s > "$MIST_INSTALL_TREE_OUT" <<'SH'
+set -eu
+stage=$(mktemp -d)
+mkdir -p "$stage/bin" "$stage/lib" "$stage/share"
+cp -a /usr/local/bin/. "$stage/bin/"
+if [ -d /usr/local/lib ]; then cp -a /usr/local/lib/. "$stage/lib/"; fi
+if [ -d /usr/local/share ]; then cp -a /usr/local/share/. "$stage/share/"; fi
+for bin in "$stage"/bin/*; do ldd "$bin" 2>/dev/null || true; done |
+  awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | sort -u |
+  while read -r lib; do
+    name=${lib##*/}
+    case "$name" in
+      libc.so.* | libm.so.* | libdl.so.* | libpthread.so.* | librt.so.* | ld-linux*) continue ;;
+    esac
+    [ -e "$stage/lib/$name" ] || cp -L "$lib" "$stage/lib/$name"
+  done
+tar -C "$stage" -czf - .
+SH
+  echo "Mist install tree: $MIST_INSTALL_TREE_OUT"
+fi
+
 MIST_CONTRACT_IMAGE="$result_id" make -C "$repo_root" verify-mist-viewer-credentials

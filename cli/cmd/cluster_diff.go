@@ -522,6 +522,11 @@ func collectServiceDiffTargets(
 				targets = append(targets, base)
 				continue
 			}
+			if contractErr := validateTaskServiceEnvContract(manifest, task, cfg); contractErr != nil {
+				base.unknown = contractErr.Error()
+				targets = append(targets, base)
+				continue
+			}
 			base.config = cfg
 			if fp, ok := ce.prov.(provisioner.Fingerprinter); ok {
 				desired, fpErr := fp.Fingerprint(ctx, host, cfg)

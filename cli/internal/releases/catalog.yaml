@@ -1,4 +1,5 @@
 service_databases:
+  bosun: bosun
   commodore: commodore
   foghorn: foghorn
   lookout: lookout
@@ -66,6 +67,23 @@ schema_migration_sentinels:
       checksum: d20c609f17629b002d242b258176e4737698e77cd895794fb092073c0e175c91,
     }
 
+# Release channels. pkg/version.ChannelForTag assigns every tag to one of these, and both the CLI and the release
+# workflow classify through it; the loader rejects names or image tracks that drift from it. The text fields are what
+# the release lifecycle documentation states for each channel.
+channels:
+  - name: stable
+    tags: Plain vX.Y.Z tags.
+    image_track: latest
+    support: Production releases. frameworks cluster upgrade follows this channel when no version is given, and fixes ship in the next stable tag. There is no separately maintained long-term line.
+  - name: candidate
+    tags: Every release tag, including prereleases
+    image_track: ""
+    support: Isolated staging follows the newest release through its versioned manifest, without a separate moving image tag.
+  - name: rc
+    tags: Any vX.Y.Z tag with a prerelease suffix, such as -rc1 or -beta.2.
+    image_track: rc
+    support: Pre-production validation. A release candidate is superseded by the next rc or stable tag of its release line.
+
 # v0.3.0 is an intentional lifecycle boundary. The republished v0.2.96 release is the only supported in-place source;
 # fresh clusters bootstrap directly from the v0.3.0 baselines. Old release entries and one-off transitions do not carry
 # forward into the new CLI.
@@ -130,3 +148,9 @@ releases:
     min_cli_version: v0.3.11-rc1
     rollback_disabled:
       - commodore
+      - purser
+    required_data_migrations:
+      - id: purser_eur_ledger_conversion_v0_3_11
+        service: purser
+        introduced_in: v0.3.11
+        required_before_phase: contract

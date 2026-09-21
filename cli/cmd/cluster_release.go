@@ -129,7 +129,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	}
 	fmt.Fprintln(out, "  6. stale placement cleanup: platform service replicas and kafka-mirrormaker workers the manifest no longer places")
 	fmt.Fprintln(out, "  7. schema postdeploy migrations")
-	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes (`cluster migrate --phase contract --to-version %s`)\n", platformVersion)
+	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path>`)\n", platformVersion)
 	writeReleasePlanGroup(out, "managed dependencies (independent manifest pins)", classes.Dependencies)
 	writeReleasePlanGroup(out, "host infrastructure (independent OS/data lifecycle)", classes.Infrastructure)
 	fmt.Fprintln(out, "  control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
@@ -144,6 +144,10 @@ func writeReleasePlanGroup(out io.Writer, label string, values []string) {
 	}
 	fmt.Fprintf(out, "  %s: %s\n", label, strings.Join(values, " -> "))
 }
+
+// fetchReleaseManifestFn reads the published release manifest `release apply` checks compatibility against. Tests
+// substitute a fixture so the apply sequence runs without the release repositories.
+var fetchReleaseManifestFn = gitops.FetchFromRepositories
 
 type releaseApplyOptions struct {
 	version                      string
@@ -196,7 +200,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	releaseChannel, _ := gitops.ResolveVersion(version)
 
 	// Compatibility must be established before migrations mutate the cluster.
-	gm, gmErr := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, releaseChannel, platformVersion)
+	gm, gmErr := fetchReleaseManifestFn(gitops.FetchOptions{}, rc.ReleaseRepos, releaseChannel, platformVersion)
 	if gmErr != nil {
 		return fmt.Errorf("fetch release metadata for compatibility check: %w", gmErr)
 	}
@@ -223,6 +227,16 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	archResolver := provisioner.NewBaseProvisioner("preflight", sshPool).DetectRemoteArch
 	if resolveErr := ensurePlannedArtifactsResolvable(cmd.Context(), gm, manifest, services, archResolver); resolveErr != nil {
 		return resolveErr
+	}
+
+	// Every running replica must be within the release floor of this move before the first mutation.
+	if floorErr := enforceSourceFloor(cmd.Context(), out, rc, sshPool, platformVersion); floorErr != nil {
+		return floorErr
+	}
+	// Every earlier release must be finished before this one mutates anything; the per-service gate would otherwise
+	// refuse only after host convergence and this release's expand migrations.
+	if priorErr := enforcePriorReleasesComplete(cmd.Context(), out, rc, sshPool, platformVersion); priorErr != nil {
+		return priorErr
 	}
 
 	// Every transition required by the release must exist in this CLI.
@@ -258,9 +272,20 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	fmt.Fprintln(out, "  4. stale placement cleanup (platform service replicas, kafka-mirrormaker workers)")
 	fmt.Fprintln(out, "  5. postdeploy migrations")
-	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes (`cluster migrate --phase contract --to-version %s`)\n", platformVersion)
+	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path>`)\n", platformVersion)
 
-	// Required operator inputs must exist before the first mutation.
+	// Every service env the release deploys must pass the schema contract, and
+	// required operator inputs must exist, before the first mutation.
+	var hostConvergence *releaseHostConvergence
+	if len(hostSteps) > 0 {
+		hostConvergence, err = newReleaseHostConvergence(cmd, rc, platformVersion, sshPool)
+		if err != nil {
+			return fmt.Errorf("pre-upgrade host convergence: %w", err)
+		}
+		if contractErr := hostConvergence.preflightEnvContract(hostSteps); contractErr != nil {
+			return contractErr
+		}
+	}
 	if envErr := preflightReleaseRequiredEnv(cmd.Context(), rc, services); envErr != nil {
 		return envErr
 	}
@@ -292,10 +317,6 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if len(hostSteps) == 0 {
 		fmt.Fprintln(out, "  no mesh, Kafka topic, or MirrorMaker2 hosts in this manifest")
 	} else {
-		hostConvergence, convergenceErr := newReleaseHostConvergence(cmd, rc, platformVersion, sshPool)
-		if convergenceErr != nil {
-			return fmt.Errorf("pre-upgrade host convergence: %w", convergenceErr)
-		}
 		if convergeErr := hostConvergence.run(cmd.Context(), hostSteps, opts.dryRun); convergeErr != nil {
 			return fmt.Errorf("pre-upgrade host convergence: %w", convergeErr)
 		}
@@ -324,7 +345,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if err := runMigrate(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false, opts.completeInterruptedBaselines); err != nil {
 		return fmt.Errorf("postdeploy migrations: %w", err)
 	}
-	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, run `frameworks cluster migrate --phase contract --to-version %s --dry-run`, then repeat without --dry-run.\n", platformVersion)
+	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat without --dry-run.\n", platformVersion)
 
 	// Keep the edge target pinned to this release's resolved version.
 	if !opts.dryRun {
@@ -413,6 +434,24 @@ func validateFetchedReleaseCompatibility(out io.Writer, gm *gitops.Manifest, all
 	}
 	if diff := stringSetDisagreement(gm.RequiredTransitions, embeddedIDs); diff != "" {
 		return fmt.Errorf("release %s required-transition set disagrees between the fetched manifest (authoritative) and this CLI's catalog: %s — align/upgrade the CLI before deploying", gm.PlatformVersion, diff)
+	}
+	return checkFetchedSourceFloor(gm, sourceFloorForFn)
+}
+
+// checkFetchedSourceFloor binds the fetched release's min_source_version to the floor this CLI's catalog derives for
+// the same release; the source-floor gate enforces the embedded value, so the two must agree. A release this catalog
+// does not declare is refused by the pre-deploy catalog gate; here it only fails when it declares a floor this CLI
+// cannot enforce.
+func checkFetchedSourceFloor(gm *gitops.Manifest, floorFor func(string) (string, bool)) error {
+	embedded, known := floorFor(gm.PlatformVersion)
+	if !known {
+		if gm.MinSourceVersion != "" {
+			return fmt.Errorf("release %s declares min_source_version %s but is not in this CLI's release catalog; upgrade the frameworks CLI before deploying", gm.PlatformVersion, gm.MinSourceVersion)
+		}
+		return nil
+	}
+	if gm.MinSourceVersion != embedded {
+		return fmt.Errorf("release %s min_source_version disagrees between the fetched manifest (%q) and this CLI's catalog (%q); align or upgrade the CLI before deploying", gm.PlatformVersion, gm.MinSourceVersion, embedded)
 	}
 	return nil
 }

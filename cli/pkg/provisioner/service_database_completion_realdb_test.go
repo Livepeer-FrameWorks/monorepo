@@ -199,7 +199,7 @@ func requireBaselineFloor(t *testing.T, probe dockerSQLProbe, database string) {
 // applies a second time without error and leaves its schema catalog unchanged.
 func TestPostgresServiceBaselinesApplyTwice(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-baseline-twice"
+	name := uniqueContainerName("fw-sv-pg-baseline-twice")
 	pgStart(t, name)
 	probe := dockerSQLProbe{t: t, container: name}
 
@@ -238,7 +238,7 @@ func TestPostgresServiceBaselinesApplyTwice(t *testing.T) {
 // by an earlier interrupted completion still present.
 func TestPostgresServiceDatabaseCompletesInterruptedBaseline(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-baseline-complete"
+	name := uniqueContainerName("fw-sv-pg-baseline-complete")
 	pgStart(t, name)
 	probe := dockerSQLProbe{t: t, container: name}
 	ctx := context.Background()
@@ -272,7 +272,7 @@ func TestPostgresServiceDatabaseCompletesInterruptedBaseline(t *testing.T) {
 // the difference is removed.
 func TestPostgresServiceDatabaseRefusesDivergentSchema(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-baseline-divergent"
+	name := uniqueContainerName("fw-sv-pg-baseline-divergent")
 	pgStart(t, name)
 	probe := dockerSQLProbe{t: t, container: name}
 	ctx := context.Background()
@@ -323,7 +323,7 @@ func TestPostgresServiceDatabaseRefusesDivergentSchema(t *testing.T) {
 // is dropped and the database stays unverified when the apply step fails.
 func TestPostgresServiceDatabaseDropsReferenceOnFailedApply(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-baseline-apply-fails"
+	name := uniqueContainerName("fw-sv-pg-baseline-apply-fails")
 	pgStart(t, name)
 	probe := dockerSQLProbe{t: t, container: name}
 	ctx := context.Background()

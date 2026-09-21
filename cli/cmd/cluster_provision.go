@@ -296,12 +296,14 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	// Show plan. In dry-run mode, annotate each task with a desired-vs-observed
 	// config diff summary so operators see the real change surface before applying.
 	annotateTask := func(task *orchestrator.Task) string { return "" }
+	dryRunContractErr := func() error { return nil }
 	if dryRun {
-		compareFn, cleanup := buildDryRunTaskCompare(ctx, cmd, rc, manifest, manifestDir, sharedEnv)
+		compareFn, contractFn, cleanup := buildDryRunTaskCompare(ctx, cmd, rc, manifest, manifestDir, sharedEnv)
 		if cleanup != nil {
 			defer cleanup()
 		}
 		annotateTask = compareFn
+		dryRunContractErr = contractFn
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Execution Plan:")
 	for i, batch := range plan.Batches {
@@ -318,6 +320,9 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	fmt.Fprintf(cmd.OutOrStdout(), "\nTotal tasks: %d\n\n", len(plan.AllTasks))
 
 	if dryRun {
+		if err := dryRunContractErr(); err != nil {
+			return fmt.Errorf("service env contract: %w", err)
+		}
 		printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
 		if phaseConvergesInfrastructure(phase) {
 			mmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
@@ -1718,7 +1723,7 @@ func manifestMeshHostname(manifest *inventory.Manifest, hostName string) string 
 
 func usesInternalGRPCLeaf(serviceName string) bool {
 	switch serviceName {
-	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator", "lookout":
+	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator", "lookout", "bosun":
 		return true
 	default:
 		return false
@@ -3752,6 +3757,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"livepeer-signer":    {},
 		"mistserver":         {},
 		"lookout":            {},
+		"bosun":              {},
 		"navigator":          {},
 		"periscope-ingest":   {},
 		"periscope-metering": {},
@@ -5547,13 +5553,15 @@ type kafkaClusterView struct {
 //     same aggregator Kafka topic set in one consumer group.
 //   - purser / periscope-metering: central billing consumer and producer.
 //   - commodore: central control-plane Kafka producer.
+//   - bosun: consumes domain.events and its mirrored copies in one durable
+//     group; every replica must bind the cluster the mirrors write into.
 //
 // Region-local services (decklog, signalman) and pool-assigned media services
 // (foghorn, chandler, livepeer-gateway) pick Kafka via serviceKafkaCluster's
 // region resolution. See docs/architecture/service-events.md.
 func isAggregatorPinnedService(serviceType string) bool {
 	switch serviceType {
-	case "periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore":
+	case "periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore", "bosun":
 		return true
 	default:
 		return false
@@ -6166,16 +6174,8 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 	beforeState := detectProvisionTaskState(ctx, prov, host, config)
 
-	if missing := missingRequiredExternalEnv(task.Type, config.EnvVars); len(missing) > 0 {
-		ux.Fail(os.Stderr, fmt.Sprintf("%s: missing required config:", task.Name))
-		for _, mk := range missing {
-			fmt.Printf("      %s — %s\n", mk.Key, mk.SetupGuide)
-		}
-		if !ignoreValidation {
-			return nil, fmt.Errorf("%s requires %d missing env var(s) — provide them in shared env files, a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, len(missing))
-		}
-		config.DeferStart = true
-		fmt.Printf("  ⏸ %s: deploying without starting (--ignore-validation)\n", task.Name)
+	if err := deferStartForMissingExternalEnv(os.Stdout, task, &config, ignoreValidation); err != nil {
+		return nil, err
 	}
 
 	provisionSkipped := false
@@ -6204,7 +6204,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Skip validation for deferred services
 	if config.DeferStart {
-		fmt.Printf("  ⏸ %s deployed but not started. Add missing config to the shared env files or service env_file, then re-run.\n", task.Name)
+		fmt.Printf("  ⏸ %s deployed but not started.\n", task.Name)
 		return &taskProvisionOutcome{
 			config:      config,
 			preexisting: serviceExists(beforeState),
@@ -6265,14 +6265,17 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 // renderProvisionTask resolves a task's provisioner and the ServiceConfig it
 // provisions with.
 func renderProvisionTask(task *orchestrator.Task, pool *ssh.Pool, manifest *inventory.Manifest, force bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.Provisioner, provisioner.ServiceConfig, error) {
-	prov, err := provisioner.GetProvisioner(task.Type, pool)
-	if err != nil {
-		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
-	}
-
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, provisioner.ServiceConfig{}, err
+	}
+	if contractErr := validateTaskServiceEnvContract(manifest, task, config); contractErr != nil {
+		return nil, provisioner.ServiceConfig{}, contractErr
+	}
+
+	prov, err := provisioner.GetProvisioner(task.Type, pool)
+	if err != nil {
+		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
 	// Infrastructure roles need shared credentials during the initial
@@ -6332,6 +6335,45 @@ func alertmanagerExternalNotificationsEnabled(env map[string]string) bool {
 	}
 	enabled, err := strconv.ParseBool(raw)
 	return err != nil || enabled
+}
+
+// deferStartForMissingExternalEnv handles a task whose rendered env lacks
+// operator inputs from servicedefs.RequiredExternalEnv. Those keys are left
+// out of the schema contract so a service that needs them can be installed
+// before they exist. Without ignoreValidation it refuses and names the keys.
+// With ignoreValidation it sets config.DeferStart, so the service installs
+// without starting, and prints the keys and the command that starts it once
+// they are set.
+func deferStartForMissingExternalEnv(out io.Writer, task *orchestrator.Task, config *provisioner.ServiceConfig, ignoreValidation bool) error {
+	missing := missingRequiredExternalEnv(task.Type, config.EnvVars)
+	if len(missing) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(missing))
+	fmt.Fprintf(out, "  %s: missing operator config:\n", task.Name)
+	for _, mk := range missing {
+		keys = append(keys, mk.Key)
+		fmt.Fprintf(out, "      %s — %s\n", mk.Key, mk.SetupGuide)
+	}
+	if !ignoreValidation {
+		return fmt.Errorf("%s requires %s — provide them in shared env files or a per-service env_file, or use --ignore-validation to deploy without starting", task.Name, strings.Join(keys, ", "))
+	}
+	config.DeferStart = true
+	fmt.Fprintf(out, "  ⏸ %s: deploying without starting (--ignore-validation). Add %s to the shared env files or the service env_file, then start it with: %s\n",
+		task.Name, strings.Join(keys, ", "), provisionStartCommand(task))
+	return nil
+}
+
+// provisionStartCommand is the command that re-renders a deferred task's env
+// and starts it: provision sees the installed-but-stopped service and
+// provisions it again.
+func provisionStartCommand(task *orchestrator.Task) string {
+	switch task.Phase {
+	case orchestrator.PhaseApplications, orchestrator.PhaseInterfaces:
+		return "frameworks cluster provision --only " + string(task.Phase)
+	default:
+		return "frameworks cluster provision"
+	}
 }
 
 func validateInfrastructureRuntimeRoleConfig(taskType string, config provisioner.ServiceConfig) error {
@@ -6694,6 +6736,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["LOOKOUT_PORT"] = strconv.Itoa(defaultPort("lookout"))
 		env["LOOKOUT_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("lookout"))
 	}
+	if baseName == "bosun" {
+		env["BOSUN_PORT"] = strconv.Itoa(defaultPort("bosun"))
+		env["BOSUN_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("bosun"))
+	}
 	if baseName == "bridge" {
 		if skipper, ok := manifest.Services["skipper"]; ok && skipper.Enabled {
 			port := skipper.Port
@@ -6775,10 +6821,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Periscope-Ingest and Signalman consume the source-prefixed topic copies
-	// MirrorMaker2 writes into the Kafka cluster they bind, so the prefixes are
-	// the sources of the links into that cluster.
-	if (baseName == "periscope-ingest" || baseName == "signalman") && env["MIRROR_REGION_PREFIXES"] == "" {
+	// Periscope-Ingest, Signalman, and Bosun consume the source-prefixed topic
+	// copies MirrorMaker2 writes into the Kafka cluster they bind, so the
+	// prefixes are the sources of the links into that cluster.
+	if (baseName == "periscope-ingest" || baseName == "signalman" || baseName == "bosun") && env["MIRROR_REGION_PREFIXES"] == "" {
 		bound := kafkaClusterForServiceTask(manifest, task)
 		if prefixes := mirroredSourceAliases(manifest, kafkaClusterAlias(manifest, bound)); len(prefixes) > 0 {
 			env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
@@ -7101,9 +7147,6 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	restrictMeteringSourceIdentity(baseName, env)
 
 	applyProductionRuntimeDefaults(manifest, env)
-	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
-		return nil, err
-	}
 	// Storage-backend agreement is enforced on the PROVISION path too (not only upgrade): a fresh or re-provisioned
 	// S3-enabled Foghorn must not reach startup with an absent/inconsistent cluster descriptor and fail after
 	// mutations have begun. baseName is the deploy name (gates on "foghorn"); task.ServiceID resolves cluster
@@ -7858,7 +7901,7 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 		if strings.TrimSpace(env["DATABASE_HOST"]) == "" {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_HOST", serviceID)
 		}
-		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && strings.TrimSpace(env["DATABASE_URL"]) == "" {
+		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && !databaseURLHasPassword(env["DATABASE_URL"]) {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_PASSWORD (or DATABASE_URL with embedded credentials)", serviceID)
 		}
 		if serviceID == "purser" && truthyLivepeerSetting(env["LIVEPEER_DEPOSIT_MONITOR_ENABLED"]) {
@@ -7886,6 +7929,34 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 }
 
 var meteringSourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// databaseURLHasPassword reports whether a PostgreSQL connection string
+// embeds a non-empty password, in URL form (postgres://user:pass@host/db,
+// including multi-host lists) or key/value form (password=...). The
+// provisioner builds DATABASE_URL from DATABASE_HOST even without a password,
+// so a URL's presence alone does not prove credentials.
+func databaseURLHasPassword(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	scheme := strings.Index(raw, "://")
+	if scheme < 0 {
+		for _, field := range strings.Fields(raw) {
+			if value, ok := strings.CutPrefix(field, "password="); ok && strings.Trim(value, `'`) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	authority := raw[scheme+3:]
+	if end := strings.IndexAny(authority, "/?"); end >= 0 {
+		authority = authority[:end]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return false
+	}
+	_, password, ok := strings.Cut(authority[:at], ":")
+	return ok && password != ""
+}
 
 func validateNavigatorProductionEnv(env map[string]string) error {
 	fileKeys := []string{

@@ -52,3 +52,12 @@
     compose_stack_name: listmonk
     compose_stack_project_dir: "{{ listmonk_project_dir }}"
   tags: [cleanup, never]
+
+- name: Listmonk | stop delegates to compose_stack
+  ansible.builtin.import_role:
+    name: frameworks.infra.compose_stack
+    tasks_from: stop.yml
+  vars:
+    compose_stack_name: listmonk
+    compose_stack_project_dir: "{{ listmonk_project_dir }}"
+  tags: [stop, never]

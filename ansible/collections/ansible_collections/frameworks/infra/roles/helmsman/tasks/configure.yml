@@ -45,6 +45,32 @@
         | combine(helmsman_extra_env | default({}, true))
       }}
 
+# EDGE_PUBLIC_URL is built from helmsman_edge_domain and is never blank, so
+# the required-env check below cannot catch a missing domain.
+- name: Assert edge domain is a DNS name or IPv4 address
+  ansible.builtin.assert:
+    that:
+      - helmsman_edge_domain | default('', true) | trim is match('^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$')
+    fail_msg: "helmsman_edge_domain {{ helmsman_edge_domain | default('', true) | to_json }} must be a DNS name or IPv4 address"
+    quiet: true
+
+# Helmsman treats a blank value as unset, so a blank required key would only
+# surface as a startup failure after the env file and unit are in place.
+- name: Assert Helmsman required env list is present
+  ansible.builtin.assert:
+    that:
+      - helmsman_required_env | length > 0
+    fail_msg: helmsman_required_env is empty; the Helmsman env contract cannot be checked
+    quiet: true
+
+- name: Assert Helmsman required env is set
+  ansible.builtin.assert:
+    that:
+      - (helmsman_env_full[item] | default('', true) | string | trim | length) > 0
+    fail_msg: "Helmsman requires {{ item }} to be non-empty in its environment"
+    quiet: true
+  loop: "{{ helmsman_required_env }}"
+
 - name: Helmsman | configure (linux)
   ansible.builtin.import_tasks: configure-linux.yml
   when: ansible_facts.os_family != 'Darwin'

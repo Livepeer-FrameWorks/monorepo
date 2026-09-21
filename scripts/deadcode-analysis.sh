@@ -24,6 +24,7 @@ api_sidecar:./cmd/helmsman
 api_realtime:./cmd/signalman
 api_dns:./cmd/navigator
 api_incidents:./cmd/lookout
+api_webhooks:./cmd/bosun
 api_mesh:./cmd/privateer
 api_forms:./cmd/steward
 api_ticketing:./cmd/deckhand

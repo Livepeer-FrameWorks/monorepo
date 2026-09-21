@@ -87,32 +87,6 @@ func TestParseRemoteEdgeEnvOutput(t *testing.T) {
 	}
 }
 
-// ============================ cluster_backup.go ============================
-
-func TestBuildPostgresBackupCommand(t *testing.T) {
-	t.Parallel()
-	cmd := buildPostgresBackupCommand("/backups", "/backups/postgres-ts.sql")
-	for _, want := range []string{"mkdir -p", "pg_dumpall -U postgres", "/opt/frameworks/postgres/docker-compose.yml"} {
-		if !strings.Contains(cmd, want) {
-			t.Fatalf("postgres backup cmd missing %q: %s", want, cmd)
-		}
-	}
-	// Paths are shell-quoted.
-	if !strings.Contains(cmd, "'/backups'") || !strings.Contains(cmd, "'/backups/postgres-ts.sql'") {
-		t.Fatalf("paths not shell-quoted: %s", cmd)
-	}
-}
-
-func TestBuildClickHouseBackupScript(t *testing.T) {
-	t.Parallel()
-	script := buildClickHouseBackupScript("/backups/ch-ts")
-	for _, want := range []string{"SHOW DATABASES", "FORMAT TSV", "information_schema", "'/backups/ch-ts'"} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("clickhouse script missing %q", want)
-		}
-	}
-}
-
 // ============================ admin.go request builders ======================
 
 func TestBuildCreateBootstrapTokenRequest(t *testing.T) {

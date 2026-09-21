@@ -6,10 +6,22 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/spf13/cobra"
 )
 
-var validChannels = []string{"stable", "candidate", "rc"}
+// validChannels comes from pkg/version, the classifier the release workflow
+// uses to publish channel pointers.
+var validChannels = releaseChannelNames()
+
+func releaseChannelNames() []string {
+	channels := fwversion.Channels()
+	names := make([]string, len(channels))
+	for i, c := range channels {
+		names[i] = string(c)
+	}
+	return names
+}
 
 func newClusterSetChannelCmd() *cobra.Command {
 	cmd := &cobra.Command{

@@ -219,7 +219,8 @@ func runUpgradePlan(cmd *cobra.Command, rc *resolvedCluster, version string) err
 
 	fmt.Fprintln(cmd.OutOrStdout(), "\nPlanner state:")
 	fmt.Fprintln(cmd.OutOrStdout(), "  target version: from selected GitOps/release manifest")
-	fmt.Fprintln(cmd.OutOrStdout(), "  current service versions: not implemented yet")
+	fmt.Fprintln(cmd.OutOrStdout(), "  current service versions: detected per host by upgrade and release apply")
+	fmt.Fprintf(cmd.OutOrStdout(), "  source floor: %s\n", describeSourceFloor(target))
 	fmt.Fprintln(cmd.OutOrStdout(), "  embedded SQL migrations: available")
 	fmt.Fprintln(cmd.OutOrStdout(), "  embedded release catalog: available")
 	fmt.Fprintln(cmd.OutOrStdout(), "  applied SQL migration query: checked by upgrade gates")
@@ -410,6 +411,14 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		return result, compatErr
 	}
 
+	// Every running replica must be within the release floor of this move before anything is deployed. `release
+	// apply` checks the whole cluster once in its preflight.
+	if !withinRelease {
+		if floorErr := enforceSourceFloor(ctx, cmd.OutOrStdout(), rc, sshPool, gitopsManifest.PlatformVersion); floorErr != nil {
+			return result, floorErr
+		}
+	}
+
 	// Required release transitions are executed and VERIFIED only by `release apply`, which interleaves them with the
 	// dependency-ordered upgrades. A DIRECT `cluster upgrade` (including `--all`) neither runs nor proves them, so
 	// deploying a service that sits on a transition's downstream side (BeforeServices) here could start it before its
@@ -449,9 +458,9 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	// Migration completeness is proven SOLELY from the migration ledgers plus target-relative catalog metadata: the
 	// prior-postdeploy scan reads EVERY catalog release below the target from the ledger, so a skewed/unreadable replica
 	// version after an interrupted HA rollout can neither block nor narrow the gate — the gate reads no running-service
-	// version at all. There is no version compatibility floor either — a DB-less service (e.g. Chandler) has none; its
-	// cross-version contract is the runtime /ready sentinel, enforced at deploy by install ordering + the sentinel gate
-	// + rollback_disabled.
+	// version at all. Release floors between running and target versions are the separate source-floor check above
+	// (catalog min_source_version); a DB-less service's own cross-version contract, such as Chandler's /ready
+	// sentinel, is enforced at deploy by install ordering, the readiness gate, and rollback_disabled.
 	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, serviceName, deployName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
 		return result, gateErr
 	}
@@ -662,11 +671,11 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		return result, nil
 	}
 
-	config, clusterID, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
+	config, task, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
 	if err != nil {
 		return result, err
 	}
-	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
+	if validateErr := validateTaskServiceEnvContract(manifest, task, config); validateErr != nil {
 		return result, fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
 	}
 	if missing := missingRequiredExternalEnv(deployName, config.EnvVars); len(missing) > 0 {
@@ -674,7 +683,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	}
 	// Foghorn's S3 descriptor env must agree with the cluster row Quartermaster persists and Chandler serves from —
 	// catch a divergent/repointed backend before deploying, not at Foghorn's crash-on-boot immutability guard.
-	if agreeErr := validateStorageBackendAgreement(manifest, serviceName, deployName, clusterID, config.EnvVars); agreeErr != nil {
+	if agreeErr := validateStorageBackendAgreement(manifest, serviceName, deployName, task.ClusterID, config.EnvVars); agreeErr != nil {
 		return result, fmt.Errorf("upgrade target %s: %w", deployName, agreeErr)
 	}
 	// Use the concrete artifact version from the selected GitOps release; selectors such as "stable" are not
@@ -737,7 +746,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	if !skipValidation {
 		if err := waitForHealth(ctx, func() error {
 			return prov.Validate(ctx, host, config)
-		}, 5*time.Second, 90*time.Second); err != nil {
+		}, 5*time.Second, provisioner.RolloutReadinessTimeout); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Health check failed on %s: %v\n", host.ExternalIP, err)
 
 			// Attempt rollback unless --no-rollback is set
@@ -769,9 +778,11 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 					return result, fmt.Errorf("upgrade failed, rollback initialization failed on %s: %w", host.ExternalIP, err)
 				}
 
+				// rollbackConfig carries the restored release version, so the gate probes that binary's readiness
+				// path: /health for a release that predates /ready.
 				if err := waitForHealth(ctx, func() error {
 					return prov.Validate(ctx, host, rollbackConfig)
-				}, 5*time.Second, 90*time.Second); err != nil {
+				}, 5*time.Second, provisioner.RolloutReadinessTimeout); err != nil {
 					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback health check failed: %v\n", err)
 					return result, fmt.Errorf("upgrade failed, rollback health check failed on %s: %w", host.ExternalIP, err)
 				}
@@ -802,14 +813,14 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 }
 
 // buildUpgradeTaskConfig renders the ServiceConfig an upgrade deploys to one replica: the same buildTaskConfig the
-// provision flow uses, fed by a synthetic application task. It also returns the effective cluster the task renders
-// against.
+// provision flow uses, fed by a synthetic application task. It also returns that task, whose ClusterID is the
+// effective cluster the config renders against.
 //
 // The ClusterID MUST be set: buildServiceEnvVars only layers a cluster's env_files (which carry regional
 // STORAGE_S3_* credentials + descriptor) when task.ClusterID is set. Omitting it renders shared/empty S3 config,
 // which the storage-backend agreement gate would then skip on an empty bucket. The effective cluster is the
 // service's explicit assignment, else the target host's cluster.
-func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, runtimeData map[string]any) (provisioner.ServiceConfig, string, error) {
+func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, runtimeData map[string]any) (provisioner.ServiceConfig, *orchestrator.Task, error) {
 	clusterID := ""
 	if svcCfg, ok := manifest.Services[serviceName]; ok {
 		if len(svcCfg.Clusters) > 0 {
@@ -834,17 +845,17 @@ func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, h
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	sharedEnv, envErr := rc.PreparedSharedEnv()
 	if envErr != nil {
-		return provisioner.ServiceConfig{}, "", fmt.Errorf("load manifest env_files: %w", envErr)
+		return provisioner.ServiceConfig{}, nil, fmt.Errorf("load manifest env_files: %w", envErr)
 	}
 	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
 	if clusterEnvsErr != nil {
-		return provisioner.ServiceConfig{}, "", fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
+		return provisioner.ServiceConfig{}, nil, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
 	}
 	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if err != nil {
-		return provisioner.ServiceConfig{}, "", fmt.Errorf("build upgrade config: %w", err)
+		return provisioner.ServiceConfig{}, nil, fmt.Errorf("build upgrade config: %w", err)
 	}
-	return config, clusterID, nil
+	return config, task, nil
 }
 
 func deployedArtifactMatches(state *detect.ServiceState, target *gitops.ServiceInfo) bool {

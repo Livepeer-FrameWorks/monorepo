@@ -183,6 +183,7 @@
     name: frameworks.infra.helmsman
     tasks_from: configure.yml
   vars:
+    helmsman_required_env: "{{ edge_helmsman_required_env }}"
     helmsman_artifact_url: "{{ edge_helmsman_artifact_url }}"
     helmsman_artifact_checksum: "{{ edge_helmsman_artifact_checksum }}"
     helmsman_force_reenroll: "{{ edge_force_reenroll }}"

@@ -37,8 +37,10 @@ type Gate interface {
 	Describe() string
 }
 
+// defaultGateTimeout matches provisioner.RolloutReadinessTimeout: a readiness endpoint stays 503 until background gRPC
+// listeners have their TLS files and the service's dependency checks pass.
 const (
-	defaultGateTimeout = 30 * time.Second
+	defaultGateTimeout = 150 * time.Second
 	defaultGatePoll    = 1 * time.Second
 )
 
@@ -168,9 +170,11 @@ func (g SystemdActive) Wait(ctx context.Context, host inventory.Host, run ProbeF
 // GateForService returns the readiness gate appropriate for a service ID,
 // auto-selected from pkg/servicedefs. Services with an HTTP readiness
 // endpoint (HealthProtocol "http" + non-empty ReadinessPath + non-zero
-// DefaultPort) get HTTPReady on the READINESS path (ReadyPath when set, else
-// HealthPath) — so a service like Chandler, whose /health is up before its
-// backing store is proven, gates rollout on /ready instead. Everything else
+// DefaultPort) get HTTPReady on the fleet-wide readiness path — so Chandler,
+// whose /health is up before its backing store is proven, gates on /ready.
+// `cluster apply` restarts the binary already on the host without reading its
+// release, so a service whose /ready is newer than the oldest supported release
+// (servicedefs.ReadySince) gates on /health. Everything else
 // falls back to SystemdActive on `frameworks-<id>`. Unknown service IDs also
 // fall back to the SystemdActive default — keeps the gate selection total
 // without requiring a hand-maintained per-service table.

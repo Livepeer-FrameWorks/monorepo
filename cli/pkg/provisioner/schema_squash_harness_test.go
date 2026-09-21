@@ -12,11 +12,17 @@ package provisioner
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func uniqueContainerName(prefix string) string {
+	return fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), time.Now().UnixNano())
+}
 
 // docker runs a docker subcommand, optionally feeding stdin, and returns stdout.
 func docker(t *testing.T, stdin string, args ...string) (string, error) {

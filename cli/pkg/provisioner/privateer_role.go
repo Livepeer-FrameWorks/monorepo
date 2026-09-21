@@ -34,6 +34,46 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 		vars["privateer_port"] = p
 	}
 
+	env := privateerEnv(host, config)
+	if len(env) > 0 {
+		envAny := make(map[string]any, len(env))
+		for k, v := range env {
+			envAny[k] = v
+		}
+		vars["privateer_env"] = envAny
+	}
+
+	if peers, ok := config.Metadata["static_peers"].([]map[string]any); ok {
+		vars["privateer_static_peers"] = peers
+	}
+	if dns, ok := config.Metadata["static_dns"].(map[string][]string); ok {
+		vars["privateer_static_dns"] = dns
+	}
+	if ip, ok := config.Metadata["wireguard_ip"].(string); ok && ip != "" {
+		vars["privateer_wireguard_ip"] = ip
+	}
+	if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" {
+		vars["privateer_wireguard_private_key"] = priv
+	}
+	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 {
+		vars["privateer_wireguard_port"] = port
+	}
+	// Adopted-local nodes surface a boolean that gates the preserve-key
+	// branch in the Ansible role. Only emit it when explicitly set in the
+	// inventory, so older (SOPS-managed-only) clusters render identically.
+	if managed, ok := config.Metadata["wireguard_private_key_managed"].(bool); ok {
+		vars["privateer_wireguard_private_key_managed"] = managed
+	}
+	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
+		vars["privateer_internal_ca_bundle_pem"] = ca
+	}
+	return vars, nil
+}
+
+// privateerEnv is the environment the Privateer role writes for the agent:
+// the task env, metadata env overrides, and the host and mesh defaults the
+// role derives.
+func privateerEnv(host inventory.Host, config ServiceConfig) map[string]string {
 	env := map[string]string{}
 	maps.Copy(env, config.EnvVars)
 	if metaEnv, ok := config.Metadata["env"].(map[string]string); ok {
@@ -85,39 +125,7 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	if services, ok := config.Metadata["expected_internal_grpc_services"].([]string); ok && len(services) > 0 && env["EXPECTED_INTERNAL_GRPC_SERVICES"] == "" {
 		env["EXPECTED_INTERNAL_GRPC_SERVICES"] = strings.Join(services, ",")
 	}
-	if len(env) > 0 {
-		envAny := make(map[string]any, len(env))
-		for k, v := range env {
-			envAny[k] = v
-		}
-		vars["privateer_env"] = envAny
-	}
-
-	if peers, ok := config.Metadata["static_peers"].([]map[string]any); ok {
-		vars["privateer_static_peers"] = peers
-	}
-	if dns, ok := config.Metadata["static_dns"].(map[string][]string); ok {
-		vars["privateer_static_dns"] = dns
-	}
-	if ip, ok := config.Metadata["wireguard_ip"].(string); ok && ip != "" {
-		vars["privateer_wireguard_ip"] = ip
-	}
-	if priv, ok := config.Metadata["wireguard_private_key"].(string); ok && priv != "" {
-		vars["privateer_wireguard_private_key"] = priv
-	}
-	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 {
-		vars["privateer_wireguard_port"] = port
-	}
-	// Adopted-local nodes surface a boolean that gates the preserve-key
-	// branch in the Ansible role. Only emit it when explicitly set in the
-	// inventory, so older (SOPS-managed-only) clusters render identically.
-	if managed, ok := config.Metadata["wireguard_private_key_managed"].(bool); ok {
-		vars["privateer_wireguard_private_key_managed"] = managed
-	}
-	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
-		vars["privateer_internal_ca_bundle_pem"] = ca
-	}
-	return vars, nil
+	return env
 }
 
 func removeNavigatorInternalCAEnv(env map[string]string) {

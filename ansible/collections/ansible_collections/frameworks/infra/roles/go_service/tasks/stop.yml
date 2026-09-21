@@ -1,0 +1,5 @@
+---
+- name: Stop installed unit {{ go_service_systemd_name }}
+  ansible.builtin.systemd:
+    name: "{{ go_service_systemd_name }}"
+    state: stopped

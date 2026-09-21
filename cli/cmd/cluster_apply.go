@@ -334,6 +334,12 @@ func buildApplyTargets(
 				if err != nil {
 					return nil, fmt.Errorf("%s on %s: %w", svc.Service, h.Host, err)
 				}
+				if err := validateTaskServiceEnvContract(manifest, task, cfg); err != nil {
+					return nil, fmt.Errorf("%s on %s: %w", svc.Service, h.Host, err)
+				}
+				if missing := missingRequiredExternalEnv(deploy, cfg.EnvVars); len(missing) > 0 {
+					return nil, requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", svc.Service, h.Host), Missing: missing}})
+				}
 				targets[svc.Service+"@"+h.Host] = clusterApplyTarget{provisioner: prov, config: cfg}
 			}
 		}

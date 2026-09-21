@@ -10,10 +10,13 @@ go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
 # Optional rollout readiness gate. HTTP readiness requires a 200 response from
-# the path; empty values keep the historical port-only validation.
+# the path; empty values use the port-only validation. The CLI passes the
+# readiness path of the release being deployed. The timeout matches the CLI's
+# 150-second rollout wait: /ready stays 503 until gRPC TLS files are present and
+# dependency checks pass.
 go_service_health_path: ""
 go_service_health_protocol: ""
-go_service_validate_timeout: 15
+go_service_validate_timeout: 150
 go_service_env: {}
 go_service_args: []
 go_service_files: []

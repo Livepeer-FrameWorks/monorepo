@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"frameworks/cli/internal/configschema"
+	"frameworks/cli/internal/templates"
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
@@ -176,6 +178,19 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_mistserver_onnx_profile":    profile,
 		"edge_mistserver_onnx_dri_device": config.onnxDRIDevice,
 	}
+	// The role asserts Helmsman's env contract before it starts anything:
+	// against the image env plus rendered env files in container mode, and
+	// against the Helmsman role's env map in native mode.
+	schema, err := configschema.Load()
+	if err != nil {
+		return nil, fmt.Errorf("edge: %w", err)
+	}
+	requiredEnv := schema.RequiredEnv("helmsman")
+	if len(requiredEnv) == 0 {
+		return nil, fmt.Errorf("edge: config schema declares no required Helmsman env")
+	}
+	vars["edge_helmsman_required_env"] = requiredEnv
+	vars["edge_image_env"] = templates.EdgeImageEnv()
 	if config.BandwidthMbps < 0 {
 		return nil, fmt.Errorf("edge: bandwidth_mbps must be non-negative")
 	}

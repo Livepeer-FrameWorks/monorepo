@@ -77,7 +77,11 @@ func TestRenderEdgeTemplatesAcceleratorDevices(t *testing.T) {
 		{name: "openvino gpu", profile: "openvino", dri: true, want: "      - /dev/dri:/dev/dri\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			files, err := RenderEdgeTemplates(EdgeVars{Mode: "container", ONNXProfile: test.profile, ONNXDRIDevice: test.dri})
+			vars := fixedEdgeVars()
+			vars.Mode = "container"
+			vars.ONNXProfile = test.profile
+			vars.ONNXDRIDevice = test.dri
+			files, err := RenderEdgeTemplates(vars)
 			if err != nil {
 				t.Fatal(err)
 			}

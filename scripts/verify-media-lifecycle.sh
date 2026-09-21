@@ -10,22 +10,23 @@
 # PASS/FAIL with its evidence and the run continues, so one failure cannot hide
 # the others; the exit status is non-zero when any step failed.
 #
-#   MIST_IMAGE=<image> make verify-media-lifecycle
+#   MEDIA_TOOLS_IMAGE=<image> make verify-media-lifecycle
 #   MEDIA_LIFECYCLE_BOOTSTRAP=1 ... runs the two-cell proof first (fresh volume required)
 #   MEDIA_LIFECYCLE_SKIP_BUILD=1 uses the already-running analytics services.
 #   MEDIA_LIFECYCLE_KEEP_WORK=1 retains all temporary proof files after the run.
+#
+# MEDIA_TOOLS_IMAGE supplies ffmpeg (libx264) and python3 for the publisher, the VOD
+# source and the in-network segment fetches. The Mist under test is the one staged
+# into frameworks-edge:dev by make edge-dev-dist.
 set -uo pipefail
-: "${MIST_IMAGE:?Set MIST_IMAGE to a full-feature Mist image (Dockerfile.mistserver build; the source-contract image cannot run processing)}"
-export MIST_IMAGE
-# The source-contract image (pkg/mist/testdata/Dockerfile.source-contract) is built with
-# WITH_AV=false, which drops MistProcAV and MistProcThumbs; clip/VOD processing on it
-# records nothing and this proof would report a product failure that is only a build gap.
-if [ "$(docker image inspect --format '{{index .Config.Labels "org.frameworks.mist.purpose"}}' "$MIST_IMAGE" 2>/dev/null)" = "source-contract-not-release" ]; then
-  echo "ERROR: $MIST_IMAGE is a source-contract test build (no processing binaries); use a full-feature Mist image" >&2
-  exit 1
-fi
+: "${MEDIA_TOOLS_IMAGE:?Set MEDIA_TOOLS_IMAGE to an image with ffmpeg (libx264) and python3}"
+export MEDIA_TOOLS_IMAGE
+EDGE_IMAGE=frameworks-edge:dev
+# A Mist built without AV support (for example the source-contract build) lacks
+# MistProcAV and MistProcThumbs; clip/VOD processing on it records nothing and this
+# proof would report a product failure that is only a build gap.
 for bin in MistProcAV MistProcThumbs; do
-  docker run --rm --entrypoint sh "$MIST_IMAGE" -c "command -v $bin >/dev/null" 2>/dev/null || { echo "ERROR: $MIST_IMAGE lacks $bin; clip/VOD processing cannot run" >&2; exit 1; }
+  docker run --rm --entrypoint test "$EDGE_IMAGE" -x "/usr/share/frameworks/dist/mistserver/bin/$bin" 2>/dev/null || { echo "ERROR: the Mist staged into $EDGE_IMAGE lacks $bin; clip/VOD processing cannot run" >&2; exit 1; }
 done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root" || exit 1
@@ -57,7 +58,7 @@ log()  { printf '\n[lifecycle %s] %s\n' "$(ts)" "$*"; }
 ok()   { PASS=$((PASS+1)); printf '  PASS  %s  (%s)\n' "$*" "$(ts)"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s  (%s)\n' "$*" "$(ts)"; }
 skip() { SKIP=$((SKIP+1)); printf '  SKIP  %s  (%s)\n' "$*" "$(ts)"; }
-compose() { docker compose --profile two-cell "$@"; }
+compose() { docker compose --profile edge --profile two-cell "$@"; }
 gql()  { curl -s -m 30 "$BRIDGE/graphql" -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
            --data "$(jq -cn --arg q "$1" --argjson v "${2:-{\}}" '{query:$q, variables:$v}')"; }
 ch()   { curl -s -m 20 "$CH" --data-binary "$1"; }
@@ -77,8 +78,8 @@ wait_until() { # wait_until <secs> <description> <command...>
 location_of() { curl -s -m 10 -o /dev/null -D - "$1/play/$PLAYBACK_ID/hls" | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r'; }
 http_code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$1"; }
 playable() { local st; st=$(http_code "$1"); echo "    playback HTTP $st"; [ "$st" = 307 ] || [ "$st" = 200 ]; }
-in_stack() { # in_stack <sh -c script>: run inside the compose network with the Mist image's curl/ffmpeg
-  docker run --rm --network "$NETWORK" --entrypoint sh "$MIST_IMAGE" -c "$1"
+in_stack() { # in_stack <sh -c script>: run inside the compose network with the media tools image's ffmpeg
+  docker run --rm --network "$NETWORK" --entrypoint sh "$MEDIA_TOOLS_IMAGE" -c "$1"
 }
 
 log "0/6 stack: analytics services, publisher, stream identity"
@@ -92,8 +93,8 @@ NETWORK="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | hea
 [ -n "$NETWORK" ] || { bad "compose network not found"; echo "PASS=$PASS FAIL=$FAIL"; exit 1; }
 if ! docker ps --format '{{.Names}}' | grep -qx "$PUBLISHER"; then
   # Same publisher as the two-cell proof's start_publisher (test pattern, looped, no FLV metadata track).
-  docker run -d --name "$PUBLISHER" --network "$NETWORK" --entrypoint sh "$MIST_IMAGE" -c \
-    "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac /tmp/source.mp4 && while true; do ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /tmp/source.mp4 -map 0:v:0 -map 0:a:0 -c copy -flvflags no_metadata -f flv rtmp://mistserver:1935/live/$STREAM_KEY; sleep 3; done" >/dev/null
+  docker run -d --name "$PUBLISHER" --network "$NETWORK" --entrypoint sh "$MEDIA_TOOLS_IMAGE" -c \
+    "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac /tmp/source.mp4 && while true; do ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /tmp/source.mp4 -map 0:v:0 -map 0:a:0 -c copy -flvflags no_metadata -f flv rtmp://edge:1935/live/$STREAM_KEY; sleep 3; done" >/dev/null
 fi
 R=$(gql 'query{ streamsConnection(page:{first:20}){ edges{ node{ id playbackId } } } }')
 STREAM_GID=$(echo "$R" | jq -r --arg p "$PLAYBACK_ID" '.data.streamsConnection.edges[].node | select(.playbackId==$p) | .id')
@@ -111,7 +112,7 @@ echo "  A -> ${loc_a%%\?*}"; echo "  B -> ${loc_b%%\?*}"
 # One pass per attempt, like the two-cell proof's media_flows: every master fetch is a
 # new viewer session, so the playlists must not be re-fetched between steps.
 fetch_segment() { # fetch_segment <master playlist url>
-  docker run --rm -i --network "$NETWORK" --entrypoint python3 "$MIST_IMAGE" - "$1" <<'PY' 2>/dev/null
+  docker run --rm -i --network "$NETWORK" --entrypoint python3 "$MEDIA_TOOLS_IMAGE" - "$1" <<'PY' 2>/dev/null
 import sys, urllib.request, urllib.parse
 def get(url, limit=None):
     with urllib.request.urlopen(url, timeout=10) as r:

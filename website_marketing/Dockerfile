@@ -31,6 +31,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 # copy workspace manifests first for better layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches/ patches/
+COPY npm_api/package.json npm_api/
 COPY npm_player/package.json npm_player/
 COPY npm_player/packages/core/package.json npm_player/packages/core/
 COPY npm_player/packages/react/package.json npm_player/packages/react/
@@ -57,6 +58,7 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
     fi
 
 # copy the remaining sources now that deps are cached
+COPY npm_api/ npm_api/
 COPY npm_player/ npm_player/
 COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/

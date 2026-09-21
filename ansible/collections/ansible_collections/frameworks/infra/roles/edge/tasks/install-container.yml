@@ -7,6 +7,47 @@
 # persists the activated config on the caddy_etc volume — nothing
 # Caddy-related is rendered on the host.
 
+# Helmsman treats a blank value as unset and refuses to start without its
+# required keys. The container's env is the image ENV, then the env_files in
+# compose order, then the compose environment list, with later layers
+# winning; checking it here stops a broken env before any file is written
+# and before compose up.
+- name: Assert Helmsman required env list is present
+  ansible.builtin.assert:
+    that:
+      - edge_helmsman_required_env | length > 0
+    fail_msg: edge_helmsman_required_env is empty; the Helmsman env contract cannot be checked
+    quiet: true
+
+# EDGE_PUBLIC_URL is rendered as https://<edge_domain>/view and is never
+# blank, so the required-env check below cannot catch a missing domain.
+- name: Assert edge domain is a DNS name or IPv4 address
+  ansible.builtin.assert:
+    that:
+      - edge_domain | default('', true) | trim is match('^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$')
+    fail_msg: "edge_domain {{ edge_domain | default('', true) | to_json }} must be a DNS name or IPv4 address; Helmsman's EDGE_PUBLIC_URL is built from it"
+    quiet: true
+
+- name: Assert Helmsman required env is set in the edge container
+  ansible.builtin.assert:
+    that:
+      - (edge_container_env_check[item] | default('', true) | string | trim | length) > 0
+    fail_msg: "Helmsman requires {{ item }} to be non-empty in the edge container environment"
+    quiet: true
+  loop: "{{ edge_helmsman_required_env }}"
+  vars:
+    edge_compose_service_env: >-
+      {{ (lookup('ansible.builtin.template', 'compose.yml.j2') | from_yaml).services.edge.environment | default([], true) }}
+    edge_container_env_lines: >-
+      {{ ((edge_image_env.items() | map('join', '=') | list)
+          + lookup('ansible.builtin.template', 'edge.env.j2').splitlines()
+          + ['EDGE_ENROLLMENT_TOKEN=' ~ edge_enrollment_token, 'MIST_API_PASSWORD=' ~ edge_effective_mist_api_password]
+          + edge_compose_service_env)
+         | select('match', '^[A-Za-z_][A-Za-z0-9_]*=') | list }}
+    edge_container_env_check: >-
+      {{ dict(edge_container_env_lines | map('regex_replace', '=.*$', '')
+              | zip(edge_container_env_lines | map('regex_replace', '^[^=]*=', ''))) }}
+
 - name: Ensure edge project directory
   ansible.builtin.file:
     path: "{{ edge_base_dir }}"

@@ -88,7 +88,6 @@
       "name": "helmsman",
       "context": "api_sidecar",
       "cmd": "./cmd/helmsman",
-      "dockerfile": "api_sidecar/Dockerfile",
       "cgo": false,
       "darwin_binary": true
     },
@@ -113,6 +112,14 @@
       "context": "api_incidents",
       "cmd": "./cmd/lookout",
       "dockerfile": "api_incidents/Dockerfile",
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "bosun",
+      "context": "api_webhooks",
+      "cmd": "./cmd/bosun",
+      "dockerfile": "api_webhooks/Dockerfile",
       "cgo": false,
       "darwin_binary": true
     },
@@ -157,6 +164,7 @@
       "build_dir": "build",
       "extra_hash_paths": [
         "patches",
+        "npm_api",
         "npm_player",
         "npm_studio",
         "packages/site-config",
@@ -175,6 +183,7 @@
       "build_dir": "build/client",
       "extra_hash_paths": [
         "patches",
+        "npm_api",
         "npm_player",
         "npm_studio",
         "packages/site-config",

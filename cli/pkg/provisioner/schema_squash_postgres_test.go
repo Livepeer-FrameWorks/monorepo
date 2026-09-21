@@ -257,7 +257,7 @@ func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
 
 func TestPostgresServiceCapabilitiesExecute(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-capabilities"
+	name := uniqueContainerName("fw-sv-pg-capabilities")
 	pgStart(t, name)
 
 	applied := map[string]bool{}
@@ -293,7 +293,7 @@ func TestPostgresServiceCapabilitiesExecute(t *testing.T) {
 
 func TestPostgresIntrospectionCoversDeployRelevantObjects(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-pg-introspect"
+	name := uniqueContainerName("fw-sv-pg-introspect")
 	pgStart(t, name)
 
 	const common = `
@@ -437,7 +437,7 @@ func TestPostgresBaselineEqualsReplay(t *testing.T) {
 		t.Fatalf("discover postgres migrations: %v", err)
 	}
 
-	const name = "fw-sv-pg"
+	name := uniqueContainerName("fw-sv-pg")
 	pgStart(t, name)
 	defer rmContainer(t, name)
 
@@ -495,7 +495,7 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 	}
 	migrations := migrationsAfterVersion(allMigrations, fromTag)
 
-	const name = "fw-sv-pg-tag"
+	name := uniqueContainerName("fw-sv-pg-tag")
 	pgStart(t, name)
 
 	pgCreateDB(t, name, "sv_current")

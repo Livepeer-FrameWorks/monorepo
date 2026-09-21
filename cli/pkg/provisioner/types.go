@@ -27,7 +27,8 @@ type Provisioner interface {
 	// Initialize creates data/schemas/topics (idempotent)
 	Initialize(ctx context.Context, host inventory.Host, config ServiceConfig) error
 
-	// Cleanup stops a service (for rollback on failure). Does not remove data.
+	// Cleanup removes a service's deployment definitions for provisioning rollback,
+	// while preserving its data. Use Stopper for a temporary maintenance stop.
 	// Returns nil if cleanup not supported or not needed.
 	Cleanup(ctx context.Context, host inventory.Host, config ServiceConfig) error
 
@@ -66,6 +67,13 @@ type ServiceConfig struct {
 	Metadata   map[string]any    // Service-specific config
 	Force      bool              // Force re-provision even if exists
 	DeferStart bool              // Deploy but don't start (missing required config)
+	// ProbeInstalled makes the rollout gate probe the binary already on the
+	// host instead of the artifact this config resolves. Commands that
+	// restart without deploying (cluster restart --validate) set it, with
+	// InstalledVersion from host detection. An empty or non-release
+	// InstalledVersion gates on liveness.
+	ProbeInstalled   bool
+	InstalledVersion string
 }
 
 // ProvisionContext holds context for provisioning operations
@@ -161,6 +169,11 @@ type ChangeInspector interface {
 // their role's tasks/restart.yml instead of a Go-side unit-name guess.
 type Restarter interface {
 	Restart(ctx context.Context, host inventory.Host, config ServiceConfig) error
+}
+
+// Stopper stops managed services without removing their units or containers.
+type Stopper interface {
+	Stop(ctx context.Context, host inventory.Host, config ServiceConfig) error
 }
 
 // Fingerprinter is the optional capability a Provisioner implements when it

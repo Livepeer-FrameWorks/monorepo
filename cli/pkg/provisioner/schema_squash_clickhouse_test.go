@@ -116,7 +116,7 @@ func chIntrospect(t *testing.T, name string) map[string]string {
 
 func TestClickHouseServiceCapabilitiesExecute(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-ch-capabilities"
+	name := uniqueContainerName("fw-sv-ch-capabilities")
 	chStart(t, name)
 	baseline, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
 	if err != nil {
@@ -138,7 +138,7 @@ func TestClickHouseServiceCapabilitiesExecute(t *testing.T) {
 
 func TestClickHouseDeliveryRollupContractSeedsAndRetainsDiscoveryThroughScheduledRefreshes(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-ch-rollup-seed"
+	name := uniqueContainerName("fw-sv-ch-rollup-seed")
 	chStart(t, name)
 	baseline, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
 	if err != nil {
@@ -202,7 +202,7 @@ func TestClickHouseBaselineEqualsReplay(t *testing.T) {
 		t.Fatalf("discover clickhouse migrations: %v", err)
 	}
 
-	const aName, bName = "fw-sv-ch-a", "fw-sv-ch-b"
+	aName, bName := uniqueContainerName("fw-sv-ch-a"), uniqueContainerName("fw-sv-ch-b")
 
 	// A: baseline only.
 	chStart(t, aName)
@@ -259,7 +259,7 @@ func TestClickHouseTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 	}
 	migrations = migrationsAfterVersion(migrations, fromTag)
 
-	const currentName, upgradedName = "fw-sv-ch-current", "fw-sv-ch-tag"
+	currentName, upgradedName := uniqueContainerName("fw-sv-ch-current"), uniqueContainerName("fw-sv-ch-tag")
 	chStart(t, currentName)
 	chApply(t, currentName, string(currentSQL))
 	current := chIntrospect(t, currentName)

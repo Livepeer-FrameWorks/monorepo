@@ -1,8 +1,9 @@
 // Package releases is the embedded upgrade-knowledge catalog. It carries
 // only metadata that cannot be inferred from embedded SQL or compiled-in
 // data-migration registries: per-release tooling floor (min_cli_version),
-// automatic-rollback policy (rollback_disabled), and the list of required
-// data migrations a release introduces.
+// source-version floor (min_source_version), automatic-rollback policy
+// (rollback_disabled), and the list of required data migrations a release
+// introduces.
 //
 // The release list can be empty, but service database ownership is still
 // populated so schema gates protect DB-backed services from day one.
@@ -18,6 +19,7 @@ import (
 	"sort"
 	"strings"
 
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,6 +58,11 @@ type Release struct {
 	// previous binary cannot pass the current health gate — published into the fetched manifest so `cluster upgrade`
 	// skips automatic rollback for them this release only (see gitops.Manifest.RollbackDisabled).
 	RollbackDisabled []string `yaml:"rollback_disabled,omitempty"`
+	// MinSourceVersion is the lowest release a cluster may run when it moves to this release, or back from it. It is
+	// declared when this release's components assume every running binary has a capability that older releases lack
+	// (for example the /ready endpoint that version-blind readiness consumers probe). The effective floor of a
+	// release carries forward from earlier releases; see MinSourceVersionFor.
+	MinSourceVersion string `yaml:"min_source_version,omitempty"`
 }
 
 // DataMigrationRequirement is the catalog's view of one data migration that a
@@ -73,8 +80,19 @@ type catalogFile struct {
 	ServiceDatabases         map[string]string              `yaml:"service_databases"`
 	SchemaMigrationFloor     string                         `yaml:"schema_migration_floor"`
 	SchemaMigrationSentinels []SchemaMigrationSentinel      `yaml:"schema_migration_sentinels,omitempty"`
+	Channels                 []ChannelDefinition            `yaml:"channels,omitempty"`
 	Releases                 []Release                      `yaml:"releases"`
 	ReleaseTransitions       []ReleaseTransitionRequirement `yaml:"release_transitions,omitempty"`
+}
+
+// ChannelDefinition is the operator-facing description of one release channel. Names and image tracks must match
+// pkg/version, which classifies tags for both the CLI and the release workflow; the text fields are what the release
+// lifecycle documentation states for each channel.
+type ChannelDefinition struct {
+	Name       string `yaml:"name"`
+	Tags       string `yaml:"tags"`
+	ImageTrack string `yaml:"image_track"`
+	Support    string `yaml:"support"`
 }
 
 // SchemaMigrationSentinel is one immutable migration-ledger identity retained after its executable SQL is folded into
@@ -109,6 +127,7 @@ type catalogState struct {
 	serviceDatabases         map[string]string
 	schemaMigrationFloor     string
 	schemaMigrationSentinels []SchemaMigrationSentinel
+	channels                 []ChannelDefinition
 	transitions              []ReleaseTransitionRequirement
 	err                      error
 }
@@ -162,11 +181,15 @@ func parseCatalog(data []byte) *catalogState {
 	sort.Slice(cf.Releases, func(i, j int) bool {
 		return CompareSemver(cf.Releases[i].Version, cf.Releases[j].Version) < 0
 	})
+	if err := validateSourceFloors(cf.Releases); err != nil {
+		return &catalogState{err: fmt.Errorf("invalid release catalog: %w", err)}
+	}
 	return &catalogState{
 		releases:                 cf.Releases,
 		serviceDatabases:         cf.ServiceDatabases,
 		schemaMigrationFloor:     cf.SchemaMigrationFloor,
 		schemaMigrationSentinels: append([]SchemaMigrationSentinel(nil), cf.SchemaMigrationSentinels...),
+		channels:                 append([]ChannelDefinition(nil), cf.Channels...),
 		transitions:              cf.ReleaseTransitions,
 	}
 }
@@ -267,7 +290,39 @@ func validateCatalog(cf *catalogFile) error {
 			return fmt.Errorf("service_databases has an empty service or database name (%q: %q)", svc, db)
 		}
 	}
+	return validateChannels(cf.Channels)
+}
+
+// validateChannels requires a declared channels section to match pkg/version exactly and in order, so the documented
+// channels cannot drift from the classifier the CLI and release workflow share.
+func validateChannels(channels []ChannelDefinition) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	want := fwversion.Channels()
+	if len(channels) != len(want) {
+		return fmt.Errorf("channels declares %d entries, want exactly %v", len(channels), want)
+	}
+	for i, ch := range channels {
+		if ch.Name != string(want[i]) {
+			return fmt.Errorf("channels[%d] is %q, want %q", i, ch.Name, want[i])
+		}
+		if ch.ImageTrack != want[i].ImageTrack() {
+			return fmt.Errorf("channel %s image_track is %q, want %q", ch.Name, ch.ImageTrack, want[i].ImageTrack())
+		}
+		if strings.TrimSpace(ch.Tags) == "" || strings.TrimSpace(ch.Support) == "" {
+			return fmt.Errorf("channel %s needs non-empty tags and support text", ch.Name)
+		}
+	}
 	return nil
+}
+
+// Channels returns the release channel definitions in pkg/version order. A corrupt catalog is an error.
+func Channels() ([]ChannelDefinition, error) {
+	if embedded.err != nil {
+		return nil, embedded.err
+	}
+	return append([]ChannelDefinition(nil), embedded.channels...), nil
 }
 
 // SchemaMigrationFloor is the declared consolidation boundary shared by migration selection, baseline markers, and
@@ -391,6 +446,86 @@ func Lookup(version string) *Release {
 	return nil
 }
 
+// MinSourceVersionFor returns the lowest release a cluster may run while moving to or from `version`: the highest
+// min_source_version declared by any release at or below the version's base, so a floor carries forward until a later
+// release raises it. known is false when the version's base is above every declared release (or the catalog is
+// corrupt), because this catalog cannot say which floor such a release declares.
+func MinSourceVersionFor(version string) (floor string, known bool) {
+	return embedded.minSourceVersionFor(version)
+}
+
+// SourceFloorsDeclared reports whether any catalog release declares min_source_version. When none does, no move
+// between declared releases can violate a floor, and callers skip reading running versions.
+func SourceFloorsDeclared() bool {
+	return embedded.sourceFloorsDeclared()
+}
+
+func (cs *catalogState) minSourceVersionFor(version string) (string, bool) {
+	if cs.err != nil || len(cs.releases) == 0 {
+		return "", false
+	}
+	base := BaseVersion(version)
+	if CompareSemver(base, BaseVersion(cs.releases[len(cs.releases)-1].Version)) > 0 {
+		return "", false
+	}
+	floor := ""
+	for _, rel := range cs.releases {
+		if CompareSemver(BaseVersion(rel.Version), base) > 0 {
+			break
+		}
+		if rel.MinSourceVersion != "" && (floor == "" || CompareSemver(rel.MinSourceVersion, floor) > 0) {
+			floor = rel.MinSourceVersion
+		}
+	}
+	return floor, true
+}
+
+func (cs *catalogState) sourceFloorsDeclared() bool {
+	if cs.err != nil {
+		return false
+	}
+	for _, rel := range cs.releases {
+		if rel.MinSourceVersion != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateSourceFloors checks min_source_version over the releases in ascending order. A floor is a plain vX.Y.Z that
+// names a declared release below its own, so it is never above the predecessor and some source can always reach the
+// release. A floor that does not raise the one already in effect is rejected as a declaration with no effect.
+func validateSourceFloors(sorted []Release) error {
+	declared := map[string]bool{}
+	for _, rel := range sorted {
+		declared[BaseVersion(rel.Version)] = true
+	}
+	inEffect := ""
+	for _, rel := range sorted {
+		floor := rel.MinSourceVersion
+		if floor == "" {
+			continue
+		}
+		if err := ValidateVersion(floor); err != nil {
+			return fmt.Errorf("release %s min_source_version %w", rel.Version, err)
+		}
+		if BaseVersion(floor) != floor {
+			return fmt.Errorf("release %s min_source_version %s must be a plain vX.Y.Z release", rel.Version, floor)
+		}
+		if CompareSemver(floor, BaseVersion(rel.Version)) >= 0 {
+			return fmt.Errorf("release %s min_source_version %s must be below its own version", rel.Version, floor)
+		}
+		if !declared[floor] {
+			return fmt.Errorf("release %s min_source_version %s is not a declared release", rel.Version, floor)
+		}
+		if inEffect != "" && CompareSemver(floor, inEffect) <= 0 {
+			return fmt.Errorf("release %s min_source_version %s does not raise the floor %s already in effect", rel.Version, floor, inEffect)
+		}
+		inEffect = floor
+	}
+	return nil
+}
+
 // ServiceDatabase returns the platform database name a service owns, or "" if
 // the catalog has not declared ownership for that service. Empty result is
 // the honest "ownership unknown" signal — gates must treat it as a reason to
@@ -418,9 +553,7 @@ func LoadError() error {
 
 // ReleasesBelow returns every catalog release whose BASE version is strictly below the target's base — the prior
 // releases whose postdeploy migrations must already be present before the target deploys, in ascending order. The
-// pre-deploy migration gate does NOT scan these one release at a time: because the migration ledger check is CUMULATIVE
-// (every postdeploy migration <= a given version), it checks only the HIGHEST entry here once, which subsumes all the
-// others. The selection is deliberately independent of any running service's reported version: a skewed/unreadable
+// pre-deploy migration gate walks these to name the first release whose postdeploy is incomplete. The selection is deliberately independent of any running service's reported version: a skewed/unreadable
 // replica cannot narrow it — completeness is proven against the actual _migrations ledger (the authority). The target's
 // own base is EXCLUDED (its postdeploy runs after the deploy); comparing by BASE version so an RC target (v1.2.3-rc1)
 // still excludes the declared final (v1.2.3). Empty catalog ⇒ empty.

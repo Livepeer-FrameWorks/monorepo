@@ -83,6 +83,41 @@ func (l *LocalRunner) Run(ctx context.Context, command string) (*CommandResult, 
 	return result, nil
 }
 
+// RunStream runs command locally with stdin and stdout connected to the caller's reader and writer.
+func (l *LocalRunner) RunStream(ctx context.Context, command string, stdin io.Reader, stdout io.Writer) (*CommandResult, error) {
+	result := &CommandResult{Command: command}
+	start := time.Now()
+	defer func() { result.Duration = time.Since(start) }()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	if l.workDir != "" {
+		cmd.Dir = l.workDir
+	}
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	cmd.Stdout = stdout
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	result.Stderr = strings.TrimSpace(stderr.String())
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = -1
+		}
+		result.Error = err
+		if result.Stderr != "" {
+			return result, fmt.Errorf("%w: %s", err, result.Stderr)
+		}
+		return result, err
+	}
+	return result, nil
+}
+
 // RunScript executes a shell script locally
 func (l *LocalRunner) RunScript(ctx context.Context, script string) (*CommandResult, error) {
 	// Write script to temp file

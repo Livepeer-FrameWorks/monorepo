@@ -103,7 +103,7 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", steps)
 	for _, line := range []string{
 		"Privateer binary, seed peers, and seed DNS: central-eu-1 -> regional-eu-1 -> regional-us-1",
-		"Kafka topics created when missing (no broker restart): eu-west, us-east",
+		"Kafka topics created when missing, topic config applied (no broker restart): eu-west, us-east",
 		"MirrorMaker2 workers and JMX exporter: regional-eu-1 -> regional-us-1",
 	} {
 		if !strings.Contains(out.String(), line) {
@@ -220,5 +220,35 @@ func TestReconcileStaleKafkaMirrorMakerWorkersFailsClosedOnProbeError(t *testing
 	err := reconcileStaleKafkaMirrorMakerWorkers(context.Background(), &bytes.Buffer{}, manifest, probe, remove, false)
 	if err == nil || !strings.Contains(err.Error(), "central-eu-1") {
 		t.Fatalf("err = %v, want probe failure naming the host", err)
+	}
+}
+
+// A Privateer host step whose env fails the schema contract refuses the
+// release before any host converges, naming every failing host.
+func TestReleaseHostConvergencePreflightsEnvContract(t *testing.T) {
+	manifest := multiRegionReleaseManifest()
+	for name, host := range manifest.Hosts {
+		host.WireguardPrivateKey = "wg-private-" + name
+		manifest.Hosts[name] = host
+	}
+	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	steps := planReleaseHostConvergence(plan, manifest)
+	convergence := &releaseHostConvergence{manifest: manifest, runtimeData: map[string]any{}, sharedEnv: map[string]string{}}
+	err = convergence.preflightEnvContract(steps)
+	if err == nil || !strings.Contains(err.Error(), "SERVICE_TOKEN") {
+		t.Fatalf("err = %v, want contract failure naming SERVICE_TOKEN", err)
+	}
+	for _, host := range []string{"central-eu-1", "regional-eu-1", "regional-us-1"} {
+		if !strings.Contains(err.Error(), "privateer-mesh-"+host+" on "+host) {
+			t.Fatalf("err = %v, want privateer on %s", err, host)
+		}
+	}
+
+	convergence.sharedEnv = map[string]string{"SERVICE_TOKEN": "token"}
+	if err := convergence.preflightEnvContract(steps); err != nil {
+		t.Fatalf("complete env: %v", err)
 	}
 }

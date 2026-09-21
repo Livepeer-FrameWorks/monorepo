@@ -21,6 +21,8 @@ releases:
     min_cli_version: v0.5.0
     # rollback_disabled: [<deploy-name>]   # skip automatic rollback this release for a service whose readiness
     #                                       # contract changed such that a restored older binary can't pass the gate
+    # min_source_version: v0.4.9           # lowest release a cluster may run when moving to or back from this
+    #                                       # release; must name a declared earlier release and carries forward
     required_data_migrations:
       - id: billing-rating-v2
         service: purser

@@ -45,12 +45,48 @@ func run() error {
 		FrontendOnly: *frontendOnly,
 	}
 
-	if _, err := configgen.Generate(opts); err != nil {
+	env, err := configgen.Generate(opts)
+	if err != nil {
 		return err
+	}
+	if !*frontendOnly {
+		if err := appendComposeProfiles(opts.OutputFile, env); err != nil {
+			return err
+		}
 	}
 
 	fmt.Printf("wrote %s\n", opts.OutputFile)
 	return nil
+}
+
+// composeProfilePresets are the docker-compose.yml profile combinations the dev
+// stack supports. make verify-compose-profiles validates every entry it reads
+// from the generated file.
+const composeProfilePresets = `
+# Docker Compose profiles for the dev stack. Presets:
+#   COMPOSE_PROFILES=                control plane only
+#   COMPOSE_PROFILES=edge            control plane and the media edge
+#   COMPOSE_PROFILES=edge,support    plus Chatwoot and Listmonk
+#   COMPOSE_PROFILES=edge,two-cell   plus a second media cell
+#   COMPOSE_PROFILES=llm             control plane and local Ollama
+`
+
+// appendComposeProfiles writes the preset list and, unless the merged env files
+// already set COMPOSE_PROFILES, the default edge profile.
+func appendComposeProfiles(path string, env map[string]string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	block := composeProfilePresets
+	if _, set := env["COMPOSE_PROFILES"]; !set {
+		block += "COMPOSE_PROFILES=\"edge\"\n"
+	}
+	if _, err := f.WriteString(block); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func findRepoRoot() (string, error) {

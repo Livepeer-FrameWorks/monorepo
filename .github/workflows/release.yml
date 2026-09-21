@@ -34,6 +34,26 @@ jobs:
       - name: Verify tag, catalog, and migration contract
         run: make release-preflight RELEASE_VERSION="${GITHUB_REF_NAME}"
 
+  # Image tracks use pkg/version.ChannelForTag. Channel pointers are advanced
+  # monotonically by release-plan, including the candidate pointer.
+  classify-release:
+    name: Classify Release Channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.classify.outputs.channel }}
+      image_track: ${{ steps.classify.outputs.image_track }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - id: classify
+        working-directory: scripts/release-channel
+        run: go run . "${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
   define-release-components:
     name: Define Release Components
     needs: [release-plan]
@@ -359,7 +379,7 @@ jobs:
   # Merge per-arch images into multi-arch manifests
   merge-image-manifests:
     name: Merge Image Manifests
-    needs: [define-release-components, build-images-amd64, build-images-arm64]
+    needs: [classify-release, define-release-components, build-images-amd64, build-images-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -421,19 +441,9 @@ jobs:
             GHCR="${{ env.REGISTRY }}/frameworks-${SVC}"
             DH="livepeerframeworks/frameworks-${SVC}"
 
-            TRACK=""
-            case "${TAG}" in
-              *-beta*) TRACK="beta" ;;
-              *-rc*)   TRACK="rc" ;;
-              v[0-9]*) TRACK="latest" ;;
-            esac
-
-            GHCR_TAGS=("-t" "${GHCR}:${TAG}")
-            DH_TAGS=("-t" "${DH}:${TAG}")
-            if [[ -n "${TRACK}" ]]; then
-              GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
-              DH_TAGS+=("-t" "${DH}:${TRACK}")
-            fi
+            TRACK="${{ needs.classify-release.outputs.image_track }}"
+            GHCR_TAGS=("-t" "${GHCR}:${TAG}" "-t" "${GHCR}:${TRACK}")
+            DH_TAGS=("-t" "${DH}:${TAG}" "-t" "${DH}:${TRACK}")
 
             docker buildx imagetools create \
               "${GHCR_TAGS[@]}" \
@@ -743,7 +753,7 @@ jobs:
 
   merge-edge-image:
     name: Merge Edge Image Manifest
-    needs: [build-edge-image]
+    needs: [classify-release, build-edge-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -772,19 +782,9 @@ jobs:
           GHCR="${{ env.REGISTRY }}/frameworks-edge"
           DH="livepeerframeworks/frameworks-edge"
 
-          TRACK=""
-          case "${TAG}" in
-            *-beta*) TRACK="beta" ;;
-            *-rc*)   TRACK="rc" ;;
-            v[0-9]*) TRACK="latest" ;;
-          esac
-
-          GHCR_TAGS=("-t" "${GHCR}:${TAG}")
-          DH_TAGS=("-t" "${DH}:${TAG}")
-          if [[ -n "${TRACK}" ]]; then
-            GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
-            DH_TAGS+=("-t" "${DH}:${TRACK}")
-          fi
+          TRACK="${{ needs.classify-release.outputs.image_track }}"
+          GHCR_TAGS=("-t" "${GHCR}:${TAG}" "-t" "${GHCR}:${TRACK}")
+          DH_TAGS=("-t" "${DH}:${TAG}" "-t" "${DH}:${TRACK}")
 
           docker buildx imagetools create \
             "${GHCR_TAGS[@]}" \
@@ -1195,7 +1195,7 @@ jobs:
   # Merge per-arch webapp images into multi-arch manifests
   merge-webapp-manifests:
     name: Merge Webapp Manifests
-    needs: [define-release-components, build-webapps-amd64, build-webapps-arm64]
+    needs: [classify-release, define-release-components, build-webapps-amd64, build-webapps-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1257,19 +1257,9 @@ jobs:
             GHCR="${{ env.REGISTRY }}/frameworks-${APP}"
             DH="livepeerframeworks/frameworks-${APP}"
 
-            TRACK=""
-            case "${TAG}" in
-              *-beta*) TRACK="beta" ;;
-              *-rc*)   TRACK="rc" ;;
-              v[0-9]*) TRACK="latest" ;;
-            esac
-
-            GHCR_TAGS=("-t" "${GHCR}:${TAG}")
-            DH_TAGS=("-t" "${DH}:${TAG}")
-            if [[ -n "${TRACK}" ]]; then
-              GHCR_TAGS+=("-t" "${GHCR}:${TRACK}")
-              DH_TAGS+=("-t" "${DH}:${TRACK}")
-            fi
+            TRACK="${{ needs.classify-release.outputs.image_track }}"
+            GHCR_TAGS=("-t" "${GHCR}:${TAG}" "-t" "${GHCR}:${TRACK}")
+            DH_TAGS=("-t" "${DH}:${TAG}" "-t" "${DH}:${TRACK}")
 
             docker buildx imagetools create \
               "${GHCR_TAGS[@]}" \
@@ -2653,7 +2643,7 @@ jobs:
 
   update-env:
     name: Update GitOps Environment Repo
-    needs: [manifest]
+    needs: [manifest, classify-release]
     runs-on: ubuntu-latest
     env:
       ENV_REPO: Livepeer-FrameWorks/gitops

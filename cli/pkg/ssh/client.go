@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +91,39 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	}
 
 	result.ExitCode = 0
+	return result, nil
+}
+
+// RunStream runs command on the remote host with stdin and stdout connected to the caller's reader and writer. The
+// error follows Run: non-nil for a non-zero exit and for an ssh failure, with the remote stderr in the message.
+func (c *Client) RunStream(ctx context.Context, command string, stdin io.Reader, stdout io.Writer) (*CommandResult, error) {
+	result := &CommandResult{Command: command}
+	start := time.Now()
+	defer func() { result.Duration = time.Since(start) }()
+
+	args := BuildSSHArgs(c.config, c.resolution)
+	args = append(args, c.resolution.Target, "sh", "-c", ShellQuote(command))
+
+	cmd := execCommandContext(ctx, "ssh", args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
+	cmd.Stdout = stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	result.Stderr = strings.TrimSpace(stderr.String())
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = -1
+		}
+		result.Error = err
+		return result, wrapRunError(c.resolution.Target, command, result.ExitCode, result.Stderr, err)
+	}
 	return result, nil
 }
 

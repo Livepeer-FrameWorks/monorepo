@@ -12,7 +12,7 @@ profiles:
     - signalman
     - navigator
     - lookout
-    - helmsman
+    - bosun
     - steward
     - skipper
     - chartroom
@@ -26,6 +26,7 @@ profiles:
     - skipper
     - navigator
     - lookout
+    - bosun
     - steward
     - decklog
     - signalman
@@ -37,6 +38,7 @@ profiles:
     - commodore
     - quartermaster
     - purser
+    - bosun
     - skipper
   data:
     - decklog
@@ -48,8 +50,6 @@ profiles:
   media:
     - foghorn
     - livepeer-gateway
-  edge:
-    - helmsman
   interfaces:
     - chartroom
     - foredeck
@@ -186,16 +186,16 @@ services:
       protocol: http
       path: /health
       port: 18022
-  helmsman:
-    name: helmsman
-    title: Helmsman (Sidecar)
-    role: media
-    image: ghcr.io/livepeer-frameworks/frameworks-helmsman:latest
-    ports: ["18007:18007"]
+  bosun:
+    name: bosun
+    title: Bosun (Webhooks)
+    role: control
+    image: ghcr.io/livepeer-frameworks/frameworks-bosun:latest
+    ports: ["18013:18013", "19009:19009"]
     health:
       protocol: http
       path: /health
-      port: 18007
+      port: 18013
   steward:
     name: steward
     title: Steward (Forms)

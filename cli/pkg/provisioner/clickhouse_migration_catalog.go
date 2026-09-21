@@ -45,7 +45,7 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 	Tables: []string{
 		"api_events", "api_requests", "api_usage_5m", "api_usage_daily_store",
 		"api_usage_hourly_store", "artifact_events", "artifact_node_copy_current",
-		"artifact_node_copy_events", "artifact_state_current",
+		"artifact_node_copy_events", "artifact_state_current", "artifact_state_current_v2",
 		"client_qoe_5m", "client_qoe_samples", "client_qoe_session_deltas",
 		"delivery_usage_5m", "federation_events", "federation_hourly", "federation_hourly_v2", "ingest_errors",
 		"ledger_rebuild_cursors", "ledger_rebuild_cursors_v2", "node_metrics_1h", "node_metrics_samples",
@@ -92,7 +92,7 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 		"viewer_geo_daily_mv", "viewer_geo_hourly_mv", "viewer_hours_hourly_mv",
 	},
 	Views: []string{
-		"api_usage_5m_v", "api_usage_daily", "api_usage_hourly", "artifact_events_deduped",
+		"api_events_deduped", "api_usage_5m_v", "api_usage_daily", "api_usage_hourly", "artifact_events_deduped",
 		"delivery_usage_5m_v", "processing_5m_v", "processing_segments_topology_v", "restream_sessions_anomalous_v",
 		"processing_daily", "processing_hourly", "processing_segments_final_v", "restream_sessions_final_v",
 		"storage_gb_seconds_5m_v", "storage_usage_daily", "storage_usage_hourly",

@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# Two-cell media proof on the local dev stack (docker compose profile two-cell).
+# Two-cell media proof on the local dev stack (docker compose profiles edge and two-cell).
 #
 # Cell A: the ordinary dev cell (control cell central-primary, media cluster demo-media,
-# edge-node-1, Mist on localhost:18090). Cell B: a second platform cell (us-primary) whose
-# Foghorn (foghorn-b) serves the tenant's virtual private cluster demo-selfhosted
-# (edge-node-b, Mist on localhost:8081). Every Foghorn is platform-run; the two cells
+# edge-node-1 on the edge bundle, Mist on localhost:18090). Cell B: a second platform cell
+# (us-primary) whose Foghorn (foghorn-b) serves the tenant's virtual private cluster
+# demo-selfhosted (edge-node-b on edge-b, Mist on localhost:8081). Every Foghorn is platform-run; the two cells
 # federate. One Commodore and one Quartermaster serve both. The script resolves RTMP through
 # both cells under an ingest policy, publishes to the exact node they agree on, resolves
 # viewers through both cells onto the private edge and asserts real media there,
 # then exercises private-only refusal, capacity fallback, publisher reconnect and a
 # control-plane outage. It is a make target (verify-two-cell-media), not a CI gate: it
-# rebuilds images, needs Docker and the edited Mist image, and takes minutes.
+# rebuilds images, needs Docker and an edge image whose Mist carries the PUSH_REWRITE
+# connector line (make edge-dev-dist, with EDGE_DEV_MIST_TAR for a local Mist build), and
+# takes minutes. MEDIA_TOOLS_IMAGE names an image with ffmpeg (libx264), python3 and pkill that
+# runs the publisher, the pull upstream and the in-network media checks.
 #
-# Re-running against a stack whose Helmsman containers were recreated (image rebuild)
+# Re-running against a stack whose edge containers were recreated (image rebuild)
 # fails enrollment: Quartermaster binds each edge node to its container fingerprint
 # (machine-id plus MACs) and a recreated container carries new MACs. Use a fresh volume
 # (docker compose down -v) or TWO_CELL_REENROLL=1, which drops the two edge registrations
@@ -20,8 +23,8 @@
 # activation when the stack is already activated.
 set -euo pipefail
 
-: "${MIST_IMAGE:?Set MIST_IMAGE to a Mist image whose PUSH_REWRITE carries the connector line (scripts/verify-mist-current-source.sh builds one)}"
-export MIST_IMAGE
+: "${MEDIA_TOOLS_IMAGE:?Set MEDIA_TOOLS_IMAGE to an image with ffmpeg (libx264), python3 and pkill}"
+export MEDIA_TOOLS_IMAGE
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -39,9 +42,9 @@ BRIDGE=http://127.0.0.1:18000
 # Edges advertise in-network addresses: peers pull DTSC from the host in the public URL
 # (a host-mapped localhost is unreachable from the other cell's Mist), so viewer
 # redirects point into the compose network and media checks run there too.
-export EDGE_PUBLIC_URL=${EDGE_PUBLIC_URL:-http://mistserver:8082}
-EDGE_A_HOST=mistserver:8082
-EDGE_B_HOST=mistserver-b:8082
+export EDGE_PUBLIC_URL=${EDGE_PUBLIC_URL:-http://edge:8082}
+EDGE_A_HOST=edge:8082
+EDGE_B_HOST=edge-b:8082
 PUBLISHER=fw-two-cell-publisher
 # Cell A's Mist host ports move off the defaults so the proof coexists with a Mist
 # running natively on this host; nothing in the proof depends on those host ports.
@@ -54,7 +57,7 @@ export MIST_CONTROLLER_HOST_PORT=${MIST_CONTROLLER_HOST_PORT:-14242} MIST_HTTP_H
 export EDGE_ENROLLMENT_TOKEN=${EDGE_ENROLLMENT_TOKEN:-demo_bootstrap_token_for_local_development_testing_only}
 # Cross-cell placement discovery and origin pull run over Foghorn federation (off in .env).
 export FEDERATION_ENABLED=true FEDERATION_ALLOW_INSECURE_DEV=true
-compose() { docker compose --profile two-cell "$@"; }
+compose() { docker compose --profile edge --profile two-cell "$@"; }
 log() { printf '\n[two-cell] %s\n' "$*"; }
 fail() { printf '\n[two-cell] FAIL: %s\n' "$*" >&2; exit 1; }
 psql_db() { compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$1" -Atc "$2"; }
@@ -106,20 +109,20 @@ start_pull_upstream() { # serves a small HLS rendition for the configured pull i
   docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
   rm -rf "$dir" && mkdir -p "$dir"
   docker run --rm -v "$repo_root/infrastructure/demo-recordings:/srv:ro" -v "$dir:/out" \
-    --entrypoint ffmpeg "$MIST_IMAGE" -hide_banner -loglevel error \
+    --entrypoint ffmpeg "$MEDIA_TOOLS_IMAGE" -hide_banner -loglevel error \
     -i /srv/vod/202605181545117110e4095d14f6b6.mkv -t 30 -c copy -f hls -hls_time 2 -hls_list_size 0 \
     -hls_segment_filename /out/seg%03d.ts /out/index.m3u8 >/dev/null 2>&1 || true
   [ -s "$dir/index.m3u8" ] || fail "could not build the pull upstream playlist"
   docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
   docker run -d --name "$PULL_UPSTREAM" --network "$network" \
     -v "$dir:/usr/share/nginx/html:ro" nginx:1.30.1-alpine >/dev/null
-  wait_for 60 "the pull upstream file server" docker run --rm --network "$network" \
-    --entrypoint curl "$MIST_IMAGE" -fsS -m 5 -o /dev/null "http://$PULL_UPSTREAM_HOST/$PULL_UPSTREAM_FILE"
+  wait_for 60 "the pull upstream file server" bash -c \
+    "docker run --rm --network $network --entrypoint python3 $MEDIA_TOOLS_IMAGE -c \"import urllib.request,sys; r=urllib.request.urlopen('http://$PULL_UPSTREAM_HOST/$PULL_UPSTREAM_FILE',timeout=5); sys.exit(0 if r.status==200 else 1)\""
 }
 media_flows() { # media_flows <playlist-url>: true when a video frame can be read
   # Runs inside the compose network: the playlist URL names an edge by its service name.
   local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
-  docker run --rm --network "$network" --entrypoint ffmpeg "$MIST_IMAGE" \
+  docker run --rm --network "$network" --entrypoint ffmpeg "$MEDIA_TOOLS_IMAGE" \
     -hide_banner -loglevel error -rw_timeout 10000000 -i "$1" -map 0:v:0 -frames:v 1 -f null -
 }
 policy_state() { # prints "revision parentRevision rolloutStatus"
@@ -158,7 +161,7 @@ PRIVATE_ONLY='{"schemaVersion":1,"constraints":{"allow":{"any":[{"clusterIds":["
 UNRESTRICTED='{"schemaVersion":1,"constraints":{"deny":[]},"preferences":{"groups":[{"id":"any","match":{}}]}}'
 
 mist_a_idle() { # true once Mist A reports no active stream
-  compose exec -T mistserver curl -fsS --get \
+  compose exec -T edge curl -fsS -m 5 --get \
     --data-urlencode 'command={"active_streams":{"streams":["live+"],"fields":["status"],"longform":true}}' \
     http://localhost:4242/api2 2>/dev/null | jq -e '(.active_streams // {}) | length == 0' >/dev/null
 }
@@ -187,7 +190,7 @@ publisher_generation() {
 }
 
 mist_a_buffer() {
-  compose exec -T mistserver curl -fsS --get \
+  compose exec -T edge curl -fsS -m 5 --get \
     --data-urlencode 'command={"active_streams":{"streams":["live+"],"fields":["pid","lastms","inputs"],"longform":true}}' \
     http://localhost:4242/api2 2>/dev/null | jq -c '.active_streams // {}'
 }
@@ -246,23 +249,29 @@ start_publisher() {
   # no_metadata: ffmpeg's FLV onMetaData becomes a one-frame JSON track in Mist whose
   # single multi-minute frame keeps the stream buffer classified DRY, so no placement
   # publisher claim ever becomes present.
-  docker run -d --name "$PUBLISHER" --network "$network" -e PUBLISH_URL="$publish_url" --entrypoint sh "$MIST_IMAGE" -c \
+  docker run -d --name "$PUBLISHER" --network "$network" -e PUBLISH_URL="$publish_url" --entrypoint sh "$MEDIA_TOOLS_IMAGE" -c \
     'ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=15 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -g 15 -pix_fmt yuv420p -c:a aac /tmp/source.mp4 && while true; do ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /tmp/source.mp4 -map 0:v:0 -map 0:a:0 -c copy -flvflags no_metadata -f flv "$PUBLISH_URL"; sleep 3; done' >/dev/null
 }
 edge_location_is() { # edge_location_is <foghorn> <edge-host>
   local loc; loc="$(resolve_location "$1")"; [[ "$loc" == *"$2"* ]]
 }
-reenroll_edges() { # drop both edge registrations so recreated Helmsman containers can enroll again
+restart_helmsman() { # restart_helmsman <edge-service>...: restarts Helmsman under s6 while Mist and Caddy keep running
+  local service
+  for service in "$@"; do
+    compose exec -T "$service" /command/s6-svc -r /run/service/helmsman >/dev/null
+  done
+}
+reenroll_edges() { # drop both edge registrations so recreated edge containers can enroll again
   # Helmsman withholds its enrollment token once a receipt exists in its state dir; the
   # registration would otherwise be refused with ENROLLMENT_REQUIRED after the rows are gone.
-  compose exec -T helmsman sh -c 'rm -rf /var/lib/frameworks/helmsman/enrollment' >/dev/null
-  compose exec -T helmsman-b sh -c 'rm -rf /var/lib/frameworks/helmsman/enrollment' >/dev/null
+  compose exec -T edge sh -c 'rm -rf /data/state/enrollment' >/dev/null
+  compose exec -T edge-b sh -c 'rm -rf /data/state/enrollment' >/dev/null
   psql_db quartermaster "DELETE FROM quartermaster.ingress_sites WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.service_instances WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.node_fingerprints WHERE node_id IN ('edge-node-1','edge-node-b'); DELETE FROM quartermaster.infrastructure_nodes WHERE node_id IN ('edge-node-1','edge-node-b')" >/dev/null
-  compose restart helmsman helmsman-b >/dev/null
+  restart_helmsman edge edge-b
   sleep 20
   compose restart foghorn foghorn-2 foghorn-b >/dev/null
   sleep 15
-  compose restart helmsman helmsman-b >/dev/null
+  restart_helmsman edge edge-b
   wait_for 120 "foghorn A" http_any "$FOGHORN_A/play/$PLAYBACK_ID/hls"
   wait_for 120 "foghorn B" http_any "$FOGHORN_B/play/$PLAYBACK_ID/hls"
 }
@@ -274,11 +283,12 @@ if [ "${TWO_CELL_RESUME:-}" = 1 ]; then
     reenroll_edges
   fi
 else
-log "1/9 bring up both cells (MIST_IMAGE=$MIST_IMAGE)"
+[ -f edge/dist/versions.env ] || fail "edge/dist is not staged: run make edge-dev-dist"
+log "1/9 bring up both cells (edge dist: $(tr '\n' ' ' < edge/dist/versions.env); MEDIA_TOOLS_IMAGE=$MEDIA_TOOLS_IMAGE)"
 # Only the services this proof needs (compose starts their dependencies); the
 # website/tray images are irrelevant here and take minutes to build.
 compose up -d --build --remove-orphans postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init \
-  foghorn foghorn-2 foghorn-b helmsman helmsman-b mistserver mistserver-b edge-proxy-a edge-proxy-b nginx
+  foghorn foghorn-2 foghorn-b edge edge-b edge-proxy-a edge-proxy-b nginx
 wait_for 120 "postgres" compose exec -T postgres pg_isready -q
 if ! compose exec -T postgres psql -U "$(grep '^POSTGRES_USER=' .env | cut -d'"' -f2)" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1; then
   fail "database foghorn_b is missing: the two-cell profile needs a fresh dev volume (docker compose down -v, then rerun)"
@@ -296,14 +306,14 @@ compose up -d --no-deps storage-init >/dev/null
 sleep 20
 compose restart foghorn foghorn-2 foghorn-b >/dev/null
 sleep 15
-compose restart helmsman helmsman-b >/dev/null
+restart_helmsman edge edge-b
 wait_for 120 "foghorn A" http_any "$FOGHORN_A/play/$PLAYBACK_ID/hls"
 wait_for 120 "foghorn B" http_any "$FOGHORN_B/play/$PLAYBACK_ID/hls"
 wait_for 120 "bridge" http_ok "$BRIDGE/health"
 
 log "3/9 wait for both cells to attest placement enforcement and for the tenant to receive schema-2 authority"
-wait_for 240 "cell attestations" bash -c "[ \"\$(docker compose --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT count(*) FROM commodore.media_cell_placement_capabilities WHERE enforcement_ready AND cell_id IN ('central-primary','us-primary')\")\" = 2 ]"
-wait_for 240 "schema-2 tenant authority" bash -c "[ \"\$(docker compose --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = 2 ]"
+wait_for 240 "cell attestations" bash -c "[ \"\$(docker compose --profile edge --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT count(*) FROM commodore.media_cell_placement_capabilities WHERE enforcement_ready AND cell_id IN ('central-primary','us-primary')\")\" = 2 ]"
+wait_for 240 "schema-2 tenant authority" bash -c "[ \"\$(docker compose --profile edge --profile two-cell exec -T postgres psql -U commodore -d commodore -Atc \"SELECT v.payload_schema_version FROM commodore.media_authority_current c JOIN commodore.media_authority_versions v ON v.authority_kind=c.authority_kind AND v.authority_id=c.authority_id AND v.authority_version=c.authority_version WHERE c.authority_kind='tenant' AND c.authority_id='$TENANT_ID'\")\" = 2 ]"
 psql_db commodore "SELECT cell_id, enforcement_ready, live_replicas, attested_at FROM commodore.media_cell_placement_capabilities ORDER BY cell_id"
 fi
 
@@ -359,7 +369,7 @@ wait_for 180 "media segments for the configured pull input" media_flows "$pull_v
 
 log "7/9 private-only policy with the private cell down refuses instead of silently spilling"
 apply_serve_policy "$PRIVATE_ONLY"
-compose stop edge-proxy-b mistserver-b helmsman-b >/dev/null
+compose stop edge-proxy-b edge-b >/dev/null
 wait_for 180 "cell B to be refused" resolve_refused "$FOGHORN_B"
 resolve_refused "$FOGHORN_A" || fail "cell A did not refuse a private-only viewer with a placement refusal: $(resolve_status "$FOGHORN_A") $(resolve_body "$FOGHORN_A")"
 # Stored media obeys the same policy. The seeded VOD's bytes are warm on cell A's
@@ -382,7 +392,7 @@ wait_for 120 "stored media to be permitted again" bash -c "[ \"\$(curl -s -m 10 
 stored_media_location="$(stored_location "$FOGHORN_A")"
 [[ "$stored_media_location" == *"$EDGE_A_HOST"* ]] || fail "stored media left the edge holding its bytes: $stored_media_location"
 wait_for 60 "media segments for stored media" media_flows "$stored_media_location"
-compose start helmsman-b mistserver-b edge-proxy-b >/dev/null
+compose start edge-b edge-proxy-b >/dev/null
 apply_serve_policy "$PREFER_B_FALLBACK_A"
 wait_for 180 "cell B back in service with the private edge preferred again" edge_location_is "$FOGHORN_B" "$EDGE_B_HOST"
 
@@ -393,7 +403,7 @@ wait_for 120 "the reconnected publisher to be placed from cell A onto the privat
 # Readiness must survive control-channel churn: Mist keeps serving, Helmsman's next report
 # carries Mist's buffer level, and Foghorn's state is in Redis. Neither restart may leave the
 # live publisher unplaceable.
-compose restart helmsman >/dev/null
+restart_helmsman edge
 wait_for 120 "placement to hold across a Helmsman restart" edge_location_is "$FOGHORN_A" "$EDGE_B_HOST"
 compose restart foghorn foghorn-2 >/dev/null
 wait_for 180 "placement to hold across a cell A Foghorn restart" edge_location_is "$FOGHORN_A" "$EDGE_B_HOST"

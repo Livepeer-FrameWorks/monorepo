@@ -11,6 +11,27 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
+// Without a CLI context or an enrollment token, edge init renders the
+// Foghorn address the operator passed with --foghorn-addr.
+func TestEdgeInitUsesFoghornAddrFlagWithoutContext(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	cmd := newEdgeInitCmd()
+	cmd.SetArgs([]string{"--dir", dir, "--domain", "edge-1.example.com", "--email", "ops@example.com", "--foghorn-addr", "foghorn.example.com:18008", "--target-os", "linux"})
+	cmd.SetOut(&strings.Builder{})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("edge init: %v", err)
+	}
+	env, err := os.ReadFile(filepath.Join(dir, ".edge.env"))
+	if err != nil {
+		t.Fatalf("read .edge.env: %v", err)
+	}
+	if !strings.Contains(string(env), "FOGHORN_CONTROL_ADDR=foghorn.example.com:18008\n") {
+		t.Fatalf(".edge.env does not carry the --foghorn-addr value:\n%s", env)
+	}
+}
+
 func TestDeriveEdgeNodeName(t *testing.T) {
 	tests := []struct {
 		name       string

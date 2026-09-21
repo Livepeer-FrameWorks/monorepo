@@ -3,6 +3,9 @@ services:
     image: {{ compose_stack_service.image }}
     container_name: frameworks-{{ compose_stack_name }}
     restart: always
+    # Covers pkg/server's 65 s pre-stop readiness delay plus its 30 s
+    # shutdown timeout (TestPreStopDelayCoversPollersAndFitsStopBudget).
+    stop_grace_period: 2m
 {% if compose_stack_env | default({}) | length > 0 %}
     env_file:
       - .env

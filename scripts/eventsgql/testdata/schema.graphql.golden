@@ -1,0 +1,59 @@
+"""
+A public tenant event as its owning service emitted it. data is the registered
+message of type, unchanged; webhooks deliver the same message.
+"""
+type PublicEvent {
+  "Event ID, stable across redeliveries."
+  id: ID!
+  "Registered event type, e.g. stream.live."
+  type: String!
+  "When the state change committed."
+  time: Time!
+  "The aggregate the event belongs to, as <aggregate>/<id>, e.g. streams/<stream id>."
+  subject: String!
+  data: PublicEventData!
+}
+
+"""
+Payload of a PublicEvent: one member per public event type. Fields of the same
+name can have different types across members (reason is a different enum per
+event family); alias them when one selection covers several.
+"""
+union PublicEventData =
+  | WidgetDropped
+  | WidgetMade
+
+"""
+`widget.dropped` event. Aggregate: `widgets`.
+"""
+type WidgetDropped {
+  widgetId: ID!
+  colors: [EventColor!]!
+}
+
+"""
+`widget.made` event. Aggregate: `widgets`.
+"""
+type WidgetMade {
+  widgetId: ID!
+  label: String!
+  count: Int!
+  sizeBytes: Int!
+  enabled: Boolean!
+  ratio: Float!
+  tags: [String!]!
+  thing: EventThing
+  madeAt: Time
+}
+
+"Part of a public event payload (test.events.v1.Thing)."
+type EventThing {
+  thingId: ID!
+  color: EventColor!
+}
+
+"Values of test.events.v1.Color, named as in the proto and the webhook JSON."
+enum EventColor {
+  COLOR_UNSPECIFIED
+  COLOR_RED
+}

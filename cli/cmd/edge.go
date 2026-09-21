@@ -286,7 +286,12 @@ func newEdgeInitCmd() *cobra.Command {
 			preRegNodeID = hex.EncodeToString(b)
 		}
 
+		// Pre-registration's answer wins, then the explicit flag, then the
+		// active context's endpoint.
 		foghornGRPC := cliCtx.Endpoints.FoghornGRPCAddr
+		if foghornAddr != "" {
+			foghornGRPC = foghornAddr
+		}
 		if preRegFoghornAddr != "" {
 			foghornGRPC = preRegFoghornAddr
 		}
@@ -337,7 +342,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&domain, "domain", "", "EDGE_DOMAIN to configure (manual DNS)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
-	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
+	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address (host:port) for PreRegisterEdge and the rendered FOGHORN_CONTROL_ADDR")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().StringVar(&initMode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
 	cmd.Flags().StringVar(&initRegion, "region", "", "Region of this edge (e.g., eu-west); set as the region label on edge telemetry")

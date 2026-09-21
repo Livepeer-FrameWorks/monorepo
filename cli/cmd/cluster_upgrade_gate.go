@@ -40,10 +40,9 @@ func serviceDependsOnClickHouse(deployName string) bool {
 }
 
 // checkPostgresMigrationGate verifies, for a database-backed service, that every Postgres EXPAND migration up to the
-// target and every HIGHEST-PRIOR postdeploy migration is already applied — checked against the actual _migrations
-// ledger (the authority), never a detected running version. MissingMigrationsForDatabases is CUMULATIVE, so checking
-// the highest prior release once covers all prior postdeploy; the target's own postdeploy is excluded (it runs after
-// deploy).
+// target and every prior release's postdeploy migration is already applied — checked against the actual _migrations
+// ledger (the authority), never a detected running version. When a prior release is incomplete, the refusal names the
+// first such release; the target's own postdeploy is excluded (it runs after deploy).
 func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName, serviceName, target string) error {
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
@@ -82,19 +81,19 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres expand migrations: %w", err)
 	}
-	missingPriorPostdeploy, priorVersion, err := highestPriorPostdeploy(ctx, target, func(v string) ([]provisioner.MigrationKey, error) {
+	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
 		return provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres prior postdeploy: %w", err)
 	}
-	if len(missingExpand) > 0 || len(missingPriorPostdeploy) > 0 {
-		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, priorVersion, missingExpand, missingPriorPostdeploy))
+	if len(missingExpand) > 0 || len(missingPostdeploy) > 0 {
+		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, incompleteRelease, missingExpand, missingPostdeploy))
 	}
 	return nil
 }
 
-// checkClickHouseMigrationGate is the ClickHouse counterpart: it verifies expand + highest-prior postdeploy for the
+// checkClickHouseMigrationGate is the ClickHouse counterpart: it verifies expand + prior-release postdeploy for the
 // analytics databases against the coordinator's ledger. Symmetric with checkPostgresMigrationGate so a ClickHouse-
 // dependent service (Periscope) is gated on the same completeness the Postgres branch enforces.
 func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, serviceName, target string) error {
@@ -117,32 +116,48 @@ func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshP
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse expand migrations: %w", err)
 	}
-	missingPriorPostdeploy, priorVersion, err := highestPriorPostdeploy(ctx, target, func(v string) ([]provisioner.MigrationKey, error) {
+	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
 		return provisioner.MissingClickHouseMigrationsForDatabases(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse prior postdeploy: %w", err)
 	}
-	if len(missingExpand) > 0 || len(missingPriorPostdeploy) > 0 {
-		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, priorVersion, missingExpand, missingPriorPostdeploy))
+	if len(missingExpand) > 0 || len(missingPostdeploy) > 0 {
+		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, incompleteRelease, missingExpand, missingPostdeploy))
 	}
 	return nil
 }
 
-// highestPriorPostdeploy runs `check` against the HIGHEST prior release below the target's base (postdeploy is
-// cumulative, so the highest prior subsumes all earlier ones) and returns the missing keys plus that prior version.
-// When there is no prior release, it returns nil with an empty version.
-func highestPriorPostdeploy(_ context.Context, target string, check func(priorVersion string) ([]provisioner.MigrationKey, error)) ([]provisioner.MigrationKey, string, error) {
-	prior := releases.ReleasesBelow(target)
+// firstIncompletePriorRelease returns the lowest release below the target whose postdeploy migrations are not all
+// applied, with the migrations `check` reports missing for it. `below` selects the prior releases in ascending order
+// (production passes releases.ReleasesBelow, which excludes the target's own base); `check` is the cumulative ledger
+// check (every postdeploy migration at or below the given version). Because the check is cumulative, a complete
+// ledger at the highest prior release proves every earlier release complete, so that one query answers the common
+// case; otherwise releases are checked in ascending order and the first incomplete one is returned. It returns an
+// empty version and nil when every prior release is complete. A check error is returned so the gate fails closed.
+func firstIncompletePriorRelease(target string, below func(target string) []releases.Release, check func(version string) ([]provisioner.MigrationKey, error)) (string, []provisioner.MigrationKey, error) {
+	prior := below(target)
 	if len(prior) == 0 {
-		return nil, "", nil
+		return "", nil, nil
 	}
-	priorVersion := prior[len(prior)-1].Version // ReleasesBelow is ascending
-	missing, err := check(priorVersion)
+	highest := prior[len(prior)-1].Version
+	missing, err := check(highest)
 	if err != nil {
-		return nil, priorVersion, err
+		return "", nil, fmt.Errorf("check postdeploy through %s: %w", highest, err)
 	}
-	return missing, priorVersion, nil
+	if len(missing) == 0 {
+		return "", nil, nil
+	}
+	for _, rel := range prior[:len(prior)-1] {
+		relMissing, relErr := check(rel.Version)
+		if relErr != nil {
+			return "", nil, fmt.Errorf("check postdeploy through %s: %w", rel.Version, relErr)
+		}
+		if len(relMissing) > 0 {
+			return rel.Version, relMissing, nil
+		}
+	}
+	return highest, missing, nil
 }
 
 // loadReleaseCatalog is the seam the migration and data-migration gates read the
@@ -347,13 +362,13 @@ func runUpgradePreDeployGate(
 	if skipMigrationCheck {
 		fmt.Fprintln(cmd.OutOrStderr(), "[gate] WARNING: --skip-migration-check active; pre-deploy schema gate bypassed.")
 	} else if pgBacked || chBacked {
-		// PostgreSQL branch: expand + highest-prior postdeploy for this service's owned database.
+		// PostgreSQL branch: expand + prior-release postdeploy for this service's owned database.
 		if pgBacked {
 			if err := checkPostgresMigrationGateFn(ctx, rc, sshPool, manifest, dbName, serviceName, targetPlatformVersion); err != nil {
 				return err
 			}
 		}
-		// ClickHouse branch (INDEPENDENT): expand + highest-prior postdeploy for the analytics databases.
+		// ClickHouse branch (INDEPENDENT): expand + prior-release postdeploy for the analytics databases.
 		if chBacked {
 			if err := checkClickHouseMigrationGateFn(ctx, rc, sshPool, manifest, serviceName, targetPlatformVersion); err != nil {
 				return err
@@ -412,7 +427,8 @@ func runUpgradePreDeployGate(
 // must meet its min_cli_version tooling floor. It deliberately does NOT depend on the running service's version —
 // migration completeness is proven separately against the actual _migrations ledger (the prior-postdeploy scan checks
 // the highest prior release's CUMULATIVE postdeploy set against the ledger, so a skewed/unreadable replica version
-// cannot block a ledger-proven rollout). It is NOT a version compatibility floor. Empty catalog ⇒ no-op.
+// cannot block a ledger-proven rollout). The release floor between running and target versions is enforced separately
+// by enforceSourceFloor. Empty catalog ⇒ no-op.
 func enforceCatalogPath(cmd *cobra.Command, target string) error {
 	// A corrupt embedded catalog must FAIL CLOSED (it would otherwise silently disable this gate and the data-migration
 	// gate), not be read as "nothing to enforce". Reading through the seam surfaces the parse error instead of an
@@ -501,38 +517,31 @@ func serviceRuntimeName(service string, svc inventory.ServiceConfig) string {
 	return service
 }
 
-// formatMigrationRemediation builds the pre-deploy refusal message, pointing the operator at the RIGHT phase(s):
-// expand migrations are applied with `--phase expand --to-version <target>`, while missing PRIOR postdeploy migrations
-// are applied with `--phase postdeploy --to-version <highest prior release>` — the two are separate commands, and the
-// postdeploy version is the prior release (not the target, whose own postdeploy runs after this deploy). A phase with
-// no missing migrations contributes no command line.
-func formatMigrationRemediation(serviceName, targetVersion, priorPostdeployVersion string, missingExpand, missingPriorPostdeploy []provisioner.MigrationKey) string {
-	msg := fmt.Sprintf("[gate] migrations required before deploying %s %s:\n%s",
-		serviceName, targetVersion, formatMissingMigrations(missingExpand, missingPriorPostdeploy))
+// formatMigrationRemediation builds the pre-deploy refusal message. An incomplete prior release is refused outright:
+// its postdeploy migrations belong to that release's own binaries, so the operator must finish that release before
+// retrying the target. Missing expand migrations for the target are applied with `--phase expand --to-version
+// <target>`, because expand runs before the deploy. A part with no missing migrations contributes nothing.
+func formatMigrationRemediation(serviceName, targetVersion, incompleteRelease string, missingExpand, missingPostdeploy []provisioner.MigrationKey) string {
+	var parts []string
+	if len(missingPostdeploy) > 0 {
+		names := make([]string, 0, len(missingPostdeploy))
+		for _, m := range missingPostdeploy {
+			names = append(names, m.String())
+		}
+		parts = append(parts, fmt.Sprintf(
+			"[gate] cluster has not completed release %s (missing postdeploy: %s). Apply %s with its own binaries, including its postdeploy migrations, then retry %s. Upgrading past an incomplete release is not supported.",
+			incompleteRelease, strings.Join(names, ", "), incompleteRelease, targetVersion))
+	}
 	if len(missingExpand) > 0 {
-		msg += fmt.Sprintf("\n\nrun: frameworks cluster migrate --phase expand --to-version %s", targetVersion)
-	}
-	if len(missingPriorPostdeploy) > 0 {
-		msg += fmt.Sprintf("\nrun: frameworks cluster migrate --phase postdeploy --to-version %s", priorPostdeployVersion)
-	}
-	return msg
-}
-
-func formatMissingMigrations(expand, postdeploy []provisioner.MigrationKey) string {
-	var b strings.Builder
-	if len(expand) > 0 {
-		b.WriteString("  expand:\n")
-		for _, m := range expand {
+		var b strings.Builder
+		fmt.Fprintf(&b, "[gate] migrations required before deploying %s %s:\n  expand:\n", serviceName, targetVersion)
+		for _, m := range missingExpand {
 			fmt.Fprintf(&b, "    - %s\n", m.String())
 		}
+		fmt.Fprintf(&b, "\nrun: frameworks cluster migrate --phase expand --to-version %s", targetVersion)
+		parts = append(parts, b.String())
 	}
-	if len(postdeploy) > 0 {
-		b.WriteString("  prior postdeploy:\n")
-		for _, m := range postdeploy {
-			fmt.Fprintf(&b, "    - %s\n", m.String())
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.Join(parts, "\n\n")
 }
 
 func formatBlockers(blockers []datamigrate.Blocker) string {

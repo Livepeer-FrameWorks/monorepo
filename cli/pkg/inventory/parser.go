@@ -497,6 +497,10 @@ func (m *Manifest) Validate() error {
 					topic.Name, topic.ReplicationFactor, brokerCount)
 			}
 		}
+		topLevelAggregator := m.Infrastructure.Kafka.Role == "" || m.Infrastructure.Kafka.Role == "aggregator"
+		if err := validateKafkaTopics("kafka", m.Infrastructure.Kafka.Topics, brokerCount, topLevelAggregator); err != nil {
+			return err
+		}
 		if m.Infrastructure.Kafka.MinInSyncReplicas > 0 {
 			for _, topic := range m.Infrastructure.Kafka.Topics {
 				if topic.ReplicationFactor > 0 && m.Infrastructure.Kafka.MinInSyncReplicas > topic.ReplicationFactor {
@@ -533,6 +537,9 @@ func (m *Manifest) Validate() error {
 			seenRegionIDs[rc.RegionID] = true
 			if !validKafkaRole(rc.Role) {
 				return fmt.Errorf("kafka.regional[%d] (%s): role must be 'aggregator' or 'regional', got %q", i, rc.RegionID, rc.Role)
+			}
+			if err := validateKafkaTopics(fmt.Sprintf("kafka.regional[%d] (%s)", i, rc.RegionID), rc.Topics, len(rc.Brokers), rc.Role == "aggregator"); err != nil {
+				return err
 			}
 			if rc.Role == "aggregator" {
 				aggregatorCount++

@@ -26,7 +26,11 @@ type Manifest struct {
 	// gate (rollback would report a successful restoration as a failed check; recover by redeploy/forward-fix). This is
 	// per-RELEASE metadata read from the fetched manifest, not a permanent code exception — a release that lists no
 	// deploy name here keeps ordinary rollback for every service.
-	RollbackDisabled     []string              `yaml:"rollback_disabled,omitempty"`
+	RollbackDisabled []string `yaml:"rollback_disabled,omitempty"`
+	// MinSourceVersion is the effective source floor of this release (see releases.MinSourceVersionFor). The CLI
+	// requires it to equal the floor its embedded catalog derives, so a release and the CLI deploying it cannot
+	// disagree about which running releases may move to it.
+	MinSourceVersion     string                `yaml:"min_source_version,omitempty"`
 	Services             []ServiceEntry        `yaml:"services"`
 	NativeBinaries       []NativeBinary        `yaml:"native_binaries"`
 	Interfaces           []InterfaceEntry      `yaml:"interfaces"`

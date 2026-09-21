@@ -2,531 +2,421 @@ package cmd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/backup"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/spf13/cobra"
 )
 
-// BackupManifest tracks backup files and their checksums for integrity verification
-type BackupManifest struct {
-	Version   string                `json:"version"`
-	Timestamp string                `json:"timestamp"`
-	Component string                `json:"component"`
-	Files     map[string]BackupFile `json:"files"`
+// clickhouseBackupDatabase is the ClickHouse database that holds the authoritative billing facts.
+const clickhouseBackupDatabase = "periscope"
+
+// Backup seams. Production opens SSH runners on the manifest hosts and reads the clock; tests substitute local
+// runners and a fixed time.
+var (
+	backupRunnerFn = func(host inventory.Host, pool *ssh.Pool) (ssh.StreamRunner, error) {
+		return getStreamRunner(host, pool)
+	}
+	backupNowFn = time.Now
+)
+
+// backupSelection is what a backup, restore, finish or rollback covers.
+type backupSelection struct {
+	all        bool
+	databases  []string
+	clickhouse bool
 }
 
-// BackupFile represents a single backup file with its metadata
-type BackupFile struct {
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	SHA256    string `json:"sha256"`
-	Host      string `json:"host,omitempty"`
-	Component string `json:"component"`
+func (s backupSelection) validate() error {
+	if !s.all && len(s.databases) == 0 && !s.clickhouse {
+		return errors.New("choose what to cover: --all, or --database <name> (repeatable) and/or --clickhouse")
+	}
+	if s.all && (len(s.databases) > 0 || s.clickhouse) {
+		return errors.New("--all already covers every database; drop --database/--clickhouse")
+	}
+	return nil
 }
 
-// newClusterBackupCmd creates the backup command
+// includes reports whether a PostgreSQL/YugabyteDB database is selected. A --database value matches the physical
+// name, or <instance>/<name> for a named instance.
+func (s backupSelection) includes(instance, name string) bool {
+	if s.all {
+		return true
+	}
+	for _, want := range s.databases {
+		if selectorMatches(want, instance, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectorMatches(want, instance, name string) bool {
+	if instance == "" {
+		return want == name || want == backup.DatabaseKey("", name)
+	}
+	return want == instance+"/"+name
+}
+
+func addSelectionFlags(cmd *cobra.Command, sel *backupSelection) {
+	cmd.Flags().BoolVar(&sel.all, "all", false, "Cover every PostgreSQL/YugabyteDB database and the ClickHouse billing facts")
+	cmd.Flags().StringArrayVar(&sel.databases, "database", nil, "Database to cover (physical name, or <instance>/<name> for a named postgres instance); repeatable")
+	cmd.Flags().BoolVar(&sel.clickhouse, "clickhouse", false, "Cover the ClickHouse billing facts")
+}
+
 func newClusterBackupCmd() *cobra.Command {
-	var outputDir string
-	var skipUpload bool
-
 	cmd := &cobra.Command{
-		Use:   "backup <component>",
-		Short: "Backup cluster components",
-		Long: `Backup cluster components to local storage.
+		Use:   "backup",
+		Short: "Back up the cluster's authoritative databases",
+		Long: `Back up the authoritative data of a cluster: every PostgreSQL/YugabyteDB service database (one logical
+dump per database, in pre-data, data and post-data sections), the databases of named postgres instances, and the
+ClickHouse billing facts. The CLI runs the dump tools on the database hosts over SSH and streams the output to the
+destination you name: a local directory or an s3:// URL. A manifest with file hashes, row counts and the migration
+ledger digest of every database is written last; a backup without it is incomplete.
 
-Supported components:
-  postgres    - Backup all PostgreSQL databases
-  clickhouse  - Backup ClickHouse databases
-  volumes     - Backup Docker volumes
-  config      - Backup configuration files (.env, docker-compose.yml)
-  all         - Backup everything (postgres + clickhouse + volumes + config)
+Object storage, Kafka, Valkey and SOPS-managed secrets are not part of a backup. Derived ClickHouse tables (rollups,
+views, raw telemetry) are rebuilt from the facts and Kafka.
 
-Backups are stored in the output directory with timestamps.
-Remote upload is not implemented; --skip-upload is accepted as a deprecated no-op.`,
-		Example: `  frameworks cluster backup postgres --output /backups
-  frameworks cluster backup all --output /backups`,
-		Args: cobra.ExactArgs(1),
+Contract migrations and irreversible data migrations require a backup taken less than an hour earlier whose ledger
+digests still match the cluster (--backup on those commands). Nothing else requires one.`,
+	}
+	cmd.AddCommand(newClusterBackupCreateCmd(), newClusterBackupVerifyCmd())
+	return cmd
+}
+
+func newClusterBackupCreateCmd() *cobra.Command {
+	var to string
+	var sel backupSelection
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Dump databases to a local directory or an S3 prefix",
+		Example: `  frameworks cluster backup create --to /var/backups/frameworks --all
+  frameworks cluster backup create --to s3://ops-backups/frameworks --database purser
+  AWS_ENDPOINT_URL_S3=https://fsn1.your-objectstorage.com frameworks cluster backup create --to s3://bucket/prod --all`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := sel.validate(); err != nil {
+				return err
+			}
+			if strings.TrimSpace(to) == "" {
+				return errors.New("--to is required: a local directory or an s3://bucket/prefix URL")
+			}
 			rc, err := resolveClusterManifest(cmd)
 			if err != nil {
 				return err
 			}
 			defer rc.Cleanup()
-			return runBackup(cmd, rc.Manifest, args[0], outputDir)
+			if platformErr := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); platformErr != nil {
+				return platformErr
+			}
+			_, err = runBackupCreate(cmd, rc, to, sel)
+			return err
 		},
 	}
-
-	cmd.Flags().StringVarP(&outputDir, "output", "o", "./backups", "Output directory for backups")
-	cmd.Flags().BoolVar(&skipUpload, "skip-upload", true, "Deprecated no-op; backups are local-only")
-
+	cmd.Flags().StringVar(&to, "to", "", "Destination: a local directory or s3://bucket/prefix (required); the backup goes into a new frameworks-backup-<UTC time> directory under it")
+	addSelectionFlags(cmd, &sel)
 	return cmd
 }
 
-// runBackup executes the backup command against an already-loaded manifest.
-func runBackup(cmd *cobra.Command, manifest *inventory.Manifest, component, outputDir string) error {
-	timestamp := time.Now().Format("20060102-150405")
-	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Starting backup: %s (timestamp: %s)", component, timestamp))
-	fmt.Fprintf(cmd.OutOrStdout(), "Output directory: %s\n\n", outputDir)
+func newClusterBackupVerifyCmd() *cobra.Command {
+	var from string
+	cmd := &cobra.Command{
+		Use:   "verify",
+		Short: "Check a backup's manifest and the size and SHA-256 of every file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := backup.ParseLocation(from)
+			if err != nil {
+				return err
+			}
+			m, err := backup.ReadManifest(cmd.Context(), loc)
+			if err != nil {
+				return err
+			}
+			if err := backup.VerifyFiles(cmd.Context(), loc, m.Files(nil)); err != nil {
+				return err
+			}
+			printBackupSummary(cmd, loc, m)
+			ux.Success(cmd.OutOrStdout(), "Backup verified")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&from, "from", "", "Backup directory or s3:// URL (required)")
+	_ = cmd.MarkFlagRequired("from") //nolint:errcheck // flag defined above
+	return cmd
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+// backupPlanDatabase is one PostgreSQL/YugabyteDB database a backup or restore addresses.
+type backupPlanDatabase struct {
+	entry  backup.Database // Instance, Name and Source
+	host   inventory.Host
+	server provisioner.DatabaseServer
+}
 
-	// Create SSH pool
-	sshKey := stringFlag(cmd, "ssh-key").Value
-	sshPool := ssh.NewPool(30*time.Second, sshKey)
+// backupPlanClickHouse is the ClickHouse coordinator a backup or restore addresses.
+type backupPlanClickHouse struct {
+	host   inventory.Host
+	server provisioner.ClickHouseServer
+	nodes  int
+}
+
+type backupPlan struct {
+	databases  []backupPlanDatabase
+	clickhouse *backupPlanClickHouse
+}
+
+// planBackupTargets resolves the selected stores against the manifest: the primary PostgreSQL/YugabyteDB with its
+// per-cell database aliases, every named postgres instance, and the ClickHouse coordinator.
+func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool, sel backupSelection) (*backupPlan, error) {
+	manifest := rc.Manifest
+	plan := &backupPlan{}
+	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+		databases := schemaDatabasesFromConfigs(pg.Databases)
+		engine := backup.EnginePostgres
+		if pg.IsYugabyte() {
+			databases = yugabyteSchemaDatabases(pg.Databases, manifest)
+			engine = backup.EngineYugabyte
+		}
+		var selected []provisioner.SchemaDatabase
+		for _, db := range databases {
+			if sel.includes("", db.Name) {
+				selected = append(selected, db)
+			}
+		}
+		if len(selected) > 0 {
+			host, err := backupPostgresHost(ctx, manifest, pg, pool)
+			if err != nil {
+				return nil, err
+			}
+			server := provisioner.DatabaseServer{Engine: engine, Port: pg.EffectivePort()}
+			for _, db := range selected {
+				plan.databases = append(plan.databases, backupPlanDatabase{
+					entry:  backup.Database{Name: db.Name, Source: db.SourceName},
+					host:   host,
+					server: server,
+				})
+			}
+		}
+		for i := range pg.Instances {
+			inst := &pg.Instances[i]
+			host, ok := manifest.GetHost(inst.Host)
+			if !ok {
+				return nil, fmt.Errorf("postgres instance %s: host %q is not in the manifest", inst.Name, inst.Host)
+			}
+			host.Name = firstNonEmpty(host.Name, inst.Host)
+			for _, db := range inst.Databases {
+				if !sel.includes(inst.Name, db.Name) {
+					continue
+				}
+				plan.databases = append(plan.databases, backupPlanDatabase{
+					entry:  backup.Database{Instance: inst.Name, Name: db.Name},
+					host:   host,
+					server: provisioner.DatabaseServer{Engine: backup.EnginePostgres, Port: postgresInstancePort(inst)},
+				})
+			}
+		}
+	}
+	if sel.all || sel.clickhouse {
+		ch := manifest.Infrastructure.ClickHouse
+		switch {
+		case ch != nil && ch.Enabled && slices.Contains(ch.Databases, clickhouseBackupDatabase):
+			host, ok := manifest.GetHost(ch.CoordinatorHost())
+			if !ok {
+				return nil, fmt.Errorf("cannot resolve clickhouse coordinator host %q", ch.CoordinatorHost())
+			}
+			host.Name = firstNonEmpty(host.Name, ch.CoordinatorHost())
+			env, err := rc.SharedEnv()
+			if err != nil {
+				return nil, fmt.Errorf("load manifest env_files: %w", err)
+			}
+			plan.clickhouse = &backupPlanClickHouse{
+				host:   host,
+				server: provisioner.ClickHouseServer{Port: ch.EffectivePort(), Password: env["CLICKHOUSE_PASSWORD"], Database: clickhouseBackupDatabase},
+				nodes:  len(ch.Nodes),
+			}
+		case sel.clickhouse:
+			return nil, fmt.Errorf("--clickhouse: the manifest has no enabled ClickHouse with the %s database", clickhouseBackupDatabase)
+		}
+	}
+	for _, want := range sel.databases {
+		found := false
+		for _, db := range plan.databases {
+			if selectorMatches(want, db.entry.Instance, db.entry.Name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("--database %s is not a database in the manifest", want)
+		}
+	}
+	if len(plan.databases) == 0 && plan.clickhouse == nil {
+		return nil, errors.New("the manifest has no database to cover")
+	}
+	return plan, nil
+}
+
+// backupPostgresHostFn selects the host the dump tools run on. Tests substitute a fixed host.
+var backupPostgresHostFn = postgresAdminHost
+
+func backupPostgresHost(ctx context.Context, manifest *inventory.Manifest, pg *inventory.PostgresConfig, pool *ssh.Pool) (inventory.Host, error) {
+	return backupPostgresHostFn(ctx, manifest, pg, pool)
+}
+
+// runBackupCreate dumps the selected stores into a new directory under `to` and writes the manifest last. Any
+// failure fails the command and leaves no manifest.
+func runBackupCreate(cmd *cobra.Command, rc *resolvedCluster, to string, sel backupSelection) (backup.Location, error) {
+	out := cmd.OutOrStdout()
+	parent, err := backup.ParseLocation(to)
+	if err != nil {
+		return nil, err
+	}
+	sshPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
 	defer sshPool.Close()
-
-	// Track backup files for manifest
-	backupFiles := make(map[string]BackupFile)
-
-	// Execute backup based on component
-	switch component {
-	case "postgres":
-		if err := backupPostgres(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			return err
-		}
-	case "clickhouse":
-		if err := backupClickHouse(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			return err
-		}
-	case "volumes":
-		if err := backupVolumes(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			return err
-		}
-	case "config":
-		if err := backupConfig(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			return err
-		}
-	case "all":
-		fmt.Fprintln(cmd.OutOrStdout(), "[1/4] Backing up Postgres...")
-		if err := backupPostgres(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Postgres backup failed: %v", err))
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "\n[2/4] Backing up ClickHouse...")
-		if err := backupClickHouse(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("ClickHouse backup failed: %v", err))
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "\n[3/4] Backing up Docker volumes...")
-		if err := backupVolumes(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Volumes backup failed: %v", err))
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "\n[4/4] Backing up configuration...")
-		if err := backupConfig(ctx, cmd, manifest, outputDir, timestamp, sshPool, backupFiles); err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Config backup failed: %v", err))
-		}
-
-	default:
-		return fmt.Errorf("unknown component: %s (must be postgres, clickhouse, volumes, config, or all)", component)
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := planBackupTargets(ctx, rc, sshPool, sel)
+	if err != nil {
+		return nil, err
 	}
 
-	// Write backup manifest with checksums
-	if len(backupFiles) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "\nWriting backup manifest...\n")
-		if err := writeBackupManifest(outputDir, timestamp, component, backupFiles); err != nil {
-			ux.Warn(cmd.ErrOrStderr(), fmt.Sprintf("Failed to write manifest: %v", err))
-		} else {
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Manifest written: manifest-%s.json", timestamp))
+	started := backupNowFn().UTC()
+	loc := parent.Child("frameworks-backup-" + started.Format("20060102T150405Z"))
+	ux.Heading(out, fmt.Sprintf("Backing up to %s", loc))
+	m := &backup.Manifest{FormatVersion: backup.FormatVersion, CreatedAt: started, CLIVersion: fwv.Version, Cluster: rc.Cluster}
+
+	for _, target := range plan.databases {
+		runner, runErr := backupRunnerFn(target.host, sshPool)
+		if runErr != nil {
+			return nil, fmt.Errorf("connect to %s for %s: %w", target.host.Name, target.entry.Key(), runErr)
 		}
+		fmt.Fprintf(out, "  %s (%s on %s)...\n", target.entry.Key(), target.server.Engine, target.host.Name)
+		entry, dumpErr := provisioner.BackupDatabase(ctx, runner, target.server, loc, target.entry)
+		if dumpErr != nil {
+			return nil, fmt.Errorf("back up %s: %w", target.entry.Key(), dumpErr)
+		}
+		m.Databases = append(m.Databases, entry)
+	}
+	if ch := plan.clickhouse; ch != nil {
+		runner, runErr := backupRunnerFn(ch.host, sshPool)
+		if runErr != nil {
+			return nil, fmt.Errorf("connect to clickhouse coordinator %s: %w", ch.host.Name, runErr)
+		}
+		fmt.Fprintf(out, "  %s (%d billing fact tables on %s)...\n", backup.ClickHouseKey(ch.server.Database), len(provisioner.ClickHouseBackupTables), ch.host.Name)
+		entry, dumpErr := backupClickHouse(ctx, runner, ch.server, loc)
+		if dumpErr != nil {
+			return nil, fmt.Errorf("back up clickhouse: %w", dumpErr)
+		}
+		m.ClickHouse = entry
 	}
 
-	ux.Success(cmd.OutOrStdout(), "Backup complete")
-	return nil
+	m.CompletedAt = backupNowFn().UTC()
+	if err := backup.WriteManifest(ctx, loc, m); err != nil {
+		return nil, err
+	}
+	printBackupSummary(cmd, loc, m)
+	ux.Success(out, fmt.Sprintf("Backup complete: %s", loc))
+	fmt.Fprintf(out, "Pass it to a contract or irreversible migration within %s: --backup %s\n", backup.MaxAge, loc)
+	return loc, nil
 }
 
-// backupPostgres backs up PostgreSQL databases
-func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, outputDir, timestamp string, pool *ssh.Pool, backupFiles map[string]BackupFile) error {
-	if !manifest.Infrastructure.Postgres.Enabled {
-		return fmt.Errorf("postgres not enabled in manifest")
-	}
-
-	host, found := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
-	if !found {
-		return fmt.Errorf("postgres host not found: %s", manifest.Infrastructure.Postgres.Host)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Postgres on %s...\n", host.ExternalIP)
-
-	// Get runner
-	runner, err := getRunner(host, pool)
+// backupClickHouse dumps the billing fact tables; the ledger read before and after must agree.
+func backupClickHouse(ctx context.Context, runner ssh.StreamRunner, server provisioner.ClickHouseServer, loc backup.Location) (*backup.ClickHouse, error) {
+	before, err := provisioner.ReadClickHouseLedger(ctx, runner, server)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	// Generate backup filename
-	backupFile := filepath.Join(outputDir, fmt.Sprintf("postgres-%s.sql", timestamp))
-
-	// Create backup command (works for both Docker and native)
-	backupCmd := buildPostgresBackupCommand(outputDir, backupFile)
-
-	result, err := runner.Run(ctx, backupCmd)
+	entry := &backup.ClickHouse{Database: server.Database}
+	for _, table := range provisioner.ClickHouseBackupTables {
+		t, tableErr := provisioner.BackupClickHouseTable(ctx, runner, server, loc, table)
+		if tableErr != nil {
+			return nil, tableErr
+		}
+		entry.Tables = append(entry.Tables, t)
+	}
+	after, err := provisioner.ReadClickHouseLedger(ctx, runner, server)
 	if err != nil {
-		return fmt.Errorf("backup command failed: %w", err)
+		return nil, err
 	}
-
-	if result.ExitCode != 0 {
-		return fmt.Errorf("backup failed: %s", result.Stderr)
+	if backup.LedgerDigest(before) != backup.LedgerDigest(after) {
+		return nil, errors.New("the clickhouse migration ledger changed during the backup; run it again when no migration is running")
 	}
+	if after == nil {
+		after = []backup.LedgerRow{}
+	}
+	entry.Ledger, entry.LedgerDigest = after, backup.LedgerDigest(after)
+	return entry, nil
+}
 
-	// Calculate checksum remotely
-	checksumCmd := fmt.Sprintf("sha256sum %s | awk '{print $1}'", backupFile)
-	checksumResult, err := runner.Run(ctx, checksumCmd)
-	if err == nil && checksumResult.ExitCode == 0 {
-		// Get file size
-		sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
-		sizeResult, _ := runner.Run(ctx, sizeCmd)
+func printBackupSummary(cmd *cobra.Command, loc backup.Location, m *backup.Manifest) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "\nBackup %s\n  started %s, completed %s (CLI %s)\n", loc, m.CreatedAt.Format(time.RFC3339), m.CompletedAt.Format(time.RFC3339), m.CLIVersion)
+	for _, db := range m.Databases {
 		var size int64
-		_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
-
-		backupFiles[filepath.Base(backupFile)] = BackupFile{
-			Path:      backupFile,
-			Size:      size,
-			SHA256:    strings.TrimSpace(checksumResult.Stdout),
-			Host:      host.ExternalIP,
-			Component: "postgres",
+		for _, s := range db.Sections {
+			size += s.File.Size
 		}
+		fmt.Fprintf(out, "  %-32s %-9s %d tables, %d ledger rows, %s compressed\n", db.Key(), db.Engine, len(db.RowCounts), len(db.Ledger), humanBytes(size))
 	}
-
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Postgres backup saved: %s", backupFile))
-	return nil
+	if ch := m.ClickHouse; ch != nil {
+		var size, rows int64
+		for _, t := range ch.Tables {
+			size += t.File.Size
+			rows += t.Rows
+		}
+		fmt.Fprintf(out, "  %-32s %-9s %d tables, %d rows, %d ledger rows, %s compressed\n", ch.Key(), backup.EngineClickHouse, len(ch.Tables), rows, len(ch.Ledger), humanBytes(size))
+	}
 }
 
-// backupClickHouse backs up ClickHouse databases
-func backupClickHouse(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, outputDir, timestamp string, pool *ssh.Pool, backupFiles map[string]BackupFile) error {
-	if !manifest.Infrastructure.ClickHouse.Enabled {
-		return fmt.Errorf("clickhouse not enabled in manifest")
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
 	}
-
-	host, found := manifest.GetHost(manifest.Infrastructure.ClickHouse.CoordinatorHost())
-	if !found {
-		return fmt.Errorf("clickhouse host not found: %s", manifest.Infrastructure.ClickHouse.CoordinatorHost())
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
 	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "  Backing up ClickHouse on %s...\n", host.ExternalIP)
-
-	// Get runner
-	runner, err := getRunner(host, pool)
-	if err != nil {
-		return err
-	}
-
-	// Generate backup directory
-	backupDir := filepath.Join(outputDir, fmt.Sprintf("clickhouse-%s", timestamp))
-
-	// Create backup using TSV export (compatible with all versions)
-	backupCmd := buildClickHouseBackupScript(backupDir)
-
-	result, err := runner.Run(ctx, backupCmd)
-	if err != nil {
-		return fmt.Errorf("backup command failed: %w", err)
-	}
-
-	if result.ExitCode != 0 {
-		return fmt.Errorf("backup failed: %s", result.Stderr)
-	}
-
-	// Create tarball for easier checksum and transfer
-	tarFile := backupDir + ".tar.gz"
-	tarCmd := fmt.Sprintf("tar -czf %s -C %s . && rm -rf %s", ssh.ShellQuote(tarFile), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
-	if tarResult, err := runner.Run(ctx, tarCmd); err == nil && tarResult.ExitCode == 0 {
-		// Calculate checksum
-		checksumCmd := fmt.Sprintf("sha256sum %s | awk '{print $1}'", tarFile)
-		if checksumResult, err := runner.Run(ctx, checksumCmd); err == nil && checksumResult.ExitCode == 0 {
-			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", tarFile, tarFile)
-			sizeResult, _ := runner.Run(ctx, sizeCmd)
-			var size int64
-			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
-
-			backupFiles[filepath.Base(tarFile)] = BackupFile{
-				Path:      tarFile,
-				Size:      size,
-				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.ExternalIP,
-				Component: "clickhouse",
-			}
-		}
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("ClickHouse backup saved: %s", tarFile))
-	} else {
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("ClickHouse backup saved: %s", backupDir))
-	}
-
-	return nil
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// backupVolumes backs up Docker volumes from all hosts
-func backupVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, outputDir, timestamp string, pool *ssh.Pool, backupFiles map[string]BackupFile) error {
-	if len(manifest.Hosts) == 0 {
-		return fmt.Errorf("no hosts defined in manifest")
-	}
-
-	var errors []string
-	successCount := 0
-
-	for hostName, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up Docker volumes on %s (%s)...\n", hostName, host.ExternalIP)
-
-		// Get runner
-		runner, err := getRunner(host, pool)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: failed to get runner: %v", hostName, err))
-			continue
-		}
-
-		// Generate backup filename with host identifier
-		backupFile := filepath.Join(outputDir, fmt.Sprintf("volumes-%s-%s.tar.gz", hostName, timestamp))
-
-		// Backup all frameworks volumes
-		backupCmd := fmt.Sprintf(`
-mkdir -p %s
-docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf /backup/volumes-%s-%s.tar.gz -C /volumes $(docker volume ls --filter name=frameworks -q | tr '\n' ' ') 2>/dev/null || echo "no volumes found"
-`, ssh.ShellQuote(outputDir), ssh.ShellQuote(outputDir), hostName, timestamp)
-
-		result, err := runner.Run(ctx, backupCmd)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: backup command failed: %v", hostName, err))
-			continue
-		}
-
-		if result.ExitCode != 0 {
-			errors = append(errors, fmt.Sprintf("%s: backup failed: %s", hostName, result.Stderr))
-			continue
-		}
-
-		// Calculate checksum
-		checksumCmd := fmt.Sprintf("sha256sum %s | awk '{print $1}'", backupFile)
-		if checksumResult, err := runner.Run(ctx, checksumCmd); err == nil && checksumResult.ExitCode == 0 {
-			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
-			sizeResult, _ := runner.Run(ctx, sizeCmd)
-			var size int64
-			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
-
-			backupFiles[filepath.Base(backupFile)] = BackupFile{
-				Path:      backupFile,
-				Size:      size,
-				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.ExternalIP,
-				Component: "volumes",
-			}
-		}
-
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Volumes backup saved: %s", backupFile))
-		successCount++
-	}
-
-	if len(errors) > 0 {
-		for _, e := range errors {
-			ux.Warn(cmd.ErrOrStderr(), e)
-		}
-	}
-
-	if successCount == 0 {
-		return fmt.Errorf("all volume backups failed")
-	}
-
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Backed up volumes from %d/%d hosts", successCount, len(manifest.Hosts)))
-	return nil
-}
-
-// backupConfig backs up configuration files from all hosts
-func backupConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, outputDir, timestamp string, pool *ssh.Pool, backupFiles map[string]BackupFile) error {
-	if len(manifest.Hosts) == 0 {
-		return fmt.Errorf("no hosts defined in manifest")
-	}
-
-	var errors []string
-	successCount := 0
-
-	for hostName, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Backing up config files on %s (%s)...\n", hostName, host.ExternalIP)
-
-		// Get runner
-		runner, err := getRunner(host, pool)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: failed to get runner: %v", hostName, err))
-			continue
-		}
-
-		// Generate backup filename with host identifier
-		backupFile := filepath.Join(outputDir, fmt.Sprintf("config-%s-%s.tar.gz", hostName, timestamp))
-
-		// Backup all config files (handle missing dirs gracefully)
-		backupCmd := fmt.Sprintf(`
-mkdir -p %s
-cd / && tar czf %s \
-  $(test -d /etc/frameworks && echo "/etc/frameworks") \
-  $(find /opt/frameworks -maxdepth 2 -name 'docker-compose.yml' 2>/dev/null) \
-  $(find /opt/frameworks -maxdepth 2 -name '.env' 2>/dev/null) \
-  2>/dev/null || true
-`, ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
-
-		result, err := runner.Run(ctx, backupCmd)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: backup command failed: %v", hostName, err))
-			continue
-		}
-
-		if result.ExitCode != 0 {
-			errors = append(errors, fmt.Sprintf("%s: backup failed: %s", hostName, result.Stderr))
-			continue
-		}
-
-		// Calculate checksum
-		checksumCmd := fmt.Sprintf("sha256sum %s | awk '{print $1}'", backupFile)
-		if checksumResult, err := runner.Run(ctx, checksumCmd); err == nil && checksumResult.ExitCode == 0 {
-			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
-			sizeResult, _ := runner.Run(ctx, sizeCmd)
-			var size int64
-			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
-
-			backupFiles[filepath.Base(backupFile)] = BackupFile{
-				Path:      backupFile,
-				Size:      size,
-				SHA256:    strings.TrimSpace(checksumResult.Stdout),
-				Host:      host.ExternalIP,
-				Component: "config",
-			}
-		}
-
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Config backup saved: %s", backupFile))
-		successCount++
-	}
-
-	if len(errors) > 0 {
-		for _, e := range errors {
-			ux.Warn(cmd.ErrOrStderr(), e)
-		}
-	}
-
-	if successCount == 0 {
-		return fmt.Errorf("all config backups failed")
-	}
-
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Backed up config from %d/%d hosts", successCount, len(manifest.Hosts)))
-	return nil
-}
-
-// buildPostgresBackupCommand builds the shell command that dumps all Postgres
-// databases to backupFile. outputDir and backupFile are shell-quoted so paths
-// with spaces or metacharacters cannot break out of the command.
-func buildPostgresBackupCommand(outputDir, backupFile string) string {
-	return fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
-		ssh.ShellQuote(outputDir), ssh.ShellQuote(backupFile))
-}
-
-// buildClickHouseBackupScript builds the TSV-export script that dumps every
-// non-system ClickHouse database/table under backupDir (shell-quoted).
-func buildClickHouseBackupScript(backupDir string) string {
-	return fmt.Sprintf(`
-mkdir -p %s
-docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --query="SHOW DATABASES" | while read db; do
-  if [ "$db" != "system" ] && [ "$db" != "information_schema" ] && [ "$db" != "INFORMATION_SCHEMA" ]; then
-    mkdir -p %s/$db
-    docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SHOW TABLES" | while read table; do
-      docker compose -f /opt/frameworks/clickhouse/docker-compose.yml exec -T clickhouse-server clickhouse-client --database=$db --query="SELECT * FROM $table FORMAT TSV" > %s/$db/$table.tsv
-    done
-  fi
-done
-`, ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir), ssh.ShellQuote(backupDir))
-}
-
-// getRunner returns an SSH runner for a host
+// getRunner returns an SSH runner for a host, or a local runner for localhost.
 func getRunner(host inventory.Host, pool *ssh.Pool) (ssh.Runner, error) {
 	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
 		return ssh.NewLocalRunner(""), nil
 	}
-
-	sshConfig := &ssh.ConnectionConfig{
+	return pool.Get(&ssh.ConnectionConfig{
 		Address:  host.ExternalIP,
 		Port:     22,
 		User:     host.User,
 		HostName: host.Name,
 		Timeout:  30 * time.Second,
-	}
-
-	return pool.Get(sshConfig)
+	})
 }
 
-// calculateFileSHA256 computes the SHA256 hash of a file
-func calculateFileSHA256(filePath string) (string, int64, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", 0, err
+// getStreamRunner is getRunner for commands that stream stdin and stdout.
+func getStreamRunner(host inventory.Host, pool *ssh.Pool) (ssh.StreamRunner, error) {
+	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
+		return ssh.NewLocalRunner(""), nil
 	}
-	defer f.Close()
-
-	h := sha256.New()
-	size, err := io.Copy(h, f)
-	if err != nil {
-		return "", 0, err
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), size, nil
-}
-
-// writeBackupManifest writes the backup manifest JSON file
-func writeBackupManifest(outputDir, timestamp, component string, files map[string]BackupFile) error {
-	manifest := BackupManifest{
-		Version:   "1",
-		Timestamp: timestamp,
-		Component: component,
-		Files:     files,
-	}
-
-	manifestPath := filepath.Join(outputDir, fmt.Sprintf("manifest-%s.json", timestamp))
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal manifest: %w", err)
-	}
-
-	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write manifest: %w", err)
-	}
-
-	return nil
-}
-
-// VerifyBackupManifest verifies the integrity of backup files against a manifest
-func VerifyBackupManifest(manifestPath string) ([]string, error) {
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read manifest: %w", err)
-	}
-
-	var manifest BackupManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-
-	var errors []string
-	for name, file := range manifest.Files {
-		hash, size, err := calculateFileSHA256(file.Path)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: failed to read file: %v", name, err))
-			continue
-		}
-
-		if size != file.Size {
-			errors = append(errors, fmt.Sprintf("%s: size mismatch (expected %d, got %d)", name, file.Size, size))
-		}
-
-		if hash != file.SHA256 {
-			errors = append(errors, fmt.Sprintf("%s: checksum mismatch", name))
-		}
-	}
-
-	return errors, nil
+	return pool.Get(&ssh.ConnectionConfig{
+		Address:  host.ExternalIP,
+		Port:     22,
+		User:     host.User,
+		HostName: host.Name,
+		Timeout:  30 * time.Second,
+	})
 }

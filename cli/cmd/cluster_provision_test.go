@@ -2008,7 +2008,7 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
+func TestServiceEnvContractProductionRequiresNavigatorManagedCA(t *testing.T) {
 	envFile := writeTestEnvFile(t, testSharedSecrets)
 	manifest := &inventory.Manifest{
 		Profile:    "production",
@@ -2018,7 +2018,13 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 		},
 		Services: map[string]inventory.ServiceConfig{
-			"navigator": {Enabled: true, Host: "core-1"},
+			"navigator": {Enabled: true, Host: "core-1", Config: map[string]string{
+				"DATABASE_URL":          "postgres://navigator:pw@db.internal:5432/navigator",
+				"ACME_EMAIL":            "ops@frameworks.network",
+				"CLOUDFLARE_API_TOKEN":  "cf-token",
+				"CLOUDFLARE_ZONE_ID":    "cf-zone",
+				"CLOUDFLARE_ACCOUNT_ID": "cf-account",
+			}},
 		},
 	}
 	task := &orchestrator.Task{
@@ -2030,7 +2036,11 @@ func TestBuildServiceEnvVarsProductionRequiresNavigatorManagedCA(t *testing.T) {
 		Phase:     orchestrator.PhaseApplications,
 	}
 
-	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", testLoadSharedEnv(t, manifest), nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+	err = validateTaskServiceEnvContract(manifest, task, config)
 	if err == nil {
 		t.Fatal("expected managed CA env validation to fail")
 	}
@@ -3177,11 +3187,11 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "purser",
 			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
-			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "USAGE_HASH_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
 		},
 		{
 			serviceID: "navigator",
-			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "NAVIGATOR_GRPC_PORT": "18011", "NAVIGATOR_PORT": "18010"},
+			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002", "DECKLOG_GRPC_ADDR": "decklog.internal:18006", "NAVIGATOR_GRPC_PORT": "18011", "NAVIGATOR_PORT": "18010"},
 			keys:      []string{"DATABASE_URL", "SERVICE_TOKEN", "FIELD_ENCRYPTION_KEY", "BRAND_DOMAIN", "ACME_EMAIL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID", "CLOUDFLARE_ACCOUNT_ID"},
 		},
 		{

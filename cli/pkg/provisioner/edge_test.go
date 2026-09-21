@@ -371,7 +371,7 @@ func TestWriteEdgeTemplates_ContainerMode(t *testing.T) {
 
 func TestWriteEdgeTemplates_ContainerModeDefaultsEdgeImage(t *testing.T) {
 	tmpDir := t.TempDir()
-	vars := templates.EdgeVars{Mode: "container"}
+	vars := templates.EdgeVars{Mode: "container", NodeID: "edge-1", EdgeDomain: "edge-1.example.com", FoghornGRPCAddr: "foghorn.example.com:18008"}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
 		t.Fatalf("WriteEdgeTemplates failed: %v", err)
@@ -445,10 +445,12 @@ func TestWriteEdgeTemplates_BootstrapCaddyfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Only native mode renders the bootstrap Caddyfile on the host.
 	vars := templates.EdgeVars{
-		EdgeDomain:  "edge-1.example.com",
-		SiteAddress: "edge-1.example.com",
-		AcmeEmail:   "ops@example.com",
-		Mode:        "native",
+		NodeID:          "edge-1",
+		FoghornGRPCAddr: "foghorn.example.com:18008",
+		EdgeDomain:      "edge-1.example.com",
+		SiteAddress:     "edge-1.example.com",
+		AcmeEmail:       "ops@example.com",
+		Mode:            "native",
 	}
 
 	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {

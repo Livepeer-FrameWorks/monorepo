@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -37,6 +38,12 @@ type UploadOptions struct {
 	Mode       uint32 // File permissions (e.g., 0644)
 	Owner      string // Optional: chown after upload
 	Group      string // Optional: chgrp after upload
+}
+
+// StreamRunner runs one command with caller-supplied stdin and stdout, so transfers such as database dumps pass
+// through without being buffered. Stderr is captured into the result. A nil stdin sends no input.
+type StreamRunner interface {
+	RunStream(ctx context.Context, command string, stdin io.Reader, stdout io.Writer) (*CommandResult, error)
 }
 
 // Runner executes commands via SSH

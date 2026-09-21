@@ -6,7 +6,7 @@ set -eu
 # repository data; no user-provided value is interpreted as an identifier.
 # foghorn_b is the second media cell's Foghorn database (docker compose profile
 # two-cell); it reuses the foghorn schema under its own role.
-service_databases="quartermaster purser foghorn foghorn_b commodore periscope navigator skipper lookout"
+service_databases="quartermaster purser foghorn foghorn_b commodore periscope navigator skipper lookout bosun"
 
 for service in $service_databases; do
   schema_file="$service"

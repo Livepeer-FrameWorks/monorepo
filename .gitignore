@@ -82,6 +82,12 @@ docker-compose.override.yml
 # Temporary & Logs
 **/tmp/
 **/EXAMPLE*/
+!npm_api/examples/
+!npm_api/examples/**
+!sdk_go/examples/
+!sdk_go/examples/**
+!sdk_python/examples/
+!sdk_python/examples/**
 **/temp/
 **/logs/
 *.log
@@ -174,3 +180,10 @@ website_docs/public/llms.txt
 website_docs/public/robots.txt
 website_docs/public/.well-known/
 .two-cell-pull-upstream/
+
+# Python SDK dev environment and caches
+sdk_python/.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+*.egg-info/

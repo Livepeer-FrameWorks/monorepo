@@ -41,6 +41,13 @@ else
   ) | awk '/^Test/ { print $1 }' | sort -u >"$actual_file"
 fi
 
+# A name listed twice means two of the composed selectors run the same test.
+duplicated=$(printf '%s\n' "$selector" | tr '|' '\n' | sed '/^$/d' | sort | uniq -d)
+if [[ -n "$duplicated" ]]; then
+  echo "ERROR: explicit test selector for $module_dir $package names a test more than once:" >&2
+  printf '%s\n' "$duplicated" >&2
+  exit 1
+fi
 printf '%s\n' "$selector" | tr '|' '\n' | sed '/^$/d' | sort -u >"$selected_file"
 
 if [[ ! -s "$actual_file" ]]; then

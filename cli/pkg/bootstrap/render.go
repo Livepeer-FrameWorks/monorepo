@@ -369,10 +369,12 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 					}
 					if hasDefs {
 						entry.Protocol = defs.HealthProtocol
-						// Advertise READINESS, not liveness: Quartermaster (and anything
-						// routing off the registry) must consider an instance serviceable
-						// only when it can actually serve. For Chandler that is /ready
-						// (store-backed); for everything else ReadinessPath() == HealthPath.
+						// Advertise the fleet-wide readiness path: Quartermaster (and anything
+						// routing off the registry) treats an instance as serviceable only when
+						// it can serve. The registry does not know which release each instance
+						// runs, so this is /ready only for services whose every supported
+						// release serves it (see servicedefs.ReadySince), and matches what
+						// self-registration advertises.
 						entry.HealthEndpoint = defs.ReadinessPath()
 					}
 					// A gateway intentionally listens on loopback behind the node's HTTPS

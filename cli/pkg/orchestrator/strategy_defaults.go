@@ -27,7 +27,7 @@ package orchestrator
 //     foredeck, logbook): max_unavailable=1, no stagger. Plenty of
 //     replicas, but reload-preferred means low-blast even at one host.
 //
-//   - Singletons (commodore, quartermaster, purser, navigator, lookout, skipper,
+//   - Singletons (commodore, quartermaster, purser, navigator, lookout, bosun, skipper,
 //     periscope-query, periscope-metering, deckhand, helmsman, livepeer-signer, mirrormaker
 //     instances, edges): max_unavailable=1. Nothing to parallelize.
 //
@@ -90,6 +90,7 @@ var serviceStrategyDefaults = map[string]UpdateStrategy{
 	"purser":             {MaxUnavailable: 1},
 	"navigator":          {MaxUnavailable: 1},
 	"lookout":            {MaxUnavailable: 1},
+	"bosun":              {MaxUnavailable: 1},
 	"skipper":            {MaxUnavailable: 1},
 	"periscope-query":    {MaxUnavailable: 1},
 	"periscope-metering": {MaxUnavailable: 1},

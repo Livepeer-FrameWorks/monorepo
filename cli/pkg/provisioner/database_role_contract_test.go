@@ -22,6 +22,32 @@ func databaseRoleTaskFile(t *testing.T, engine, file string) string {
 	return string(data)
 }
 
+func TestRestoreStopTasksPreserveServiceDefinitions(t *testing.T) {
+	for _, role := range []string{"go_service", "compose_stack"} {
+		t.Run(role, func(t *testing.T) {
+			main := databaseRoleTaskFile(t, role, "main.yml")
+			if !strings.Contains(main, "ansible.builtin.import_tasks: stop.yml\n  tags: [stop, never]") {
+				t.Fatal("stop tasks must be explicitly selectable and excluded from ordinary provisioning")
+			}
+			stop := databaseRoleTaskFile(t, role, "stop.yml")
+			if !strings.Contains(stop, "state: stopped") {
+				t.Fatal("stop must preserve installed resources")
+			}
+			for _, forbidden := range []string{"state: absent", "enabled: false", "failed_when:", "ignore_errors:", "remove_volumes:", "remove_images:"} {
+				if strings.Contains(stop, forbidden) {
+					t.Fatalf("stop contains destructive or error-suppressing option %q", forbidden)
+				}
+			}
+		})
+	}
+	for _, role := range []string{"chatwoot", "listmonk"} {
+		main := databaseRoleTaskFile(t, role, "main.yml")
+		if !strings.Contains(main, "tasks_from: stop.yml") || !strings.Contains(main, "tags: [stop, never]") {
+			t.Fatalf("%s must delegate stop to compose_stack", role)
+		}
+	}
+}
+
 func TestDatabaseRolesApplyOwnershipBeforeRuntimeGrants(t *testing.T) {
 	for _, engine := range []string{"postgres", "yugabyte"} {
 		t.Run(engine, func(t *testing.T) {

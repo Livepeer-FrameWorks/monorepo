@@ -18,6 +18,7 @@ import (
 
 	"frameworks/cli/internal/releases"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -350,6 +351,11 @@ func validateManifestCompat(m *Manifest) error {
 			return fmt.Errorf("min_cli_version %w", err)
 		}
 	}
+	if v := m.MinSourceVersion; v != "" {
+		if err := releases.ValidateVersion(v); err != nil {
+			return fmt.Errorf("min_source_version %w", err)
+		}
+	}
 	for _, id := range m.RequiredTransitions {
 		if strings.TrimSpace(id) == "" {
 			return fmt.Errorf("required_transitions contains an empty transition id")
@@ -511,7 +517,12 @@ func ResolveVersion(versionStr string) (channel, version string) {
 
 // channelForTag maps a concrete SemVer tag to its release channel by its prerelease identifier. A prerelease
 // (the segment after '-', excluding build metadata after '+') means the rc channel; a plain release tag is stable.
+// Well-formed tags classify through pkg/version.ChannelForTag, the same function the release workflow uses to pick
+// the channel pointer and image track; the lenient fallback only covers malformed operator input.
 func channelForTag(tag string) string {
+	if channel, err := fwversion.ChannelForTag(tag); err == nil {
+		return string(channel)
+	}
 	// Strip build metadata (+...), which is not prerelease.
 	if plus := strings.IndexByte(tag, '+'); plus >= 0 {
 		tag = tag[:plus]

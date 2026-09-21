@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
@@ -76,14 +77,22 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 		deployName = serviceName // infrastructure services use canonical IDs
 	}
 
-	host, found := resolveServiceHost(manifest, serviceName)
-	if !found {
-		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+	hosts, err := resolveRestartHosts(manifest, serviceName)
+	if err != nil {
+		return err
 	}
+	for _, host := range hosts {
+		if err := restartServiceOnHost(cmd, rc, serviceName, deployName, host, validate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+func restartServiceOnHost(cmd *cobra.Command, rc *resolvedCluster, serviceName, deployName string, host inventory.Host, validate bool) error {
 	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Restarting %s on %s", serviceName, host.ExternalIP))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(cmd.Context(), restartCommandTimeout)
 	defer cancel()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
@@ -99,31 +108,19 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 		return fmt.Errorf("provisioner for %s does not support role-based restart", deployName)
 	}
 
-	// Build the same ServiceConfig surface provision would pass so the
-	// role's restart.yml has access to env-derived unit names, ports, etc.
-	task := &orchestrator.Task{
-		Name:       serviceName,
-		Type:       deployName,
-		ServiceID:  serviceName,
-		Host:       host.Name,
-		Phase:      orchestrator.PhaseApplications,
-		Idempotent: true,
+	config, err := buildServiceRoleConfig(cmd, rc, serviceName, deployName, host)
+	if err != nil {
+		return fmt.Errorf("restart %s: %w", serviceName, err)
 	}
-	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, envErr := rc.PreparedSharedEnv()
-	if envErr != nil {
-		return fmt.Errorf("prepare shared environment: %w", envErr)
+
+	if validate {
+		// Restart deploys nothing, so the gate must probe the release already on the host, not the channel's newest.
+		state, detectErr := provisioner.DetectWithConfig(ctx, prov, host, config)
+		if detectErr != nil {
+			return fmt.Errorf("detect installed %s before restart: %w", serviceName, detectErr)
+		}
+		config = probeInstalledRelease(config, state)
 	}
-	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
-	if clusterEnvsErr != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "  warning: cluster env decrypt failed: %v\n", clusterEnvsErr)
-		clusterEnvs = nil
-	}
-	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
-	if cfgErr != nil {
-		return fmt.Errorf("build restart config: %w", cfgErr)
-	}
-	rc.applyReleaseMetadata(config.Metadata)
 
 	if err := restarter.Restart(ctx, host, config); err != nil {
 		return fmt.Errorf("restart %s: %w", serviceName, err)
@@ -144,9 +141,95 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 	return nil
 }
 
+func resolveRestartHosts(manifest *inventory.Manifest, serviceName string) ([]inventory.Host, error) {
+	for _, group := range []map[string]inventory.ServiceConfig{manifest.Services, manifest.Interfaces, manifest.Observability} {
+		if svc, ok := group[serviceName]; ok && svc.Enabled {
+			names := svc.Hosts
+			if len(names) == 0 && svc.Host != "" {
+				names = []string{svc.Host}
+			}
+			if len(names) == 0 {
+				return nil, fmt.Errorf("service %s has no configured hosts", serviceName)
+			}
+			var hosts []inventory.Host
+			seen := map[string]bool{}
+			for _, name := range names {
+				if seen[name] {
+					continue
+				}
+				host, ok := manifest.GetHost(name)
+				if !ok {
+					return nil, fmt.Errorf("service %s: unknown host %s", serviceName, name)
+				}
+				host.Name = firstNonEmpty(host.Name, name)
+				hosts = append(hosts, host)
+				seen[name] = true
+			}
+			return hosts, nil
+		}
+	}
+	if host, found := resolveServiceHost(manifest, serviceName); found {
+		return []inventory.Host{host}, nil
+	}
+	return nil, fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+}
+
+// restartCommandTimeout bounds cluster restart: the role restart, host
+// detection, the settle pause, and a validate that may wait the full rollout
+// readiness window.
+const restartCommandTimeout = provisioner.RolloutReadinessTimeout + 2*time.Minute
+
+// probeInstalledRelease makes config's rollout gate follow the release
+// detected on the host. A missing detection leaves InstalledVersion empty,
+// which gates on liveness.
+func probeInstalledRelease(config provisioner.ServiceConfig, state *detect.ServiceState) provisioner.ServiceConfig {
+	config.ProbeInstalled = true
+	config.InstalledVersion = ""
+	if state != nil {
+		config.InstalledVersion = state.Version
+	}
+	return config
+}
+
 // resolveServiceHost walks the manifest in the same order as upgrade +
 // provision: infrastructure first, then application services, interfaces,
 // observability.
+// buildServiceRoleConfig builds the ServiceConfig provision would pass for one service on one host, so a role's
+// restart, cleanup and validate tasks see the same env-derived unit names and ports.
+func buildServiceRoleConfig(cmd *cobra.Command, rc *resolvedCluster, serviceName, deployName string, host inventory.Host) (provisioner.ServiceConfig, error) {
+	manifest := rc.Manifest
+	task := &orchestrator.Task{
+		Name:       serviceName,
+		Type:       deployName,
+		ServiceID:  serviceName,
+		Host:       host.Name,
+		Phase:      orchestrator.PhaseApplications,
+		Idempotent: true,
+	}
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.PreparedSharedEnv()
+	if envErr != nil {
+		return provisioner.ServiceConfig{}, fmt.Errorf("prepare shared environment: %w", envErr)
+	}
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "  warning: cluster env decrypt failed: %v\n", clusterEnvsErr)
+		clusterEnvs = nil
+	}
+	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	if cfgErr != nil {
+		return provisioner.ServiceConfig{}, fmt.Errorf("build role config: %w", cfgErr)
+	}
+	if contractErr := validateTaskServiceEnvContract(manifest, task, config); contractErr != nil {
+		return provisioner.ServiceConfig{}, contractErr
+	}
+	if missing := missingRequiredExternalEnv(deployName, config.EnvVars); len(missing) > 0 {
+		return provisioner.ServiceConfig{}, requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", serviceName, host.Name), Missing: missing}})
+	}
+	rc.applyReleaseMetadata(config.Metadata)
+	return config, nil
+}
+
 func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inventory.Host, bool) {
 	switch serviceName {
 	case "postgres":

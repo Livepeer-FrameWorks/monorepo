@@ -10,7 +10,8 @@ import (
 )
 
 // newReleaseMetadataCmd emits the release-manifest compatibility metadata (min_cli_version + required_transitions +
-// rollback_disabled) for a target platform version, as YAML lines the release pipeline appends to the published
+// rollback_disabled + the effective min_source_version) for a target platform version, as YAML lines the release
+// pipeline appends to the published
 // manifest. Publishing these in the FETCHED manifest is what lets an OUTDATED CLI fail closed before migrations (see
 // validateFetchedReleaseCompatibility) and lets `cluster upgrade` honor per-release rollback policy; this command
 // derives them from the SAME embedded catalog the CLI validates against, so publish and validate never drift. It reads
@@ -55,6 +56,9 @@ func newReleaseMetadataCmd() *cobra.Command {
 				for _, name := range rollbackDisabled {
 					fmt.Fprintf(out, "  - %s\n", name)
 				}
+			}
+			if floor, _ := sourceFloorForFn(version); floor != "" {
+				fmt.Fprintf(out, "min_source_version: %s\n", floor)
 			}
 			return nil
 		},

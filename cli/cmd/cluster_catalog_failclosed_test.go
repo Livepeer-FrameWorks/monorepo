@@ -121,42 +121,46 @@ func TestDoctorDataMigrations_ReportsDegradedOnCorruptCatalog(t *testing.T) {
 	}
 }
 
-// TestFormatMigrationRemediation pins the separated expand/postdeploy remediation:
-// each phase contributes its own command only when it has missing migrations, and
-// the postdeploy command targets the HIGHEST PRIOR release version, never the
-// deploy target (whose own postdeploy runs after the deploy).
+// TestFormatMigrationRemediation pins the refusal text: missing expand migrations get the
+// target's expand command, while an incomplete prior release is refused by name and is never
+// remediated by running its postdeploy migrations from the target's binaries.
 func TestFormatMigrationRemediation(t *testing.T) {
 	expand := []provisioner.MigrationKey{{Database: "foghorn", Version: "v0.2.96", Phase: "expand", Seq: 1, Filename: "001_a.sql"}}
 	postdeploy := []provisioner.MigrationKey{{Database: "foghorn", Version: "v0.2.90", Phase: "postdeploy", Seq: 1, Filename: "001_b.sql"}}
+	refusal := "cluster has not completed release v0.2.90 (missing postdeploy: foghorn/v0.2.90/postdeploy/001_b.sql). " +
+		"Apply v0.2.90 with its own binaries, including its postdeploy migrations, then retry v0.2.96. " +
+		"Upgrading past an incomplete release is not supported."
 
 	t.Run("expand only", func(t *testing.T) {
-		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", expand, nil)
+		msg := formatMigrationRemediation("foghorn", "v0.2.96", "", expand, nil)
 		if !strings.Contains(msg, "--phase expand --to-version v0.2.96") {
 			t.Fatalf("expected expand remediation, got:\n%s", msg)
 		}
-		if strings.Contains(msg, "--phase postdeploy") {
-			t.Fatalf("no postdeploy missing, must not suggest postdeploy:\n%s", msg)
+		if strings.Contains(msg, "postdeploy") {
+			t.Fatalf("no postdeploy missing, must not mention postdeploy:\n%s", msg)
 		}
 	})
 
-	t.Run("postdeploy only targets prior version", func(t *testing.T) {
+	t.Run("incomplete prior release is refused by name", func(t *testing.T) {
 		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", nil, postdeploy)
-		if !strings.Contains(msg, "--phase postdeploy --to-version v0.2.90") {
-			t.Fatalf("postdeploy remediation must target the prior release v0.2.90, got:\n%s", msg)
+		if !strings.Contains(msg, refusal) {
+			t.Fatalf("expected refusal naming v0.2.90, got:\n%s", msg)
 		}
-		if strings.Contains(msg, "--phase postdeploy --to-version v0.2.96") {
-			t.Fatalf("postdeploy must NOT target the deploy version v0.2.96, got:\n%s", msg)
+		if strings.Contains(msg, "--phase postdeploy") {
+			t.Fatalf("must not suggest running prior postdeploy from the target's binaries:\n%s", msg)
 		}
 		if strings.Contains(msg, "--phase expand") {
 			t.Fatalf("no expand missing, must not suggest expand:\n%s", msg)
 		}
 	})
 
-	t.Run("both phases each get their own command", func(t *testing.T) {
+	t.Run("both keep the expand command and the refusal", func(t *testing.T) {
 		msg := formatMigrationRemediation("foghorn", "v0.2.96", "v0.2.90", expand, postdeploy)
-		if !strings.Contains(msg, "--phase expand --to-version v0.2.96") ||
-			!strings.Contains(msg, "--phase postdeploy --to-version v0.2.90") {
-			t.Fatalf("both remediation commands must appear with their own versions, got:\n%s", msg)
+		if !strings.Contains(msg, "--phase expand --to-version v0.2.96") || !strings.Contains(msg, refusal) {
+			t.Fatalf("expected expand command and refusal, got:\n%s", msg)
+		}
+		if strings.Contains(msg, "--phase postdeploy") {
+			t.Fatalf("must not suggest running prior postdeploy from the target's binaries:\n%s", msg)
 		}
 	})
 }

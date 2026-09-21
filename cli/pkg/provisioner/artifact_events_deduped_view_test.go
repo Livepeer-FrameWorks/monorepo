@@ -26,7 +26,7 @@ func TestArtifactEventsDedupedPreservesLegacyRows(t *testing.T) {
 		t.Fatalf("read baseline periscope.sql: %v", err)
 	}
 
-	const name = "fw-sv-ch-dedup"
+	name := uniqueContainerName("fw-sv-ch-dedup")
 	chStart(t, name)
 	defer rmContainer(t, name)
 	chApply(t, name, string(baselineSQL))

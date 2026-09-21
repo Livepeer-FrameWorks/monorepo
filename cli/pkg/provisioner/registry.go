@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"fmt"
+	"slices"
 
 	"frameworks/cli/pkg/ssh"
 
@@ -29,6 +30,7 @@ var ServicePorts = map[string]int{
 	"signalman":          18009,
 	"navigator":          18010,
 	"lookout":            18022,
+	"bosun":              18013,
 	"prometheus":         9090,
 	"victoriametrics":    8428,
 	"vmauth":             8427,
@@ -128,46 +130,62 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			"frameworks.infra.chatwoot", "playbooks/chatwoot.yml",
 			chatwootRoleVars, chatwootRoleDetect)
 
-	// Generic FrameWorks Go microservices — dispatch on ServiceConfig.Mode.
-	case "quartermaster", "commodore", "bridge", "foghorn", "decklog", "helmsman",
-		"periscope-ingest", "periscope-query", "periscope-metering", "signalman", "purser", "steward",
-		"navigator", "lookout", "chartroom", "foredeck", "logbook", "skipper", "chandler",
-		"deckhand", "metabase", "grafana",
-		"livepeer-gateway", "livepeer-signer":
-		cfg := ServiceRoleConfig{
-			ServiceName: serviceName,
-			DefaultPort: port,
-		}
-		switch serviceName {
-		case "quartermaster", "commodore", "foghorn":
-			cfg.DataMigrations = true
-		case "metabase":
-			cfg.ContainerPort = 3000
-			cfg.HealthPath = "/api/health"
-		case "grafana":
-			cfg.HealthPath = "/api/health"
-		}
-		// The compose rollout gate (compose_stack validate.yml) waits on this path.
-		// Use the service's READINESS path so a service that is live but cannot serve
-		// — Chandler before its immutable store is reachable — fails the rollout
-		// rather than deploying green. ReadinessPath() == HealthPath for everyone
-		// except services that declare a distinct ReadyPath.
-		if cfg.HealthPath == "" {
-			if def, ok := servicedefs.Lookup(serviceName); ok {
-				cfg.HealthPath = def.ReadinessPath()
-			}
-		}
-		if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
-			cfg.DebianRuntimePackages = []string{"libva-drm2"}
-			cfg.PacmanRuntimePackages = []string{"libva"}
-			stateDir := fmt.Sprintf("/var/lib/frameworks/%s", serviceName)
-			cfg.StateDirs = []string{stateDir, stateDir + "/keystore"}
-		}
-		return NewServiceRoleProvisioner(cfg, pool)
-
-	default:
-		return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)
 	}
+
+	if isGenericServiceRole(serviceName) {
+		return NewServiceRoleProvisioner(genericServiceRoleConfig(serviceName, port), pool)
+	}
+	return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)
+}
+
+// genericServiceRoleConfig is the ServiceRoleConfig for a generic FrameWorks service, which dispatches on
+// ServiceConfig.Mode between compose_stack and go_service.
+func genericServiceRoleConfig(serviceName string, port int) ServiceRoleConfig {
+	cfg := ServiceRoleConfig{
+		ServiceName: serviceName,
+		DefaultPort: port,
+	}
+	switch serviceName {
+	case "quartermaster", "commodore", "foghorn", "purser":
+		cfg.DataMigrations = true
+	case "metabase":
+		cfg.ContainerPort = 3000
+		cfg.HealthPath = "/api/health"
+	case "grafana":
+		cfg.HealthPath = "/api/health"
+	}
+	// The native and Compose rollout gates wait on the service's readiness path for
+	// the release being deployed, so a service that is live but cannot serve fails
+	// the rollout rather than deploying green, and a rollback to a release without
+	// /ready is gated on /health.
+	if cfg.HealthPath == "" {
+		if def, ok := servicedefs.Lookup(serviceName); ok {
+			cfg.ReadinessPathFor = def.ReadinessPathFor
+			cfg.HealthPath = def.HealthPath
+		}
+	}
+	if serviceName == "livepeer-gateway" || serviceName == "livepeer-signer" {
+		cfg.DebianRuntimePackages = []string{"libva-drm2"}
+		cfg.PacmanRuntimePackages = []string{"libva"}
+		stateDir := fmt.Sprintf("/var/lib/frameworks/%s", serviceName)
+		cfg.StateDirs = []string{stateDir, stateDir + "/keystore"}
+	}
+	return cfg
+}
+
+// genericServiceRoles are the services deployed through
+// ServiceRoleProvisioner (compose_stack in docker mode, go_service in native
+// mode).
+var genericServiceRoles = []string{
+	"quartermaster", "commodore", "bridge", "foghorn", "decklog",
+	"periscope-ingest", "periscope-query", "periscope-metering", "signalman", "purser", "steward",
+	"navigator", "lookout", "bosun", "chartroom", "foredeck", "logbook", "skipper", "chandler",
+	"deckhand", "metabase", "grafana",
+	"livepeer-gateway", "livepeer-signer",
+}
+
+func isGenericServiceRole(serviceName string) bool {
+	return slices.Contains(genericServiceRoles, serviceName)
 }
 
 // ListServices returns all known services.

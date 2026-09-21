@@ -88,8 +88,7 @@ func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) 
 // until 200) must probe Chandler's READINESS endpoint, not its liveness one.
 // Chandler's /health is up before its immutable S3 backend is proven reachable,
 // so gating rollout on /health would deploy an instance that returns 503 for
-// every asset. GetProvisioner wires cfg.HealthPath from servicedefs.ReadinessPath;
-// this pins the whole chain: servicedefs declares /ready, and the compose vars
+// every asset. This pins the chain: servicedefs declares /ready, and the compose vars
 // propagate it to the gate. Paired with the /ready-returns-503-on-unreachable-store
 // handler test, an unreachable store therefore fails rollout.
 func TestChandlerComposeRolloutGateProbesReadiness(t *testing.T) {
@@ -104,7 +103,6 @@ func TestChandlerComposeRolloutGateProbesReadiness(t *testing.T) {
 		t.Fatalf("chandler HealthPath (liveness) = %q, want /health", def.HealthPath)
 	}
 
-	// Reproduce the registry's generic-service wiring: cfg.HealthPath = ReadinessPath().
 	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
 		ServiceName:  "chandler",
 		DefaultPort:  def.DefaultPort,
@@ -134,7 +132,7 @@ func TestServiceNativeVarsWiresReadinessProbe(t *testing.T) {
 	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
 		ServiceName: "chandler",
 		DefaultPort: 18020,
-		HealthPath:  servicedefs.Services["chandler"].ReadinessPath(), // registry wires this (= /ready)
+		HealthPath:  servicedefs.Services["chandler"].ReadinessPath(), // /ready
 	}, inventory.Host{Name: "media-eu-1"}, ServiceConfig{
 		Mode:      "native",
 		BinaryURL: "http://example.invalid/chandler.tar.gz",

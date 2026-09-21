@@ -77,6 +77,7 @@ sending any database, role, or baseline SQL.`,
 	cmd.Flags().StringVar(&toVersion, "to-version", "", "Concrete vX.Y.Z to migrate up to (defaults to cluster's resolved platform version)")
 	cmd.Flags().BoolVar(&skipDataMigrationCheck, "skip-data-migration-check", false, "DANGEROUS: skip pre-postdeploy data migration gate")
 	cmd.Flags().BoolVar(&completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
+	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required by --phase contract when contract migrations are pending")
 
 	cmd.AddCommand(newClusterMigrateValidateCmd())
 
@@ -159,6 +160,13 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 
 	if phase == "postdeploy" || phase == "contract" {
 		if err := runPhaseDataMigrationGate(ctx, cmd, rc, sshPool, phase, target, skipDataMigrationCheck); err != nil {
+			return err
+		}
+	}
+	// Contract migrations drop what a rollback would need, so they require a fresh backup that matches the live
+	// ledgers of the databases they change.
+	if phase == "contract" {
+		if err := requireContractBackup(ctx, cmd, rc, sshPool, target); err != nil {
 			return err
 		}
 	}

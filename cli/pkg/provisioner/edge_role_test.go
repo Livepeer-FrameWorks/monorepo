@@ -1,6 +1,13 @@
 package provisioner
 
-import "testing"
+import (
+	"maps"
+	"slices"
+	"testing"
+
+	"frameworks/cli/internal/configschema"
+	"frameworks/cli/internal/templates"
+)
 
 func TestEdgeCapabilityEnv(t *testing.T) {
 	t.Run("empty_returns_nil_map", func(t *testing.T) {
@@ -37,4 +44,29 @@ func TestEdgeCapabilityEnv(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestEdgeRoleVarsPassHelmsmanEnvContract(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:    "container",
+		Version: "vtest",
+		NodeID:  "edge-eu-1",
+	}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	schema, err := configschema.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	required, ok := vars["edge_helmsman_required_env"].([]string)
+	if !ok || len(required) == 0 || !slices.Equal(required, schema.RequiredEnv("helmsman")) {
+		t.Fatalf("edge_helmsman_required_env = %#v, want schema %v", vars["edge_helmsman_required_env"], schema.RequiredEnv("helmsman"))
+	}
+	imageEnv, ok := vars["edge_image_env"].(map[string]string)
+	if !ok || !maps.Equal(imageEnv, templates.EdgeImageEnv()) {
+		t.Fatalf("edge_image_env = %#v, want %v", vars["edge_image_env"], templates.EdgeImageEnv())
+	}
 }

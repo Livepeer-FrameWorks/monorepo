@@ -21,6 +21,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
+// RolloutReadinessTimeout bounds how long a rollout gate waits for a deployed service to report ready: the native and
+// Compose validate steps, the upgrade command's health wait, and the orchestrator's rolling-apply gate. /ready stays 503
+// until every background gRPC listener serves, which includes waiting up to two minutes for TLS files, and until the
+// service's dependency checks pass.
+const RolloutReadinessTimeout = 150 * time.Second
+
 // ServiceRoleConfig customizes the generic service-role provisioner for a
 // specific service. All fields are optional aside from ServiceName.
 type ServiceRoleConfig struct {
@@ -30,9 +36,15 @@ type ServiceRoleConfig struct {
 	// DefaultPort is used when the manifest does not supply one.
 	DefaultPort int
 
-	// HealthPath defaults to "/health" when empty; surfaces in the generated
-	// compose HTTP validation for docker mode.
+	// HealthPath is the rollout gate's probe path when ReadinessPathFor is nil.
+	// It defaults to "/health" when empty.
 	HealthPath string
+
+	// ReadinessPathFor, when set, chooses the rollout gate's probe path from
+	// the release version being deployed (servicedefs.Service.ReadinessPathFor),
+	// so an upgrade gates the new binary on /ready while a rollback to a release
+	// without /ready gates on /health.
+	ReadinessPathFor func(version string) string
 
 	// ContainerPort is the port the container listens on in docker mode.
 	// DefaultPort remains the host-facing port published by Docker.
@@ -94,6 +106,26 @@ func NewServiceRoleProvisioner(cfg ServiceRoleConfig, pool *ssh.Pool) (Provision
 	}, nil
 }
 
+// readinessPath is the rollout gate's probe path for a binary of the given release version.
+func (cfg ServiceRoleConfig) readinessPath(version string) string {
+	if cfg.ReadinessPathFor != nil {
+		if path := cfg.ReadinessPathFor(version); path != "" {
+			return path
+		}
+	}
+	return cfg.HealthPath
+}
+
+// gateReadinessPath is the rollout gate's probe path for config: the release
+// detected on the host when config.ProbeInstalled is set, otherwise the
+// release being deployed.
+func (cfg ServiceRoleConfig) gateReadinessPath(config ServiceConfig, deployedVersion string) string {
+	if config.ProbeInstalled {
+		return cfg.readinessPath(config.InstalledVersion)
+	}
+	return cfg.readinessPath(deployedVersion)
+}
+
 // serviceRolePlaybookSelector picks between compose_stack.yml and
 // go_service.yml based on the manifest entry's Mode. An unsupported mode
 // surfaces at runtime via the executor's required-playbook check.
@@ -149,10 +181,11 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	if containerPort == 0 {
 		containerPort = port
 	}
-	// Authoritative readiness path (cfg.HealthPath = servicedefs.ReadinessPath): the Compose rollout gate
-	// (compose_stack validate.yml) waits on it. Not metadata-overridable, so nothing can silently downgrade a
-	// store-backed /ready gate to plain liveness.
-	healthPath := cfg.HealthPath
+	// The Compose rollout gate (compose_stack validate.yml) waits on the readiness path of the release being deployed,
+	// which is the restored release during an automatic rollback, or of the release installed on the host for a
+	// restart (gateReadinessPath). It is not metadata-overridable, so nothing can silently downgrade a /ready gate to
+	// plain liveness.
+	healthPath := cfg.gateReadinessPath(config, firstNonEmpty(config.Version, metaString(config.Metadata, "version")))
 	image, err := resolveGenericImage(cfg, config)
 	if err != nil {
 		return nil, err
@@ -216,6 +249,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 		"compose_stack_env":                    envAny,
 		"compose_stack_state_dirs":             composeStateDirs,
 		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
+		"compose_stack_validate_timeout":       int(RolloutReadinessTimeout.Seconds()),
 	}, nil
 }
 
@@ -350,18 +384,19 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
 		args = livepeerNativeArgs(cfg.ServiceName, envMap, cfg.StateDirs)
 	}
-	validateTimeout := 15
+	validateTimeout := int(RolloutReadinessTimeout.Seconds())
 	if cfg.ServiceName == "livepeer-gateway" {
 		validateTimeout = 300
 	}
-	// Readiness probe for the native rollout gate (go_service validate.yml). The readiness path is AUTHORITATIVE —
-	// cfg.HealthPath, which the registry sets from servicedefs.ReadinessPath (/ready for Chandler, /health for the
-	// rest). It is deliberately NOT overridable by request metadata: a stale or accidental value must never downgrade
-	// a store-backed /ready gate to plain liveness and let a broken Chandler deploy green. The protocol decides HOW
-	// validate.yml probes: "http" ⇒ GET the path and require 200 (so a store-unreachable Chandler fails rollout);
-	// anything else ⇒ the TCP listener check. This aligns the native gate with the Compose gate and the orchestrator's
-	// HTTPReady, closing the hole where native only proved the port opened.
-	readinessPath := cfg.HealthPath
+	serviceVersion := firstNonEmpty(artifactVersion, config.Version, metaString(config.Metadata, "version"))
+	// Readiness probe for the native rollout gate (go_service validate.yml): the readiness path of the release being
+	// deployed, which is the restored release during an automatic rollback (servicedefs.ReadinessPathFor), or of the
+	// release installed on the host for a restart (gateReadinessPath). It is
+	// deliberately NOT overridable by request metadata: a stale or accidental value must never downgrade a /ready gate
+	// to plain liveness and let a broken instance deploy green. The protocol decides HOW validate.yml probes: "http" ⇒
+	// GET the path and require 200; anything else ⇒ the TCP listener check. This aligns the native gate with the
+	// Compose gate and the orchestrator's HTTPReady.
+	readinessPath := cfg.gateReadinessPath(config, serviceVersion)
 	readinessProtocol := ""
 	if def, ok := servicedefs.Lookup(cfg.ServiceName); ok {
 		readinessProtocol = def.HealthProtocol
@@ -370,7 +405,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_name":                             cfg.ServiceName,
 		"go_service_artifact_url":                     url,
 		"go_service_artifact_checksum":                checksum,
-		"go_service_version":                          firstNonEmpty(artifactVersion, config.Version, metaString(config.Metadata, "version")),
+		"go_service_version":                          serviceVersion,
 		"go_service_port":                             port,
 		"go_service_health_path":                      readinessPath,
 		"go_service_health_protocol":                  readinessProtocol,

@@ -77,7 +77,8 @@ type ResolvedArtifact struct {
 //	Provision  → tags: install,configure,service,validate
 //	Validate   → tags: validate
 //	Initialize → tags: init
-//	Cleanup    → tags: service (with a state=stopped var) — not implemented yet
+//	Cleanup    → tags: cleanup
+//	Stop       → tags: stop
 type RolePlaybookProvisioner struct {
 	*BaseProvisioner
 
@@ -237,6 +238,11 @@ func (r *RolePlaybookProvisioner) Initialize(ctx context.Context, host inventory
 // old generic `frameworks-<service>` systemd guess in BaseProvisioner.
 func (r *RolePlaybookProvisioner) Cleanup(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	return r.runWithTags(ctx, host, config, []string{"cleanup"})
+}
+
+// Stop preserves the installed service definitions so Restart can start them again.
+func (r *RolePlaybookProvisioner) Stop(ctx context.Context, host inventory.Host, config ServiceConfig) error {
+	return r.runWithTags(ctx, host, config, []string{"stop"})
 }
 
 // ApplySeeds runs the role with the seed tag. Seed items (database + SQL

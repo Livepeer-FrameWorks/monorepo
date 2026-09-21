@@ -23,6 +23,8 @@ var valueProtos = map[string]bool{
 	"media_placement":   true,
 	"x402":              true,
 	"foghorn_control":   true,
+	"events/envelope":   true,
+	"events/options":    true,
 }
 
 // allowedServiceEdges are the only permitted imports of one Layer-2 service /

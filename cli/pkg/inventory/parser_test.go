@@ -129,6 +129,7 @@ func TestManifestValidateKafkaSingleBrokerAllowed(t *testing.T) {
 				Enabled:   true,
 				ClusterID: "test-cluster-id-12345",
 				Brokers:   []KafkaBroker{{Host: "broker-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 			},
 		},
 	}
@@ -774,8 +775,9 @@ func TestManifestValidateKafkaTopLevelDefaultsToAggregator(t *testing.T) {
 				Enabled:   true,
 				ClusterID: "eu-cluster",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 				Regional: []RegionalKafkaCluster{
-					{RegionID: "us-east", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+					{RegionID: "us-east", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}, Topics: requiredManifestTopics(t, 1, false)},
 				},
 			},
 		},
@@ -799,14 +801,15 @@ func TestManifestValidateKafkaRejectsTwoAggregators(t *testing.T) {
 				ClusterID: "eu-cluster",
 				Role:      "aggregator",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 				Regional: []RegionalKafkaCluster{
-					{RegionID: "us-east", Role: "aggregator", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+					{RegionID: "us-east", Role: "aggregator", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}, Topics: requiredManifestTopics(t, 1, true)},
 				},
 			},
 		},
 	}
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("two aggregators must be rejected")
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "at most one cluster") {
+		t.Fatalf("two aggregators must be rejected: %v", err)
 	}
 }
 
@@ -823,11 +826,12 @@ func TestManifestValidateKafkaRejectsUnknownRole(t *testing.T) {
 				ClusterID: "eu-cluster",
 				Role:      "lol",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 			},
 		},
 	}
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("unknown role must be rejected")
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "kafka.role must be") {
+		t.Fatalf("unknown role must be rejected: %v", err)
 	}
 }
 
@@ -845,15 +849,16 @@ func TestManifestValidateKafkaRejectsDuplicateRegionID(t *testing.T) {
 				Enabled:   true,
 				ClusterID: "eu-cluster",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 				Regional: []RegionalKafkaCluster{
-					{RegionID: "us-east", ClusterID: "us-cluster-1", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
+					{RegionID: "us-east", ClusterID: "us-cluster-1", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}, Topics: requiredManifestTopics(t, 1, false)},
 					{RegionID: "us-east", ClusterID: "us-cluster-2", Brokers: []KafkaBroker{{Host: "us-2", ID: 12}}},
 				},
 			},
 		},
 	}
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("duplicate region_id must be rejected")
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate region_id") {
+		t.Fatalf("duplicate region_id must be rejected: %v", err)
 	}
 }
 
@@ -870,14 +875,15 @@ func TestManifestValidateKafkaRejectsRegionalWithoutRegionID(t *testing.T) {
 				Enabled:   true,
 				ClusterID: "eu-cluster",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 				Regional: []RegionalKafkaCluster{
 					{ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
 				},
 			},
 		},
 	}
-	if err := manifest.Validate(); err == nil {
-		t.Fatal("regional entry without region_id must be rejected")
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "region_id is required") {
+		t.Fatalf("regional entry without region_id must be rejected: %v", err)
 	}
 }
 
@@ -897,9 +903,10 @@ func TestManifestValidateKafkaAcceptsThreeRegionTopology(t *testing.T) {
 				RegionID:  "eu-west",
 				Role:      "aggregator",
 				Brokers:   []KafkaBroker{{Host: "eu-1", ID: 1}},
+				Topics:    requiredManifestTopics(t, 1, true),
 				Regional: []RegionalKafkaCluster{
-					{RegionID: "us-east", Role: "regional", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}},
-					{RegionID: "ap-south", Role: "regional", ClusterID: "ap-cluster", Brokers: []KafkaBroker{{Host: "ap-1", ID: 21}}},
+					{RegionID: "us-east", Role: "regional", ClusterID: "us-cluster", Brokers: []KafkaBroker{{Host: "us-1", ID: 11}}, Topics: requiredManifestTopics(t, 1, false)},
+					{RegionID: "ap-south", Role: "regional", ClusterID: "ap-cluster", Brokers: []KafkaBroker{{Host: "ap-1", ID: 21}}, Topics: requiredManifestTopics(t, 1, false)},
 				},
 			},
 		},

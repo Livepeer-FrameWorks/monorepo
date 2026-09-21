@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -23,7 +24,8 @@ import (
 //   - Privateer on every mesh host (binary, seed peers, seed DNS). Seeds carry
 //     the names both the previous and the target release dial, so converging
 //     them first breaks no running service.
-//   - The declared Kafka topics, created when missing. Brokers and
+//   - The declared Kafka topics, created when missing, with their declared
+//     topic config (retention) applied to existing topics. Brokers and
 //     controllers are never reconfigured or restarted.
 //   - MirrorMaker2 workers on every declared link worker host, so each
 //     region's mirrored topics exist before Signalman and Bridge roll.
@@ -103,7 +105,7 @@ func writeReleaseHostConvergencePlan(out io.Writer, heading string, steps []rele
 	}
 	for _, group := range []struct{ kind, label, sep string }{
 		{releaseHostStepPrivateer, "Privateer binary, seed peers, and seed DNS", " -> "},
-		{releaseHostStepKafkaTopics, "Kafka topics created when missing (no broker restart)", ", "},
+		{releaseHostStepKafkaTopics, "Kafka topics created when missing, topic config applied (no broker restart)", ", "},
 		{releaseHostStepMirrorMaker, "MirrorMaker2 workers and JMX exporter", " -> "},
 	} {
 		if labels := groups[group.kind]; len(labels) > 0 {
@@ -153,6 +155,27 @@ func newReleaseHostConvergence(cmd *cobra.Command, rc *resolvedCluster, platform
 	}, nil
 }
 
+// preflightEnvContract renders every host step's task as convergeTask
+// deploys it and reports every schema-contract failure before any host
+// changes, so a bad env refuses the release instead of stopping it after
+// earlier hosts converged.
+func (c *releaseHostConvergence) preflightEnvContract(steps []releaseHostConvergenceStep) error {
+	var failures envContractFailures
+	for _, step := range steps {
+		task := step.Task
+		if task == nil || task.Phase == orchestrator.PhaseInfrastructure {
+			continue
+		}
+		config, err := buildTaskConfig(task, c.manifest, c.runtimeData, false, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
+		if err != nil {
+			return fmt.Errorf("%s on %s: render for env preflight: %w", step.Kind, step.Label, err)
+		}
+		host, _ := c.manifest.GetHost(task.Host)
+		failures.check(c.manifest, fmt.Sprintf("%s on %s", task.Name, task.Host), task.Type, provisioner.FinalServiceEnv(task.Type, host, config))
+	}
+	return failures.err()
+}
+
 // run executes (or, with dryRun, previews) every step in order. The mesh is
 // verified once every Privateer host has converged and before Kafka work
 // starts.
@@ -178,7 +201,7 @@ func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostCon
 		case releaseHostStepKafkaTopics:
 			fmt.Fprintf(out, "\n[host %d/%d] Kafka topics for %s\n", i+1, len(steps), step.Label)
 			if dryRun {
-				fmt.Fprintln(out, "    [DRY-RUN] would create any declared topic that does not exist")
+				fmt.Fprintln(out, "    [DRY-RUN] would create any declared topic that does not exist and apply declared topic config that differs")
 				continue
 			}
 			if err := initializeDeferredKafka(ctx, c.cmd, c.manifest, c.pool, c.releaseRepos); err != nil {

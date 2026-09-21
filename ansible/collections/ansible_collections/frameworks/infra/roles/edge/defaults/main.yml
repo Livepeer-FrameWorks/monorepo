@@ -64,6 +64,34 @@ edge_mist_api_password: ""
 # Remote cluster applies pass the GitOps-pinned image@digest.
 edge_image: livepeerframeworks/frameworks-edge:latest
 
+# Helmsman env contract. edge_helmsman_required_env is the required key list
+# of Helmsman's config schema; edge_image_env is the ENV block of
+# edge/Dockerfile. Container installs assert every required key is non-blank
+# across the image env and the rendered env files before compose up; native
+# installs hand the list to the Helmsman role. The CLI passes both;
+# TestAnsibleRoleEnvContractDefaultsMatchGo pins these copies.
+edge_helmsman_required_env:
+  - NODE_ID
+  - FOGHORN_CONTROL_ADDR
+  - MISTSERVER_URL
+  - EDGE_PUBLIC_URL
+  - HELMSMAN_STATE_DIR
+edge_image_env:
+  DEPLOY_MODE: container
+  MIST_ONNX_PROFILE: cpu
+  HELMSMAN_SUPERVISOR: s6
+  CADDY_ADMIN_SOCKET: /run/caddy/admin.sock
+  CADDY_CONFIG_PATH: /etc/caddy/Caddyfile
+  CADDY_TLS_GROUP: caddy
+  MISTSERVER_URL: http://localhost:4242
+  MISTSERVER_HTTP_URL: http://localhost:8080
+  HELMSMAN_WEBHOOK_URL: http://localhost:18007
+  HELMSMAN_STORAGE_LOCAL_PATH: /data/storage
+  HELMSMAN_STATE_DIR: /data/state
+  S6_BEHAVIOUR_IF_STAGE2_FAILS: "2"
+  S6_KEEP_ENV: "1"
+  S6_CMD_WAIT_FOR_SERVICES_MAXTIME: "0"
+
 # Pinned artifacts. Each sub-role receives its own vars; these top-level
 # keys let the Go caller hand the full set in one map.
 edge_mistserver_artifact_url: ""

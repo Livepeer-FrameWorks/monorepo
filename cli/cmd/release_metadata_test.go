@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestReleaseMetadataV0311AcceptsItsOwnCandidateCLI(t *testing.T) {
 				t.Fatal(err)
 			}
 			manifest.PlatformVersion = target
-			if manifest.MinCLIVersion != "v0.3.11-rc1" || len(manifest.RollbackDisabled) != 1 || manifest.RollbackDisabled[0] != "commodore" {
+			if manifest.MinCLIVersion != "v0.3.11-rc1" || !slices.Equal(manifest.RollbackDisabled, []string{"commodore", "purser"}) {
 				t.Fatalf("unexpected candidate metadata: %s", buf.String())
 			}
 			fwv.Version = target

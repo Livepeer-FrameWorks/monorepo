@@ -49,12 +49,15 @@ func TestYugabyteVerificationCoversEveryServiceQueryCatalog(t *testing.T) {
 	if !strings.Contains(target, "verify-schema-yugabyte-schema-isolated") {
 		t.Fatal("exhaustive Yugabyte schema verification must isolate database catalogs")
 	}
-	for _, service := range []string{"commodore", "purser", "navigator", "skipper", "quartermaster", "periscope-metering", "foghorn", "lookout"} {
+	for _, service := range []string{"commodore", "purser", "navigator", "skipper", "quartermaster", "periscope-metering", "foghorn", "lookout", "bosun"} {
 		if !strings.Contains(string(makefile), "verify-yugabyte-"+service+"-contracts") {
 			t.Errorf("exhaustive Yugabyte services batch lacks %s contracts", service)
 		}
 	}
-	if !strings.Contains(string(makefile), "YUGABYTE_SCHEMA_DATABASES := commodore foghorn lookout navigator periscope purser quartermaster skipper") {
+	if !strings.Contains(target, "verify-backup-restore-yugabyte") {
+		t.Error("exhaustive Yugabyte verification lacks the backup and restore round trip")
+	}
+	if !strings.Contains(string(makefile), "YUGABYTE_SCHEMA_DATABASES := bosun commodore foghorn lookout navigator periscope purser quartermaster skipper") {
 		t.Fatal("Yugabyte schema shard inventory must cover every service database")
 	}
 	if !strings.Contains(target, "YUGABYTE_SCHEMA_COVERAGE_NAME=\"schema-$$database\"") {
@@ -100,6 +103,7 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"make verify-yugabyte-service SERVICE=periscope-metering",
 		"make verify-yugabyte-service SERVICE=foghorn",
 		"make verify-yugabyte-service SERVICE=lookout",
+		"make verify-yugabyte-service SERVICE=bosun",
 	} {
 		if !strings.Contains(job, command) {
 			t.Errorf("database-yugabyte CI job lacks scoped command %q", command)
@@ -107,6 +111,7 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 	}
 	for _, profile := range []string{
 		"schema-selection.out",
+		"schema-bosun.out",
 		"schema-commodore.out",
 		"schema-foghorn.out",
 		"schema-lookout.out",
@@ -126,12 +131,16 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"skipper-query-catalog.out",
 		"quartermaster-query-catalog.out",
 		"quartermaster-consent-management.out",
+		"quartermaster-capabilities.out",
 		"periscope-metering.out",
 		"foghorn-query-catalog-a.out",
 		"foghorn-query-catalog-b.out",
 		"lookout-query-catalog.out",
 		"lookout-incidents.out",
 		"lookout-delivery.out",
+		"lookout-ownership.out",
+		"bosun-ledger.out",
+		"cli-backup-restore.out",
 		"ha.out",
 	} {
 		if !strings.Contains(job, "coverage/contracts/yugabyte/"+profile) {
@@ -156,6 +165,8 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"verify-yugabyte-foghorn-contracts-a",
 		"verify-yugabyte-foghorn-contracts-b",
 		"verify-yugabyte-lookout-contracts",
+		"verify-yugabyte-bosun-contracts",
+		"verify-backup-restore-yugabyte",
 		"verify-yugabyte-ha",
 	} {
 		marker := "\n" + targetName + ":"
@@ -204,5 +215,78 @@ func TestYugabyteDatabaseFoghornScopesBothFixtureLegs(t *testing.T) {
 	target := contents[start : start+end]
 	if count := strings.Count(target, "FRAMEWORKS_YUGABYTE_DATABASES=foghorn"); count != 2 {
 		t.Fatalf("foghorn database target has %d scoped fixture legs, want 2", count)
+	}
+}
+
+// Derived from the Makefile rather than a fixed list: a new verify-yugabyte-<service>-contracts target or a new
+// Yugabyte coverage profile fails this test until CI runs and uploads it.
+func TestYugabyteContractInventoryIsComplete(t *testing.T) {
+	makefile := readRepoFile(t, "Makefile")
+	targets := parseMakeTargets(makefile)
+	job := ciJob(t, readRepoFile(t, ".github/workflows/ci.yml"), "database-yugabyte", "codecov-notify")
+
+	serviceTarget, ok := targets["verify-yugabyte-service"]
+	if !ok || len(serviceTarget.recipe) == 0 {
+		t.Fatal("verify-yugabyte-service target not found")
+	}
+	caseValues := regexp.MustCompile(`case "\$\(SERVICE\)" in ([a-z|-]+)\)`).FindStringSubmatch(serviceTarget.recipe[0].text)
+	if caseValues == nil {
+		t.Fatal("verify-yugabyte-service does not validate SERVICE against a case list")
+	}
+	services := map[string]bool{}
+	for _, service := range strings.Split(caseValues[1], "|") {
+		services[service] = true
+	}
+
+	exhaustive := reachableMakeTargets(t, targets, "verify-yugabyte-services-isolated", nil)
+	contractTarget := regexp.MustCompile(`^verify-yugabyte-([a-z-]+)-contracts$`)
+	for name := range targets {
+		match := contractTarget.FindStringSubmatch(name)
+		if match == nil {
+			continue
+		}
+		if !services[match[1]] {
+			t.Errorf("%s exists but verify-yugabyte-service does not accept SERVICE=%s", name, match[1])
+		}
+		if !exhaustive[name] {
+			t.Errorf("%s exists but verify-yugabyte-services-isolated does not run it", name)
+		}
+	}
+	scopedTargets := map[string]bool{}
+	for _, match := range regexp.MustCompile(`run: make verify-yugabyte-service SERVICE=([a-z-]+)\n`).FindAllStringSubmatch(job, -1) {
+		for name := range reachableMakeTargets(t, targets, "verify-yugabyte-service", map[string]string{"SERVICE": match[1]}) {
+			scopedTargets[name] = true
+		}
+	}
+	for _, service := range sortedKeys(services) {
+		reached := reachableMakeTargets(t, targets, "verify-yugabyte-service", map[string]string{"SERVICE": service})
+		legs := 0
+		for name := range reached {
+			if strings.HasPrefix(name, "verify-yugabyte-"+service+"-contracts") {
+				legs++
+				if !scopedTargets[name] {
+					t.Errorf("database-yugabyte CI scoped steps do not reach %s", name)
+				}
+			}
+		}
+		if legs == 0 {
+			t.Errorf("verify-yugabyte-service SERVICE=%s runs no verify-yugabyte-%s-contracts target", service, service)
+		}
+	}
+
+	profiles := ciContractProfiles(t, makefile, job)
+	for _, profile := range sortedKeys(profiles) {
+		if !strings.HasPrefix(profile, "yugabyte/") {
+			t.Errorf("database-yugabyte CI job writes non-Yugabyte profile %q", profile)
+			continue
+		}
+		if !strings.Contains(job, "coverage/contracts/"+profile+".out") {
+			t.Errorf("database-yugabyte CI job writes %q but does not upload it to Codecov", profile)
+		}
+	}
+	for _, profile := range []string{"yugabyte/bosun-ledger", "yugabyte/quartermaster-capabilities", "yugabyte/cli-backup-restore", "yugabyte/schema-bosun"} {
+		if !profiles[profile] {
+			t.Errorf("database-yugabyte CI job no longer runs the %q contract", profile)
+		}
 	}
 }

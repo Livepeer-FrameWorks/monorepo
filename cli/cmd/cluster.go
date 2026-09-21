@@ -118,6 +118,10 @@ type resolvedCluster struct {
 	// NOT report success against a GitHub source, since the change would be discarded.
 	SourcePersistsManifest bool
 
+	// sourceFloorVerifiedFor is the target release whose source floor this run has already checked against the
+	// detected fleet, so `cluster upgrade --all` reads running versions once rather than once per service.
+	sourceFloorVerifiedFor string
+
 	sharedEnvOnce         sync.Once
 	sharedEnv             map[string]string
 	sharedEnvErr          error
@@ -1053,6 +1057,24 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 				})
 			}
 
+			totalChecks++
+			var ledgerResult *health.CheckResult
+			for _, h := range hosts {
+				ledgerResult = doctorPurserLedgerCurrency(cmd.Context(), doctorSSHPool, manifest, h, databasePassword)
+				if ledgerResult.OK || ledgerResult.Metadata["non_eur_balance_rows"] != "" {
+					break
+				}
+			}
+			printHealthResult(cmd, "Purser ledger currency", ledgerResult)
+			if ledgerResult.OK {
+				passedChecks++
+			} else {
+				remediationSteps = append(remediationSteps, ux.NextStep{
+					Cmd: "frameworks cluster data-migrate list",
+					Why: "Check the purser_eur_ledger_conversion_v0_3_11 data migration that converts non-EUR prepaid balances.",
+				})
+			}
+
 			if deep {
 				totalChecks++
 				var capabilityResult *health.CheckResult
@@ -1417,9 +1439,11 @@ func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
 	case "grpc", "tcp":
 		return doctorProbe{Protocol: "tcp"}
 	case "http":
-		// Probe READINESS (ReadyPath when set, else HealthPath): the doctor gate
-		// must fail a service that is live but cannot serve — e.g. Chandler whose
-		// /health is up before its immutable store is proven reachable.
+		// Probe the fleet-wide readiness path: the doctor must fail a service that
+		// is live but cannot serve, such as Chandler before its immutable store is
+		// reachable. The doctor does not read each host's release, so services
+		// whose /ready is newer than the oldest supported release are probed on
+		// /health (servicedefs.ReadySince).
 		if def.ReadinessPath() == "" {
 			return doctorProbe{Protocol: "tcp"}
 		}

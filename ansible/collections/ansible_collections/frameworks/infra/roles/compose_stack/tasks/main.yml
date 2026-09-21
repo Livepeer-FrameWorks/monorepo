@@ -15,6 +15,10 @@
   ansible.builtin.import_tasks: restart.yml
   tags: [restart, never]
 
+- name: Compose_stack | stop
+  ansible.builtin.import_tasks: stop.yml
+  tags: [stop, never]
+
 - name: Compose_stack | cleanup
   ansible.builtin.import_tasks: cleanup.yml
   tags: [cleanup, never]

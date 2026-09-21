@@ -32,6 +32,17 @@ helmsman_grpc_tls_ca_path: ""
 # Extra env keys merged last, letting operators override anything above.
 helmsman_extra_env: {}
 
+# Variables Helmsman refuses to start without (the required keys of its
+# server section in cli/internal/configschema/config-schema.json). configure
+# asserts each is non-blank before writing the env file. The CLI passes the
+# schema list; TestAnsibleRoleEnvContractDefaultsMatchGo pins this copy.
+helmsman_required_env:
+  - NODE_ID
+  - FOGHORN_CONTROL_ADDR
+  - MISTSERVER_URL
+  - EDGE_PUBLIC_URL
+  - HELMSMAN_STATE_DIR
+
 # Linux layout.
 helmsman_user: frameworks
 helmsman_group: frameworks

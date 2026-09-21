@@ -1,0 +1,31 @@
+  PublicEvent:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman.TenantEvent
+    fields:
+      time:
+        resolver: true
+      data:
+        resolver: true
+  PublicEventData:
+    model:
+      - google.golang.org/protobuf/proto.Message
+  WidgetDropped:
+    model:
+      - example.com/events/v1.WidgetDropped
+  WidgetMade:
+    model:
+      - example.com/events/v1.WidgetMade
+    fields:
+      madeAt:
+        resolver: true
+  EventThing:
+    model:
+      - example.com/events/v1.Thing
+  EventColor:
+    model:
+      - example.com/events/v1.Color
+    enum_values:
+      COLOR_UNSPECIFIED:
+        value: example.com/events/v1.Color_COLOR_UNSPECIFIED
+      COLOR_RED:
+        value: example.com/events/v1.Color_COLOR_RED

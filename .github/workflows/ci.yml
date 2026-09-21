@@ -24,8 +24,11 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       frontend: ${{ steps.filter.outputs.frontend }}
       registry: ${{ steps.filter.outputs.registry }}
+      contracts: ${{ steps.filter.outputs.contracts }}
       release: ${{ steps.filter.outputs.release }}
       database: ${{ steps.filter.outputs.database }}
+      compose: ${{ steps.filter.outputs.compose }}
+      sdk: ${{ steps.filter.outputs.sdk }}
       yugabyte_core: ${{ steps.filter.outputs.yugabyte_core }}
       yugabyte_commodore: ${{ steps.filter.outputs.yugabyte_commodore }}
       yugabyte_purser: ${{ steps.filter.outputs.yugabyte_purser }}
@@ -35,6 +38,7 @@ jobs:
       yugabyte_periscope: ${{ steps.filter.outputs.yugabyte_periscope }}
       yugabyte_foghorn: ${{ steps.filter.outputs.yugabyte_foghorn }}
       yugabyte_lookout: ${{ steps.filter.outputs.yugabyte_lookout }}
+      yugabyte_bosun: ${{ steps.filter.outputs.yugabyte_bosun }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -50,6 +54,7 @@ jobs:
               - '**/go.sum'
               - 'Makefile'
               - 'scripts/run-go-contract-test.sh'
+              - 'scripts/check-go-format.sh'
               - 'pkg/proto/**'
               - '.golangci.yml'
               - '.golangci-baseline'
@@ -62,6 +67,45 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'scripts/test-logbook-image-health.sh'
               - 'website_docs/**'
+            contracts:
+              - 'pkg/config/**'
+              - 'pkg/version/**'
+              - 'api_*/internal/appconfig/**'
+              - 'api_*/cmd/**'
+              - 'scripts/configref/**'
+              - 'scripts/release-channel/**'
+              - 'cli/internal/configschema/**'
+              - 'cli/internal/releases/**'
+              - '.github/workflows/release.yml'
+              - 'website_docs/src/content/docs/operators/configuration-reference.mdx'
+              - 'pkg/graphql/**'
+              - 'pkg/proto/events/**'
+              - 'pkg/events/**'
+              - 'scripts/eventsgql/**'
+              - 'api_gateway/gqlgen.yml'
+              - 'app_mac/Sources/Gateway/**'
+              - 'scripts/generate-swift-gql.sh'
+              - 'scripts/sdkcontract/**'
+              - 'npm_api/**'
+              - 'sdk_go/**'
+              - 'sdk_python/**'
+              - 'sdk_conformance/**'
+              - 'Makefile'
+            sdk:
+              - 'pkg/graphql/**'
+              - 'pkg/proto/events/**'
+              - 'pkg/events/**'
+              - 'pkg/auth/jwt_es256.go'
+              - 'api_balancing/internal/triggers/playback_auth*.go'
+              - 'api_balancing/internal/triggers/sdk_playback_token_test.go'
+              - 'scripts/sdkcontract/**'
+              - 'npm_api/**'
+              - 'sdk_go/**'
+              - 'sdk_python/**'
+              - 'sdk_conformance/**'
+              - 'cli/internal/releases/catalog.yaml'
+              - 'pnpm-lock.yaml'
+              - 'Makefile'
             registry:
               - 'docs/platform-features.yaml'
               - 'scripts/registry/**'
@@ -97,9 +141,11 @@ jobs:
               - 'api_dns/**'
               - 'api_incidents/**'
               - 'api_tenants/**'
+              - 'api_webhooks/**'
               - 'cli/internal/releases/catalog.yaml'
               - 'cli/cmd/**'
               - 'cli/examples/**'
+              - 'cli/pkg/backup/**'
               - 'cli/pkg/inventory/**'
               - 'cli/pkg/provisioner/**'
               - 'config/infrastructure.yaml'
@@ -116,20 +162,31 @@ jobs:
               - 'pkg/testutil/dockervalkey/**'
               - 'pkg/redis/**'
               - 'pkg/topology/**'
+              - 'scripts/check-go-test-selection.sh'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
               - 'scripts/reset-demo-databases.sh'
               - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
+            compose:
+              - 'docker-compose.yml'
+              - 'config/env/base.env'
+              - 'config/env/secrets.env.example'
+              - 'pkg/configgen/**'
+              - 'scripts/env/**'
+              - 'scripts/verify-compose-profiles.sh'
+              - 'Makefile'
             yugabyte_core:
               - '.github/workflows/**'
               - 'ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/**'
               - 'cli/internal/releases/catalog.yaml'
+              - 'cli/pkg/backup/**'
               - 'cli/pkg/provisioner/**'
               - 'config/infrastructure.yaml'
               - 'config/schema-contract-engines.yaml'
               - 'infrastructure/postgres/**'
               - 'pkg/database/*.go'
+              - 'pkg/database/sql/schema/bosun.sql'
               - 'pkg/database/sql/schema/commodore.sql'
               - 'pkg/database/sql/schema/foghorn.sql'
               - 'pkg/database/sql/schema/lookout.sql'
@@ -140,6 +197,7 @@ jobs:
               - 'pkg/database/sql/schema/skipper.sql'
               - 'pkg/database/sql/migrations/**'
               - 'pkg/testutil/dockerpg/**'
+              - 'scripts/check-go-test-selection.sh'
               - 'scripts/run-go-contract-test.sh'
               - 'scripts/run-yugabyte-contract-fixture.sh'
               - 'Makefile'
@@ -150,6 +208,12 @@ jobs:
               - 'api_incidents/internal/lookouttest/**'
               - 'api_incidents/go.mod'
               - 'api_incidents/go.sum'
+            yugabyte_bosun:
+              - 'api_webhooks/internal/ledger/**'
+              - 'api_webhooks/internal/delivery/**'
+              - 'api_webhooks/internal/integration/**'
+              - 'api_webhooks/go.mod'
+              - 'api_webhooks/go.sum'
             yugabyte_commodore:
               - 'api_control/internal/**'
               - 'api_control/cmd/**'
@@ -174,6 +238,7 @@ jobs:
               - 'api_consultant/go.sum'
             yugabyte_quartermaster:
               - 'api_tenants/internal/database/quartermasterdb/**'
+              - 'api_tenants/internal/grpc/tenant_capabilities*.go'
               - 'api_tenants/go.mod'
               - 'api_tenants/go.sum'
             yugabyte_periscope:
@@ -192,6 +257,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # proto-breaking compares against the latest release tag.
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -202,6 +270,8 @@ jobs:
         run: go install github.com/99designs/gqlgen@v0.17.86
       - name: Check proto codegen is up to date
         run: make proto-check
+      - name: Check domain event schemas against the latest release
+        run: make proto-breaking
       - name: Check sqlc codegen is up to date
         run: make sqlc-check
       - run: make build
@@ -284,6 +354,8 @@ jobs:
           GOTOOLCHAIN: local
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+      - name: Check Go formatting
+        run: make fmt-check
       - name: Read baseline commit
         id: baseline
         run: |
@@ -410,6 +482,90 @@ jobs:
           GOTOOLCHAIN: local
       - run: make verify-feature-registry
 
+  generated-contracts:
+    name: Generated contracts
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The SDK operation manifest records each operation's first release from the tags.
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - uses: ./.github/actions/setup-node-pnpm
+      - name: Typed configuration reference and schema
+        run: make verify-config-annotations
+      - name: Release channel classifier
+        run: make verify-release-channels
+      - name: Public event GraphQL types match the event registry
+        run: make verify-graphql-events
+      - name: Swift GraphQL constants
+        run: make verify-swift-gql
+      - name: Houdini codegen against the schema
+        run: make graphql-frontend
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: SDK generated code matches the operations, schema, and event protos
+        run: make verify-sdk-generated
+
+  sdk:
+    name: SDKs (TypeScript, Go, Python)
+    needs: changes
+    if: needs.changes.outputs.sdk == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # verify-api-compat and verify-schema-compat read release schemas from the tags.
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - uses: ./.github/actions/setup-node-pnpm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Contract tool
+        run: make test-sdkcontract
+      - name: Operations validate on every supported release
+        run: make verify-api-compat
+      - name: No breaking schema change to a field a live SDK line uses
+        run: make verify-schema-compat
+      - name: TypeScript SDK (tsc, eslint, vitest, examples)
+        run: make test-sdk-ts
+      - name: Go SDK (go vet, tests, examples)
+        run: make test-sdk-go
+      - name: Python SDK (mypy, pytest, examples)
+        run: make sdk-py-venv test-sdk-py typecheck-sdk-py
+      - name: SDK playback tokens pass the playback verifier
+        run: make test-foghorn GO_TEST_PACKAGES=./internal/triggers/ GO_TEST_FLAGS="-run TestSDKPlaybackTokensPassThePlaybackVerifier"
+
+  compose-profiles:
+    name: Compose profiles
+    needs: changes
+    if: needs.changes.outputs.compose == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
+      - name: docker compose config for every profile preset
+        run: make verify-compose-profiles
+
   migration-release-state:
     name: Migration release state
     needs: changes
@@ -457,7 +613,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/lookout-query-catalog.out,coverage/contracts/postgres/lookout-incidents.out,coverage/contracts/postgres/lookout-delivery.out,coverage/contracts/postgres/lookout-grpc.out,coverage/contracts/postgres/lookout-ownership.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-placement.out,coverage/contracts/postgres/commodore-media-authority.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/quartermaster-bootstrap.out,coverage/contracts/postgres/quartermaster-query-catalog.out,coverage/contracts/postgres/foghorn-query-catalog.out,coverage/contracts/postgres/foghorn-control.out,coverage/contracts/postgres/foghorn-jobs.out,coverage/contracts/postgres/foghorn-federation.out,coverage/contracts/postgres/foghorn-media-authority.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
+          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/lookout-query-catalog.out,coverage/contracts/postgres/lookout-incidents.out,coverage/contracts/postgres/lookout-delivery.out,coverage/contracts/postgres/lookout-grpc.out,coverage/contracts/postgres/lookout-ownership.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-placement.out,coverage/contracts/postgres/commodore-media-authority.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/quartermaster-bootstrap.out,coverage/contracts/postgres/quartermaster-query-catalog.out,coverage/contracts/postgres/foghorn-query-catalog.out,coverage/contracts/postgres/foghorn-control.out,coverage/contracts/postgres/foghorn-jobs.out,coverage/contracts/postgres/foghorn-federation.out,coverage/contracts/postgres/foghorn-media-authority.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out,coverage/contracts/postgres/bosun.out,coverage/contracts/postgres/foghorn-grpc.out,coverage/contracts/postgres/purser-tier-features.out,coverage/contracts/postgres/purser-eur-ledger.out,coverage/contracts/postgres/purser-presentment-grpc.out,coverage/contracts/postgres/purser-presentment-handlers.out,coverage/contracts/postgres/purser-domain-events.out,coverage/contracts/postgres/purser-handlers-domain-events.out,coverage/contracts/postgres/commodore-ingest-claims.out,coverage/contracts/postgres/commodore-field-encryption.out,coverage/contracts/postgres/commodore-domain-events.out,coverage/contracts/postgres/quartermaster-data-migrations.out,coverage/contracts/postgres/quartermaster-dns-entitlement-handoff.out,coverage/contracts/postgres/quartermaster-capabilities.out,coverage/contracts/postgres/quartermaster-domain-events.out,coverage/contracts/postgres/domain-event-outbox.out,coverage/contracts/postgres/cli-backup-restore.out
           flags: postgres-contract
           name: postgres-contract-coverage
           fail_ci_if_error: false
@@ -468,7 +624,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-metering-chain-ingest.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out,coverage/contracts/clickhouse/periscope-metering-chain.out
+          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-metering-chain-ingest.out,coverage/contracts/clickhouse/periscope-domain-events.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out,coverage/contracts/clickhouse/periscope-metering-chain.out,coverage/contracts/clickhouse/cli-backup-restore.out
           flags: clickhouse-contract
           name: clickhouse-contract-coverage
           fail_ci_if_error: false
@@ -487,7 +643,7 @@ jobs:
   database-yugabyte:
     name: Yugabyte database contract
     needs: changes
-    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || needs.changes.outputs.yugabyte_bosun == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -544,6 +700,11 @@ jobs:
         run: make verify-yugabyte-service SERVICE=lookout
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Bosun Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_bosun == 'true'
+        run: make verify-yugabyte-service SERVICE=bosun
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Yugabyte HA contract
         if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: make verify-yugabyte-ha
@@ -563,7 +724,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema-selection.out,coverage/contracts/yugabyte/schema-commodore.out,coverage/contracts/yugabyte/schema-foghorn.out,coverage/contracts/yugabyte/schema-lookout.out,coverage/contracts/yugabyte/schema-navigator.out,coverage/contracts/yugabyte/schema-periscope.out,coverage/contracts/yugabyte/schema-purser.out,coverage/contracts/yugabyte/schema-quartermaster.out,coverage/contracts/yugabyte/schema-skipper.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/commodore-placement-a.out,coverage/contracts/yugabyte/commodore-placement-b.out,coverage/contracts/yugabyte/commodore-media-authority-c.out,coverage/contracts/yugabyte/commodore-media-authority-d.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/quartermaster-consent-management.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/lookout-query-catalog.out,coverage/contracts/yugabyte/lookout-incidents.out,coverage/contracts/yugabyte/lookout-delivery.out,coverage/contracts/yugabyte/lookout-ownership.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema-selection.out,coverage/contracts/yugabyte/schema-commodore.out,coverage/contracts/yugabyte/schema-foghorn.out,coverage/contracts/yugabyte/schema-lookout.out,coverage/contracts/yugabyte/schema-navigator.out,coverage/contracts/yugabyte/schema-periscope.out,coverage/contracts/yugabyte/schema-purser.out,coverage/contracts/yugabyte/schema-quartermaster.out,coverage/contracts/yugabyte/schema-skipper.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/commodore-placement-a.out,coverage/contracts/yugabyte/commodore-placement-b.out,coverage/contracts/yugabyte/commodore-media-authority-c.out,coverage/contracts/yugabyte/commodore-media-authority-d.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/quartermaster-consent-management.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/lookout-query-catalog.out,coverage/contracts/yugabyte/lookout-incidents.out,coverage/contracts/yugabyte/lookout-delivery.out,coverage/contracts/yugabyte/lookout-ownership.out,coverage/contracts/yugabyte/foghorn-media-authority.out,coverage/contracts/yugabyte/ha.out,coverage/contracts/yugabyte/schema-bosun.out,coverage/contracts/yugabyte/quartermaster-capabilities.out,coverage/contracts/yugabyte/bosun-ledger.out,coverage/contracts/yugabyte/cli-backup-restore.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false
@@ -594,6 +755,9 @@ jobs:
         frontend-test,
         frontend-build,
         feature-registry,
+        generated-contracts,
+        sdk,
+        compose-profiles,
         migration-release-state,
         database-yugabyte,
       ]
