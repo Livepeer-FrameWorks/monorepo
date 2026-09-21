@@ -263,7 +263,8 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	}
 
 	onlyServices := stringSliceFlag(cmd, "only-services")
-	if len(onlyServices) > 0 {
+	targetedProvision := len(onlyServices) > 0
+	if targetedProvision {
 		plan, err = filterProvisionPlan(plan, onlyServices)
 		if err != nil {
 			return err
@@ -323,8 +324,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		if err := dryRunContractErr(); err != nil {
 			return fmt.Errorf("service env contract: %w", err)
 		}
-		printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
-		if phaseConvergesInfrastructure(phase) {
+		if len(onlyServices) == 0 {
+			printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
+		}
+		if len(onlyServices) == 0 && phaseConvergesInfrastructure(phase) {
 			mmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
 			if mmErr := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, out, manifest, mmPool, true); mmErr != nil {
 				fmt.Fprintf(out, "Removed kafka-mirrormaker worker plan: inconclusive: %v\n\n", mmErr)
@@ -335,13 +338,14 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		return nil
 	}
 
-	// `--only applications` runs against already-live infrastructure, so its plan contains NO infrastructure tasks —
+	// A full `--only applications` phase runs against already-live infrastructure, so its plan contains NO infrastructure tasks —
 	// which means the inline database barriers inside executeProvision never fire. Initialize the (already-running)
 	// databases/Kafka/ClickHouse BEFORE the application plan executes, so an application never starts or validates
 	// against an uninitialized or stale schema. For PhaseAll the inline barriers already do this during executeProvision;
-	// postdeploy migrations and seeds still run after executeProvision below for both phases.
+	// postdeploy migrations and seeds still run after executeProvision below for full, non-service-targeted phases.
+	// `--only-services` is intentionally surgical: its documented contract requires dependencies to already be ready.
 	preInitRan := false
-	if phase == orchestrator.PhaseApplications {
+	if phase == orchestrator.PhaseApplications && !targetedProvision {
 		ux.Heading(out, "Initializing infrastructure before applications")
 		if err := runInit(cmd, rc, "all"); err != nil {
 			return fmt.Errorf("pre-application infrastructure init: %w", err)
@@ -349,12 +353,12 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		preInitRan = true
 	}
 
-	// Release-level data-migration gate for the APPLICATIONS-only phase: the pre-init above has already initialized the
+	// Release-level data-migration gate for the full APPLICATIONS-only phase: the pre-init above has already initialized the
 	// (already-live) databases, so it runs here — after DB init, before the application plan. For PhaseAll the gate runs
 	// INSIDE executeProvision, at the first application batch (after the in-cell DB-init barriers), so a greenfield
 	// install reaches it only once the database and its `_schema_baseline` provenance exist. No-op when the catalog
 	// declares no data migrations.
-	if phase == orchestrator.PhaseApplications {
+	if phase == orchestrator.PhaseApplications && !targetedProvision {
 		if skipDataMigrationCheck {
 			fmt.Fprintln(out, "[provision] WARNING: --skip-data-migration-check active; deploy runners, complete and verify every required migration, then rerun without this flag.")
 		} else {
@@ -369,7 +373,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		}
 	}
 
-	if err := executeProvision(ctx, cmd, rc, manifest, plan, phase, force, ignoreValidation, skipDataMigrationCheck, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, releaseVersion); err != nil {
+	if err := executeProvision(ctx, cmd, rc, manifest, plan, phase, targetedProvision, force, ignoreValidation, skipDataMigrationCheck, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, releaseVersion); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -378,10 +382,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	}
 
 	initRan, seedsRan := preInitRan, false
-	if phaseRunsPostProvisionInit(phase) {
+	if phaseRunsPostProvisionInit(phase) && !targetedProvision {
 		// Skip the post-provision init pass when it already ran BEFORE the application plan (PhaseApplications, above) —
 		// re-running would be a redundant idempotent pass. PhaseAll still reconciles here as the catch-up after the
-		// inline infra-batch barriers. Postdeploy migrations and seeds run for both phases regardless.
+		// inline infra-batch barriers. Postdeploy migrations and seeds run for both full phases.
 		if !preInitRan {
 			ux.Heading(out, "Reconciling platform data")
 			if err := runInit(cmd, rc, "all"); err != nil {
@@ -403,7 +407,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		seedsRan = true
 	}
 
-	if phaseSyncsEdgeReleaseTarget(phase) {
+	if phaseSyncsEdgeReleaseTarget(phase) && !targetedProvision {
 		ux.Heading(out, "Syncing edge release target")
 		if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, manifest.ResolvedChannel(), sharedEnv); err != nil {
 			return fmt.Errorf("edge release target sync: %w", err)
@@ -765,7 +769,7 @@ func plannedDeployNames(plan *orchestrator.ExecutionPlan, manifest *inventory.Ma
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation, skipDataMigrationCheck bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, releaseVersion string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, targetedProvision, force, ignoreValidation, skipDataMigrationCheck bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, releaseVersion string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -810,7 +814,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		// this point the in-cell database-init barriers below have run in earlier batches (baseline schema + expand
 		// applied), so the databases and their `_schema_baseline` provenance exist, and no application binary has
 		// deployed yet. PhaseApplications runs the same gate before executeProvision (after its explicit pre-init).
-		if phase == orchestrator.PhaseAll && !dataMigrationGateRan && batchContainsApplicationTask(batch) {
+		if phase == orchestrator.PhaseAll && !targetedProvision && !dataMigrationGateRan && batchContainsApplicationTask(batch) {
 			dataMigrationGateRan = true
 			if skipDataMigrationCheck {
 				fmt.Fprintln(cmd.OutOrStdout(), "[provision] WARNING: --skip-data-migration-check active; pre-deploy data migration gate bypassed.")
@@ -1117,18 +1121,25 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		fmt.Fprintln(cmd.OutOrStdout(), "")
 	}
 
-	if err := reconcileRemovedServicePlacements(ctx, cmd, manifest, phase, runtimeData, raSession, sshPool); err != nil {
-		return fmt.Errorf("removed service placement reconciliation failed: %w", err)
-	}
-	if phaseConvergesInfrastructure(phase) {
-		if err := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, cmd.OutOrStdout(), manifest, sshPool, false); err != nil {
-			return fmt.Errorf("removed kafka-mirrormaker worker reconciliation failed: %w", err)
+	// A service-targeted run must not reconcile the rest of the manifest. Cleanup is a
+	// full-phase convergence operation and could otherwise remove an unrelated placement
+	// merely because it was not part of this run's filtered plan.
+	if len(stringSliceFlag(cmd, "only-services")) == 0 {
+		if err := reconcileRemovedServicePlacements(ctx, cmd, manifest, phase, runtimeData, raSession, sshPool); err != nil {
+			return fmt.Errorf("removed service placement reconciliation failed: %w", err)
+		}
+		if phaseConvergesInfrastructure(phase) {
+			if err := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, cmd.OutOrStdout(), manifest, sshPool, false); err != nil {
+				return fmt.Errorf("removed kafka-mirrormaker worker reconciliation failed: %w", err)
+			}
 		}
 	}
 
 	// Post-provision: bootstrap Purser cluster pricing, admin user, control-plane validation
-	if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, raSession); err != nil {
-		return err
+	if !targetedProvision {
+		if err := postProvisionFinalize(ctx, cmd, manifest, runtimeData, raSession); err != nil {
+			return err
+		}
 	}
 
 	return nil
