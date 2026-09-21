@@ -7,8 +7,7 @@
   - container darwin: vmagent sits on the compose bridge and dials the edge
     service by name. Caddy's admin endpoint is a unix socket inside the
     container, so there is no caddy scrape in container mode.
-  MistServer metrics are served by its HTTP output on 8080 (pkg/mist
-  MetricsPath), not the 4242 controller API.
+  MistServer exposes Prometheus metrics from its controller listener on 4242.
   external_labels stamp cluster and region on every series, sorted by key
   with empty values omitted, exactly like edgeVMAgentExternalLabels.
 #}
@@ -31,7 +30,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - "{{ edge_scrape_host }}:8080"
+          - "{{ edge_scrape_host }}:4242"
         labels:
           frameworks_mode: "edge"
           frameworks_node: "{{ edge_node_id }}"

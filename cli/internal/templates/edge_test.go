@@ -138,6 +138,36 @@ func TestRenderEdgeTemplates_dockerVMAgentUsesStandardPort(t *testing.T) {
 	}
 }
 
+func TestRenderEdgeTemplatesMistControllerMetrics(t *testing.T) {
+	for _, test := range []struct {
+		mode string
+		os   string
+		host string
+	}{
+		{mode: "native", os: "linux", host: "localhost"},
+		{mode: "container", os: "linux", host: "localhost"},
+		{mode: "container", os: "darwin", host: "edge"},
+	} {
+		t.Run(test.mode+"/"+test.os, func(t *testing.T) {
+			vars := fixedEdgeVars()
+			vars.Mode = test.mode
+			vars.EdgeOS = test.os
+			files, err := RenderEdgeTemplates(vars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, ok := fileByPath(files, "vmagent-edge.yml")
+			if !ok {
+				t.Fatal("vmagent-edge.yml missing")
+			}
+			content := string(config.Content)
+			if !strings.Contains(content, test.host+":4242") || strings.Contains(content, test.host+":8080") {
+				t.Fatalf("Mist metrics must use the controller listener:\n%s", content)
+			}
+		})
+	}
+}
+
 func TestRenderEdgeTemplates_nativeSkipsCompose(t *testing.T) {
 	t.Parallel()
 	vars := fixedEdgeVars()

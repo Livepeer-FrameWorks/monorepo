@@ -308,7 +308,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
     metrics_path: %s
     static_configs:
       - targets:
-          - "%s:8080"
+          - "%s:4242"
         labels:
           frameworks_mode: "edge"
           frameworks_node: %q
