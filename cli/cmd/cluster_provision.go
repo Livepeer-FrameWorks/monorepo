@@ -64,6 +64,7 @@ func newClusterProvisionCmd() *cobra.Command {
 	var dryRun bool
 	var force bool
 	var ignoreValidation bool
+	var skipDataMigrationCheck bool
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -112,7 +113,7 @@ save a default, or pass them explicitly.`,
 			if err := requirePlatformIfImplicitManifest(rc, cmd.OutOrStdout()); err != nil {
 				return err
 			}
-			return runProvision(cmd, rc, only, version, dryRun, force, ignoreValidation)
+			return runProvision(cmd, rc, only, version, dryRun, force, ignoreValidation, skipDataMigrationCheck)
 		},
 	}
 
@@ -121,6 +122,7 @@ save a default, or pass them explicitly.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if health validation fails (DANGEROUS)")
+	cmd.Flags().BoolVar(&skipDataMigrationCheck, "skip-data-migration-check", false, "DANGEROUS: skip the pre-deploy data migration gate (greenfield runner bootstrap only)")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 
 	cmd.Flags().String("bootstrap-admin-email", "", "Create an initial operator user with this email")
@@ -136,7 +138,7 @@ save a default, or pass them explicitly.`,
 	return cmd
 }
 
-func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string, dryRun, force, ignoreValidation bool) error {
+func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string, dryRun, force, ignoreValidation, skipDataMigrationCheck bool) error {
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	out := cmd.OutOrStdout()
@@ -337,17 +339,21 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	// install reaches it only once the database and its `_schema_baseline` provenance exist. No-op when the catalog
 	// declares no data migrations.
 	if phase == orchestrator.PhaseApplications {
-		dmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
-		// PhaseApplications: the pre-init above already initialized the (already-live) infrastructure, so no database
-		// task is pending — dbInfraPending is false.
-		dmErr := runProvisionDataMigrationPreflight(ctx, cmd, rc, dmPool, manifest, releaseVersion, false)
-		dmPool.Close()
-		if dmErr != nil {
-			return dmErr
+		if skipDataMigrationCheck {
+			fmt.Fprintln(out, "[provision] WARNING: --skip-data-migration-check active; deploy runners, complete and verify every required migration, then rerun without this flag.")
+		} else {
+			dmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+			// PhaseApplications: the pre-init above already initialized the (already-live) infrastructure, so no database
+			// task is pending — dbInfraPending is false.
+			dmErr := runProvisionDataMigrationPreflight(ctx, cmd, rc, dmPool, manifest, releaseVersion, false)
+			dmPool.Close()
+			if dmErr != nil {
+				return dmErr
+			}
 		}
 	}
 
-	if err := executeProvision(ctx, cmd, rc, manifest, plan, phase, force, ignoreValidation, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, releaseVersion); err != nil {
+	if err := executeProvision(ctx, cmd, rc, manifest, plan, phase, force, ignoreValidation, skipDataMigrationCheck, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos, releaseVersion); err != nil {
 		return fmt.Errorf("provisioning failed: %w", err)
 	}
 
@@ -693,7 +699,7 @@ func plannedDeployNames(plan *orchestrator.ExecutionPlan, manifest *inventory.Ma
 }
 
 // executeProvision runs the provisioning tasks
-func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, releaseVersion string) error {
+func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, phase orchestrator.Phase, force, ignoreValidation, skipDataMigrationCheck bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, releaseVersion string) error {
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
@@ -740,12 +746,16 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		// deployed yet. PhaseApplications runs the same gate before executeProvision (after its explicit pre-init).
 		if phase == orchestrator.PhaseAll && !dataMigrationGateRan && batchContainsApplicationTask(batch) {
 			dataMigrationGateRan = true
-			// The gate reads the initialized database, so every database-infrastructure task it depends on must be in an
-			// EARLIER batch. If a database task is co-scheduled with (or after) this first application batch, the gate
-			// fails closed rather than reading a half-initialized database.
-			dbInfraPending := batchesContainDatabaseInfra(plan.Batches[batchNum:])
-			if err := runProvisionDataMigrationPreflight(ctx, cmd, rc, sshPool, manifest, releaseVersion, dbInfraPending); err != nil {
-				return err
+			if skipDataMigrationCheck {
+				fmt.Fprintln(cmd.OutOrStdout(), "[provision] WARNING: --skip-data-migration-check active; pre-deploy data migration gate bypassed.")
+			} else {
+				// The gate reads the initialized database, so every database-infrastructure task it depends on must be in an
+				// EARLIER batch. If a database task is co-scheduled with (or after) this first application batch, the gate
+				// fails closed rather than reading a half-initialized database.
+				dbInfraPending := batchesContainDatabaseInfra(plan.Batches[batchNum:])
+				if err := runProvisionDataMigrationPreflight(ctx, cmd, rc, sshPool, manifest, releaseVersion, dbInfraPending); err != nil {
+					return err
+				}
 			}
 		}
 		ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Executing Batch %d/%d (%d task(s))", batchNum+1, len(plan.Batches), len(batch)))
