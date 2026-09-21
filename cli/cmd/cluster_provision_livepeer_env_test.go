@@ -432,7 +432,7 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 		"http_ingest":            "true",
 		"cli_addr":               "127.0.0.1:7935",
 		"trusted_proxy_cidrs":    "127.0.0.1/32,::1/128",
-		"rtmp_addr":              "",
+		"rtmp_addr":              "127.0.0.1:1936",
 		"max_sessions":           "500",
 		"max_price_per_unit":     "1200",
 		"pixels_per_unit":        "1",

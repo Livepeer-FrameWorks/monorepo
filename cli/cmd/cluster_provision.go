@@ -7906,12 +7906,15 @@ func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string
 
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
-		"network":                "arbitrum-one-mainnet",
-		"http_addr":              "127.0.0.1:8935",
-		"http_ingest":            "true",
-		"cli_addr":               "127.0.0.1:7935",
-		"trusted_proxy_cidrs":    "127.0.0.1/32,::1/128",
-		"rtmp_addr":              "",
+		"network":             "arbitrum-one-mainnet",
+		"http_addr":           "127.0.0.1:8935",
+		"http_ingest":         "true",
+		"cli_addr":            "127.0.0.1:7935",
+		"trusted_proxy_cidrs": "127.0.0.1/32,::1/128",
+		// go-livepeer normalizes an empty RTMP address to 127.0.0.1:1935.
+		// Mist owns 1935 on media nodes, so keep the gateway's unused RTMP
+		// listener on a separate loopback-only port.
+		"rtmp_addr":              "127.0.0.1:1936",
 		"max_sessions":           "500",
 		"max_price_per_unit":     "1200",
 		"pixels_per_unit":        "1",
