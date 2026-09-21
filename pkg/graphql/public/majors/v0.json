@@ -313,6 +313,319 @@
           "document": "mutation UpdateStream ($id: ID!, $input: UpdateStreamInput!) {\n  updateStream(id: $id, input: $input) {\n    __typename\n    ... StreamFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
         }
       ]
+    },
+    "0.2": {
+      "minServer": "v0.3.11",
+      "operations": [
+        {
+          "name": "AbortVodUpload",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:8522047f670c4127a8ed48f84784a2014a0625f22ecc502953adc09668c42c37",
+          "document": "mutation AbortVodUpload ($uploadId: ID!) {\n  abortVodUpload(uploadId: $uploadId) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "CompleteVodUpload",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:7378e90c084c7d4b3a373d1237d98b2ba4e6f80380a10a6cd96bfc3bde6d864a",
+          "document": "mutation CompleteVodUpload ($input: CompleteVodUploadInput!) {\n  completeVodUpload(input: $input) {\n    __typename\n    ... VodAssetFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment EffectiveRetentionFields on EffectiveRetention {\n  retentionDays\n  retentionUntil\n  source\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\nfragment VodAssetFields on VodAsset {\n  __typename\n  id\n  artifactHash\n  playbackId\n  streamId\n  title\n  description\n  filename\n  status\n  sizeBytes\n  durationMs\n  resolution\n  videoCodec\n  audioCodec\n  bitrateKbps\n  createdAt\n  updatedAt\n  expiresAt\n  errorMessage\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n  effectiveRetention {\n    ... EffectiveRetentionFields\n  }\n}\n"
+        },
+        {
+          "name": "CreateClip",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:97823935fa98707cd7661c53c1bff473733aba5499b7fbe2bcbc9049ee4e32a0",
+          "document": "mutation CreateClip ($input: CreateClipInput!) {\n  createClip(input: $input) {\n    __typename\n    ... ClipFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment ClipFields on Clip {\n  __typename\n  id\n  clipHash\n  playbackId\n  streamId\n  title\n  description\n  startTime\n  duration\n  sizeBytes\n  status\n  clipMode\n  createdAt\n  updatedAt\n  expiresAt\n  isExpired\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n  effectiveRetention {\n    ... EffectiveRetentionFields\n  }\n}\nfragment EffectiveRetentionFields on EffectiveRetention {\n  retentionDays\n  retentionUntil\n  source\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "CreateDeveloperToken",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:540ebfc541ea5a6c7c14f777b506e14807f3db1084dc84a8ea8470206a101572",
+          "document": "mutation CreateDeveloperToken ($input: CreateDeveloperTokenInput!) {\n  createDeveloperToken(input: $input) {\n    __typename\n    ... DeveloperTokenFields\n    ... ValidationErrorFields\n    ... RateLimitErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeveloperTokenFields on DeveloperToken {\n  __typename\n  id\n  tokenName\n  tokenValue\n  permissions\n  status\n  lastUsedAt\n  expiresAt\n  createdAt\n}\nfragment RateLimitErrorFields on RateLimitError {\n  __typename\n  message\n  code\n  retryAfter\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "CreatePushTarget",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:f87effcffe0cd20adead983989722279e33a09fab785a61919d6b0fd3c80fef7",
+          "document": "mutation CreatePushTarget ($streamId: ID!, $input: CreatePushTargetInput!) {\n  createPushTarget(streamId: $streamId, input: $input) {\n    ... PushTargetFields\n  }\n}\nfragment PushTargetFields on PushTarget {\n  id\n  streamId\n  platform\n  name\n  targetUri\n  isEnabled\n  status\n  lastError\n  reasonCode\n  lastPushedAt\n  createdAt\n}\n"
+        },
+        {
+          "name": "CreateSigningKey",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:912a7b0a0c8667ede5852854ee4e2c1789d69e55f18010392ebf0d6a596a4a7d",
+          "document": "mutation CreateSigningKey ($input: CreateSigningKeyInput!) {\n  createSigningKey(input: $input) {\n    __typename\n    ... on CreateSigningKeySuccess {\n      signingKey {\n        ... SigningKeyFields\n      }\n      privateKeyPem\n    }\n    ... ValidationErrorFields\n    ... RateLimitErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment RateLimitErrorFields on RateLimitError {\n  __typename\n  message\n  code\n  retryAfter\n}\nfragment SigningKeyFields on SigningKey {\n  __typename\n  id\n  kid\n  name\n  algorithm\n  publicKeyPem\n  status\n  createdAt\n  lastUsedAt\n  revokedAt\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "CreateStream",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:ada4e43f1969147ce05a03ff1efd3fdf24d810efb0069900bed3bf67ce078a63",
+          "document": "mutation CreateStream ($input: CreateStreamInput!) {\n  createStream(input: $input) {\n    __typename\n    ... StreamFields\n    ... ValidationErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "CreateStreamKey",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:b62393ffa7ca87d50c4b7eae9a71d562706df63a63056eefa51e9c660e181f10",
+          "document": "mutation CreateStreamKey ($streamId: ID!, $input: CreateStreamKeyInput!) {\n  createStreamKey(streamId: $streamId, input: $input) {\n    __typename\n    ... StreamKeyFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment StreamKeyFields on StreamKey {\n  __typename\n  id\n  streamId\n  keyValue\n  keyName\n  isActive\n  lastUsedAt\n  createdAt\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "CreateVodUpload",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:10f4b6e3cc00bd0be6bc7d3ad46f113d2cc096a08a8cb298237ba7e70d91c29a",
+          "document": "mutation CreateVodUpload ($input: CreateVodUploadInput!) {\n  createVodUpload(input: $input) {\n    __typename\n    ... on VodUploadSession {\n      id\n      artifactId\n      artifactHash\n      playbackId\n      partSize\n      parts {\n        partNumber\n        presignedUrl\n      }\n      expiresAt\n    }\n    ... ValidationErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "DeleteClip",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:9021f86ab549b1f46f736567de01e32cb2cddf4b49b816999440d0ee10abaf66",
+          "document": "mutation DeleteClip ($id: ID!) {\n  deleteClip(id: $id) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "DeleteDVR",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:2c868d0ca4d6e3217e70c123df7f252904eb498de74e1f8e86963c7ad5abaa70",
+          "document": "mutation DeleteDVR ($dvrHash: ID!) {\n  deleteDVR(dvrHash: $dvrHash) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "DeletePushTarget",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:4ee9dd4fb15e94709b06877644ef69fec3859e4ea8fe1bb14d5f3a89d12f7e1a",
+          "document": "mutation DeletePushTarget ($id: ID!) {\n  deletePushTarget(id: $id) {\n    ... DeleteSuccessFields\n  }\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\n"
+        },
+        {
+          "name": "DeleteStream",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:ae2f01f00669c17657a2c811511886526fc4e51aa6f0e873d2465d6ba0999f76",
+          "document": "mutation DeleteStream ($id: ID!) {\n  deleteStream(id: $id) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "DeleteStreamKey",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:1b7f99b520762141fdbfa043e5b661c792a267e1238265922fe1c5b7c71c3efd",
+          "document": "mutation DeleteStreamKey ($streamId: ID!, $keyId: ID!) {\n  deleteStreamKey(streamId: $streamId, keyId: $keyId) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "DeleteVodAsset",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:1810121f47bbe8f8cd69e8c08ad84ccc0d65bc456b9acdb72282e732f5c97f39",
+          "document": "mutation DeleteVodAsset ($id: ID!) {\n  deleteVodAsset(id: $id) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "GetClip",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:de4649c754603b1ad25a14bc741988e94fd6301076010276770de1d9eca50d00",
+          "document": "query GetClip ($id: ID!) {\n  clip(id: $id) {\n    ... ClipFields\n  }\n}\nfragment ClipFields on Clip {\n  __typename\n  id\n  clipHash\n  playbackId\n  streamId\n  title\n  description\n  startTime\n  duration\n  sizeBytes\n  status\n  clipMode\n  createdAt\n  updatedAt\n  expiresAt\n  isExpired\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n  effectiveRetention {\n    ... EffectiveRetentionFields\n  }\n}\nfragment EffectiveRetentionFields on EffectiveRetention {\n  retentionDays\n  retentionUntil\n  source\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\n"
+        },
+        {
+          "name": "GetDVRChapter",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:e44ccbf11cf9292daf9c009350c78007880a03d03ac071d5378a3264414da925",
+          "document": "query GetDVRChapter ($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRChapterMode, $intervalSeconds: Int) {\n  dvrChapter(dvrId: $dvrId, startMs: $startMs, endMs: $endMs, mode: $mode, intervalSeconds: $intervalSeconds) {\n    chapterId\n    state\n    playbackId\n    isCurrent\n    hasGaps\n    segmentCount\n    wallClockStartUnixMs\n    wallClockEndUnixMs\n    playableNow\n    lastFailureReason\n  }\n}\n"
+        },
+        {
+          "name": "GetSigningKey",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:4ed73548dfb4b49650d97245f9273fa28ddaf52d60a741793dbf0c77cbdd64c0",
+          "document": "query GetSigningKey ($id: ID!) {\n  signingKey(id: $id) {\n    ... SigningKeyFields\n  }\n}\nfragment SigningKeyFields on SigningKey {\n  __typename\n  id\n  kid\n  name\n  algorithm\n  publicKeyPem\n  status\n  createdAt\n  lastUsedAt\n  revokedAt\n}\n"
+        },
+        {
+          "name": "GetStream",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:ed8f2e03fc1b50af9e763c12429303c36833350630f2e8dd991595475b46beb9",
+          "document": "query GetStream ($id: ID!) {\n  stream(id: $id) {\n    ... StreamFields\n  }\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\n"
+        },
+        {
+          "name": "GetTenantUsage",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:f093b8aa69e7fa39782df933d6798e9bbd625aacfabd1e1a798e79a67fc8258f",
+          "document": "query GetTenantUsage ($timeRange: TimeRangeInput) {\n  tenantUsage(timeRange: $timeRange) {\n    billingPeriod\n    currency\n    totalCost\n    baseAmount\n    usageAmount\n    usage {\n      resourceType\n      amount\n    }\n    costs {\n      resourceType\n      cost\n    }\n    lineItems {\n      lineKey\n      meter\n      description\n      quantity\n      includedQuantity\n      billableQuantity\n      unitPrice\n      total\n      currency\n      clusterId\n      clusterName\n      pricingSource\n      pricingLabel\n      unit\n    }\n  }\n}\n"
+        },
+        {
+          "name": "GetUsageAggregates",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:f907d987b0ea40c6d5e3426b5c3ce7171d7a96ab293381aea405036ee7b99b5a",
+          "document": "query GetUsageAggregates ($timeRange: TimeRangeInput!, $granularity: String, $usageTypes: [String!]) {\n  usageAggregates(timeRange: $timeRange, granularity: $granularity, usageTypes: $usageTypes) {\n    usageType\n    periodStart\n    periodEnd\n    usageValue\n    granularity\n  }\n}\n"
+        },
+        {
+          "name": "GetVodAsset",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:11a8ae4934fae28f3a2d714c245bc6234cc001aa7350fcfb17fd8e171c3a1635",
+          "document": "query GetVodAsset ($id: ID!) {\n  vodAsset(id: $id) {\n    ... VodAssetFields\n  }\n}\nfragment EffectiveRetentionFields on EffectiveRetention {\n  retentionDays\n  retentionUntil\n  source\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment VodAssetFields on VodAsset {\n  __typename\n  id\n  artifactHash\n  playbackId\n  streamId\n  title\n  description\n  filename\n  status\n  sizeBytes\n  durationMs\n  resolution\n  videoCodec\n  audioCodec\n  bitrateKbps\n  createdAt\n  updatedAt\n  expiresAt\n  errorMessage\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n  effectiveRetention {\n    ... EffectiveRetentionFields\n  }\n}\n"
+        },
+        {
+          "name": "GetVodUploadStatus",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:714045ff62deb56c7504099dedb9c15ceefe7b6fbbf8f948cd423d46d5163c29",
+          "document": "query GetVodUploadStatus ($uploadId: ID!) {\n  vodUploadStatus(uploadId: $uploadId) {\n    __typename\n    ... on VodUploadStatus {\n      uploadId\n      state\n      expiresAt\n      retentionUntil\n      uploadedParts {\n        partNumber\n        etag\n        sizeBytes\n      }\n      missingParts\n      lastErrorCode\n      artifactHash\n      playbackId\n    }\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "ListArtifacts",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:ae59f73283079618c993735b8fb96f8de65a851e30eb70a2913ae57a91ca96e4",
+          "document": "query ListArtifacts ($input: StorageArtifactsInput) {\n  storageArtifactsConnection(input: $input) {\n    nodes {\n      ... StorageArtifactFields\n    }\n    totalCount\n    hasNextPage\n    limit\n    offset\n  }\n}\nfragment StorageArtifactFields on StorageArtifact {\n  key\n  kind\n  id\n  hash\n  playbackId\n  streamId\n  streamTitle\n  title\n  description\n  errorMessage\n  sizeBytes\n  status\n  createdAt\n  updatedAt\n  expiresAt\n  deleteId\n  durationSeconds\n  thumbnailAssets {\n    ... ThumbnailAssetsFields\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\n"
+        },
+        {
+          "name": "ListDVRChapters",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:d7d3354d6f06cfcb35bcc7199d6df00b9c88bba97b15e2c229c827f00b674220",
+          "document": "query ListDVRChapters ($dvrId: ID!, $mode: DVRChapterMode, $intervalSeconds: Int, $rangeStartMs: Float, $rangeEndMs: Float, $pageSize: Int, $pageToken: String) {\n  dvrChapters(dvrId: $dvrId, mode: $mode, intervalSeconds: $intervalSeconds, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs, pageSize: $pageSize, pageToken: $pageToken) {\n    chapters {\n      ... DVRChapterRefFields\n    }\n    nextPageToken\n  }\n}\nfragment DVRChapterRefFields on DVRChapterRef {\n  chapterId\n  mode\n  intervalSeconds\n  startMs\n  endMs\n  isCurrent\n  state\n  playbackId\n  hasGaps\n  segmentCount\n  lastFailureReason\n}\n"
+        },
+        {
+          "name": "ListDeveloperTokens",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:5176529985df2b9e7f8dd5c47f6caef06d5dff663b5cc90273d24d62daa6df60",
+          "document": "query ListDeveloperTokens ($page: ConnectionInput) {\n  developerTokensConnection(page: $page) {\n    nodes {\n      ... DeveloperTokenFields\n    }\n    pageInfo {\n      ... PageInfoFields\n    }\n    totalCount\n  }\n}\nfragment DeveloperTokenFields on DeveloperToken {\n  __typename\n  id\n  tokenName\n  tokenValue\n  permissions\n  status\n  lastUsedAt\n  expiresAt\n  createdAt\n}\nfragment PageInfoFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
+        },
+        {
+          "name": "ListPushTargets",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:e25c8d3787946a7f17ae2a5af6e053c65e7e1848933e59957f8fd36538072323",
+          "document": "query ListPushTargets ($streamId: ID!) {\n  stream(id: $streamId) {\n    id\n    pushTargets {\n      ... PushTargetFields\n    }\n  }\n}\nfragment PushTargetFields on PushTarget {\n  id\n  streamId\n  platform\n  name\n  targetUri\n  isEnabled\n  status\n  lastError\n  reasonCode\n  lastPushedAt\n  createdAt\n}\n"
+        },
+        {
+          "name": "ListSigningKeys",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:d6700429c8adaa93d0ddf345092654897166803930790da0b2a55ae9d1b9ac08",
+          "document": "query ListSigningKeys ($status: String, $page: ConnectionInput) {\n  signingKeysConnection(status: $status, page: $page) {\n    nodes {\n      ... SigningKeyFields\n    }\n    pageInfo {\n      ... PageInfoFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment SigningKeyFields on SigningKey {\n  __typename\n  id\n  kid\n  name\n  algorithm\n  publicKeyPem\n  status\n  createdAt\n  lastUsedAt\n  revokedAt\n}\n"
+        },
+        {
+          "name": "ListStreamKeys",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:82e33b4037eaca5b717b8f9e206b430204f58259950cd3cbc28f59d7458fc39b",
+          "document": "query ListStreamKeys ($streamId: ID!, $page: ConnectionInput) {\n  streamKeysConnection(streamId: $streamId, page: $page) {\n    nodes {\n      ... StreamKeyFields\n    }\n    pageInfo {\n      ... PageInfoFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment StreamKeyFields on StreamKey {\n  __typename\n  id\n  streamId\n  keyValue\n  keyName\n  isActive\n  lastUsedAt\n  createdAt\n}\n"
+        },
+        {
+          "name": "ListStreams",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:b4d40707bf2d05661356351b9413a1f80e62d2009359b126ca710ea05a9a4982",
+          "document": "query ListStreams ($page: ConnectionInput, $search: String) {\n  streamsConnection(page: $page, search: $search) {\n    nodes {\n      ... StreamFields\n    }\n    pageInfo {\n      ... PageInfoFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\n"
+        },
+        {
+          "name": "ListUsageRecords",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:bdf0f9328fd086914d85345b37dbe9739b253873d06f7bf6fd0c66ed918b8d21",
+          "document": "query ListUsageRecords ($page: ConnectionInput, $timeRange: TimeRangeInput) {\n  usageRecordsConnection(page: $page, timeRange: $timeRange) {\n    nodes {\n      id\n      clusterId\n      clusterName\n      usageType\n      unit\n      dimensions\n      usageValue\n      createdAt\n      periodStart\n      periodEnd\n      granularity\n    }\n    pageInfo {\n      ... PageInfoFields\n    }\n    totalCount\n  }\n}\nfragment PageInfoFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
+        },
+        {
+          "name": "RefreshStreamKey",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:83c8c17c10a5ecfd9a52764a8ba6e9949bd215dc4da7c8004efaf130016ded92",
+          "document": "mutation RefreshStreamKey ($id: ID!) {\n  refreshStreamKey(id: $id) {\n    __typename\n    ... StreamFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "ResolveIngestEndpoint",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:135dae72fff9905e070e0956aed6bbbc1ce050e282bb318b296d37af083e6a5b",
+          "document": "query ResolveIngestEndpoint ($streamKey: String!, $protocol: MediaIngestProtocol) {\n  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {\n    primary {\n      ... IngestEndpointFields\n    }\n    fallbacks {\n      ... IngestEndpointFields\n    }\n    metadata {\n      streamId\n      streamKey\n      tenantId\n      recordingEnabled\n    }\n  }\n}\nfragment IngestEndpointFields on IngestEndpoint {\n  nodeId\n  baseUrl\n  whipUrl\n  rtmpUrl\n  srtUrl\n  region\n  loadScore\n  kind\n  clusterId\n}\n"
+        },
+        {
+          "name": "ResolveViewerEndpoint",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:dec07ed1bf7c0a35df7cd0ac6b43b10375f772ed8ae0aeffdff371f505207134",
+          "document": "query ResolveViewerEndpoint ($contentId: String!, $protocol: MediaViewerProtocol) {\n  resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {\n    primary {\n      ... ViewerEndpointFields\n    }\n    fallbacks {\n      ... ViewerEndpointFields\n    }\n    metadata {\n      contentType\n      contentId\n      title\n      description\n      durationSeconds\n      status\n      isLive\n      viewers\n      recordingSizeBytes\n      clipSource\n      createdAt\n      telemetryToken\n      thumbnailAssets {\n        ... ThumbnailAssetsFields\n      }\n    }\n  }\n}\nfragment ThumbnailAssetsFields on ThumbnailAssets {\n  posterUrl\n  spriteVttUrl\n  spriteJpgUrl\n  assetKey\n}\nfragment ViewerEndpointFields on ViewerEndpoint {\n  nodeId\n  baseUrl\n  protocol\n  url\n  geoDistance\n  loadScore\n  outputs\n}\n"
+        },
+        {
+          "name": "RevokeDeveloperToken",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:d32ec205a5ae70b5130d151bab4e3e4140ca4b6f683fa61a7473358a03efe1f7",
+          "document": "mutation RevokeDeveloperToken ($id: ID!) {\n  revokeDeveloperToken(id: $id) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "RevokeSigningKey",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:6f0b1e5a2ec244d0fc57a91e4a6ff1ad2a13ff2c685e91e2e5cf23b679b61970",
+          "document": "mutation RevokeSigningKey ($id: ID!) {\n  revokeSigningKey(id: $id) {\n    __typename\n    ... SigningKeyFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment SigningKeyFields on SigningKey {\n  __typename\n  id\n  kid\n  name\n  algorithm\n  publicKeyPem\n  status\n  createdAt\n  lastUsedAt\n  revokedAt\n}\n"
+        },
+        {
+          "name": "ServerInfo",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:165542f6f7045d81b9934e2f5c75f29fc6f0318d08cef85cebc580341026bf2b",
+          "document": "query ServerInfo {\n  serverInfo {\n    version\n    features\n  }\n}\n"
+        },
+        {
+          "name": "SetPlaybackPolicy",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:95e13b6243040c38e8b62549bc49dfd37c58f3fa71a471fd9c52431d2ec0d0d2",
+          "document": "mutation SetPlaybackPolicy ($input: SetPlaybackPolicyInput!) {\n  setPlaybackPolicy(input: $input) {\n    __typename\n    ... on Stream {\n      id\n      playbackPolicy {\n        ... PlaybackPolicyFields\n      }\n    }\n    ... on VodAsset {\n      id\n      playbackPolicy {\n        ... PlaybackPolicyFields\n      }\n    }\n    ... on Clip {\n      id\n      playbackPolicy {\n        ... PlaybackPolicyFields\n      }\n    }\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "StartDVR",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:da4c8950e2c269df37253102a205b41d3998d4b7a7fcfd14bae5ba8b18111aae",
+          "document": "mutation StartDVR ($streamId: ID!) {\n  startDVR(streamId: $streamId) {\n    __typename\n    ... DVRRequestFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DVRRequestFields on DVRRequest {\n  __typename\n  id\n  dvrHash\n  playbackId\n  streamId\n  title\n  status\n  createdAt\n  updatedAt\n  startedAt\n  endedAt\n  expiresAt\n  isExpired\n  durationSeconds\n  sizeBytes\n  errorMessage\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "StopDVR",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:1ae1d6448505e92b1a0f590281320eaf7faffac6974f0696be5b523f86e5d9ae",
+          "document": "mutation StopDVR ($dvrHash: ID!) {\n  stopDVR(dvrHash: $dvrHash) {\n    __typename\n    ... DeleteSuccessFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment DeleteSuccessFields on DeleteSuccess {\n  __typename\n  success\n  deletedId\n  pending\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\n"
+        },
+        {
+          "name": "TenantEvents",
+          "kind": "subscription",
+          "since": "v0.3.11",
+          "hash": "sha256:659858e9b14772833db0a775909cfb0f9ae339e77ef85977b7cdc6ceeba32933",
+          "document": "subscription TenantEvents ($types: [String!], $streamId: ID) {\n  tenantEvents(types: $types, streamId: $streamId) {\n    id\n    type\n    time\n    subject\n    data {\n      __typename\n      ... on AccountSuspended {\n        suspensionReason: reason\n      }\n      ... on ApiTokenCreated {\n        tokenId\n        name\n        permissions\n        expiresAt\n      }\n      ... on ApiTokenRevoked {\n        tokenId\n      }\n      ... on BillingDetailsUpdated {\n        changedFields\n      }\n      ... on InvoiceCreated {\n        invoiceId\n        amountDue {\n          ... EventMoneyFields\n        }\n        periodStart\n        periodEnd\n        dueAt\n      }\n      ... on InvoicePaid {\n        invoiceId\n        amountPaid {\n          ... EventMoneyFields\n        }\n      }\n      ... on PaymentFailed {\n        paymentId\n        invoiceId\n        amount {\n          ... EventMoneyFields\n        }\n        paymentFailureReason: reason\n        provider\n        providerReferenceId\n      }\n      ... on TopupCredited {\n        topupId\n        amount {\n          ... EventMoneyFields\n        }\n      }\n      ... on ClipRequested {\n        artifact {\n          ... EventArtifactFields\n        }\n        durationMs\n      }\n      ... on ClipReady {\n        artifact {\n          ... EventArtifactFields\n        }\n        durationMs\n        sizeBytes\n      }\n      ... on ClipFailed {\n        artifact {\n          ... EventArtifactFields\n        }\n        mediaFailureReason: reason\n      }\n      ... on CustomDomainVerified {\n        domain\n      }\n      ... on CustomDomainFailed {\n        domain\n        customDomainFailureReason: reason\n      }\n      ... on MultistreamStatusChanged {\n        streamId\n        targetId\n        targetName\n        status\n        previousStatus\n      }\n      ... on RecordingReady {\n        artifact {\n          ... EventArtifactFields\n        }\n        durationMs\n        sizeBytes\n      }\n      ... on RecordingFailed {\n        artifact {\n          ... EventArtifactFields\n        }\n        mediaFailureReason: reason\n      }\n      ... on StreamConnected {\n        streamId\n        protocol\n      }\n      ... on StreamCreated {\n        streamId\n        name\n        playbackId\n      }\n      ... on StreamDeleted {\n        streamId\n      }\n      ... on StreamIdle {\n        streamId\n      }\n      ... on StreamKeyRotated {\n        streamId\n      }\n      ... on StreamLive {\n        streamId\n      }\n      ... on StreamUpdated {\n        streamId\n        changedFields\n      }\n      ... on UploadCreated {\n        artifact {\n          ... EventArtifactFields\n        }\n        filename\n        expectedSizeBytes\n      }\n      ... on UploadCompleted {\n        artifact {\n          ... EventArtifactFields\n        }\n        sizeBytes\n      }\n      ... on UploadAborted {\n        artifact {\n          ... EventArtifactFields\n        }\n      }\n      ... on UploadReady {\n        artifact {\n          ... EventArtifactFields\n        }\n        durationMs\n        sizeBytes\n      }\n      ... on UploadFailed {\n        artifact {\n          ... EventArtifactFields\n        }\n        mediaFailureReason: reason\n      }\n    }\n  }\n}\nfragment EventArtifactFields on EventArtifact {\n  artifactId\n  kind\n  streamId\n  playbackId\n}\nfragment EventMoneyFields on EventMoney {\n  amountMinor\n  currency\n}\n"
+        },
+        {
+          "name": "TestPlaybackAccess",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:ef20072fd6ad393fff27f87fb125defa01aeb5fe6b6610b183b8378a80cd153e",
+          "document": "mutation TestPlaybackAccess ($input: TestPlaybackAccessInput!) {\n  testPlaybackAccess(input: $input) {\n    __typename\n    ... on PlaybackAccessDecision {\n      allowed\n      policyType\n      reason\n      detail\n      kid\n      claimsJson\n      webhookStatus\n      webhookLatencyMs\n      resolvedInternalName\n    }\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        },
+        {
+          "name": "UpdatePushTarget",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:e28b2d4b9e2df7a986ad07225472fc8df4c6a5b4ab6b20ffe7eafef8d220ae2a",
+          "document": "mutation UpdatePushTarget ($id: ID!, $input: UpdatePushTargetInput!) {\n  updatePushTarget(id: $id, input: $input) {\n    ... PushTargetFields\n  }\n}\nfragment PushTargetFields on PushTarget {\n  id\n  streamId\n  platform\n  name\n  targetUri\n  isEnabled\n  status\n  lastError\n  reasonCode\n  lastPushedAt\n  createdAt\n}\n"
+        },
+        {
+          "name": "UpdateStream",
+          "kind": "mutation",
+          "since": "v0.3.11",
+          "hash": "sha256:50f7edc855583d27174901a8d45b2380d8f2365be7285dd285b8d783f6c7bb63",
+          "document": "mutation UpdateStream ($id: ID!, $input: UpdateStreamInput!) {\n  updateStream(id: $id, input: $input) {\n    __typename\n    ... StreamFields\n    ... ValidationErrorFields\n    ... NotFoundErrorFields\n    ... AuthErrorFields\n  }\n}\nfragment AuthErrorFields on AuthError {\n  __typename\n  message\n  code\n}\nfragment NotFoundErrorFields on NotFoundError {\n  __typename\n  message\n  code\n  resourceType\n  resourceId\n}\nfragment PlaybackPolicyFields on PlaybackPolicy {\n  type\n  jwt {\n    allowedKids\n    requiredAudience\n    requiredClaimsJson {\n      name\n      jsonValue\n    }\n  }\n  webhook {\n    url\n    timeoutMs\n    secretMasked\n  }\n}\nfragment StreamFields on Stream {\n  __typename\n  id\n  streamId\n  name\n  description\n  streamKey\n  playbackId\n  record\n  ingestMode\n  pullSource {\n    sourceUriRedacted\n    enabled\n    class\n  }\n  createdAt\n  updatedAt\n  dvrChapterMode\n  dvrChapterIntervalSeconds\n  monitoring\n  playbackPolicy {\n    ... PlaybackPolicyFields\n  }\n  metrics {\n    status\n    isLive\n    currentViewers\n    startedAt\n    updatedAt\n  }\n}\nfragment ValidationErrorFields on ValidationError {\n  __typename\n  message\n  code\n  field\n  constraint\n}\n"
+        }
+      ]
     }
   }
 }

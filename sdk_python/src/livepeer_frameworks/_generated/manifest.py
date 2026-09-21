@@ -8,8 +8,8 @@ class OperationInfo(TypedDict):
     since: str
 
 
-SDK_VERSION: Final = "0.1.0"
-SDK_LINE: Final = "0.1"
+SDK_VERSION: Final = "0.2.0"
+SDK_LINE: Final = "0.2"
 MIN_SERVER_VERSION: Final = "v0.3.11"
 
 OPERATIONS: Final[dict[str, OperationInfo]] = {

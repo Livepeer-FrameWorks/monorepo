@@ -1,5 +1,12 @@
 # @livepeer-frameworks/streamcrafter-core
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @livepeer-frameworks/api@0.2.0
+
 ## 0.4.0
 
 ### Minor Changes

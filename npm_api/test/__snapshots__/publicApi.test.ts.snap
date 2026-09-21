@@ -13,7 +13,7 @@ exports[`public API > gateway-probe entry exports 1`] = `
 
 exports[`public API > operation manifest 1`] = `
 {
-  "line": "0.1",
+  "line": "0.2",
   "minServer": "v0.3.11",
   "operations": {
     "AbortVodUpload": {
