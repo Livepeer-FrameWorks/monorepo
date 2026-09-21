@@ -1,0 +1,25 @@
+# Public event payload types for the webhooks entry, generated from
+# pkg/proto/events/public/v1 by make graphql-sdk-ts. JSON decoding only:
+# webhooks deliver the standard protobuf JSON mapping.
+version: v2
+plugins:
+  - local: npm_api/node_modules/.bin/protoc-gen-ts_proto
+    out: npm_api/src/generated/proto
+    strategy: all
+    include_imports: false
+    include_wkt: false
+    opt:
+      - outputEncodeMethods=false
+      - outputJsonMethods=from-only
+      - outputPartialMethods=false
+      - outputClientImpl=false
+      - outputServices=false
+      - stringEnums=true
+      - forceLong=bigint
+      - useDate=string
+      - useOptionals=none
+      - exportCommonSymbols=false
+      - importSuffix=.js
+      - esModuleInterop=true
+      - unrecognizedEnum=true
+      - emitImportedFiles=false

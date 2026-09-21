@@ -1,9 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
+import { ResolveIngestEndpointDocument } from "@livepeer-frameworks/api";
 import { IngestClient } from "../src/core/IngestClient";
+import { clearServerInfoProbes, probeServerInfo } from "@livepeer-frameworks/api/gateway-probe";
 
 const MOCK_GATEWAY_URL = "https://gateway.example.com/graphql";
 const MOCK_STREAM_KEY = "test-stream-key";
+const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.11", features: [] } } };
 
 function mockFetchSuccess(data = mockEndpointResponse()) {
   return vi.fn().mockResolvedValue({
@@ -46,15 +49,20 @@ function mockEndpointResponse() {
 describe("IngestClient", () => {
   let origFetch: typeof globalThis.fetch;
 
-  beforeEach(() => {
+  // The gateway's serverInfo is probed once and cached, so each test starts
+  // with a supported gateway on record and its fetch mock sees only resolves.
+  beforeEach(async () => {
     vi.useFakeTimers();
     origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify(SUPPORTED_GATEWAY)));
+    await probeServerInfo(MOCK_GATEWAY_URL);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     globalThis.fetch = origFetch;
+    clearServerInfoProbes();
   });
 
   function createClient(overrides?: Record<string, any>) {
@@ -96,11 +104,12 @@ describe("IngestClient", () => {
           headers: expect.objectContaining({
             "Content-Type": "application/json",
           }),
-          body: expect.stringContaining("protocol: WHIP"),
         })
       );
       const request = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
-      expect(request.variables).toEqual({ streamKey: MOCK_STREAM_KEY });
+      expect(request.query).toBe(String(ResolveIngestEndpointDocument));
+      expect(request.operationName).toBe("ResolveIngestEndpoint");
+      expect(request.variables).toEqual({ streamKey: MOCK_STREAM_KEY, protocol: "WHIP" });
       client.destroy();
     });
 

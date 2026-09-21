@@ -1,0 +1,9 @@
+# Public event payload types for webhook parsing, generated from
+# pkg/proto/events/public/v1 by make graphql-sdk-py with the venv's
+# betterproto2 compiler (on PATH there, together with ruff, which it formats
+# its output with). Output lands in the package's _generated/proto.
+version: v2
+plugins:
+  - local: protoc-gen-python_betterproto2
+    out: sdk_python/src/livepeer_frameworks/_generated/proto
+    strategy: all

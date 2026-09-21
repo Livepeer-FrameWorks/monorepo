@@ -25,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     Task {
       await detectAndLoadCLIContext()
       let restored = await AuthService.shared.restoreSession(appState: appState)
+      await ServerInfoService.shared.refresh(appState: appState)
       await MainActor.run {
         if restored {
           startEdgePolling()
@@ -124,6 +125,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func showContextMenu() {
     let menu = NSMenu()
+
+    if let warning = appState.serverCompatibility.warning {
+      let warningItem = NSMenuItem(title: warning, action: nil, keyEquivalent: "")
+      warningItem.isEnabled = false
+      warningItem.image = SFSymbols.tintedImage(
+        "exclamationmark.triangle.fill", color: .systemOrange)
+      menu.addItem(warningItem)
+      menu.addItem(NSMenuItem.separator())
+    }
 
     if appState.isAuthenticated {
       let userItem = NSMenuItem(title: appState.userEmail ?? "Logged in", action: nil, keyEquivalent: "")
@@ -342,6 +352,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // consistent state, then attempt restore against the new bridge.
     await clearAuthState()
     let restored = await AuthService.shared.restoreSession(appState: appState)
+    await ServerInfoService.shared.refresh(appState: appState)
     await MainActor.run {
       if restored {
         startEdgePolling()
@@ -376,6 +387,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     guard retryRestore, fallbackURL != previousURL else { return }
 
     let restored = await AuthService.shared.restoreSession(appState: appState)
+    await ServerInfoService.shared.refresh(appState: appState)
     await MainActor.run {
       if restored {
         startEdgePolling()

@@ -1,0 +1,64 @@
+{
+  "description": "Playback JWT signing. Each SDK signs input with the key and must produce exactly signingInput (base64url of the header and payload JSON with keys sorted at every level and no whitespace) and an ES256 signature (raw r||s, JOSE) that verifies under publicKeyPem. The playback access-control verifier (pkg/auth VerifyViewerJWT through the Foghorn USER_NEW policy evaluator) must accept every token in tokens, one produced by each SDK over the second case ('audience, not-before, and custom claims'), under that case's policy; each SDK's tests check that its own token has that case's signingInput. Claims named like a registered claim the signer sets (exp, iat, nbf, aud, sub) are rejected in claims. Times are unix seconds: iat and nbf are in the past and exp far in the future, so the tokens stay valid.",
+  "key": {
+    "kid": "k7d3fixture2uvq4",
+    "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgGk4BXeLokHYzhshr\nYFVRhf6EOdwhi0/yqjZNG/znQCShRANCAATibnNlr1y49oNa6Ywx36Z0OK78UIBe\nOLH+2fjCsdFtDsZwWTqiLMYJtGE5o6RWtxSMluvylY/GRUNNDNrf4Bmc\n-----END PRIVATE KEY-----\n",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4m5zZa9cuPaDWumMMd+mdDiu/FCA\nXjix/tn4wrHRbQ7GcFk6oizGCbRhOaOkVrcUjJbr8pWPxkVDTQza3+AZnA==\n-----END PUBLIC KEY-----\n"
+  },
+  "cases": [
+    {
+      "name": "subject and expiry",
+      "input": { "subject": "viewer-42", "expiresAt": 4102444800, "issuedAt": 1700000000 },
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTcwMDAwMDAwMCwic3ViIjoidmlld2VyLTQyIn0",
+      "policy": { "allowedKids": ["k7d3fixture2uvq4"] }
+    },
+    {
+      "name": "audience, not-before, and custom claims",
+      "input": {
+        "subject": "viewer-7",
+        "audience": ["viewer"],
+        "expiresAt": 4102444800,
+        "issuedAt": 1700000000,
+        "notBefore": 1699999400,
+        "claims": { "tier": "pro", "seats": 3, "flags": { "b": true, "a": 1 } }
+      },
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJ2aWV3ZXIiLCJleHAiOjQxMDI0NDQ4MDAsImZsYWdzIjp7ImEiOjEsImIiOnRydWV9LCJpYXQiOjE3MDAwMDAwMDAsIm5iZiI6MTY5OTk5OTQwMCwic2VhdHMiOjMsInN1YiI6InZpZXdlci03IiwidGllciI6InBybyJ9",
+      "policy": {
+        "allowedKids": ["k7d3fixture2uvq4"],
+        "requiredAudience": ["viewer"],
+        "requiredClaimsJson": { "tier": "\"pro\"", "seats": "3" }
+      }
+    },
+    {
+      "name": "several audiences keep their order",
+      "input": {
+        "subject": "viewer-9",
+        "audience": ["viewer", "embed"],
+        "expiresAt": 4102444800,
+        "issuedAt": 1700000000
+      },
+      "signingInput": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsidmlld2VyIiwiZW1iZWQiXSwiZXhwIjo0MTAyNDQ0ODAwLCJpYXQiOjE3MDAwMDAwMDAsInN1YiI6InZpZXdlci05In0",
+      "policy": { "requiredAudience": ["embed"] }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "a custom claim may not set exp",
+      "input": {
+        "subject": "viewer-1",
+        "expiresAt": 4102444800,
+        "issuedAt": 1700000000,
+        "claims": { "exp": 1 }
+      }
+    },
+    {
+      "name": "expiry is required",
+      "input": { "subject": "viewer-1", "issuedAt": 1700000000 }
+    }
+  ],
+  "tokens": {
+    "go": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJ2aWV3ZXIiLCJleHAiOjQxMDI0NDQ4MDAsImZsYWdzIjp7ImEiOjEsImIiOnRydWV9LCJpYXQiOjE3MDAwMDAwMDAsIm5iZiI6MTY5OTk5OTQwMCwic2VhdHMiOjMsInN1YiI6InZpZXdlci03IiwidGllciI6InBybyJ9.MjcZslAnx-kZpDhOIXtsP0Sypvo2WxKqeGo38rpVEIlJY6Bzk2GoaNnODwH2a3_g4HKCY-q_kXIpexxQiMYCQA",
+    "python": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJ2aWV3ZXIiLCJleHAiOjQxMDI0NDQ4MDAsImZsYWdzIjp7ImEiOjEsImIiOnRydWV9LCJpYXQiOjE3MDAwMDAwMDAsIm5iZiI6MTY5OTk5OTQwMCwic2VhdHMiOjMsInN1YiI6InZpZXdlci03IiwidGllciI6InBybyJ9.Qfpq-5aX8wmk3QbJ_U7HcK9ugJsxP8jtyqsQt_yRPwPQg13UDIwnJc0Z4xJpeMYIVxUjN9oM16u1EiyHQodYlw",
+    "typescript": "eyJhbGciOiJFUzI1NiIsImtpZCI6Ims3ZDNmaXh0dXJlMnV2cTQiLCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJ2aWV3ZXIiLCJleHAiOjQxMDI0NDQ4MDAsImZsYWdzIjp7ImEiOjEsImIiOnRydWV9LCJpYXQiOjE3MDAwMDAwMDAsIm5iZiI6MTY5OTk5OTQwMCwic2VhdHMiOjMsInN1YiI6InZpZXdlci03IiwidGllciI6InBybyJ9.Hu_hicoQpNoHay5C-RrUPxJhx0YtOu0N_aJLI9aJrt7Sd0-cPL6xzr4DfrH3WdHrzJ3XBIZuhhBFD55cxuUOrw"
+  }
+}

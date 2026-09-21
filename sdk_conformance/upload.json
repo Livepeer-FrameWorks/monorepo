@@ -1,0 +1,167 @@
+{
+  "description": "VOD upload helper, run against a local HTTP server that serves both GraphQL and the presigned part URLs. The file is sizeBytes bytes where byte i is i mod 251. createVodUpload returns partSize and one presigned URL per part, <server>/s3?part=<partNumber>&X-Amz-Signature=<presignedSignature>; a PUT answers 200 with ETag \"etag-<partNumber>\" unless putFailures lists statuses to return first for that part (each with a Retry-After of putRetryAfter when given), or putDrops says how many times the server first closes that part's connection without answering. The helper puts at most concurrency parts at once and retries a failed part up to partAttempts attempts in total, waiting a Retry-After when the storage sends one; a Retry-After above the GraphQL transport's maxRetryAfterMs (30000 by default) ends retrying instead of waiting. Any failure after the upload is created aborts it. expect.puts counts PUTs per part number and expect.partBytes the bytes the server stored per part. expect.errorOmits must not appear in the error's message or in the message of any error it wraps: an error never carries the presigned URL's signature.",
+  "presignedSignature": "fixture-signature-secret",
+  "cases": [
+    {
+      "name": "uploads every part and completes with the ETags",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 2,
+      "partAttempts": 3,
+      "expect": {
+        "ok": true,
+        "puts": { "1": 1, "2": 1, "3": 1 },
+        "partBytes": { "1": 4, "2": 4, "3": 2 },
+        "completedParts": [
+          { "partNumber": 1, "etag": "\"etag-1\"" },
+          { "partNumber": 2, "etag": "\"etag-2\"" },
+          { "partNumber": 3, "etag": "\"etag-3\"" }
+        ],
+        "aborted": false,
+        "maxConcurrentPuts": 2
+      }
+    },
+    {
+      "name": "never runs more parts at once than the concurrency",
+      "sizeBytes": 60,
+      "partSize": 10,
+      "concurrency": 2,
+      "partAttempts": 3,
+      "expect": {
+        "ok": true,
+        "puts": { "1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1 },
+        "aborted": false,
+        "maxConcurrentPuts": 2
+      }
+    },
+    {
+      "name": "a failed part is retried",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 3,
+      "putFailures": { "2": [503, 500] },
+      "expect": {
+        "ok": true,
+        "puts": { "1": 1, "2": 3, "3": 1 },
+        "partBytes": { "1": 4, "2": 4, "3": 2 },
+        "aborted": false
+      }
+    },
+    {
+      "name": "a part that keeps failing aborts the upload",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 2,
+      "putFailures": { "2": [503, 503, 503] },
+      "expect": {
+        "ok": false,
+        "error": { "kind": "UploadError" },
+        "aborted": true,
+        "completed": false
+      }
+    },
+    {
+      "name": "a part rejected with 403 is not retried and aborts the upload",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 3,
+      "putFailures": { "1": [403] },
+      "expect": {
+        "ok": false,
+        "error": { "kind": "UploadError" },
+        "puts": { "1": 1 },
+        "aborted": true,
+        "completed": false
+      }
+    },
+    {
+      "name": "a storage Retry-After within the maximum is waited for",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 3,
+      "putFailures": { "2": [503] },
+      "putRetryAfter": "2",
+      "expect": {
+        "ok": true,
+        "puts": { "1": 1, "2": 2, "3": 1 },
+        "aborted": false
+      }
+    },
+    {
+      "name": "a storage Retry-After above the maximum is not waited for and aborts the upload",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 3,
+      "putFailures": { "2": [503] },
+      "putRetryAfter": "3600",
+      "expect": {
+        "ok": false,
+        "error": { "kind": "UploadError", "status": 503 },
+        "puts": { "1": 1, "2": 1 },
+        "aborted": true,
+        "completed": false
+      }
+    },
+    {
+      "name": "a dropped part connection fails without the presigned URL's signature",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 1,
+      "partAttempts": 2,
+      "putDrops": { "1": 2 },
+      "expect": {
+        "ok": false,
+        "error": { "kind": "UploadError" },
+        "errorOmits": "fixture-signature-secret",
+        "puts": { "1": 2 },
+        "aborted": true,
+        "completed": false
+      }
+    },
+    {
+      "name": "a completion error aborts the upload",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 2,
+      "partAttempts": 3,
+      "completeResult": {
+        "__typename": "ValidationError",
+        "message": "part 2 ETag does not match",
+        "code": "ETAG_MISMATCH",
+        "field": "parts",
+        "constraint": null
+      },
+      "expect": {
+        "ok": false,
+        "error": { "kind": "ResultError", "typename": "ValidationError" },
+        "aborted": true,
+        "completed": true
+      }
+    },
+    {
+      "name": "a rejected create has nothing to abort",
+      "sizeBytes": 10,
+      "partSize": 4,
+      "concurrency": 2,
+      "partAttempts": 3,
+      "createResult": {
+        "__typename": "ValidationError",
+        "message": "file too large",
+        "code": "TOO_LARGE",
+        "field": "sizeBytes",
+        "constraint": null
+      },
+      "expect": {
+        "ok": false,
+        "error": { "kind": "ResultError", "typename": "ValidationError" },
+        "aborted": false,
+        "completed": false
+      }
+    }
+  ]
+}

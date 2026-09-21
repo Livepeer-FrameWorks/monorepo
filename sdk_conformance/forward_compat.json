@@ -1,0 +1,128 @@
+{
+  "description": "Forward compatibility: a server newer than the SDK may return a result union member or an enum value the SDK does not know. Each case runs one generated query against a 200 response. unknownMember: the union field at path decodes to the SDK's unknown member, which carries the member's typename and raw, the member's JSON exactly as the server sent it. expectResult: expectResult on the named field with the given success members fails with the listed error; an unknown member is a ResultError carrying its __typename, message and code, never a decoding failure. enumValue: the enum at path decodes and keeps the server's string value. In every case the decoded result re-encodes to the response data unchanged.",
+  "cases": [
+    {
+      "name": "unknown union member in a query result",
+      "operation": "GetVodUploadStatus",
+      "variables": { "uploadId": "id-1" },
+      "response": {
+        "data": {
+          "vodUploadStatus": {
+            "__typename": "VodUploadQuarantine",
+            "uploadId": "id-1",
+            "reason": "malware scan pending",
+            "releasedAt": null
+          }
+        }
+      },
+      "unknownMember": {
+        "path": ["vodUploadStatus"],
+        "typename": "VodUploadQuarantine",
+        "raw": {
+          "__typename": "VodUploadQuarantine",
+          "uploadId": "id-1",
+          "reason": "malware scan pending",
+          "releasedAt": null
+        }
+      }
+    },
+    {
+      "name": "unknown error member is a ResultError",
+      "operation": "GetVodUploadStatus",
+      "variables": { "uploadId": "id-1" },
+      "response": {
+        "data": {
+          "vodUploadStatus": {
+            "__typename": "QuotaExceededError",
+            "message": "upload quota exceeded",
+            "code": "QUOTA_EXCEEDED",
+            "limitBytes": 1073741824
+          }
+        }
+      },
+      "unknownMember": {
+        "path": ["vodUploadStatus"],
+        "typename": "QuotaExceededError",
+        "raw": {
+          "__typename": "QuotaExceededError",
+          "message": "upload quota exceeded",
+          "code": "QUOTA_EXCEEDED",
+          "limitBytes": 1073741824
+        }
+      },
+      "expectResult": { "field": "vodUploadStatus", "success": ["VodUploadStatus"] },
+      "error": {
+        "kind": "ResultError",
+        "typename": "QuotaExceededError",
+        "message": "upload quota exceeded",
+        "code": "QUOTA_EXCEEDED"
+      }
+    },
+    {
+      "name": "unknown enum value in a query result",
+      "operation": "GetStream",
+      "variables": { "id": "id-1" },
+      "response": {
+        "data": {
+          "stream": {
+            "__typename": "Stream",
+            "createdAt": "2026-09-19T14:03:27Z",
+            "description": "text",
+            "dvrChapterIntervalSeconds": 1,
+            "dvrChapterMode": "WINDOW_SIZED",
+            "id": "id-1",
+            "ingestMode": "RELAYED",
+            "metrics": {
+              "currentViewers": 1,
+              "isLive": true,
+              "startedAt": "2026-09-19T14:03:27Z",
+              "status": "OFFLINE",
+              "updatedAt": "2026-09-19T14:03:27Z"
+            },
+            "monitoring": "INHERIT",
+            "name": "text",
+            "playbackId": "text",
+            "playbackPolicy": {
+              "jwt": {
+                "allowedKids": ["text"],
+                "requiredAudience": ["text"],
+                "requiredClaimsJson": [{ "jsonValue": "text", "name": "text" }]
+              },
+              "type": "PUBLIC",
+              "webhook": { "secretMasked": "text", "timeoutMs": 1, "url": "text" }
+            },
+            "pullSource": { "class": "text", "enabled": true, "sourceUriRedacted": "text" },
+            "record": true,
+            "streamId": "text",
+            "streamKey": "text",
+            "updatedAt": "2026-09-19T14:03:27Z"
+          }
+        }
+      },
+      "enumValue": { "path": ["stream", "ingestMode"], "value": "RELAYED" }
+    },
+    {
+      "name": "unknown enum value inside a known union member",
+      "operation": "GetVodUploadStatus",
+      "variables": { "uploadId": "id-1" },
+      "response": {
+        "data": {
+          "vodUploadStatus": {
+            "__typename": "VodUploadStatus",
+            "artifactHash": "text",
+            "expiresAt": "2026-09-19T14:03:27Z",
+            "lastErrorCode": "text",
+            "missingParts": [1],
+            "playbackId": "id-1",
+            "retentionUntil": "2026-09-19T14:03:27Z",
+            "state": "QUARANTINED",
+            "uploadId": "id-1",
+            "uploadedParts": [{ "etag": "text", "partNumber": 1, "sizeBytes": 1.5 }]
+          }
+        }
+      },
+      "enumValue": { "path": ["vodUploadStatus", "state"], "value": "QUARANTINED" },
+      "expectResult": { "field": "vodUploadStatus", "success": ["VodUploadStatus"] }
+    }
+  ]
+}

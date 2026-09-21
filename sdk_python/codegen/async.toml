@@ -1,0 +1,29 @@
+# ariadne-codegen: the async client, its models, and the TenantEvents
+# subscription, from every curated public operation. Run from sdk_python/ by
+# make graphql-sdk-py, after codegen/sync.toml.
+[tool.ariadne-codegen]
+schema_path = "../pkg/graphql/schema.graphql"
+queries_path = "../pkg/graphql/public"
+target_package_path = "src/livepeer_frameworks/_generated"
+target_package_name = "graphql"
+client_name = "AsyncGraphQLClient"
+client_file_name = "async_client"
+async_client = true
+base_client_name = "AsyncBaseClient"
+base_client_file_path = "codegen/async_base_client.py"
+include_comments = "none"
+include_all_inputs = false
+include_all_enums = false
+multipart_uploads = false
+# The warnings name deprecated input fields of the schema, not of the curated
+# operations; make verify-api-compat reports deprecated use by the operations.
+show_deprecation_warnings = false
+# Union members and enum values a newer server adds decode instead of failing
+# (codegen/forward_compat.py).
+plugins = ["forward_compat.ForwardCompatPlugin"]
+
+[tool.ariadne-codegen.scalars.Time]
+type = "datetime.datetime"
+
+[tool.ariadne-codegen.scalars.JSON]
+type = "typing.Any"

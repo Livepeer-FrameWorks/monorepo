@@ -1,0 +1,394 @@
+{
+  "description": "Subscriptions over graphql-transport-ws. Each case runs TenantEvents against a scripted WebSocket server; connections[i] scripts the i-th connection. onInit is what the server does after connection_init: ack; close with closeCode and closeReason; or reset, which drops the TCP connection without a close frame. After ack the server sends each item of next as a next message for the subscription, then errors with error when given, then ends with then: complete (a complete message) or drop (a close with dropCode). tokens are the values the token function returns, one per call; the client reads the token for every connection. A 4403 close before connection_ack is the gateway rejecting the Authorization value: an AuthenticationError that is never retried. Any other close or connection failure before the ack (the gateway closes 1013 when it could not check the token) and any drop after the ack reconnects and resubscribes. maxReconnects bounds consecutive reconnects without an acknowledged connection between them: an ack starts the count again, and when it runs out the subscription fails with NetworkError. expect.authorization lists the Authorization value of each connection_init payload.",
+  "maxReconnects": 3,
+  "cases": [
+    {
+      "name": "a 1000 close before connection_ack reconnects",
+      "tokens": ["token-1", "token-2"],
+      "connections": [
+        {
+          "onInit": "close",
+          "closeCode": 1000,
+          "closeReason": "terminated"
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-10",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 2,
+        "authorization": ["Bearer token-1", "Bearer token-2"],
+        "eventIds": ["evt-10"]
+      }
+    },
+    {
+      "name": "a 4403 close before connection_ack is an authentication error",
+      "tokens": ["expired-token"],
+      "connections": [
+        {
+          "onInit": "close",
+          "closeCode": 4403,
+          "closeReason": "Forbidden"
+        }
+      ],
+      "expect": {
+        "connections": 1,
+        "authorization": ["Bearer expired-token"],
+        "eventIds": [],
+        "error": {
+          "kind": "AuthenticationError"
+        }
+      }
+    },
+    {
+      "name": "a 1013 close before connection_ack (the gateway could not check the token) reconnects",
+      "tokens": ["token-1", "token-2"],
+      "connections": [
+        {
+          "onInit": "close",
+          "closeCode": 1013,
+          "closeReason": "authentication unavailable"
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-11",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 2,
+        "authorization": ["Bearer token-1", "Bearer token-2"],
+        "eventIds": ["evt-11"]
+      }
+    },
+    {
+      "name": "a connection reset before connection_ack reconnects",
+      "tokens": ["token-1", "token-2"],
+      "connections": [
+        {
+          "onInit": "reset"
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-12",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 2,
+        "authorization": ["Bearer token-1", "Bearer token-2"],
+        "eventIds": ["evt-12"]
+      }
+    },
+    {
+      "name": "reconnects run out after maxReconnects failures without an ack",
+      "tokens": ["token-1", "token-2", "token-3", "token-4"],
+      "connections": [
+        {
+          "onInit": "close",
+          "closeCode": 1013,
+          "closeReason": "authentication unavailable"
+        },
+        {
+          "onInit": "close",
+          "closeCode": 1013,
+          "closeReason": "authentication unavailable"
+        },
+        {
+          "onInit": "close",
+          "closeCode": 1013,
+          "closeReason": "authentication unavailable"
+        },
+        {
+          "onInit": "close",
+          "closeCode": 1013,
+          "closeReason": "authentication unavailable"
+        }
+      ],
+      "expect": {
+        "connections": 4,
+        "authorization": ["Bearer token-1", "Bearer token-2", "Bearer token-3", "Bearer token-4"],
+        "eventIds": [],
+        "error": {
+          "kind": "NetworkError"
+        }
+      }
+    },
+    {
+      "name": "a drop after ack reconnects and reads the token again",
+      "tokens": ["token-1", "token-2"],
+      "connections": [
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-1",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-2",
+                "type": "stream.idle",
+                "time": "2026-09-19T14:09:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamIdle",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 2,
+        "authorization": ["Bearer token-1", "Bearer token-2"],
+        "eventIds": ["evt-1", "evt-2"]
+      }
+    },
+    {
+      "name": "a subscription error ends the subscription with a typed error",
+      "tokens": ["token-1"],
+      "connections": [
+        {
+          "onInit": "ack",
+          "next": [],
+          "error": [
+            {
+              "message": "authentication required",
+              "extensions": {
+                "code": "UNAUTHORIZED"
+              }
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "connections": 1,
+        "authorization": ["Bearer token-1"],
+        "eventIds": [],
+        "error": {
+          "kind": "AuthenticationError",
+          "code": "UNAUTHORIZED"
+        }
+      }
+    },
+    {
+      "name": "no token sends no Authorization value",
+      "tokens": [null],
+      "connections": [
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-3",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 1,
+        "authorization": [null],
+        "eventIds": ["evt-3"]
+      }
+    },
+    {
+      "name": "drops spaced by acknowledged connections reconnect beyond maxReconnects",
+      "tokens": ["token-1", "token-2", "token-3", "token-4", "token-5", "token-6"],
+      "connections": [
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-20",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-21",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-22",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-23",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-24",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "tenantEvents": {
+                "id": "evt-25",
+                "type": "stream.live",
+                "time": "2026-09-19T14:05:00Z",
+                "subject": "streams/5b0e6a2c",
+                "data": {
+                  "__typename": "StreamLive",
+                  "streamId": "5b0e6a2c"
+                }
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 6,
+        "authorization": [
+          "Bearer token-1",
+          "Bearer token-2",
+          "Bearer token-3",
+          "Bearer token-4",
+          "Bearer token-5",
+          "Bearer token-6"
+        ],
+        "eventIds": ["evt-20", "evt-21", "evt-22", "evt-23", "evt-24", "evt-25"]
+      }
+    }
+  ]
+}

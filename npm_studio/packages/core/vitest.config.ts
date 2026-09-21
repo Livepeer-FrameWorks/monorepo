@@ -1,6 +1,11 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Workspace packages (@livepeer-frameworks/api) resolve to their sources,
+  // so the tests run without building them first.
+  resolve: {
+    conditions: ["source"],
+  },
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",

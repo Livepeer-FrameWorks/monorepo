@@ -1,0 +1,276 @@
+{
+  "description": "Retry matrix. Each case runs one operation against a scripted HTTP transport that answers the attempts in order. A response is {status, headers, body} or {networkError}; body is JSON unless bodyText is given. networkError names how the attempt failed, as each runtime's HTTP stack reports it: refused (the connection was refused) and dns (the host name did not resolve) fail before the request is sent; reset (the connection dropped after the request was sent) and timeout (no response in time) may have reached the server; true means reset. Queries retry network errors and 408, 429, and 5xx. A mutation, with or without an idempotency key, retries only when the request provably never reached the server: refused, dns, or 429; never a reset, a timeout, or a 5xx, because the gateway does not deduplicate replayed mutations. Delays are computed with jitter off: attempt n (n >= 1 retries) waits min(maxDelayMs, baseDelayMs * 2^(n-1)), unless the response carries a valid Retry-After, which is used instead. A Retry-After above maxRetryAfterMs ends retrying. expect.attempts counts HTTP attempts, expect.delaysMs lists the waits between them.",
+  "policy": {
+    "maxAttempts": 3,
+    "baseDelayMs": 100,
+    "maxDelayMs": 150,
+    "maxRetryAfterMs": 30000,
+    "jitter": false
+  },
+  "cases": [
+    {
+      "name": "query retries a network error, then succeeds",
+      "kind": "query",
+      "responses": [
+        { "networkError": true },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [100], "data": { "ok": true } }
+    },
+    {
+      "name": "query retries 408",
+      "kind": "query",
+      "responses": [{ "status": 408 }, { "status": 200, "body": { "data": { "ok": true } } }],
+      "expect": { "attempts": 2, "delaysMs": [100], "data": { "ok": true } }
+    },
+    {
+      "name": "query retries 429 after Retry-After seconds",
+      "kind": "query",
+      "responses": [
+        {
+          "status": 429,
+          "headers": { "Retry-After": "2" },
+          "body": {
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please retry after the specified time.",
+            "limit": 60,
+            "retry_after": 2
+          }
+        },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [2000], "data": { "ok": true } }
+    },
+    {
+      "name": "query retries 500 and 502, backing off up to maxDelayMs",
+      "kind": "query",
+      "responses": [
+        { "status": 500 },
+        { "status": 502 },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 3, "delaysMs": [100, 150], "data": { "ok": true } }
+    },
+    {
+      "name": "query retries 503 with Retry-After",
+      "kind": "query",
+      "responses": [
+        { "status": 503, "headers": { "Retry-After": "1" } },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [1000], "data": { "ok": true } }
+    },
+    {
+      "name": "query retries 504",
+      "kind": "query",
+      "responses": [{ "status": 504 }, { "status": 200, "body": { "data": { "ok": true } } }],
+      "expect": { "attempts": 2, "delaysMs": [100], "data": { "ok": true } }
+    },
+    {
+      "name": "an unparseable Retry-After falls back to backoff",
+      "kind": "query",
+      "responses": [
+        { "status": 503, "headers": { "Retry-After": "soon" } },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [100], "data": { "ok": true } }
+    },
+    {
+      "name": "a Retry-After above maxRetryAfterMs is not waited for",
+      "kind": "query",
+      "responses": [
+        {
+          "status": 429,
+          "headers": { "Retry-After": "120" },
+          "body": {
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please retry after the specified time.",
+            "limit": 60,
+            "retry_after": 120
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "delaysMs": [],
+        "error": { "kind": "RateLimitError", "status": 429, "retryAfterSeconds": 120 }
+      }
+    },
+    {
+      "name": "exhausted retries surface the last response",
+      "kind": "query",
+      "responses": [{ "status": 503 }, { "status": 503 }, { "status": 503 }],
+      "expect": {
+        "attempts": 3,
+        "delaysMs": [100, 150],
+        "error": { "kind": "ServerError", "status": 503 }
+      }
+    },
+    {
+      "name": "exhausted network retries surface a network error",
+      "kind": "query",
+      "responses": [{ "networkError": true }, { "networkError": true }, { "networkError": true }],
+      "expect": { "attempts": 3, "delaysMs": [100, 150], "error": { "kind": "NetworkError" } }
+    },
+    {
+      "name": "400 is not retried",
+      "kind": "query",
+      "responses": [{ "status": 400, "body": { "error": "invalid request" } }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "HTTPError", "status": 400 } }
+    },
+    {
+      "name": "401 is not retried",
+      "kind": "query",
+      "responses": [{ "status": 401, "body": { "error": "authentication failed" } }],
+      "expect": {
+        "attempts": 1,
+        "delaysMs": [],
+        "error": { "kind": "AuthenticationError", "status": 401 }
+      }
+    },
+    {
+      "name": "a GraphQL error in a 200 response is not retried",
+      "kind": "query",
+      "responses": [
+        {
+          "status": 200,
+          "body": {
+            "data": null,
+            "errors": [
+              {
+                "message": "service temporarily unavailable",
+                "extensions": { "code": "UNAVAILABLE" }
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "delaysMs": [],
+        "error": { "kind": "GraphQLError", "code": "UNAVAILABLE" }
+      }
+    },
+    {
+      "name": "mutation without an idempotency key is not retried on 503",
+      "kind": "mutation",
+      "responses": [{ "status": 503 }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "ServerError", "status": 503 } }
+    },
+    {
+      "name": "mutation without an idempotency key is not retried on a reset",
+      "kind": "mutation",
+      "responses": [{ "networkError": "reset" }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "NetworkError" } }
+    },
+    {
+      "name": "mutation with an idempotency key is not retried on a reset after send",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [{ "networkError": "reset" }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "NetworkError" } }
+    },
+    {
+      "name": "mutation with an idempotency key is not retried on a timeout",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [{ "networkError": "timeout" }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "NetworkError" } }
+    },
+    {
+      "name": "mutation with an idempotency key is not retried on 503",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [{ "status": 503 }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "ServerError", "status": 503 } }
+    },
+    {
+      "name": "mutation with an idempotency key is not retried on 502",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [{ "status": 502 }],
+      "expect": { "attempts": 1, "delaysMs": [], "error": { "kind": "ServerError", "status": 502 } }
+    },
+    {
+      "name": "mutation retries a refused connection and a failed DNS lookup, resending the same key",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [
+        { "networkError": "refused" },
+        { "networkError": "dns" },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": {
+        "attempts": 3,
+        "delaysMs": [100, 150],
+        "data": { "ok": true },
+        "idempotencyKeys": ["create-stream-7f3a2c", "create-stream-7f3a2c", "create-stream-7f3a2c"]
+      }
+    },
+    {
+      "name": "mutation without an idempotency key retries a refused connection",
+      "kind": "mutation",
+      "responses": [
+        { "networkError": "refused" },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [100], "data": { "ok": true } }
+    },
+    {
+      "name": "mutation retries 429 after Retry-After seconds",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [
+        {
+          "status": 429,
+          "headers": { "Retry-After": "2" },
+          "body": {
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please retry after the specified time.",
+            "limit": 60,
+            "retry_after": 2
+          }
+        },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 2, "delaysMs": [2000], "data": { "ok": true } }
+    },
+    {
+      "name": "mutation stops at a reset after a refused connection",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [{ "networkError": "refused" }, { "networkError": "reset" }],
+      "expect": { "attempts": 2, "delaysMs": [100], "error": { "kind": "NetworkError" } }
+    },
+    {
+      "name": "query retries a timeout and a refused connection",
+      "kind": "query",
+      "responses": [
+        { "networkError": "timeout" },
+        { "networkError": "refused" },
+        { "status": 200, "body": { "data": { "ok": true } } }
+      ],
+      "expect": { "attempts": 3, "delaysMs": [100, 150], "data": { "ok": true } }
+    },
+    {
+      "name": "mutation with an idempotency key still does not retry 400",
+      "kind": "mutation",
+      "idempotencyKey": "create-stream-7f3a2c",
+      "responses": [
+        {
+          "status": 400,
+          "body": {
+            "error": "idempotency_key_required",
+            "code": "IDEMPOTENCY_KEY_REQUIRED",
+            "message": "paid GraphQL mutations require an Idempotency-Key containing 8-255 characters"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "delaysMs": [],
+        "error": { "kind": "HTTPError", "status": 400, "code": "IDEMPOTENCY_KEY_REQUIRED" }
+      }
+    }
+  ]
+}

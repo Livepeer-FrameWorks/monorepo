@@ -33,6 +33,7 @@ class AppState: ObservableObject {
 
   // Gateway
   @Published var gatewayBaseURL: String = ""
+  @Published var serverCompatibility: ServerCompatibility = .unknown
 
   // CLI Integration
   @Published var cliAvailable = false

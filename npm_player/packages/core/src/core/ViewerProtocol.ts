@@ -29,6 +29,10 @@ export const viewerProtocols = {
 } as const;
 
 export type ViewerProtocol = keyof typeof viewerProtocols;
+
+/** Feature slug a gateway lists when resolveViewerEndpoint accepts `protocol`. */
+export const VIEWER_PROTOCOL_SELECTION_FEATURE = "viewer-protocol-selection";
+
 const canonicalProtocols = new Set<string>(Object.values(viewerProtocols));
 
 export function canonicalViewerProtocol(value: unknown): string | undefined {

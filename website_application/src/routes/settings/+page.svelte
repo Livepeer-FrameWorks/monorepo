@@ -47,6 +47,8 @@
     postalCode: string;
     country: string;
     isComplete: boolean;
+    // Derived by Purser from the billing country; not editable here.
+    presentmentCurrency: string;
   }
   let billingDetails = $state<BillingDetailsState>({
     email: "",
@@ -59,6 +61,7 @@
     postalCode: "",
     country: "",
     isComplete: false,
+    presentmentCurrency: "",
   });
   let billingDetailsLoading = $state(false);
   let billingDetailsSaving = $state(false);
@@ -114,6 +117,7 @@
             postalCode: d.address?.postalCode || "",
             country: d.address?.country || "",
             isComplete: d.isComplete,
+            presentmentCurrency: d.presentmentCurrency || "",
           };
         }
       } catch {
@@ -226,6 +230,7 @@
           postalCode: d.address?.postalCode || "",
           country: d.address?.country || "",
           isComplete: d.isComplete,
+          presentmentCurrency: d.presentmentCurrency || "",
         };
         toast.success("Billing details saved");
       }
@@ -740,6 +745,24 @@
                     bind:value={billingDetails.postalCode}
                     placeholder="10115"
                   />
+                </div>
+                <div>
+                  <label for="billingCurrency" class="text-sm font-medium text-muted-foreground"
+                    >Billing Currency</label
+                  >
+                  <Input
+                    id="billingCurrency"
+                    type="text"
+                    value={billingDetails.presentmentCurrency || "Set by billing country"}
+                    readonly
+                    disabled
+                  />
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    Follows your billing country: EUR in the EEA, GBP in the United Kingdom, USD
+                    elsewhere. It cannot change while a provider subscription, an open invoice, or a
+                    card first payment started in the last day exists. Prices and your prepaid
+                    balance are in EUR; charges convert at the ECB reference rate.
+                  </p>
                 </div>
               </div>
             {/if}

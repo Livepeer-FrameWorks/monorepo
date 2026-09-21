@@ -6,7 +6,8 @@
   "packageManager": "pnpm@10.30.3",
   "description": "StreamCrafter - browser-based streaming with WebCodecs",
   "scripts": {
-    "build": "pnpm run build:core && pnpm run build:react && pnpm run build:svelte && pnpm run build:wc",
+    "build": "pnpm run build:api && pnpm run build:core && pnpm run build:react && pnpm run build:svelte && pnpm run build:wc",
+    "build:api": "pnpm --filter @livepeer-frameworks/api build",
     "build:core": "pnpm --filter @livepeer-frameworks/streamcrafter-core build",
     "build:react": "pnpm --filter @livepeer-frameworks/streamcrafter-react build",
     "build:svelte": "pnpm --filter @livepeer-frameworks/streamcrafter-svelte build",

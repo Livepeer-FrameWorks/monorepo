@@ -27,6 +27,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import PrepaidBalanceWidget from "$lib/components/PrepaidBalanceWidget.svelte";
   import { getIconComponent } from "$lib/iconUtils";
+  import { formatEcbRate, formatEurConversion, invoiceChargeDisplay } from "$lib/utils/formatters";
   import { PaymentMethod, type PaymentMethod$options } from "$houdini";
 
   // Houdini stores
@@ -61,6 +62,10 @@
     currency: string;
     status: string;
     download_filename: string;
+    // EUR amount and ECB rate of a document charged in another currency.
+    eur_amount_cents?: number;
+    units_per_eur?: string;
+    fx_reference_date?: string;
   };
   let billingDocuments = $state<BillingDocument[]>([]);
   let invoiceCryptoPayment = $state<{
@@ -472,7 +477,7 @@
     return 0;
   }
 
-  function formatCurrency(amount: unknown, currency = "EUR") {
+  function formatCurrency(amount: unknown, currency: string) {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: currency,
@@ -880,24 +885,9 @@
 
                       {#if tier.features}
                         <ul class="space-y-1 mb-4 text-sm">
-                          {#if tier.features.recording}
+                          {#if tier.features.processingCustomizable}
                             <li class="flex items-center">
-                              <span class="text-success mr-2">✓</span> DVR Recording
-                            </li>
-                          {/if}
-                          {#if tier.features.analytics}
-                            <li class="flex items-center">
-                              <span class="text-success mr-2">✓</span> Analytics
-                            </li>
-                          {/if}
-                          {#if tier.features.apiAccess}
-                            <li class="flex items-center">
-                              <span class="text-success mr-2">✓</span> API Access
-                            </li>
-                          {/if}
-                          {#if tier.features.customBranding}
-                            <li class="flex items-center">
-                              <span class="text-success mr-2">✓</span> Custom Branding
+                              <span class="text-success mr-2">✓</span> Custom processing profiles
                             </li>
                           {/if}
                           {#if tier.features.sla}
@@ -1116,6 +1106,15 @@
                         <td class="py-3 px-4 font-mono">{document.document_number}</td>
                         <td class="py-3 px-4">
                           {formatCurrency(document.amount_cents / 100, document.currency)}
+                          {#if document.eur_amount_cents != null && formatEcbRate(document.currency, document.units_per_eur, document.fx_reference_date)}
+                            <p class="text-xs text-muted-foreground">
+                              {formatCurrency(document.eur_amount_cents / 100, "EUR")} at {formatEcbRate(
+                                document.currency,
+                                document.units_per_eur,
+                                document.fx_reference_date
+                              )}
+                            </p>
+                          {/if}
                         </td>
                         <td class="py-3 px-4">
                           <span class="px-2 py-1 text-xs {getStatusColor(document.status)}">
@@ -1159,6 +1158,7 @@
                   </thead>
                   <tbody>
                     {#each invoices as invoice (invoice.id)}
+                      {@const charge = invoiceChargeDisplay(invoice)}
                       <tr
                         id={`invoice-${invoice.id}`}
                         class="border-b border-border/30 cursor-pointer hover:bg-muted/20 transition-colors"
@@ -1173,8 +1173,12 @@
                           >
                         </td>
                         <td class="py-3 px-4 font-mono">{invoice.id}</td>
-                        <td class="py-3 px-4">{formatCurrency(invoice.amount, invoice.currency)}</td
-                        >
+                        <td class="py-3 px-4">
+                          {charge.charged}
+                          {#if charge.eurNote}
+                            <p class="text-xs text-muted-foreground">{charge.eurNote}</p>
+                          {/if}
+                        </td>
                         <td class="py-3 px-4">
                           <span class="px-2 py-1 text-xs {getStatusColor(invoice.status)}"
                             >{invoice.status}</span
@@ -1399,6 +1403,11 @@
                         <td class="py-3 px-4 uppercase">{payment.method.replaceAll("_", " ")}</td>
                         <td class="py-3 px-4 text-right font-mono">
                           {formatCurrency(payment.amount, payment.currency)}
+                          {#if formatEurConversion(payment.conversion)}
+                            <p class="text-xs text-muted-foreground font-sans">
+                              {formatEurConversion(payment.conversion)}
+                            </p>
+                          {/if}
                         </td>
                         <td class="py-3 px-4">
                           <span class="px-2 py-1 text-xs {getStatusColor(payment.status)}">

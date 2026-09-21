@@ -21,9 +21,7 @@
     AbortVodUploadStore,
     DeleteVodAssetStore,
     GetVodUploadStatusStore,
-    ClipLifecycleStore,
-    DvrLifecycleStore,
-    VodLifecycleStore,
+    TenantEventsStore,
     ClipCreationMode,
     StorageArtifactKind,
     StreamCoreFieldsStore,
@@ -63,6 +61,8 @@
   import { formatDuration } from "$lib/utils/stream-helpers";
   import { createCatalogRefresh } from "$lib/library/catalog-refresh";
   import { canPlayRollingDvr } from "$lib/library/dvr-playback";
+  import { processingWatchVerdict } from "$lib/library/processing-watch";
+  import { ARTIFACT_EVENT_TYPES, artifactEventFromTenantEvent } from "$lib/library/artifact-events";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
@@ -133,10 +133,9 @@
   const deleteVodMutation = new DeleteVodAssetStore();
   const vodUploadStatusQuery = new GetVodUploadStatusStore();
 
-  // Subscriptions
-  const clipLifecycleSub = new ClipLifecycleStore();
-  const dvrLifecycleSub = new DvrLifecycleStore();
-  const vodLifecycleSub = new VodLifecycleStore();
+  // Public clip, recording, and upload events of every stream of the tenant
+  const artifactEventsSub = new TenantEventsStore();
+  let artifactEventsListening = false;
 
   // Fragment stores
   const streamCoreStore = new StreamCoreFieldsStore();
@@ -688,6 +687,84 @@
     };
   });
 
+  // Each public artifact event joins the lifecycle panel; a terminal one refreshes the catalog
+  // rows at once instead of waiting for the next poll.
+  let lastArtifactEventId: string | null = null;
+  $effect(() => {
+    const tenantEvent = $artifactEventsSub.data?.tenantEvents;
+    const event = tenantEvent ? artifactEventFromTenantEvent(tenantEvent) : null;
+    if (!event || event.id === lastArtifactEventId) return;
+    lastArtifactEventId = event.id;
+    untrack(() => {
+      liveLifecycleEvents = [
+        {
+          eventKey: event.id,
+          timestamp: event.time,
+          stage: event.stage,
+          type: event.kind,
+          message: event.reason,
+        },
+        ...liveLifecycleEvents.slice(0, 99),
+      ];
+      if (event.terminal) {
+        void catalogRefresh.run();
+        if (event.kind === "vod") void checkProcessingUpload();
+      }
+    });
+  });
+
+  // After completeVodUpload the dialog shows "processing" until vodUploadStatus reports a
+  // final state. Public upload events carry no progress, so the status query is the source.
+  let processingUploadId = $state<string | null>(null);
+  let processingStartedAt = 0;
+  // Set when the dialog stops watching without a final state; shown in place of the
+  // processing progress text.
+  let processingNotice = $state<string | null>(null);
+
+  function watchProcessing(uploadId: string | null) {
+    processingUploadId = uploadId;
+    processingStartedAt = Date.now();
+    processingNotice = null;
+  }
+
+  async function checkProcessingUpload() {
+    const uploadId = processingUploadId;
+    if (!uploadId || uploadStage !== "processing") return;
+    const result = await vodUploadStatusQuery
+      .fetch({ variables: { uploadId }, policy: "NetworkOnly" })
+      .catch(() => null);
+    if (processingUploadId !== uploadId) return;
+    const verdict = processingWatchVerdict(
+      result?.data?.vodUploadStatus,
+      processingStartedAt,
+      Date.now()
+    );
+    switch (verdict.kind) {
+      case "continue":
+        return;
+      case "ready":
+        processingUploadId = null;
+        uploadStage = "done";
+        break;
+      case "failed":
+        processingUploadId = null;
+        uploadStage = "idle";
+        toast.error(verdict.message);
+        break;
+      case "stopped":
+        processingUploadId = null;
+        processingNotice = verdict.message;
+        break;
+    }
+    void catalogRefresh.run();
+  }
+
+  $effect(() => {
+    if (!processingUploadId || uploadStage !== "processing") return;
+    const timer = setInterval(() => void checkProcessingUpload(), 5_000);
+    return () => clearInterval(timer);
+  });
+
   onMount(async () => {
     if (!isAuthenticated) {
       await auth.checkAuth();
@@ -698,9 +775,7 @@
   onDestroy(() => {
     unsubscribeAuth();
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    clipLifecycleSub.unlisten();
-    dvrLifecycleSub.unlisten();
-    vodLifecycleSub.unlisten();
+    artifactEventsSub.unlisten();
   });
 
   async function loadData() {
@@ -733,13 +808,10 @@
       // Subsequent filter changes drive their own refetch via the $effect above.
       filterInitialized = true;
 
-      // Start subscriptions for live updates
-      if (streams.length > 0) {
-        clipLifecycleSub.listen({ streamId: streams[0].id });
-        dvrLifecycleSub.listen({ streamId: streams[0].id });
+      if (!artifactEventsListening) {
+        artifactEventsListening = true;
+        artifactEventsSub.listen({ types: ARTIFACT_EVENT_TYPES });
       }
-      // VOD lifecycle doesn't filter by stream (uploads are tenant-wide)
-      vodLifecycleSub.listen();
     } catch (error) {
       console.error("Failed to load library data:", error);
       toast.error("Failed to load library. Please refresh.");
@@ -1172,6 +1244,7 @@
         recoveryOffer = null;
         resumeRequested = false;
         uploadStage = completed.stage;
+        watchProcessing(completed.stage === "processing" ? activeUploadId : null);
         await loadData();
         return;
       }
@@ -1191,6 +1264,7 @@
       recoveryOffer = null;
       resumeRequested = false;
       uploadStage = "processing";
+      watchProcessing(activeUploadId);
       toast.success("Upload complete — video is being processed.");
       await loadData();
     } catch (error) {
@@ -1259,6 +1333,7 @@
     uploadProgress = 0;
     uploadStage = "idle";
     currentUploadId = null;
+    watchProcessing(null);
     recoveryOffer = null;
     resumeRequested = false;
   }
@@ -2761,14 +2836,18 @@
                   >Processing</span
                 >
                 <span class="text-muted-foreground">
-                  {#if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Analyzing
-                    video…{:else}Ready{/if}
+                  {#if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing" && processingNotice}No
+                    longer tracking{:else if uploadStage === "processing"}Analyzing video…{:else}Ready{/if}
                 </span>
               </div>
-              <p class="text-xs text-muted-foreground/70">
-                Server is extracting metadata and preparing playback. You can safely close this
-                dialog; progress is shown in the library.
-              </p>
+              {#if uploadStage === "processing" && processingNotice}
+                <p class="text-xs text-warning" role="status">{processingNotice}</p>
+              {:else}
+                <p class="text-xs text-muted-foreground/70">
+                  Server is extracting metadata and preparing playback. You can safely close this
+                  dialog; progress is shown in the library.
+                </p>
+              {/if}
             </div>
           {/if}
         </div>

@@ -27,6 +27,7 @@
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { formatBytes } from "$lib/utils/formatters.js";
   import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
+  import { getPlatformOperator } from "$lib/stores/capabilities.svelte";
   import NodeModePanel from "$lib/components/nodes/NodeModePanel.svelte";
   import OpenMistAdminButton from "$lib/components/nodes/OpenMistAdminButton.svelte";
 
@@ -45,7 +46,10 @@
   const systemHealthSub = new SystemHealthStore();
 
   let isAuthenticated = false;
-  let hasOperatorRole = $state(false);
+  let authUser = $state<{ role?: string; platform_operator?: boolean } | null>(null);
+  // Follows the capabilities reading, which lands after the token, so the
+  // operator surfaces appear as soon as the server confirms the grant.
+  let hasOperatorRole = $derived(hasInfrastructureOperatorRole(authUser, getPlatformOperator()));
   let systemHealthListening = false;
 
   let hasData = $derived(!!$nodeStore.data);
@@ -199,7 +203,7 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
+    authUser = authState.user ?? null;
   });
 
   onMount(async () => {

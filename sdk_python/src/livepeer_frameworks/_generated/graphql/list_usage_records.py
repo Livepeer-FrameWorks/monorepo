@@ -1,0 +1,40 @@
+from datetime import datetime
+from typing import Any, Optional
+
+from pydantic import Field
+
+from .base_model import BaseModel
+from .fragments import PageInfoFields
+
+
+class ListUsageRecords(BaseModel):
+    usage_records_connection: "ListUsageRecordsUsageRecordsConnection" = Field(
+        alias="usageRecordsConnection"
+    )
+
+
+class ListUsageRecordsUsageRecordsConnection(BaseModel):
+    nodes: list["ListUsageRecordsUsageRecordsConnectionNodes"]
+    page_info: "ListUsageRecordsUsageRecordsConnectionPageInfo" = Field(
+        alias="pageInfo"
+    )
+    total_count: int = Field(alias="totalCount")
+
+
+class ListUsageRecordsUsageRecordsConnectionNodes(BaseModel):
+    id: str
+    cluster_id: Optional[str] = Field(alias="clusterId")
+    cluster_name: Optional[str] = Field(alias="clusterName")
+    usage_type: str = Field(alias="usageType")
+    unit: str
+    dimensions: Any
+    usage_value: float = Field(alias="usageValue")
+    created_at: Optional[datetime] = Field(alias="createdAt")
+    period_start: Optional[datetime] = Field(alias="periodStart")
+    period_end: Optional[datetime] = Field(alias="periodEnd")
+    granularity: Optional[str]
+
+
+ListUsageRecordsUsageRecordsConnectionPageInfo = PageInfoFields
+ListUsageRecords.model_rebuild()
+ListUsageRecordsUsageRecordsConnection.model_rebuild()

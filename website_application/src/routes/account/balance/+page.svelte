@@ -7,9 +7,18 @@
   import { toast } from "$lib/stores/toast.js";
   import { getDocsSiteUrl } from "$lib/config";
   import {
+    formatCents,
+    formatCurrency,
+    formatEcbRate,
+    formatEurConversion,
+    type CurrencyConversionFields,
+  } from "$lib/utils/formatters";
+  import { topupCurrency } from "$lib/utils/presentment-currency";
+  import {
     GetPrepaidBalanceStore,
     GetBalanceTransactionsStore,
     GetBillingStatusStore,
+    GetBillingDetailsStore,
     CreateCardTopupStore,
     CreateCryptoTopupStore,
     GetCryptoTopupStatusStore,
@@ -29,13 +38,21 @@
   const balanceQuery = new GetPrepaidBalanceStore();
   const transactionsQuery = new GetBalanceTransactionsStore();
   const billingStatusQuery = new GetBillingStatusStore();
+  const billingDetailsQuery = new GetBillingDetailsStore();
   const cardTopupMutation = new CreateCardTopupStore();
   const cryptoTopupMutation = new CreateCryptoTopupStore();
   const cryptoStatusMutation = new GetCryptoTopupStatusStore();
   const docsSiteUrl = getDocsSiteUrl().replace(/\/$/, "");
 
+  // The prepaid balance and its transactions are EUR. Top-ups are charged in
+  // the tenant's presentment currency, which follows the billing country, and
+  // credit EUR at the ECB rate locked when the checkout or quote is created.
+  const LEDGER_CURRENCY = "EUR";
+
   // State
   let loading = $state(true);
+  // Null until billing details report the tenant's currency; the top-up form needs it.
+  let presentmentCurrency = $state<string | null>(null);
   let balance = $state<{
     balanceCents: number;
     reservedBalanceCents: number;
@@ -75,6 +92,15 @@
     quotedPriceUsd: string;
     quoteSource: string;
     network: string;
+    conversion: CurrencyConversionFields | null;
+  } | null>(null);
+
+  // A non-EUR card checkout is shown with its EUR credit before redirecting.
+  let cardCheckout = $state<{
+    checkoutUrl: string;
+    amountCents: number;
+    currency: string;
+    conversion: CurrencyConversionFields;
   } | null>(null);
 
   // Polling status — set from GetCryptoTopupStatus on a 15s interval.
@@ -84,6 +110,7 @@
     confirmations: number;
     creditedAmountCents: number | null;
     creditedAmountCurrency: string | null;
+    conversion: CurrencyConversionFields | null;
   } | null>(null);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -115,6 +142,7 @@
         confirmations: data.confirmations,
         creditedAmountCents: data.creditedAmountCents ?? null,
         creditedAmountCurrency: data.creditedAmountCurrency ?? null,
+        conversion: data.conversion ?? null,
       };
       if (data.status === "completed") {
         stopPolling();
@@ -137,10 +165,11 @@
   async function loadData() {
     loading = true;
     try {
-      const [balanceResult, txResult, billingResult] = await Promise.all([
-        balanceQuery.fetch({ variables: { currency: "EUR" } }),
+      const [balanceResult, txResult, billingResult, detailsResult] = await Promise.all([
+        balanceQuery.fetch(),
         transactionsQuery.fetch({ variables: { page: { first: 10 } } }),
         billingStatusQuery.fetch(),
+        billingDetailsQuery.fetch().catch(() => null),
       ]);
 
       if (balanceResult.data?.prepaidBalance) {
@@ -165,6 +194,7 @@
         totalTransactions = txResult.data.balanceTransactionsConnection.totalCount;
       }
 
+      presentmentCurrency = topupCurrency(detailsResult?.data?.billingDetails);
       const configuredProviders = billingResult.data?.billingStatus?.setupProviders ?? [];
       availableCardProviders = configuredProviders
         .map((provider) => provider.toUpperCase())
@@ -183,22 +213,23 @@
   }
 
   async function handleCardTopup() {
+    if (!presentmentCurrency) return;
     if (!availableCardProviders.includes(cardProvider)) {
       toast.error("No fiat payment provider is currently configured");
       return;
     }
     if (topupAmount < 5) {
-      toast.error("Fiat top-ups have a €5.00 minimum");
+      toast.error(`Fiat top-ups have a ${formatCurrency(5, presentmentCurrency)} minimum`);
       return;
     }
 
     topupLoading = true;
     topupGuidance = null;
+    cardCheckout = null;
     try {
       const result = await cardTopupMutation.mutate({
         input: {
           amountCents: Math.round(topupAmount * 100),
-          currency: "EUR",
           provider: cardProvider,
           successUrl: `${window.location.origin}${resolve("/account/balance")}?success=true`,
           cancelUrl: `${window.location.origin}${resolve("/account/balance")}?cancelled=true`,
@@ -209,8 +240,18 @@
         throw new Error(paymentErrorMessage(result.errors[0], "Failed to create checkout session"));
       }
 
-      if (result.data?.createCardTopup?.checkoutUrl) {
-        window.location.href = result.data.createCardTopup.checkoutUrl;
+      const checkout = result.data?.createCardTopup;
+      if (checkout?.checkoutUrl) {
+        if (checkout.conversion && formatEurConversion(checkout.conversion)) {
+          cardCheckout = {
+            checkoutUrl: checkout.checkoutUrl,
+            amountCents: checkout.amountCents,
+            currency: checkout.currency,
+            conversion: checkout.conversion,
+          };
+        } else {
+          window.location.href = checkout.checkoutUrl;
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create checkout session";
@@ -222,19 +263,20 @@
   }
 
   async function handleCryptoTopup() {
+    if (!presentmentCurrency) return;
     if (topupAmount < 0.01) {
-      toast.error("Crypto top-ups have a €0.01 minimum");
+      toast.error(`Crypto top-ups have a ${formatCurrency(0.01, presentmentCurrency)} minimum`);
       return;
     }
 
     topupLoading = true;
     topupGuidance = null;
+    cardCheckout = null;
     try {
       const result = await cryptoTopupMutation.mutate({
         input: {
           amountCents: Math.round(topupAmount * 100),
           asset: cryptoAsset,
-          currency: "EUR",
         },
       });
 
@@ -253,6 +295,7 @@
           quotedPriceUsd: r.quotedPriceUsd,
           quoteSource: r.quoteSource,
           network: r.network,
+          conversion: r.conversion ?? null,
         };
         cryptoStatus = null;
         startPolling(r.topupId);
@@ -274,12 +317,17 @@
     }
   }
 
-  function formatCurrency(cents: number, curr: string = "EUR"): string {
-    const amount = cents / 100;
-    return new Intl.NumberFormat("en-IE", {
-      style: "currency",
-      currency: curr,
-    }).format(amount);
+  function conversionCredit(conversion: CurrencyConversionFields | null): string | null {
+    if (!conversion) return null;
+    return formatEurConversion(conversion) ?? formatCents(conversion.eurAmountCents, "EUR");
+  }
+
+  function conversionRate(conversion: CurrencyConversionFields): string | null {
+    return formatEcbRate(
+      conversion.originalCurrency,
+      conversion.unitsPerEur,
+      conversion.referenceDate
+    );
   }
 
   function formatDate(dateStr: string): string {
@@ -371,11 +419,11 @@
                 class="text-4xl font-bold tabular-nums"
                 class:text-destructive={balance.availableBalanceCents < 0}
               >
-                {formatCurrency(balance.availableBalanceCents, balance.currency)}
+                {formatCents(balance.availableBalanceCents, balance.currency)}
               </div>
               <p class="text-xs text-muted-foreground mt-2">
-                {formatCurrency(balance.balanceCents, balance.currency)} settled ·
-                {formatCurrency(balance.reservedBalanceCents, balance.currency)} reserved in active usage
+                {formatCents(balance.balanceCents, balance.currency)} settled ·
+                {formatCents(balance.reservedBalanceCents, balance.currency)} reserved in active usage
               </p>
               {#if balance.isLowBalance}
                 <div class="flex items-center gap-2 mt-3 text-warning">
@@ -408,140 +456,196 @@
               <h3>Top Up Balance</h3>
             </div>
           </div>
-          <div class="slab-body--padded space-y-4">
-            <!-- Amount -->
-            <div>
-              <span class="block text-sm font-medium text-muted-foreground mb-2">Amount (EUR)</span>
-              <div class="flex gap-2">
-                {#each topupMethod === "card" ? [5, 10, 25, 50, 100] : [0.01, 1, 5, 10, 25] as amount (amount)}
-                  <Button
-                    variant={topupAmount === amount ? "default" : "outline"}
-                    size="sm"
-                    onclick={() => (topupAmount = amount)}
-                  >
-                    €{amount}
-                  </Button>
-                {/each}
+          {#if !presentmentCurrency}
+            <div class="slab-body--padded">
+              <div class="flex items-start gap-2 text-destructive" role="alert">
+                <AlertIcon class="w-4 h-4 mt-0.5 shrink-0" />
+                <p class="text-sm">
+                  Your billing currency could not be loaded, so top-ups are unavailable. Reload the
+                  page, or check your billing details in settings.
+                </p>
               </div>
-              <div class="mt-2">
-                <Input
-                  type="number"
-                  min={minimumTopupAmount}
-                  max={100000}
-                  step={topupMethod === "card" ? 1 : 0.01}
-                  bind:value={topupAmount}
-                  placeholder="Custom amount"
-                  class="w-32"
-                />
-              </div>
+              <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
+                Billing details
+              </Button>
             </div>
-
-            <!-- Method -->
-            <div>
-              <span class="block text-sm font-medium text-muted-foreground mb-2"
-                >Payment Method</span
-              >
-              <div class="flex gap-2">
-                <Button
-                  variant={topupMethod === "card" ? "default" : "outline"}
-                  onclick={() => (topupMethod = "card")}
-                  class="gap-2"
-                >
-                  <CreditCardIcon class="w-4 h-4" />
-                  Card
-                </Button>
-                <Button
-                  variant={topupMethod === "crypto" ? "default" : "outline"}
-                  onclick={() => (topupMethod = "crypto")}
-                  class="gap-2"
-                >
-                  <CoinsIcon class="w-4 h-4" />
-                  Crypto
-                </Button>
-              </div>
-            </div>
-
-            {#if topupMethod === "crypto"}
+          {:else}
+            <div class="slab-body--padded space-y-4">
+              <!-- Amount -->
               <div>
                 <span class="block text-sm font-medium text-muted-foreground mb-2"
-                  >Asset (ETH or USDC)</span
+                  >Amount ({presentmentCurrency})</span
                 >
                 <div class="flex gap-2">
-                  {#each ["ETH", "USDC"] as asset (asset)}
+                  {#each topupMethod === "card" ? [5, 10, 25, 50, 100] : [0.01, 1, 5, 10, 25] as amount (amount)}
                     <Button
-                      variant={cryptoAsset === asset ? "default" : "outline"}
+                      variant={topupAmount === amount ? "default" : "outline"}
                       size="sm"
-                      onclick={() => (cryptoAsset = asset as "ETH" | "USDC")}
+                      onclick={() => (topupAmount = amount)}
                     >
-                      {asset}
+                      {formatCurrency(amount, presentmentCurrency)}
                     </Button>
                   {/each}
                 </div>
-              </div>
-              <p class="text-xs text-muted-foreground">
-                Up to €100 can use the customer-anonymous simplified VAT document path. A larger
-                payment or a VAT-number claim needs a complete billing profile before an address is
-                issued.
-              </p>
-            {:else}
-              <div>
-                <span class="block text-sm font-medium text-muted-foreground mb-2"
-                  >Fiat Provider</span
-                >
-                <div class="flex gap-2">
-                  {#each availableCardProviders as provider (provider)}
-                    <Button
-                      variant={cardProvider === provider ? "default" : "outline"}
-                      size="sm"
-                      onclick={() => (cardProvider = provider as "STRIPE" | "MOLLIE")}
-                    >
-                      {provider === "STRIPE" ? "Stripe" : "Mollie"}
-                    </Button>
-                  {/each}
-                </div>
-                {#if availableCardProviders.length === 0}
-                  <p class="mt-2 text-xs text-warning">
-                    No fiat payment provider is currently configured. Use crypto or contact support.
-                  </p>
-                {:else}
+                {#if presentmentCurrency !== LEDGER_CURRENCY}
                   <p class="mt-2 text-xs text-muted-foreground">
-                    Minimum €5.00. The provider may enforce a higher currency-specific minimum.
+                    Charged in {presentmentCurrency}, the currency of your billing country. Your
+                    balance is credited in EUR at the ECB reference rate locked when the checkout or
+                    deposit quote is created.
                   </p>
                 {/if}
+                <div class="mt-2">
+                  <Input
+                    type="number"
+                    min={minimumTopupAmount}
+                    max={100000}
+                    step={topupMethod === "card" ? 1 : 0.01}
+                    bind:value={topupAmount}
+                    placeholder="Custom amount"
+                    class="w-32"
+                  />
+                </div>
               </div>
-            {/if}
 
-            {#if topupGuidance}
-              <div class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-                <p>{topupGuidance}</p>
-                {#if topupGuidance.includes("billing profile")}
-                  <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
-                    Complete billing profile
+              <!-- Method -->
+              <div>
+                <span class="block text-sm font-medium text-muted-foreground mb-2"
+                  >Payment Method</span
+                >
+                <div class="flex gap-2">
+                  <Button
+                    variant={topupMethod === "card" ? "default" : "outline"}
+                    onclick={() => (topupMethod = "card")}
+                    class="gap-2"
+                  >
+                    <CreditCardIcon class="w-4 h-4" />
+                    Card
                   </Button>
-                {/if}
+                  <Button
+                    variant={topupMethod === "crypto" ? "default" : "outline"}
+                    onclick={() => (topupMethod = "crypto")}
+                    class="gap-2"
+                  >
+                    <CoinsIcon class="w-4 h-4" />
+                    Crypto
+                  </Button>
+                </div>
               </div>
-            {/if}
-          </div>
-          <div class="slab-actions">
-            {#if topupMethod === "card"}
-              <Button
-                onclick={handleCardTopup}
-                disabled={topupLoading || topupAmount < 5 || availableCardProviders.length === 0}
-                class="gap-2"
-              >
-                {topupLoading ? "Processing..." : `Pay ${formatCurrency(topupAmount * 100)}`}
-              </Button>
-            {:else}
-              <Button
-                onclick={handleCryptoTopup}
-                disabled={topupLoading || topupAmount < 0.01}
-                class="gap-2"
-              >
-                {topupLoading ? "Creating..." : "Get Deposit Address"}
-              </Button>
-            {/if}
-          </div>
+
+              {#if topupMethod === "crypto"}
+                <div>
+                  <span class="block text-sm font-medium text-muted-foreground mb-2"
+                    >Asset (ETH or USDC)</span
+                  >
+                  <div class="flex gap-2">
+                    {#each ["ETH", "USDC"] as asset (asset)}
+                      <Button
+                        variant={cryptoAsset === asset ? "default" : "outline"}
+                        size="sm"
+                        onclick={() => (cryptoAsset = asset as "ETH" | "USDC")}
+                      >
+                        {asset}
+                      </Button>
+                    {/each}
+                  </div>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Up to €100 in EUR can use the customer-anonymous simplified VAT document path. A
+                  larger payment or a VAT-number claim needs a complete billing profile before an
+                  address is issued.
+                </p>
+              {:else}
+                <div>
+                  <span class="block text-sm font-medium text-muted-foreground mb-2"
+                    >Fiat Provider</span
+                  >
+                  <div class="flex gap-2">
+                    {#each availableCardProviders as provider (provider)}
+                      <Button
+                        variant={cardProvider === provider ? "default" : "outline"}
+                        size="sm"
+                        onclick={() => (cardProvider = provider as "STRIPE" | "MOLLIE")}
+                      >
+                        {provider === "STRIPE" ? "Stripe" : "Mollie"}
+                      </Button>
+                    {/each}
+                  </div>
+                  {#if availableCardProviders.length === 0}
+                    <p class="mt-2 text-xs text-warning">
+                      No fiat payment provider is currently configured. Use crypto or contact
+                      support.
+                    </p>
+                  {:else}
+                    <p class="mt-2 text-xs text-muted-foreground">
+                      Minimum {formatCurrency(5, presentmentCurrency)}. The provider may enforce a
+                      higher currency-specific minimum.
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+
+              {#if topupGuidance}
+                <div class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+                  <p>{topupGuidance}</p>
+                  {#if topupGuidance.includes("billing profile")}
+                    <Button href={resolve("/settings")} variant="ghost" size="sm" class="mt-2 px-0">
+                      Complete billing profile
+                    </Button>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+            <div class="slab-actions">
+              {#if topupMethod === "card"}
+                <Button
+                  onclick={handleCardTopup}
+                  disabled={topupLoading || topupAmount < 5 || availableCardProviders.length === 0}
+                  class="gap-2"
+                >
+                  {topupLoading
+                    ? "Processing..."
+                    : `Pay ${formatCurrency(topupAmount, presentmentCurrency)}`}
+                </Button>
+              {:else}
+                <Button
+                  onclick={handleCryptoTopup}
+                  disabled={topupLoading || topupAmount < 0.01}
+                  class="gap-2"
+                >
+                  {topupLoading ? "Creating..." : "Get Deposit Address"}
+                </Button>
+              {/if}
+            </div>
+          {/if}
         </div>
+
+        <!-- Card checkout in a non-EUR presentment currency -->
+        {#if cardCheckout}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <CreditCardIcon class="w-4 h-4 text-success" />
+                <h3>Checkout Ready</h3>
+              </div>
+            </div>
+            <div class="slab-body--padded">
+              <p class="text-sm text-foreground">
+                Pays <span class="font-semibold tabular-nums"
+                  >{formatCents(cardCheckout.amountCents, cardCheckout.currency)}</span
+                >
+                and credits
+                <span class="font-semibold tabular-nums"
+                  >{conversionCredit(cardCheckout.conversion)}</span
+                >.
+              </p>
+            </div>
+            <div class="slab-actions">
+              <!-- eslint-disable svelte/no-navigation-without-resolve -->
+              <Button href={cardCheckout.checkoutUrl} class="gap-2">Continue to checkout</Button>
+              <!-- eslint-enable svelte/no-navigation-without-resolve -->
+            </div>
+          </div>
+        {/if}
 
         <!-- Crypto Deposit Address (if created) -->
         {#if cryptoDeposit}
@@ -565,6 +669,14 @@
                 Locked at ${cryptoDeposit.quotedPriceUsd}/{cryptoDeposit.asset} ({cryptoDeposit.quoteSource}).
                 Quote valid until {formatDate(cryptoDeposit.expiresAt)}.
               </p>
+              {#if cryptoDeposit.conversion}
+                <p class="text-xs text-muted-foreground mb-3">
+                  {formatCents(
+                    cryptoDeposit.conversion.originalAmountCents,
+                    cryptoDeposit.conversion.originalCurrency
+                  )} credits {conversionCredit(cryptoDeposit.conversion)}.
+                </p>
+              {/if}
               <div
                 class="flex items-center gap-2 p-3 bg-muted/30 rounded-md font-mono text-sm break-all"
               >
@@ -589,10 +701,14 @@
                     </p>
                   {:else if cryptoStatus.status === "completed"}
                     <p class="text-success">
-                      Credited {#if cryptoStatus.creditedAmountCents !== null && cryptoStatus.creditedAmountCurrency}{formatCurrency(
+                      Credited {#if cryptoStatus.creditedAmountCents !== null && cryptoStatus.creditedAmountCurrency}{formatCents(
                           cryptoStatus.creditedAmountCents,
                           cryptoStatus.creditedAmountCurrency
-                        )}{/if}.
+                        )}{/if}{#if cryptoStatus.conversion && conversionRate(cryptoStatus.conversion)}
+                        ({formatCents(
+                          cryptoStatus.conversion.originalAmountCents,
+                          cryptoStatus.conversion.originalCurrency
+                        )} at {conversionRate(cryptoStatus.conversion)}){/if}.
                       {#if cryptoStatus.txHash}
                         <span class="font-mono text-xs break-all">tx: {cryptoStatus.txHash}</span>
                       {/if}
@@ -645,15 +761,15 @@
                     <div class="text-right">
                       {#if isPositiveAmount(tx.amountCents)}
                         <p class="font-medium tabular-nums text-success">
-                          +{formatCurrency(tx.amountCents)}
+                          +{formatCents(tx.amountCents, LEDGER_CURRENCY)}
                         </p>
                       {:else}
                         <p class="font-medium tabular-nums text-foreground">
-                          {formatCurrency(tx.amountCents)}
+                          {formatCents(tx.amountCents, LEDGER_CURRENCY)}
                         </p>
                       {/if}
                       <p class="text-sm text-muted-foreground tabular-nums">
-                        Balance: {formatCurrency(tx.balanceAfterCents)}
+                        Balance: {formatCents(tx.balanceAfterCents, LEDGER_CURRENCY)}
                       </p>
                     </div>
                   </div>

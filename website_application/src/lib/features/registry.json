@@ -37,7 +37,8 @@
           ],
           "subscriptions": [
             "liveStreamEvents",
-            "liveTrackListUpdates"
+            "liveTrackListUpdates",
+            "tenantEvents"
           ]
         },
         "mcp": {
@@ -506,6 +507,56 @@
           ]
         },
         {
+          "slug": "viewer-protocol-selection",
+          "name": "Viewer protocol selection",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument.",
+          "status": "shipped",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": false,
+              "reason": "Players choose the protocol client-side; agents resolve endpoints via resolve_playback_endpoint."
+            },
+            "webapp": {
+              "required": false,
+              "reason": "A player request argument, not a dashboard setting."
+            }
+          },
+          "surfaces": {
+            "graphql": {
+              "queries": [
+                "resolveViewerEndpoint"
+              ]
+            },
+            "mcp": {},
+            "cli": {},
+            "webapp": {},
+            "docs": {
+              "pages": [
+                "builders/playback-advanced.mdx"
+              ]
+            }
+          },
+          "depends_on": [
+            "playback"
+          ],
+          "actual_surfaces": {
+            "cli": false,
+            "docs": true,
+            "graphql": true,
+            "mcp": false,
+            "webapp": false
+          }
+        },
+        {
           "slug": "playback-access-control",
           "name": "Playback access control",
           "area": "",
@@ -707,7 +758,8 @@
         "webapp": true
       },
       "enables": [
-        "player-sdks"
+        "player-sdks",
+        "viewer-protocol-selection"
       ],
       "family_surfaces": {
         "cli": false,
@@ -750,7 +802,7 @@
             "storageArtifactsConnection"
           ],
           "subscriptions": [
-            "liveDvrLifecycle"
+            "tenantEvents"
           ]
         },
         "mcp": {
@@ -938,7 +990,7 @@
             "vodUploadStatus"
           ],
           "subscriptions": [
-            "liveVodLifecycle"
+            "tenantEvents"
           ]
         },
         "mcp": {
@@ -1101,7 +1153,7 @@
             "storageArtifactsConnection"
           ],
           "subscriptions": [
-            "liveClipLifecycle"
+            "tenantEvents"
           ]
         },
         "mcp": {
@@ -1214,6 +1266,9 @@
           "query": "mutation Update {\n  updateMediaRetention(input: { targetType: CLIP, targetId: \"\u003cclip-hash\u003e\", retentionDays: 0 }) {\n    ... on EffectiveRetention { retentionDays retentionUntil source }\n    ... on ValidationError { message field }\n  }\n}\n"
         }
       ],
+      "enforced_by": [
+        "recording-retention"
+      ],
       "actual_surfaces": {
         "cli": false,
         "docs": true,
@@ -1324,6 +1379,10 @@
         "webapp": {},
         "docs": {}
       },
+      "enforced_by": [
+        "processing-customizable",
+        "cluster-media-processing"
+      ],
       "subitems": [
         {
           "slug": "gateway-backed-transcoding",
@@ -3055,6 +3114,11 @@
         "byoc-ownership",
         "placement-policy"
       ],
+      "enforced_by": [
+        "cluster-media-ingest",
+        "cluster-media-playback",
+        "cluster-media-storage"
+      ],
       "actual_surfaces": {
         "cli": false,
         "docs": true,
@@ -3407,7 +3471,7 @@
       "audience": "product",
       "description": "The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs.",
       "status": "partial",
-      "gap_reason": "The GraphQL API, playground, and developer tokens ship; outbound webhooks and server-side SDKs are roadmap subitems.",
+      "gap_reason": "The GraphQL API, playground, developer tokens, public tenant events, outbound webhooks, and the TypeScript, Go, and Python SDKs ship; SDKs for other languages do not (backend-sdks).",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -3435,7 +3499,8 @@
         },
         "docs": {
           "pages": [
-            "builders/api-reference.mdx"
+            "builders/api-reference.mdx",
+            "builders/sdks.mdx"
           ]
         }
       },
@@ -3492,7 +3557,10 @@
             "graphql": true,
             "mcp": false,
             "webapp": true
-          }
+          },
+          "enables": [
+            "backend-sdks"
+          ]
         },
         {
           "slug": "graphql-playground",
@@ -3542,14 +3610,67 @@
           }
         },
         {
+          "slug": "tenant-events",
+          "name": "Public tenant events",
+          "area": "",
+          "kind": "product",
+          "audience": "product",
+          "description": "One public event contract for streams, clips, recordings, uploads, multistream targets, API tokens, billing, account, and custom domains, written by each owning service in the same transaction as the change and delivered live through the tenantEvents subscription, filterable by type and stream.",
+          "status": "shipped",
+          "required_surfaces": {
+            "docs": {
+              "required": true
+            },
+            "graphql": {
+              "required": true
+            },
+            "mcp": {
+              "required": false,
+              "reason": "MCP has no subscription transport; agents read the same state through queries and tools."
+            },
+            "webapp": {
+              "required": true
+            }
+          },
+          "surfaces": {
+            "graphql": {
+              "subscriptions": [
+                "tenantEvents"
+              ]
+            },
+            "mcp": {},
+            "cli": {},
+            "webapp": {
+              "routes": [
+                "/library",
+                "/developer/playground"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/events.mdx"
+              ]
+            }
+          },
+          "actual_surfaces": {
+            "cli": false,
+            "docs": true,
+            "graphql": true,
+            "mcp": false,
+            "webapp": true
+          },
+          "enables": [
+            "backend-sdks"
+          ]
+        },
+        {
           "slug": "outbound-webhooks",
           "name": "Outbound event webhooks",
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.",
-          "status": "roadmap",
-          "gap_reason": "Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.",
+          "description": "Up to 10 tenant HTTPS endpoints receive the public tenant events (the tenantEvents payloads) as Standard Webhooks-signed requests, retried for about three days with auto-disable after sustained failure, with a 30-day delivery log, single and range replay, test deliveries, and secret rotation with a 24-hour overlap. Delivered by the Bosun service.",
+          "status": "shipped",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -3565,19 +3686,71 @@
             }
           },
           "surfaces": {
-            "graphql": {},
-            "mcp": {},
+            "graphql": {
+              "mutations": [
+                "createWebhookEndpoint",
+                "updateWebhookEndpoint",
+                "deleteWebhookEndpoint",
+                "enableWebhookEndpoint",
+                "disableWebhookEndpoint",
+                "rotateWebhookEndpointSecret",
+                "testWebhookEndpoint",
+                "replayWebhookDelivery",
+                "replayWebhookDeliveries"
+              ],
+              "queries": [
+                "webhookEndpoint",
+                "webhookEndpointsConnection",
+                "webhookDeliveriesConnection",
+                "webhookDelivery",
+                "webhookEventTypes"
+              ]
+            },
+            "mcp": {
+              "tools": [
+                "list_webhook_endpoints",
+                "get_webhook_endpoint",
+                "list_webhook_deliveries",
+                "get_webhook_delivery",
+                "list_webhook_event_types",
+                "create_webhook_endpoint",
+                "update_webhook_endpoint",
+                "delete_webhook_endpoint",
+                "enable_webhook_endpoint",
+                "disable_webhook_endpoint",
+                "rotate_webhook_secret",
+                "test_webhook_endpoint",
+                "replay_webhook_delivery",
+                "replay_webhook_deliveries"
+              ]
+            },
             "cli": {},
-            "webapp": {},
-            "docs": {}
+            "webapp": {
+              "routes": [
+                "/developer/webhooks",
+                "/developer/webhooks/:id"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/webhooks.mdx",
+                "builders/events.mdx"
+              ]
+            }
           },
+          "related": [
+            "tenant-events"
+          ],
           "actual_surfaces": {
             "cli": false,
-            "docs": false,
-            "graphql": false,
-            "mcp": false,
-            "webapp": false
-          }
+            "docs": true,
+            "graphql": true,
+            "mcp": true,
+            "webapp": true
+          },
+          "enables": [
+            "backend-sdks"
+          ]
         },
         {
           "slug": "backend-sdks",
@@ -3585,9 +3758,9 @@
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows.",
-          "status": "roadmap",
-          "gap_reason": "Not shipped. Only frontend JS packages (player, StreamCrafter) exist today, and the migration guides disclose the\nmissing server-side SDKs as a parity gap. Phased delivery, starting with Node and Python; each SDK covers API access,\nwebhook verification, uploads, access tokens, and JWT signing.\n",
+          "description": "SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from one curated operation set and released under one version. Each has typed operations for streams, stream keys, clips, DVR, VOD, uploads, playback access control, push targets, developer tokens, usage, and the tenantEvents subscription, plus retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing.",
+          "status": "partial",
+          "gap_reason": "TypeScript, Go, and Python SDKs ship; there are no SDKs for PHP, Ruby, Elixir, Java, or C#, which use the GraphQL API and the Standard Webhooks libraries directly.",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -3608,15 +3781,28 @@
             "graphql": {},
             "mcp": {},
             "cli": {},
-            "webapp": {},
-            "docs": {}
+            "webapp": {
+              "routes": [
+                "/developer/sdks"
+              ]
+            },
+            "docs": {
+              "pages": [
+                "builders/sdks.mdx"
+              ]
+            }
           },
+          "depends_on": [
+            "developer-tokens",
+            "tenant-events",
+            "outbound-webhooks"
+          ],
           "actual_surfaces": {
             "cli": false,
-            "docs": false,
+            "docs": true,
             "graphql": false,
             "mcp": false,
-            "webapp": false
+            "webapp": true
           }
         }
       ],
@@ -3631,7 +3817,7 @@
         "cli": false,
         "docs": true,
         "graphql": true,
-        "mcp": false,
+        "mcp": true,
         "webapp": true
       }
     },
@@ -3919,7 +4105,7 @@
       "audience": "product",
       "description": "Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.",
       "status": "partial",
-      "gap_reason": "Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains/branding, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
+      "gap_reason": "Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,\nand preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,\ncustom domains, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -3963,6 +4149,10 @@
           ]
         }
       },
+      "enforced_by": [
+        "custom-subdomain",
+        "custom-domain"
+      ],
       "subitems": [
         {
           "slug": "team-rbac",

@@ -12,6 +12,11 @@
   import { auth } from "$lib/stores/auth";
   import { isPlatformOperatorUser } from "$lib/navigation";
   import { resolveTimeRange, TIME_RANGE_OPTIONS, DEFAULT_TIME_RANGE } from "$lib/utils/time-range";
+  import {
+    formatCents,
+    formatCurrency as formatMoney,
+    invoiceChargeDisplay,
+  } from "$lib/utils/formatters";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { Tabs, TabsContent, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
   import { Badge } from "$lib/components/ui/badge";
@@ -94,14 +99,6 @@
     if (!value || value === timeRange) return;
     timeRange = value;
     void loadTab(activeTab, true);
-  }
-
-  function formatMoney(amount: number, currency = "EUR"): string {
-    return new Intl.NumberFormat("en-IE", { style: "currency", currency }).format(amount);
-  }
-
-  function formatCents(cents: number, currency = "EUR"): string {
-    return formatMoney(cents / 100, currency);
   }
 
   function formatDate(value?: string | Date | null): string {
@@ -271,7 +268,11 @@
                         </Badge>
                       </TableCell>
                       <TableCell class="text-right">
-                        {formatMoney(edge.node.amount, edge.node.currency)}
+                        {@const charge = invoiceChargeDisplay(edge.node)}
+                        {charge.charged}
+                        {#if charge.eurNote}
+                          <p class="text-xs text-muted-foreground">{charge.eurNote}</p>
+                        {/if}
                       </TableCell>
                       <TableCell>{formatDate(edge.node.dueDate)}</TableCell>
                       <TableCell>{formatDate(edge.node.createdAt)}</TableCell>

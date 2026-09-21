@@ -3,7 +3,7 @@ import { fetch as houdiniFetch, subscription, type RequestHandlerArgs } from "$h
 import { createClient } from "graphql-ws";
 import { browser } from "$app/environment";
 import { refreshAuthSession } from "$lib/auth/refresh";
-import { notifyRealtimeReconnected } from "$lib/houdini/reconnect";
+import { realtimeClientOptions } from "$lib/houdini/realtime-ws";
 
 const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
 const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL ?? "";
@@ -130,62 +130,10 @@ export default new HoudiniClient({
     };
   },
 
-  // WebSocket subscriptions - use session for auth
+  // WebSocket subscriptions authenticate with the access_token cookie.
   plugins: browser
     ? [
-        subscription(({ session }) => {
-          const sess = session as Session | null;
-          return createClient({
-            url: GRAPHQL_WS_URL,
-            connectionParams: () => {
-              // Pass auth from session to WebSocket connection
-              const params: Record<string, string> = {};
-              if (sess?.token) {
-                params["Authorization"] = `Bearer ${sess.token}`;
-              }
-              if (sess?.tenantId) {
-                params["X-Tenant-ID"] = sess.tenantId;
-              }
-              return params;
-            },
-            retryAttempts: Number.POSITIVE_INFINITY,
-            retryWait: async (retries) => {
-              const delayMs = Math.min(30_000, 1_000 * 2 ** retries);
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
-            },
-            shouldRetry: () => true,
-            // Handle connection errors gracefully (logged, not thrown to global error handler)
-            on: {
-              connecting: (isRetry) => {
-                if (isRetry) {
-                  console.info("[WebSocket] Reconnecting");
-                }
-              },
-              connected: (_socket, _payload, wasRetry) => {
-                if (wasRetry) {
-                  console.info("[WebSocket] Reconnected");
-                  notifyRealtimeReconnected();
-                }
-              },
-              error: (error) => {
-                console.warn("[WebSocket] Connection error:", error);
-              },
-              closed: (event) => {
-                // Only log unexpected closures (not clean shutdowns)
-                if (event && typeof event === "object" && "code" in event) {
-                  const closeEvent = event as CloseEvent;
-                  if (closeEvent.code !== 1000) {
-                    console.warn(
-                      "[WebSocket] Connection closed:",
-                      closeEvent.code,
-                      closeEvent.reason
-                    );
-                  }
-                }
-              },
-            },
-          });
-        }) as ClientPlugin,
+        subscription(() => createClient(realtimeClientOptions(GRAPHQL_WS_URL))) as ClientPlugin,
         houdiniFetch(graphQLFetch) as ClientPlugin,
       ]
     : [],

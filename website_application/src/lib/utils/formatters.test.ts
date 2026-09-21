@@ -10,6 +10,9 @@ import {
   formatBitrate,
   formatResolution,
   formatCurrency,
+  formatCents,
+  formatEurConversion,
+  invoiceChargeDisplay,
   formatUptime,
   decodeRelayId,
 } from "./formatters";
@@ -228,19 +231,94 @@ describe("formatResolution", () => {
 });
 
 describe("formatCurrency", () => {
-  it("returns 'N/A' for invalid values", () => {
-    expect(formatCurrency(null as unknown as number)).toBe("N/A");
-    expect(formatCurrency(NaN)).toBe("N/A");
+  it("returns 'N/A' for invalid amounts", () => {
+    expect(formatCurrency(null as unknown as number, "EUR")).toBe("N/A");
+    expect(formatCurrency(NaN, "EUR")).toBe("N/A");
   });
 
-  it("formats USD by default", () => {
-    const result = formatCurrency(99.99);
-    expect(result).toContain("99.99");
+  it("formats the given currency", () => {
+    expect(formatCurrency(99.99, "USD")).toBe("$99.99");
+    expect(formatCurrency(100, "EUR")).toBe("€100.00");
+  });
+});
+
+describe("formatCents", () => {
+  it("formats minor units", () => {
+    expect(formatCents(2137, "EUR")).toBe("€21.37");
+    expect(formatCents(2500, "GBP")).toBe("£25.00");
+  });
+});
+
+describe("formatEurConversion", () => {
+  it("states the EUR amount, rate and ECB reference date of a non-EUR payment", () => {
+    expect(
+      formatEurConversion({
+        originalAmountCents: 2500,
+        originalCurrency: "USD",
+        eurAmountCents: 2137,
+        unitsPerEur: "1.1698000000",
+        referenceDate: "2026-09-16",
+      })
+    ).toBe("€21.37 at 1.1698 USD per EUR, ECB reference rate of 2026-09-16");
   });
 
-  it("formats other currencies", () => {
-    const result = formatCurrency(100, "EUR");
-    expect(result).toContain("100");
+  it("returns null for EUR and missing conversions", () => {
+    expect(
+      formatEurConversion({
+        originalAmountCents: 2500,
+        originalCurrency: "EUR",
+        eurAmountCents: 2500,
+        unitsPerEur: "1",
+        referenceDate: "2026-09-16",
+      })
+    ).toBeNull();
+    expect(formatEurConversion(null)).toBeNull();
+  });
+});
+
+describe("invoiceChargeDisplay", () => {
+  it("shows the presentment amount with the EUR total, rate and date", () => {
+    expect(
+      invoiceChargeDisplay({
+        amount: 249.46,
+        currency: "EUR",
+        presentmentAmountCents: 29218,
+        presentmentCurrency: "USD",
+        presentmentUnitsPerEur: "1.1712",
+        presentmentReferenceDate: "2026-09-01",
+      })
+    ).toEqual({
+      charged: "$292.18",
+      eurNote: "€249.46 at 1.1712 USD per EUR, ECB reference rate of 2026-09-01",
+    });
+  });
+
+  it("shows the EUR total without a rate when the rate fields are not selected", () => {
+    expect(
+      invoiceChargeDisplay({
+        amount: 249.46,
+        currency: "EUR",
+        presentmentAmountCents: 21513,
+        presentmentCurrency: "GBP",
+      })
+    ).toEqual({ charged: "£215.13", eurNote: "€249.46" });
+  });
+
+  it("shows the EUR amount alone for EUR and draft invoices", () => {
+    expect(
+      invoiceChargeDisplay({
+        amount: 249.46,
+        currency: "EUR",
+        presentmentAmountCents: 24946,
+        presentmentCurrency: "EUR",
+        presentmentUnitsPerEur: "1",
+        presentmentReferenceDate: "2026-09-01",
+      })
+    ).toEqual({ charged: "€249.46", eurNote: null });
+    expect(invoiceChargeDisplay({ amount: "12.5", currency: "EUR" })).toEqual({
+      charged: "€12.50",
+      eurNote: null,
+    });
   });
 });
 

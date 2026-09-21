@@ -1,0 +1,501 @@
+{
+  "description": "The serverInfo gate. Each case builds one client (minimum server v0.3.11 unless minServer is set) on a scripted transport that answers each operation name from its own queue, and makes the listed calls in order; a calls entry {advanceMs} moves the client's clock forward instead of making a call. A stable server version vMAJOR.MINOR.PATCH below the minimum is ServerTooOldError; so is a server whose schema lacks serverInfo. Any other version string (dev, git describe, release candidates) is unverified and passes every check. A network failure of the probe is not too old: the call proceeds and the next call probes again. A probe answer is cached for the client's URL for five minutes (300000 ms), then probed again. A cached answer that would fail a call as too old is probed again first, and an operation that fails with a schema validation error probes again at once: when the fresh answer fails the check the call fails with that verdict, otherwise with the schema error. An HTTP 402 answer to serverInfo (a v0.3.10 gateway answers an anonymous serverInfo with its x402 payment challenge, because the field is not on its public allowlist) is not a verdict: calls proceed unchecked, and the 402 is cached like an answer so the gateway is not probed again for five minutes. Cases with scope client exercise the client's operation path and do not apply to a probe alone. An operation whose since is above a verified server version is UnsupportedOperationError; operationSince overrides the manifest for the case. Mutations and operations whose since is above the minimum are never sent before the probe settles; other queries may be sent alongside the probe, but a failed check still fails the call. Retries are off. expect.calls gives, per call, ok or the error; expect.sent counts the requests per operation name.",
+  "cases": [
+    {
+      "name": "a stable server at the minimum passes and is probed once",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          }
+        ],
+        "GetStream": [
+          { "status": 200, "body": { "data": { "stream": null } } },
+          { "status": 200, "body": { "data": { "stream": null } } }
+        ]
+      },
+      "calls": ["GetStream", "GetStream"],
+      "expect": {
+        "calls": [{ "ok": true }, { "ok": true }],
+        "sent": { "ServerInfo": 1, "GetStream": 2 },
+        "serverVersion": "v0.3.11",
+        "verified": true
+      }
+    },
+    {
+      "name": "a newer server passes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.4.2", "features": [] } } }
+          }
+        ],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": {
+        "calls": [{ "ok": true }],
+        "sent": { "ServerInfo": 1, "GetStream": 1 },
+        "verified": true
+      }
+    },
+    {
+      "name": "a stable server below the minimum is too old and the mutation is not sent",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.10", "features": [] } } }
+          }
+        ],
+        "DeleteStream": []
+      },
+      "calls": ["DeleteStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": "v0.3.10",
+              "minimumVersion": "v0.3.11"
+            }
+          }
+        ],
+        "sent": { "ServerInfo": 1, "DeleteStream": 0 }
+      }
+    },
+    {
+      "name": "a too-old server fails queries too",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.9", "features": [] } } }
+          }
+        ],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": "v0.3.9",
+              "minimumVersion": "v0.3.11"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "a server without serverInfo is too old",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 422,
+            "body": {
+              "data": null,
+              "errors": [
+                {
+                  "message": "Cannot query field \"serverInfo\" on type \"Query\".",
+                  "extensions": { "code": "GRAPHQL_VALIDATION_FAILED" }
+                }
+              ]
+            }
+          }
+        ],
+        "DeleteStream": []
+      },
+      "calls": ["DeleteStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": null,
+              "minimumVersion": "v0.3.11"
+            }
+          }
+        ],
+        "sent": { "ServerInfo": 1, "DeleteStream": 0 }
+      }
+    },
+    {
+      "name": "a dev build is unverified and passes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "dev", "features": [] } } }
+          }
+        ],
+        "DeleteStream": [
+          {
+            "status": 200,
+            "body": {
+              "data": {
+                "deleteStream": {
+                  "__typename": "DeleteSuccess",
+                  "success": true,
+                  "deletedId": "s1",
+                  "pending": null
+                }
+              }
+            }
+          }
+        ]
+      },
+      "calls": ["DeleteStream"],
+      "expect": {
+        "calls": [{ "ok": true }],
+        "sent": { "ServerInfo": 1, "DeleteStream": 1 },
+        "serverVersion": "dev",
+        "verified": false
+      }
+    },
+    {
+      "name": "a git describe build is unverified and passes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": {
+              "data": { "serverInfo": { "version": "v0.3.10-14-g5fa3875-dirty", "features": [] } }
+            }
+          }
+        ],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": { "calls": [{ "ok": true }], "verified": false }
+    },
+    {
+      "name": "a release candidate is unverified and passes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11-rc1", "features": [] } } }
+          }
+        ],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": { "calls": [{ "ok": true }], "verified": false }
+    },
+    {
+      "name": "a network failure of the probe is not too old and is probed again",
+      "responses": {
+        "ServerInfo": [
+          { "networkError": true },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          }
+        ],
+        "GetStream": [
+          { "status": 200, "body": { "data": { "stream": null } } },
+          { "status": 200, "body": { "data": { "stream": null } } }
+        ]
+      },
+      "calls": ["GetStream", "GetStream"],
+      "expect": {
+        "calls": [{ "ok": true }, { "ok": true }],
+        "sent": { "ServerInfo": 2, "GetStream": 2 },
+        "verified": true
+      }
+    },
+    {
+      "name": "a 503 on the probe is not too old",
+      "responses": {
+        "ServerInfo": [{ "status": 503 }],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": { "calls": [{ "ok": true }], "sent": { "ServerInfo": 1, "GetStream": 1 } }
+    },
+    {
+      "name": "an operation newer than a verified server is unsupported and not sent",
+      "operationSince": { "GetStream": "v0.3.12" },
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          }
+        ],
+        "GetStream": []
+      },
+      "calls": ["GetStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "UnsupportedOperationError",
+              "operation": "GetStream",
+              "since": "v0.3.12",
+              "serverVersion": "v0.3.11"
+            }
+          }
+        ],
+        "sent": { "ServerInfo": 1, "GetStream": 0 }
+      }
+    },
+    {
+      "name": "an operation newer than an unverified server is sent",
+      "operationSince": { "GetStream": "v0.3.12" },
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "dev", "features": [] } } }
+          }
+        ],
+        "GetStream": [{ "status": 200, "body": { "data": { "stream": null } } }]
+      },
+      "calls": ["GetStream"],
+      "expect": { "calls": [{ "ok": true }], "sent": { "ServerInfo": 1, "GetStream": 1 } }
+    },
+    {
+      "name": "a probe answer is probed again after five minutes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.12", "features": [] } } }
+          }
+        ],
+        "GetStream": [
+          { "status": 200, "body": { "data": { "stream": null } } },
+          { "status": 200, "body": { "data": { "stream": null } } },
+          { "status": 200, "body": { "data": { "stream": null } } }
+        ]
+      },
+      "calls": [
+        "GetStream",
+        { "advanceMs": 299000 },
+        "GetStream",
+        { "advanceMs": 2000 },
+        "GetStream"
+      ],
+      "expect": {
+        "calls": [{ "ok": true }, { "ok": true }, { "ok": true }],
+        "sent": { "ServerInfo": 2, "GetStream": 3 },
+        "serverVersion": "v0.3.12",
+        "verified": true
+      }
+    },
+    {
+      "name": "a cached too-old answer is probed again before it fails a call",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.10", "features": [] } } }
+          },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          }
+        ],
+        "DeleteStream": [
+          {
+            "status": 200,
+            "body": {
+              "data": {
+                "deleteStream": {
+                  "__typename": "DeleteSuccess",
+                  "success": true,
+                  "deletedId": "s1",
+                  "pending": null
+                }
+              }
+            }
+          }
+        ]
+      },
+      "calls": ["DeleteStream", "DeleteStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": "v0.3.10",
+              "minimumVersion": "v0.3.11"
+            }
+          },
+          { "ok": true }
+        ],
+        "sent": { "ServerInfo": 2, "DeleteStream": 1 },
+        "serverVersion": "v0.3.11",
+        "verified": true
+      }
+    },
+    {
+      "name": "a schema validation failure of an operation probes again and reports the new verdict",
+      "scope": "client",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.10", "features": [] } } }
+          }
+        ],
+        "GetStream": [
+          {
+            "status": 422,
+            "body": {
+              "data": null,
+              "errors": [
+                {
+                  "message": "Cannot query field \"stream\" on type \"Query\".",
+                  "extensions": { "code": "GRAPHQL_VALIDATION_FAILED" }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "calls": ["GetStream"],
+      "expect": {
+        "calls": [
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": "v0.3.10",
+              "minimumVersion": "v0.3.11"
+            }
+          }
+        ],
+        "sent": { "ServerInfo": 2, "GetStream": 1 }
+      }
+    },
+    {
+      "name": "a schema validation failure on a server that still passes keeps the schema error",
+      "scope": "client",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.11", "features": [] } } }
+          }
+        ],
+        "GetStream": [
+          {
+            "status": 422,
+            "body": {
+              "data": null,
+              "errors": [
+                {
+                  "message": "Cannot query field \"stream\" on type \"Query\".",
+                  "extensions": { "code": "GRAPHQL_VALIDATION_FAILED" }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "calls": ["GetStream"],
+      "expect": {
+        "calls": [{ "error": { "kind": "SchemaMismatchError" } }],
+        "sent": { "ServerInfo": 2, "GetStream": 1 }
+      }
+    },
+    {
+      "name": "a v0.3.10 gateway's 402 challenge to an anonymous serverInfo is no verdict and is not probed again for five minutes",
+      "responses": {
+        "ServerInfo": [
+          {
+            "status": 402,
+            "headers": { "PAYMENT-REQUIRED": "eyJ4NDAyVmVyc2lvbiI6Mn0=" },
+            "body": {
+              "error": "insufficient_balance",
+              "message": "Insufficient balance - please top up to continue",
+              "code": "INSUFFICIENT_BALANCE",
+              "operation": "ServerInfo",
+              "topup_url": "/account/billing",
+              "x402Version": 2,
+              "accepts": [
+                {
+                  "scheme": "exact",
+                  "network": "eip155:8453",
+                  "payTo": "0x5b0e6a2c00000000000000000000000000000001",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "maxTimeoutSeconds": 60,
+                  "amount": "1000"
+                }
+              ],
+              "resource": {
+                "url": "graphql://ServerInfo",
+                "description": "GraphQL operation ServerInfo",
+                "mimeType": "application/json"
+              }
+            }
+          },
+          {
+            "status": 200,
+            "body": { "data": { "serverInfo": { "version": "v0.3.10", "features": [] } } }
+          }
+        ],
+        "DeleteStream": [
+          {
+            "status": 200,
+            "body": {
+              "data": {
+                "deleteStream": {
+                  "__typename": "DeleteSuccess",
+                  "success": true,
+                  "deletedId": "s1",
+                  "pending": null
+                }
+              }
+            }
+          },
+          {
+            "status": 200,
+            "body": {
+              "data": {
+                "deleteStream": {
+                  "__typename": "DeleteSuccess",
+                  "success": true,
+                  "deletedId": "s1",
+                  "pending": null
+                }
+              }
+            }
+          }
+        ]
+      },
+      "calls": ["DeleteStream", "DeleteStream", { "advanceMs": 300001 }, "DeleteStream"],
+      "expect": {
+        "calls": [
+          { "ok": true },
+          { "ok": true },
+          {
+            "error": {
+              "kind": "ServerTooOldError",
+              "serverVersion": "v0.3.10",
+              "minimumVersion": "v0.3.11"
+            }
+          }
+        ],
+        "sent": { "ServerInfo": 2, "DeleteStream": 2 }
+      }
+    }
+  ]
+}

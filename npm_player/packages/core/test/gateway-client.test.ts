@@ -5,6 +5,7 @@ import {
   GatewayClient,
   type GatewayClientConfig,
 } from "../src/core/GatewayClient";
+import { clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
 
 function makeConfig(overrides: Partial<GatewayClientConfig> = {}): GatewayClientConfig {
   return {
@@ -28,19 +29,33 @@ function makeGqlResponse(primary: Record<string, unknown> | null, fallbacks: unk
   };
 }
 
+const SUPPORTED_GATEWAY = { data: { serverInfo: { version: "v0.3.11", features: ["playback"] } } };
+
+function isProbe(init?: RequestInit): boolean {
+  return typeof init?.body === "string" && init.body.includes("serverInfo");
+}
+
+// Every mock answers the serverInfo probe as a supported gateway; the
+// assertions below count resolve requests only.
 function mockFetchSuccess(body: unknown) {
-  return vi.fn(async () => ({
+  return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => ({
     ok: true,
-    json: async () => body,
+    json: async () => (isProbe(init) ? SUPPORTED_GATEWAY : body),
   })) as unknown as typeof globalThis.fetch;
 }
 
 function mockFetchError(status = 500) {
-  return vi.fn(async () => ({
-    ok: false,
-    status,
-    json: async () => ({}),
-  })) as unknown as typeof globalThis.fetch;
+  return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+    isProbe(init)
+      ? { ok: true, json: async () => SUPPORTED_GATEWAY }
+      : { ok: false, status, json: async () => ({}) }
+  ) as unknown as typeof globalThis.fetch;
+}
+
+function resolveCalls(fetcher: typeof globalThis.fetch): unknown[][] {
+  return (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+    ([, init]) => !isProbe(init as RequestInit | undefined)
+  );
 }
 
 describe("GatewayClient", () => {
@@ -54,6 +69,7 @@ describe("GatewayClient", () => {
   afterEach(() => {
     globalThis.fetch = origFetch;
     vi.restoreAllMocks();
+    clearServerInfoProbes();
   });
 
   // ===========================================================================
@@ -237,7 +253,7 @@ describe("GatewayClient", () => {
       const r2 = await client.resolve();
 
       expect(r1).toBe(r2);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(1);
       client.destroy();
     });
 
@@ -249,12 +265,12 @@ describe("GatewayClient", () => {
       client.setCacheTtl(5000);
 
       await client.resolve();
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(1);
 
       // Advance past TTL
       (Date.now as ReturnType<typeof vi.fn>).mockReturnValue(106000);
       await client.resolve();
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(2);
       client.destroy();
     });
 
@@ -266,7 +282,7 @@ describe("GatewayClient", () => {
       await client.resolve();
       await client.resolve(true);
 
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(2);
       client.destroy();
     });
 
@@ -279,7 +295,7 @@ describe("GatewayClient", () => {
       client.invalidateCache();
       await client.resolve();
 
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(2);
       client.destroy();
     });
   });
@@ -298,7 +314,7 @@ describe("GatewayClient", () => {
 
       const [r1, r2] = await Promise.all([p1, p2]);
       expect(r1).toBe(r2);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(1);
       client.destroy();
     });
   });
@@ -556,6 +572,62 @@ describe("GatewayClient", () => {
         "https://gw.example.com/graphql",
         expect.any(Object)
       );
+      client.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Schema mismatch re-probe
+  // ===========================================================================
+  describe("schema mismatch", () => {
+    const rejectedResolve = {
+      ok: false,
+      status: 422,
+      json: async () => ({
+        data: null,
+        errors: [
+          {
+            message: 'Cannot query field "resolveViewerEndpoint" on type "Query".',
+            extensions: { code: "GRAPHQL_VALIDATION_FAILED" },
+          },
+        ],
+      }),
+    };
+
+    function gatewayAnswering(probeVersions: string[]) {
+      return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        if (!isProbe(init)) return rejectedResolve;
+        const version = probeVersions.shift() ?? "v0.3.11";
+        return {
+          ok: true,
+          json: async () => ({ data: { serverInfo: { version, features: [] } } }),
+        };
+      }) as unknown as typeof globalThis.fetch;
+    }
+
+    function probeCalls(fetcher: typeof globalThis.fetch): number {
+      return (fetcher as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) =>
+        isProbe(init as RequestInit | undefined)
+      ).length;
+    }
+
+    it("asks the gateway again at once and reports a gateway that is now too old", async () => {
+      globalThis.fetch = gatewayAnswering(["v0.3.11", "v0.3.10"]);
+      const client = new GatewayClient(makeConfig());
+      const error = await client.resolve().catch((e: unknown) => e);
+      expect((error as Error).name).toBe("ServerTooOldError");
+      expect((error as { serverVersion?: string }).serverVersion).toBe("v0.3.10");
+      expect(probeCalls(globalThis.fetch)).toBe(2);
+      client.destroy();
+    });
+
+    it("keeps the resolve error when the fresh answer still supports the gateway", async () => {
+      globalThis.fetch = gatewayAnswering(["v0.3.11", "v0.3.11"]);
+      const client = new GatewayClient(makeConfig());
+      const error = await client.resolve().catch((e: unknown) => e);
+      expect((error as Error).name).not.toBe("ServerTooOldError");
+      expect((error as Error).message).toContain("Cannot query field");
+      expect(probeCalls(globalThis.fetch)).toBe(2);
       client.destroy();
     });
   });

@@ -18,6 +18,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
+  import { getPlatformOperator } from "$lib/stores/capabilities.svelte";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { Tooltip, TooltipContent, TooltipTrigger } from "$lib/components/ui/tooltip";
 
@@ -33,7 +34,10 @@
   const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
 
   let isAuthenticated = false;
-  let hasOperatorRole = $state(false);
+  let authUser = $state<{ role?: string; platform_operator?: boolean } | null>(null);
+  // Follows the capabilities reading, which lands after the token, so the
+  // operator surfaces appear as soon as the server confirms the grant.
+  let hasOperatorRole = $derived(hasInfrastructureOperatorRole(authUser, getPlatformOperator()));
   let operatorAccessChecked = $state(false);
 
   let hasInfrastructureData = $derived(!!$infrastructureStore.data);
@@ -125,7 +129,7 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
+    authUser = authState.user ?? null;
   });
 
   onDestroy(() => {

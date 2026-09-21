@@ -5,9 +5,25 @@
  * Extracted from useViewerEndpoints.ts for use in headless core.
  */
 
+import {
+  ResolveViewerEndpointDocument,
+  type ResolveViewerEndpointQuery,
+  type ResolveViewerEndpointQueryVariables,
+  ServerTooOldError,
+} from "@livepeer-frameworks/api";
+import {
+  checkGateway,
+  isSchemaMismatchCode,
+  recheckGateway,
+} from "@livepeer-frameworks/api/gateway-probe";
 import { TypedEventEmitter } from "./EventEmitter";
 import type { ContentEndpoints, ContentType, PlaybackAuth, EndpointInfo } from "../types";
-import { requireViewerProtocol, viewerProtocols, type ViewerProtocol } from "./ViewerProtocol";
+import {
+  requireViewerProtocol,
+  VIEWER_PROTOCOL_SELECTION_FEATURE,
+  viewerProtocols,
+  type ViewerProtocol,
+} from "./ViewerProtocol";
 
 // ============================================================================
 // Types
@@ -26,7 +42,12 @@ export interface GatewayClientConfig {
   authToken?: string;
   /** Viewer playback auth token forwarded to resolve-time access control. */
   playbackAuth?: PlaybackAuth;
-  /** Required format for destination selection; never downgraded to an unqualified query. */
+  /**
+   * Required playback format. Gateways that list the viewer-protocol-selection
+   * feature receive it as the resolve argument; others are asked without it.
+   * Either way the returned endpoint must match it, and a schema error is
+   * never retried without it.
+   */
   protocol?: ViewerProtocol;
   /** Maximum retry attempts (default: 3) */
   maxRetries?: number;
@@ -63,23 +84,9 @@ type GraphQLErrorPayload = {
   };
 };
 
-const RESOLVE_VIEWER_QUERY = `
-  query ResolveViewer($contentId: String!) {
-    resolveViewerEndpoint(contentId: $contentId) {
-      primary { nodeId baseUrl protocol url geoDistance loadScore outputs }
-      fallbacks { nodeId baseUrl protocol url geoDistance loadScore outputs }
-      metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt telemetryToken thumbnailAssets { posterUrl spriteVttUrl spriteJpgUrl assetKey } }
-    }
-  }
-`;
-
-const RESOLVE_VIEWER_PROTOCOL_QUERY = RESOLVE_VIEWER_QUERY.replace(
-  "$contentId: String!",
-  "$contentId: String!, $protocol: MediaViewerProtocol!"
-).replace(
-  "resolveViewerEndpoint(contentId: $contentId)",
-  "resolveViewerEndpoint(contentId: $contentId, protocol: $protocol)"
-);
+type ResolvedViewerEndpoint = NonNullable<
+  NonNullable<ResolveViewerEndpointQuery["resolveViewerEndpoint"]>["primary"]
+>;
 
 // ============================================================================
 // Helper Functions
@@ -117,12 +124,34 @@ async function waitBeforeRetry(
   });
 }
 
+/** The gateway rejected the resolve as invalid against its schema. */
+class GatewaySchemaMismatch extends Error {}
+
+// A gateway rejects an operation its schema does not accept with HTTP 422 or
+// 400 and a validation error code.
+async function schemaMismatchError(response: Response): Promise<GatewaySchemaMismatch | null> {
+  if (response.status !== 400 && response.status !== 422) return null;
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return null;
+  }
+  const error = getFirstGraphQLError(payload);
+  return error && isSchemaMismatchCode(error.extensions?.code)
+    ? new GatewaySchemaMismatch(error.message || "GraphQL validation error")
+    : null;
+}
+
 function getFirstGraphQLError(payload: unknown): GraphQLErrorPayload | null {
   const errors = (payload as { errors?: GraphQLErrorPayload[] })?.errors;
   return Array.isArray(errors) && errors.length > 0 ? errors[0] : null;
 }
 
-function decodeEndpointOutputs(endpoint: EndpointInfo): EndpointInfo {
+// The gateway's endpoint passes through as returned, nulls included; outputs
+// is the JSON scalar, sent as an object or as encoded JSON.
+function decodeEndpointOutputs(resolved: ResolvedViewerEndpoint): EndpointInfo {
+  const endpoint = resolved as unknown as EndpointInfo;
   if (typeof endpoint.outputs !== "string") return endpoint;
   let outputs: unknown;
   try {
@@ -179,6 +208,8 @@ async function fetchResolvePayloadWithRetry(
     }
 
     if (!response.ok) {
+      const rejected = await schemaMismatchError(response);
+      if (rejected) throw rejected;
       lastError = new Error(`Gateway GQL error ${response.status}`);
 
       if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxRetries - 1) {
@@ -193,6 +224,9 @@ async function fetchResolvePayloadWithRetry(
     const gqlError = getFirstGraphQLError(payload);
 
     if (gqlError) {
+      if (isSchemaMismatchCode(gqlError.extensions?.code)) {
+        throw new GatewaySchemaMismatch(gqlError.message || "GraphQL validation error");
+      }
       lastError = new Error(gqlError.message || "GraphQL error");
 
       if (isRetryableGraphQLError(gqlError) && attempt < maxRetries - 1) {
@@ -434,6 +468,24 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     try {
       const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
 
+      // One cached serverInfo probe per gateway both refuses a gateway older
+      // than this player and says whether it ships viewer-protocol-selection.
+      // Without a required format the resolve runs alongside the probe and
+      // its answer is held until the probe settles.
+      const gateway = checkGateway(graphqlEndpoint);
+      gateway.catch(() => undefined);
+      let sendProtocol = false;
+      if (protocol !== undefined) {
+        const status = await gateway;
+        if (ac.signal.aborted) throw new Error("Request aborted");
+        // A gateway that does not list the feature is asked without the
+        // argument; requireViewerProtocol below applies the requirement.
+        sendProtocol = status?.features.includes(VIEWER_PROTOCOL_SELECTION_FEATURE) ?? false;
+      }
+
+      const variables: ResolveViewerEndpointQueryVariables = sendProtocol
+        ? { contentId, protocol }
+        : { contentId };
       const payload = await fetchResolvePayloadWithRetry(
         graphqlEndpoint,
         {
@@ -444,8 +496,9 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
             ...(playbackAuth?.token ? { "X-Frameworks-Playback-JWT": playbackAuth.token } : {}),
           },
           body: JSON.stringify({
-            query: protocol ? RESOLVE_VIEWER_PROTOCOL_QUERY : RESOLVE_VIEWER_QUERY,
-            variables: protocol ? { contentId, protocol } : { contentId },
+            query: String(ResolveViewerEndpointDocument),
+            operationName: "ResolveViewerEndpoint",
+            variables,
           }),
           signal: ac.signal,
         },
@@ -453,15 +506,11 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
         initialDelayMs
       );
       if (ac.signal.aborted) throw new Error("Request aborted");
+      await gateway;
+      if (ac.signal.aborted) throw new Error("Request aborted");
 
-      const resp = (payload as { data?: { resolveViewerEndpoint?: unknown } }).data
-        ?.resolveViewerEndpoint as
-        | {
-            primary?: ContentEndpoints["primary"];
-            fallbacks?: ContentEndpoints["fallbacks"];
-            metadata?: ContentEndpoints["metadata"];
-          }
-        | undefined;
+      const resp = (payload as { data?: Partial<ResolveViewerEndpointQuery> | null }).data
+        ?.resolveViewerEndpoint;
       const primary = resp?.primary;
       const fallbacks = Array.isArray(resp?.fallbacks) ? resp.fallbacks : [];
 
@@ -472,7 +521,9 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       let endpoints: ContentEndpoints = {
         primary: decodeEndpointOutputs(primary),
         fallbacks: fallbacks.map(decodeEndpointOutputs),
-        metadata: resp?.metadata,
+        // Metadata passes through as returned; ContentMetadata narrows its
+        // string fields to the values the gateway sends.
+        metadata: (resp?.metadata ?? undefined) as ContentEndpoints["metadata"],
       };
       if (protocol) endpoints = requireViewerProtocol(endpoints, protocol);
 
@@ -483,15 +534,30 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       this.emit("endpointsResolved", { endpoints });
 
       return endpoints;
-    } catch (e) {
+    } catch (caught) {
       // Ignore abort errors
       if (ac.signal.aborted) {
         throw new Error("Request aborted");
       }
 
+      let e = caught;
+      // The gateway may have changed since the cached probe; a fresh answer
+      // that refuses it explains the failed resolve better than the schema
+      // error does.
+      if (e instanceof GatewaySchemaMismatch) {
+        try {
+          await recheckGateway(gatewayUrl.replace(/\/$/, ""));
+        } catch (verdict) {
+          e = verdict;
+        }
+      }
+
       const message = e instanceof Error ? e.message : "Unknown gateway error";
       console.error("[GatewayClient] Gateway resolution failed:", message);
       this.setStatus("error", message);
+      // ServerTooOldError keeps its type so callers can tell an unsupported
+      // gateway from a failed resolve.
+      if (e instanceof ServerTooOldError) throw e;
       throw new Error(message);
     }
   }

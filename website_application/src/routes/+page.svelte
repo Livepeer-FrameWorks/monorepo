@@ -26,6 +26,7 @@
   import { EventLog, type StreamEvent } from "$lib/components/stream-details";
   import TrendChart from "$lib/components/charts/TrendChart.svelte";
   import { palette } from "$lib/components/charts/theme";
+  import { formatCurrency } from "$lib/utils/formatters";
   import {
     realtimeStreams,
     streamMetrics,
@@ -592,9 +593,18 @@
                       <p class="text-muted-foreground">Monthly Cost</p>
                       <p class="font-semibold text-foreground text-lg">
                         {billingStatus.currentTier?.basePrice
-                          ? `$${billingStatus.currentTier.basePrice}`
+                          ? formatCurrency(
+                              billingStatus.currentTier.basePrice,
+                              billingStatus.currentTier.currency
+                            )
                           : "Free"}
                       </p>
+                      {#if billingStatus.currentTier?.basePrice && billingStatus.subscription?.presentmentCurrency && billingStatus.subscription.presentmentCurrency !== billingStatus.currentTier.currency}
+                        <p class="text-xs text-muted-foreground">
+                          Charged in {billingStatus.subscription.presentmentCurrency} at the ECB reference
+                          rate
+                        </p>
+                      {/if}
                     </div>
                     <div>
                       <p class="text-muted-foreground">Usage (24h)</p>

@@ -4,7 +4,6 @@ export interface NavigationItem {
   icon: string;
   active?: boolean | string;
   description?: string;
-  tier?: string;
   badge?: string;
   external?: boolean;
   children?: Record<string, NavigationItem>;
@@ -19,9 +18,14 @@ export interface NavigationItem {
 }
 
 /** Client-side mirror of the backend platform-operator gate (cosmetic only;
- * the gateway enforces the real grant from the signed token). */
-export function isPlatformOperatorUser(user?: { platform_operator?: boolean } | null): boolean {
-  return user?.platform_operator === true;
+ * the gateway enforces the real grant from the signed token). The server's
+ * capabilities reading answers when it has arrived; until then the signed
+ * token's own claim does, which is the same grant the gateway checks. */
+export function isPlatformOperatorUser(
+  user?: { platform_operator?: boolean } | null,
+  platformOperator?: boolean | null
+): boolean {
+  return (platformOperator ?? user?.platform_operator ?? false) === true;
 }
 
 export interface RouteInfo {
@@ -79,6 +83,16 @@ const dynamicRoutes: Array<{
       { name: "Infrastructure" },
       { name: "Incidents", href: "/infrastructure/incidents" },
       { name: "Incident" },
+    ],
+  },
+  {
+    pattern: /^\/developer\/webhooks\/[^/]+$/,
+    route: { name: "Webhook Endpoint", parent: "Developer" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Developer" },
+      { name: "Webhooks", href: "/developer/webhooks" },
+      { name: "Webhook Endpoint" },
     ],
   },
   {
@@ -437,9 +451,9 @@ export const navigationConfig: Record<string, NavigationItem> = {
       webhooks: {
         name: "Webhooks",
         href: "/developer/webhooks",
-        icon: "Link",
-        active: "soon",
-        description: "Configure event notifications and external integrations",
+        icon: "Webhook",
+        active: true,
+        description: "Signed event deliveries to your endpoints, with a delivery log and replay",
       },
       sdks: {
         name: "SDKs & Libraries",

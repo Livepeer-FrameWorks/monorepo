@@ -1,0 +1,59 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`IngestClient public API > keeps its declarations 1`] = `
+"export declare class IngestClient extends TypedEventEmitter<IngestClientEvents> {
+    constructor(config: IngestClientConfig);
+    getEndpoints(): IngestEndpoints | null;
+    resolve(): Promise<IngestEndpoints>;
+    getWhipUrl(): string | null;
+    getRtmpUrl(): string | null;
+    getSrtUrl(): string | null;
+    destroy(): void;
+}"
+`;
+
+exports[`IngestClient public API > keeps its module exports 1`] = `
+[
+  "IngestClient",
+]
+`;
+
+exports[`IngestClient public API > keeps the configuration, event, and endpoint types 1`] = `
+"export interface IngestEndpoint {
+    nodeId: string;
+    baseUrl: string;
+    whipUrl?: string;
+    rtmpUrl?: string;
+    srtUrl?: string;
+    region?: string;
+    loadScore?: number;
+}
+export interface IngestMetadata {
+    streamId: string;
+    streamKey: string;
+    tenantId: string;
+    recordingEnabled: boolean;
+}
+export interface IngestEndpoints {
+    primary: IngestEndpoint;
+    fallbacks: IngestEndpoint[];
+    metadata?: IngestMetadata;
+}
+export interface IngestClientConfig {
+    gatewayUrl: string;
+    streamKey: string;
+    authToken?: string;
+    maxRetries?: number;
+    initialDelayMs?: number;
+}
+export type IngestClientStatus = "idle" | "loading" | "ready" | "error";
+export interface IngestClientEvents {
+    statusChange: {
+        status: IngestClientStatus;
+        error?: string;
+    };
+    endpointsResolved: {
+        endpoints: IngestEndpoints;
+    };
+}"
+`;

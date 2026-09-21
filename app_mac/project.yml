@@ -34,3 +34,28 @@ targets:
           CODE_SIGN_STYLE: Automatic
         Release:
           CODE_SIGN_STYLE: Manual
+    scheme:
+      testTargets:
+        - FrameWorksTests
+
+  # Logic tests compile the sources under test directly instead of hosting the
+  # app, so a test run never launches the tray, registers a login item, or
+  # starts the MCP server.
+  FrameWorksTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - Sources/AppState.swift
+      - Sources/Edge/ServiceManager.swift
+      - Sources/Gateway/GatewayClient.swift
+      - Sources/Gateway/GeneratedQueries.swift
+      - Sources/Gateway/KeychainHelper.swift
+      - Sources/Gateway/ServerInfoService.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.livepeer.frameworks.desktop.tests
+        GENERATE_INFOPLIST_FILE: YES
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"

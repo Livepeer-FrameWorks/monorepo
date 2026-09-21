@@ -29,12 +29,9 @@ enum GQL {
     meteringEnabled
     isEnterprise
     features {
-      recording
-      analytics
-      customBranding
-      apiAccess
       supportLevel
       sla
+      processingCustomizable
     }
     pricingRules {
       meter
@@ -177,6 +174,16 @@ enum GQL {
       spriteJpgUrl
       assetKey
     }
+  }
+  """
+
+  static let EventArtifactFields = """
+  # Public identifiers of the clip, recording, or upload a media event names
+  fragment EventArtifactFields on EventArtifact {
+    artifactId
+    kind
+    streamId
+    playbackId
   }
   """
 
@@ -781,6 +788,58 @@ enum GQL {
   }
   """
 
+  static let WebhookDeliveryAttemptFields = """
+  fragment WebhookDeliveryAttemptFields on WebhookDeliveryAttempt {
+    id
+    attemptNumber
+    statusCode
+    errorClass
+    latencyMs
+    responseExcerpt
+    attemptedAt
+  }
+  """
+
+  static let WebhookDeliveryFields = """
+  fragment WebhookDeliveryFields on WebhookDelivery {
+    id
+    endpointId
+    eventId
+    eventType
+    kind
+    status
+    attempts
+    nextAttemptAt
+    lastStatusCode
+    lastErrorClass
+    deliveredAt
+    replayCount
+    lastReplayedAt
+    createdAt
+    updatedAt
+  }
+  """
+
+  static let WebhookEndpointFields = """
+  fragment WebhookEndpointFields on WebhookEndpoint {
+    id
+    url
+    description
+    eventTypes
+    apiVersion
+    status
+    disabledReason
+    disabledAt
+    consecutiveFailures
+    failingSince
+    lastSuccessAt
+    lastFailureAt
+    previousSecretExpiresAt
+    createdAt
+    updatedAt
+  }
+  """
+
   // MARK: - queries
 
   static let DVRChapter = """
@@ -1101,6 +1160,7 @@ enum GQL {
       }
       isComplete
       updatedAt
+      presentmentCurrency
     }
   }
   """
@@ -1125,6 +1185,14 @@ enum GQL {
         confirmedAt
         createdAt
         updatedAt
+        conversion {
+          originalAmountCents
+          originalCurrency
+          eurAmountCents
+          unitsPerEur
+          source
+          referenceDate
+        }
       }
       nextBillingDate
       trialEndsAt
@@ -1144,12 +1212,9 @@ enum GQL {
         nextBillingDate
         cancelledAt
         customFeatures {
-          recording
-          analytics
-          customBranding
-          apiAccess
           supportLevel
           sla
+          processingCustomizable
         }
         pricingOverrides {
           meter
@@ -1172,6 +1237,7 @@ enum GQL {
         }
         pendingEffectiveAt
         pendingReason
+        presentmentCurrency
         createdAt
         updatedAt
       }
@@ -1226,12 +1292,9 @@ enum GQL {
       currency
       billingPeriod
       features {
-        recording
-        analytics
-        customBranding
-        apiAccess
         supportLevel
         sla
+        processingCustomizable
       }
       pricingRules {
         meter
@@ -1249,6 +1312,37 @@ enum GQL {
       slaLevel
       meteringEnabled
       isEnterprise
+    }
+  }
+  """
+
+  static let GetCapabilities = """
+  # Fetch the enforced gates for the current tenant and its entitled clusters
+  query GetCapabilities {
+    capabilities {
+      observedAt
+      tenant {
+        platformOperator
+        recordingRetention {
+          capped
+          maxDays
+        }
+        processingCustomizable
+        customSubdomain
+        customDomain
+      }
+      clusters {
+        clusterId
+        clusterName
+        role
+        accessLevel
+        media {
+          ingest
+          playback
+          storage
+          processing
+        }
+      }
     }
   }
   """
@@ -1842,6 +1936,11 @@ enum GQL {
           grossMeteredAmount
           prepaidCreditApplied
           currency
+          presentmentAmountCents
+          presentmentCurrency
+          presentmentUnitsPerEur
+          presentmentReferenceDate
+          finalizedAt
           status
           dueDate
           createdAt
@@ -2496,6 +2595,14 @@ enum GQL {
           confirmedAt
           createdAt
           updatedAt
+          conversion {
+            originalAmountCents
+            originalCurrency
+            eurAmountCents
+            unitsPerEur
+            source
+            referenceDate
+          }
         }
       }
       pageInfo {
@@ -2640,6 +2747,10 @@ enum GQL {
                 id
                 amount
                 currency
+                presentmentAmountCents
+                presentmentCurrency
+                presentmentUnitsPerEur
+                presentmentReferenceDate
                 status
                 dueDate
                 createdAt
@@ -2833,8 +2944,8 @@ enum GQL {
   """
 
   static let GetPrepaidBalance = """
-  query GetPrepaidBalance($currency: String = "EUR") {
-    prepaidBalance(currency: $currency) {
+  query GetPrepaidBalance {
+    prepaidBalance {
       id
       tenantId
       balanceCents
@@ -3117,6 +3228,16 @@ enum GQL {
           totalCount
         }
       }
+    }
+  }
+  """
+
+  static let GetServerInfo = """
+  # Fetch the platform release and shipped feature slugs; readable without a token
+  query GetServerInfo {
+    serverInfo {
+      version
+      features
     }
   }
   """
@@ -4558,6 +4679,93 @@ enum GQL {
   }
   """
 
+  static let GetWebhookDeliveriesConnection = """
+  # Webhook delivery log, newest first, with optional filters
+  query GetWebhookDeliveriesConnection(
+    $endpointId: ID
+    $statuses: [WebhookDeliveryStatus!]
+    $eventType: String
+    $eventId: ID
+    $createdAfter: Time
+    $createdBefore: Time
+    $first: Int = 50
+    $after: String
+  ) {
+    webhookDeliveriesConnection(
+      endpointId: $endpointId
+      statuses: $statuses
+      eventType: $eventType
+      eventId: $eventId
+      createdAfter: $createdAfter
+      createdBefore: $createdBefore
+      page: { first: $first, after: $after }
+    ) {
+      edges {
+        cursor
+        node {
+          ...WebhookDeliveryFields
+        }
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      totalCount
+    }
+  }
+  """
+
+  static let GetWebhookDelivery = """
+  # Fetch one webhook delivery with every HTTP attempt
+  query GetWebhookDelivery($id: ID!) {
+    webhookDelivery(id: $id) {
+      ...WebhookDeliveryFields
+      attemptHistory {
+        ...WebhookDeliveryAttemptFields
+      }
+    }
+  }
+  """
+
+  static let GetWebhookEndpoint = """
+  # Fetch one webhook endpoint
+  query GetWebhookEndpoint($id: ID!) {
+    webhookEndpoint(id: $id) {
+      ...WebhookEndpointFields
+    }
+  }
+  """
+
+  static let GetWebhookEndpointsConnection = """
+  # List the tenant's outbound webhook endpoints
+  query GetWebhookEndpointsConnection($first: Int = 50, $after: String) {
+    webhookEndpointsConnection(page: { first: $first, after: $after }) {
+      edges {
+        cursor
+        node {
+          ...WebhookEndpointFields
+        }
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      totalCount
+    }
+  }
+  """
+
+  static let GetWebhookEventTypes = """
+  # Public event types a webhook endpoint can subscribe to
+  query GetWebhookEventTypes {
+    webhookEventTypes
+  }
+  """
+
   static let ListVodRetentionAssets = """
   # VOD/clip assets that have retention data in the window — backs the Recent Assets
   # table on the analytics overview. title/playbackId are composed from the catalog
@@ -5084,6 +5292,16 @@ enum GQL {
       topupId
       checkoutUrl
       expiresAt
+      amountCents
+      currency
+      conversion {
+        originalAmountCents
+        originalCurrency
+        eurAmountCents
+        unitsPerEur
+        source
+        referenceDate
+      }
     }
   }
   """
@@ -5143,6 +5361,14 @@ enum GQL {
       quoteSource
       quotedAt
       network
+      conversion {
+        originalAmountCents
+        originalCurrency
+        eurAmountCents
+        unitsPerEur
+        source
+        referenceDate
+      }
     }
   }
   """
@@ -5262,6 +5488,14 @@ enum GQL {
         network
         quotedAt
         createdAt
+        conversion {
+          originalAmountCents
+          originalCurrency
+          eurAmountCents
+          unitsPerEur
+          source
+          referenceDate
+        }
       }
       ... on ValidationError {
         ...ValidationErrorFields
@@ -5415,6 +5649,27 @@ enum GQL {
   }
   """
 
+  static let CreateWebhookEndpoint = """
+  # Create an outbound webhook endpoint; the signing secret is returned only here
+  mutation CreateWebhookEndpoint($input: CreateWebhookEndpointInput!) {
+    createWebhookEndpoint(input: $input) {
+      __typename
+      ... on WebhookEndpointSecret {
+        secret
+        endpoint {
+          ...WebhookEndpointFields
+        }
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let DeleteClip = """
   # Delete a clip by its ID
   mutation DeleteClip($id: ID!) {
@@ -5522,6 +5777,60 @@ enum GQL {
   }
   """
 
+  static let DeleteWebhookEndpoint = """
+  # Delete a webhook endpoint with its secrets and delivery log
+  mutation DeleteWebhookEndpoint($id: ID!) {
+    deleteWebhookEndpoint(id: $id) {
+      __typename
+      ... on DeleteSuccess {
+        ...DeleteSuccessFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let DisableWebhookEndpoint = """
+  # Disable a webhook endpoint and skip its pending deliveries
+  mutation DisableWebhookEndpoint($id: ID!) {
+    disableWebhookEndpoint(id: $id) {
+      __typename
+      ... on WebhookEndpoint {
+        ...WebhookEndpointFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let EnableWebhookEndpoint = """
+  # Enable a disabled webhook endpoint
+  mutation EnableWebhookEndpoint($id: ID!) {
+    enableWebhookEndpoint(id: $id) {
+      __typename
+      ... on WebhookEndpoint {
+        ...WebhookEndpointFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let GetCryptoTopupStatus = """
   mutation GetCryptoTopupStatus($topupId: ID!) {
     cryptoTopupStatus(topupId: $topupId) {
@@ -5540,6 +5849,14 @@ enum GQL {
       expiresAt
       detectedAt
       completedAt
+      conversion {
+        originalAmountCents
+        originalCurrency
+        eurAmountCents
+        unitsPerEur
+        source
+        referenceDate
+      }
     }
   }
   """
@@ -5703,6 +6020,53 @@ enum GQL {
   }
   """
 
+  static let ReplayWebhookDeliveries = """
+  # Replay the failed and skipped deliveries of one endpoint in a time range
+  mutation ReplayWebhookDeliveries($endpointId: ID!, $createdAfter: Time!, $createdBefore: Time!) {
+    replayWebhookDeliveries(
+      endpointId: $endpointId
+      createdAfter: $createdAfter
+      createdBefore: $createdBefore
+    ) {
+      __typename
+      ... on WebhookReplayResult {
+        replayedCount
+        hasMore
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let ReplayWebhookDelivery = """
+  # Send a finished webhook delivery again under the same ID
+  mutation ReplayWebhookDelivery($id: ID!) {
+    replayWebhookDelivery(id: $id) {
+      __typename
+      ... on WebhookDelivery {
+        ...WebhookDeliveryFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let RequestClusterSubscription = """
   # Request to subscribe to a cluster (with optional invite token)
   mutation RequestClusterSubscription($clusterId: ID!, $inviteToken: String) {
@@ -5801,6 +6165,27 @@ enum GQL {
       __typename
       ... on SigningKey {
         ...SigningKeyFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
+  static let RotateWebhookEndpointSecret = """
+  # Replace a webhook endpoint's signing secret; the new secret is returned only here
+  mutation RotateWebhookEndpointSecret($id: ID!, $revokePrevious: Boolean = false) {
+    rotateWebhookEndpointSecret(id: $id, revokePrevious: $revokePrevious) {
+      __typename
+      ... on WebhookEndpointSecret {
+        secret
+        endpoint {
+          ...WebhookEndpointFields
+        }
       }
       ... on NotFoundError {
         ...NotFoundErrorFields
@@ -6049,6 +6434,32 @@ enum GQL {
   }
   """
 
+  static let TestWebhookEndpoint = """
+  # Send a signed webhook.test event to an endpoint and return the attempt
+  mutation TestWebhookEndpoint($id: ID!) {
+    testWebhookEndpoint(id: $id) {
+      __typename
+      ... on WebhookTestResult {
+        delivery {
+          ...WebhookDeliveryFields
+        }
+        attempt {
+          ...WebhookDeliveryAttemptFields
+        }
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on RateLimitError {
+        ...RateLimitErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let UnlinkWallet = """
   mutation UnlinkWallet($walletId: ID!) {
     unlinkWallet(walletId: $walletId) {
@@ -6090,6 +6501,7 @@ enum GQL {
       }
       isComplete
       updatedAt
+      presentmentCurrency
     }
   }
   """
@@ -6162,6 +6574,27 @@ enum GQL {
   }
   """
 
+  static let UpdateWebhookEndpoint = """
+  # Change a webhook endpoint's URL, description, or event types
+  mutation UpdateWebhookEndpoint($id: ID!, $input: UpdateWebhookEndpointInput!) {
+    updateWebhookEndpoint(id: $id, input: $input) {
+      __typename
+      ... on WebhookEndpoint {
+        ...WebhookEndpointFields
+      }
+      ... on ValidationError {
+        ...ValidationErrorFields
+      }
+      ... on NotFoundError {
+        ...NotFoundErrorFields
+      }
+      ... on AuthError {
+        ...AuthErrorFields
+      }
+    }
+  }
+  """
+
   static let WalletLogin = """
   mutation WalletLogin($input: WalletLoginInput!) {
     walletLogin(input: $input) {
@@ -6186,34 +6619,6 @@ enum GQL {
 
   // MARK: - subscriptions
 
-  static let ClipLifecycle = """
-  # Real-time clip generation progress and completion updates
-  # Monitors clip creation stages, upload progress, S3 URLs, and error states
-  subscription ClipLifecycle($streamId: ID!) {
-    liveClipLifecycle(streamId: $streamId) {
-      stage
-      clipHash
-      playbackId
-      progressPercent
-      filePath
-      s3Url
-      sizeBytes
-      error
-      startedAt
-      completedAt
-      nodeId
-      streamId
-      stream {
-        streamId
-      }
-      startUnix
-      stopUnix
-      durationSec
-      clipMode
-    }
-  }
-  """
-
   static let ConnectionEventsLive = """
   # Real-time viewer connection/disconnection events
   # Shows geographic distribution and session metrics for live streams
@@ -6232,29 +6637,6 @@ enum GQL {
       eventType
       sessionDurationSeconds
       bytesTransferred
-    }
-  }
-  """
-
-  static let DvrLifecycle = """
-  # Real-time DVR recording lifecycle updates from start to completion
-  # Tracks recording status, progress, manifest paths, and error states
-  subscription DvrLifecycle($streamId: ID!) {
-    liveDvrLifecycle(streamId: $streamId) {
-      status
-      dvrHash
-      playbackId
-      manifestPath
-      startedAt
-      endedAt
-      sizeBytes
-      segmentCount
-      error
-      nodeId
-      streamId
-      stream {
-        streamId
-      }
     }
   }
   """
@@ -6438,6 +6820,176 @@ enum GQL {
   }
   """
 
+  static let TenantEvents = """
+  # Public tenant events, the same messages webhooks deliver. Filter with types
+  # (e.g. ["clip.ready", "clip.failed"]) and streamId; data carries the payload of
+  # the event's type. The reason fields of the account, custom domain, and
+  # payment events are aliased: their enum types differ from the media reason.
+  subscription TenantEvents($types: [String!], $streamId: ID) {
+    tenantEvents(types: $types, streamId: $streamId) {
+      id
+      type
+      time
+      subject
+      data {
+        __typename
+        ... on StreamCreated {
+          streamId
+          name
+          playbackId
+        }
+        ... on StreamUpdated {
+          streamId
+          changedFields
+        }
+        ... on StreamDeleted {
+          streamId
+        }
+        ... on StreamKeyRotated {
+          streamId
+        }
+        ... on StreamConnected {
+          streamId
+          protocol
+        }
+        ... on StreamLive {
+          streamId
+        }
+        ... on StreamIdle {
+          streamId
+        }
+        ... on ClipRequested {
+          artifact {
+            ...EventArtifactFields
+          }
+          durationMs
+        }
+        ... on ClipReady {
+          artifact {
+            ...EventArtifactFields
+          }
+          durationMs
+          sizeBytes
+        }
+        ... on ClipFailed {
+          artifact {
+            ...EventArtifactFields
+          }
+          reason
+        }
+        ... on RecordingReady {
+          artifact {
+            ...EventArtifactFields
+          }
+          durationMs
+          sizeBytes
+        }
+        ... on RecordingFailed {
+          artifact {
+            ...EventArtifactFields
+          }
+          reason
+        }
+        ... on UploadCreated {
+          artifact {
+            ...EventArtifactFields
+          }
+          filename
+          expectedSizeBytes
+        }
+        ... on UploadCompleted {
+          artifact {
+            ...EventArtifactFields
+          }
+          sizeBytes
+        }
+        ... on UploadAborted {
+          artifact {
+            ...EventArtifactFields
+          }
+        }
+        ... on UploadReady {
+          artifact {
+            ...EventArtifactFields
+          }
+          durationMs
+          sizeBytes
+        }
+        ... on UploadFailed {
+          artifact {
+            ...EventArtifactFields
+          }
+          reason
+        }
+        ... on MultistreamStatusChanged {
+          streamId
+          targetId
+          targetName
+          status
+          previousStatus
+        }
+        ... on ApiTokenCreated {
+          tokenId
+          name
+          permissions
+          expiresAt
+        }
+        ... on ApiTokenRevoked {
+          tokenId
+        }
+        ... on AccountSuspended {
+          suspensionReason: reason
+        }
+        ... on CustomDomainVerified {
+          domain
+        }
+        ... on CustomDomainFailed {
+          domain
+          domainFailureReason: reason
+        }
+        ... on InvoiceCreated {
+          invoiceId
+          amountDue {
+            amountMinor
+            currency
+          }
+          periodStart
+          periodEnd
+          dueAt
+        }
+        ... on InvoicePaid {
+          invoiceId
+          amountPaid {
+            amountMinor
+            currency
+          }
+        }
+        ... on PaymentFailed {
+          paymentId
+          invoiceId
+          amount {
+            amountMinor
+            currency
+          }
+          paymentFailureReason: reason
+          provider
+          providerReferenceId
+        }
+        ... on TopupCredited {
+          topupId
+          amount {
+            amountMinor
+            currency
+          }
+        }
+        ... on BillingDetailsUpdated {
+          changedFields
+        }
+      }
+    }
+  }
+  """
+
   static let TrackListUpdates = """
   # Live updates to stream media tracks and encoding parameters
   # Includes video/audio codec details, bitrates, resolution, and quality tier changes
@@ -6498,33 +7050,6 @@ enum GQL {
       clientCountry
       clientLatitude
       clientLongitude
-    }
-  }
-  """
-
-  static let VodLifecycle = """
-  # Real-time VOD upload progress and completion updates
-  # Monitors VOD upload stages, S3 processing, and error states
-  subscription VodLifecycle {
-    liveVodLifecycle {
-      status
-      vodHash
-      playbackId
-      uploadId
-      filename
-      contentType
-      sizeBytes
-      s3Url
-      filePath
-      error
-      startedAt
-      completedAt
-      nodeId
-      expiresAt
-      durationMs
-      resolution
-      videoCodec
-      audioCodec
     }
   }
   """

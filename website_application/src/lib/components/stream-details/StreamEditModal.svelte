@@ -15,6 +15,7 @@
   } from "$lib/components/ui/dialog";
   import { getIconComponent } from "$lib/iconUtils";
   import { pullSourcePlacementClass } from "$lib/utils/pull-source";
+  import { getRecordingRetentionMaxDays } from "$lib/stores/capabilities.svelte";
   import SourceLocationControl from "./SourceLocationControl.svelte";
   import SourceLocationSummary from "./SourceLocationSummary.svelte";
   import {
@@ -107,6 +108,10 @@
     dvrRetentionOverride: null,
     clipRetentionOverride: null,
   });
+
+  // The tier's upper bound on retention. Null means uncapped or not yet read;
+  // the server clamps either way.
+  let retentionMaxDays = $derived(getRecordingRetentionMaxDays());
 
   // Compare against initial values to decide which mutations to fire on save.
   let initialDvrOverride = $state<OverrideField>(null);
@@ -303,7 +308,12 @@
         <div class="text-sm font-medium text-foreground">Retention overrides</div>
         <p class="text-xs text-muted-foreground">
           Override the tenant DVR / clip retention defaults for artifacts from this stream. Leave
-          empty to inherit. 0 = keep forever (paid tiers only; Free clamps to its cap).
+          empty to inherit.
+          {#if retentionMaxDays !== null}
+            Your tier caps retention at {retentionMaxDays} days; longer values are clamped.
+          {:else}
+            0 = keep forever (paid tiers only; Free clamps to its cap).
+          {/if}
         </p>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -312,6 +322,7 @@
               id="editDvrRetention"
               type="number"
               min="0"
+              max={retentionMaxDays ?? undefined}
               value={formData.dvrRetentionOverride ?? ""}
               oninput={(e) =>
                 (formData.dvrRetentionOverride = parseOverrideInput(
@@ -326,6 +337,7 @@
               id="editClipRetention"
               type="number"
               min="0"
+              max={retentionMaxDays ?? undefined}
               value={formData.clipRetentionOverride ?? ""}
               oninput={(e) =>
                 (formData.clipRetentionOverride = parseOverrideInput(

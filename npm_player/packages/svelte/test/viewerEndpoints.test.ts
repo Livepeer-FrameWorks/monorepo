@@ -5,7 +5,11 @@ import {
   createDerivedPrimaryEndpoint,
   createDerivedMetadata,
 } from "../src/stores/viewerEndpoints";
-import { viewerReply, deferredReply } from "../../test-contract/viewer-endpoint-fixtures";
+import {
+  viewerReply,
+  deferredReply,
+  supportedGateway,
+} from "../../test-contract/viewer-endpoint-fixtures";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,7 +20,7 @@ describe("standalone Svelte viewer placement", () => {
   it("cancels retry backoff when destroyed", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn(async () => ({ ok: false, status: 503 }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({ contentId: "playback", protocol: "HLS" });
     await vi.advanceTimersByTimeAsync(0);
     resolver.destroy();
@@ -27,7 +31,7 @@ describe("standalone Svelte viewer placement", () => {
 
   it("uses typed resolution, credential forwarding and prepared-only output for derived stores", async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => viewerReply("HLS") }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({
       contentId: "playback",
       protocol: "HLS",
@@ -58,7 +62,7 @@ describe("standalone Svelte viewer placement", () => {
       .fn()
       .mockResolvedValueOnce({ ok: true, json: () => old.promise })
       .mockResolvedValueOnce({ ok: true, json: async () => viewerReply("DASH") });
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({ contentId: "playback", protocol: "HLS" });
     await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
     resolver.update({ protocol: "DASH" });
@@ -77,7 +81,7 @@ describe("standalone Svelte viewer placement", () => {
       .fn()
       .mockResolvedValueOnce({ ok: true, json: async () => viewerReply("HLS", "first") })
       .mockResolvedValueOnce({ ok: true, json: async () => viewerReply("HLS", "second") });
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({ contentId: "playback", protocol: "HLS" });
     await vi.waitFor(() => expect(get(resolver).status).toBe("ready"));
     resolver.refetch();
@@ -91,7 +95,7 @@ describe("standalone Svelte viewer placement", () => {
   it("cannot be resurrected by a late body, refetch or update after destruction", async () => {
     const old = deferredReply();
     const fetcher = vi.fn(async () => ({ ok: true, json: () => old.promise }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({ contentId: "playback", protocol: "HLS" });
     resolver.destroy();
     old.resolve(viewerReply("HLS"));
@@ -100,12 +104,14 @@ describe("standalone Svelte viewer placement", () => {
     resolver.update({ contentId: "replacement" });
     await Promise.resolve();
     expect(get(resolver)).toEqual({ endpoints: null, status: "idle", error: null });
-    expect(fetcher).toHaveBeenCalledOnce();
+    // A required format waits for the gateway check, which the synchronous
+    // destroy outruns, so no resolve is ever sent.
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("rejects a different output format rather than borrowing its URL", async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => viewerReply("DASH") }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const resolver = createEndpointResolver({ contentId: "playback", protocol: "HLS" });
     await vi.waitFor(() => expect(get(resolver).status).toBe("error"));
     expect(get(resolver).endpoints).toBeNull();

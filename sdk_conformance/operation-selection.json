@@ -1,0 +1,61 @@
+{
+  "cases": [
+    {
+      "name": "fragment before mutation",
+      "document": "fragment Result on Stream { id } mutation Create { createStream { ...Result } }",
+      "kind": "mutation",
+      "selectedName": "Create"
+    },
+    {
+      "name": "selected mutation after query",
+      "document": "query Read { streams { id } } mutation Create { createStream { id } }",
+      "operationName": "Create",
+      "kind": "mutation",
+      "selectedName": "Create"
+    },
+    {
+      "name": "selected query after mutation",
+      "document": "mutation Create { createStream { id } } query Read { streams { id } }",
+      "operationName": "Read",
+      "kind": "query",
+      "selectedName": "Read"
+    },
+    {
+      "name": "ignored tokens before mutation",
+      "document": "\ufeff, # query Fake { id }\nmutation Create { createStream { id } }",
+      "kind": "mutation",
+      "selectedName": "Create"
+    },
+    {
+      "name": "keyword inside string",
+      "document": "mutation Create { createStream(name: \"query Read { id }\") { id } }",
+      "kind": "mutation",
+      "selectedName": "Create"
+    },
+    {
+      "name": "anonymous query",
+      "document": "{ streams { id } }",
+      "kind": "query",
+      "selectedName": null
+    },
+    {
+      "name": "subscription",
+      "document": "subscription Events { events { id } }",
+      "kind": "subscription",
+      "selectedName": "Events"
+    },
+    {
+      "name": "ambiguous operations",
+      "document": "query Read { id } mutation Create { id }",
+      "invalid": true
+    },
+    {
+      "name": "unknown operation",
+      "document": "mutation Create { id }",
+      "operationName": "Missing",
+      "invalid": true
+    },
+    { "name": "only a fragment", "document": "fragment Result on Stream { id }", "invalid": true },
+    { "name": "invalid syntax", "document": "mutation Create {", "invalid": true }
+  ]
+}

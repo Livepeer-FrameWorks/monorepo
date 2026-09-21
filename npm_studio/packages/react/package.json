@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-react",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "type": "module",
   "description": "React hooks for StreamCrafter browser streaming",
   "main": "dist/esm/index.js",
@@ -65,5 +65,10 @@
     "ingest"
   ],
   "author": "Livepeer FrameWorks",
-  "license": "Unlicense"
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Livepeer-FrameWorks/monorepo.git",
+    "directory": "npm_studio/packages/react"
+  }
 }

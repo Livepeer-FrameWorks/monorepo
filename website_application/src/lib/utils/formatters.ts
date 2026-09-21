@@ -204,13 +204,106 @@ export function formatResolution(resolution: string): string {
   return resolutionMap[resolution] || resolution;
 }
 
-export function formatCurrency(amount: number, currency: string = "USD"): string {
+/**
+ * Formats a money amount in major units. The currency is always explicit: the
+ * prepaid ledger and invoice amounts are EUR, while charges are in the tenant's
+ * presentment currency.
+ */
+export function formatCurrency(amount: number, currency: string): string {
   if (amount === null || amount === undefined || isNaN(amount)) return "N/A";
 
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: currency,
   }).format(amount);
+}
+
+/** Formats a money amount given in minor units (cents). */
+export function formatCents(cents: number, currency: string): string {
+  if (cents === null || cents === undefined || isNaN(cents)) return "N/A";
+  return formatCurrency(cents / 100, currency);
+}
+
+/** Decimal string of an ECB rate without trailing zeros, e.g. "1.1698". */
+export function formatUnitsPerEur(unitsPerEur: string): string {
+  const trimmed = unitsPerEur.trim();
+  return trimmed.includes(".") ? trimmed.replace(/0+$/, "").replace(/\.$/, "") : trimmed;
+}
+
+/**
+ * States the ECB rate of a conversion, e.g. "1.1698 USD per EUR, ECB reference
+ * rate of 2026-09-16". Returns null for EUR, which converts at the identity.
+ */
+export function formatEcbRate(
+  currency: string | null | undefined,
+  unitsPerEur: string | null | undefined,
+  referenceDate: string | null | undefined
+): string | null {
+  if (!currency || currency.toUpperCase() === "EUR" || !unitsPerEur || !referenceDate) {
+    return null;
+  }
+  return `${formatUnitsPerEur(unitsPerEur)} ${currency.toUpperCase()} per EUR, ECB reference rate of ${referenceDate}`;
+}
+
+export interface CurrencyConversionFields {
+  originalAmountCents: number;
+  originalCurrency: string;
+  eurAmountCents: number;
+  unitsPerEur: string;
+  referenceDate: string;
+}
+
+/**
+ * Describes the EUR amount of a non-EUR payment, e.g. "€21.37 at 1.1698 USD
+ * per EUR, ECB reference rate of 2026-09-16". Returns null for EUR payments
+ * and payments without a conversion.
+ */
+export function formatEurConversion(
+  conversion: CurrencyConversionFields | null | undefined
+): string | null {
+  if (!conversion) return null;
+  const rate = formatEcbRate(
+    conversion.originalCurrency,
+    conversion.unitsPerEur,
+    conversion.referenceDate
+  );
+  if (!rate) return null;
+  return `${formatCents(conversion.eurAmountCents, "EUR")} at ${rate}`;
+}
+
+export interface InvoicePresentmentFields {
+  amount: number | string;
+  currency: string;
+  presentmentAmountCents?: number | null;
+  presentmentCurrency?: string | null;
+  presentmentUnitsPerEur?: string | null;
+  presentmentReferenceDate?: string | null;
+}
+
+/**
+ * The amount an invoice charges and, when it is presented in another currency
+ * than EUR, the EUR total with the rate and reference date. Drafts carry no
+ * presentment fields and show their EUR amount.
+ */
+export function invoiceChargeDisplay(invoice: InvoicePresentmentFields): {
+  charged: string;
+  eurNote: string | null;
+} {
+  const eurAmount = typeof invoice.amount === "number" ? invoice.amount : Number(invoice.amount);
+  const eurTotal = formatCurrency(eurAmount, invoice.currency);
+  if (invoice.presentmentAmountCents == null || !invoice.presentmentCurrency) {
+    return { charged: eurTotal, eurNote: null };
+  }
+  const charged = formatCents(invoice.presentmentAmountCents, invoice.presentmentCurrency);
+  if (invoice.presentmentCurrency.toUpperCase() === "EUR") {
+    return { charged, eurNote: null };
+  }
+  const rate = formatEcbRate(
+    invoice.presentmentCurrency,
+    invoice.presentmentUnitsPerEur,
+    invoice.presentmentReferenceDate
+  );
+  return { charged, eurNote: rate ? `${eurTotal} at ${rate}` : eurTotal };
 }
 
 const TOKEN_DECIMALS: Record<string, number> = {

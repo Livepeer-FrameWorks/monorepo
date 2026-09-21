@@ -4,22 +4,21 @@ import {
   ViewerMetricsStreamStore,
   SystemHealthStore,
   TrackListUpdatesStore,
-  ClipLifecycleStore,
-  DvrLifecycleStore,
+  TenantEventsStore,
 } from "$houdini";
-import type {
-  StreamEvents$result,
-  TrackListUpdates$result,
-  ClipLifecycle$result,
-  DvrLifecycle$result,
-} from "$houdini";
+import type { StreamEvents$result, TrackListUpdates$result } from "$houdini";
 import { browser } from "$app/environment";
+import {
+  CLIP_EVENT_TYPES,
+  RECORDING_EVENT_TYPES,
+  artifactEventFromTenantEvent,
+  upsertArtifactEvent,
+  type ArtifactEvent,
+} from "$lib/library/artifact-events";
 
 // Type aliases for subscription results
 type StreamEventData = NonNullable<StreamEvents$result["liveStreamEvents"]>;
 type TrackListEventData = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
-type ClipLifecycleEventData = NonNullable<ClipLifecycle$result["liveClipLifecycle"]>;
-type DvrLifecycleEventData = NonNullable<DvrLifecycle$result["liveDvrLifecycle"]>;
 
 // Real-time per-client connection event from ViewerMetrics subscription
 interface StreamMetric {
@@ -101,17 +100,17 @@ export const realtimeViewers = derived(streamMetrics, ($metrics) => {
 // Track list updates per stream
 export const trackListUpdates = writable<Record<string, TrackListEventData>>({});
 
-// Clip/DVR lifecycle events
-export const clipLifecycleEvents = writable<ClipLifecycleEventData[]>([]);
-export const dvrLifecycleEvents = writable<DvrLifecycleEventData[]>([]);
+// Latest public clip and recording event per artifact, newest first
+export const clipEvents = writable<ArtifactEvent[]>([]);
+export const recordingEvents = writable<ArtifactEvent[]>([]);
 
 // Active Houdini subscription stores
 let streamEventsStore: StreamEventsStore | null = null;
 let viewerMetricsStores: Record<string, ViewerMetricsStreamStore> = {};
 let systemHealthStore: SystemHealthStore | null = null;
 let trackListStores: Record<string, TrackListUpdatesStore> = {};
-let clipLifecycleStores: Record<string, ClipLifecycleStore> = {};
-let dvrLifecycleStores: Record<string, DvrLifecycleStore> = {};
+let clipEventStores: Record<string, TenantEventsStore> = {};
+let recordingEventStores: Record<string, TenantEventsStore> = {};
 
 // Effect cleanup functions
 let cleanupFunctions: Array<() => void> = [];
@@ -394,94 +393,69 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
   }
 }
 
-export function subscribeToClipLifecycle(streamId: string): () => void {
+// subscribeToArtifactEvents listens to the stream's public events of types and
+// keeps the latest event per artifact in target.
+function subscribeToArtifactEvents(
+  label: string,
+  stores: Record<string, TenantEventsStore>,
+  types: string[],
+  target: typeof clipEvents,
+  streamId: string
+): () => void {
   if (!browser || !streamId) return () => {};
 
-  if (clipLifecycleStores[streamId]) {
-    clipLifecycleStores[streamId].unlisten();
+  if (stores[streamId]) {
+    stores[streamId].unlisten();
   }
 
   try {
-    const store = new ClipLifecycleStore();
-    clipLifecycleStores[streamId] = store;
-    store.listen({ streamId });
+    const store = new TenantEventsStore();
+    stores[streamId] = store;
+    store.listen({ types, streamId });
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
-        console.warn(`[ClipLifecycle:${streamId}] Subscription error:`, result.errors);
+        console.warn(`[${label}:${streamId}] Subscription error:`, result.errors);
         return;
       }
-
-      if (result.data?.liveClipLifecycle) {
-        const event = result.data.liveClipLifecycle;
-        clipLifecycleEvents.update((events) => {
-          const existingIndex = events.findIndex((e) => e.clipHash === event.clipHash);
-          if (existingIndex >= 0) {
-            const updated = [...events];
-            updated[existingIndex] = event;
-            return updated;
-          }
-          return [event, ...events.slice(0, 99)];
-        });
+      const tenantEvent = result.data?.tenantEvents;
+      const event = tenantEvent ? artifactEventFromTenantEvent(tenantEvent) : null;
+      if (event) {
+        target.update((events) => upsertArtifactEvent(events, event));
       }
     });
 
     return () => {
       unsubscribe();
-      if (clipLifecycleStores[streamId]) {
-        clipLifecycleStores[streamId].unlisten();
-        delete clipLifecycleStores[streamId];
+      if (stores[streamId] === store) {
+        store.unlisten();
+        delete stores[streamId];
       }
     };
   } catch (error) {
-    console.error(`Failed to subscribe to clip lifecycle for ${streamId}:`, error);
+    console.error(`Failed to subscribe to ${label} for ${streamId}:`, error);
     return () => {};
   }
 }
 
-export function subscribeToDvrLifecycle(streamId: string): () => void {
-  if (!browser || !streamId) return () => {};
+export function subscribeToClipEvents(streamId: string): () => void {
+  return subscribeToArtifactEvents(
+    "ClipEvents",
+    clipEventStores,
+    CLIP_EVENT_TYPES,
+    clipEvents,
+    streamId
+  );
+}
 
-  if (dvrLifecycleStores[streamId]) {
-    dvrLifecycleStores[streamId].unlisten();
-  }
-
-  try {
-    const store = new DvrLifecycleStore();
-    dvrLifecycleStores[streamId] = store;
-    store.listen({ streamId });
-
-    const unsubscribe = store.subscribe((result) => {
-      if (result.errors?.length) {
-        console.warn(`[DvrLifecycle:${streamId}] Subscription error:`, result.errors);
-        return;
-      }
-
-      if (result.data?.liveDvrLifecycle) {
-        const event = result.data.liveDvrLifecycle;
-        dvrLifecycleEvents.update((events) => {
-          const existingIndex = events.findIndex((e) => e.dvrHash === event.dvrHash);
-          if (existingIndex >= 0) {
-            const updated = [...events];
-            updated[existingIndex] = event;
-            return updated;
-          }
-          return [event, ...events.slice(0, 99)];
-        });
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      if (dvrLifecycleStores[streamId]) {
-        dvrLifecycleStores[streamId].unlisten();
-        delete dvrLifecycleStores[streamId];
-      }
-    };
-  } catch (error) {
-    console.error(`Failed to subscribe to DVR lifecycle for ${streamId}:`, error);
-    return () => {};
-  }
+export function subscribeToRecordingEvents(streamId: string): () => void {
+  return subscribeToArtifactEvents(
+    "RecordingEvents",
+    recordingEventStores,
+    RECORDING_EVENT_TYPES,
+    recordingEvents,
+    streamId
+  );
 }
 
 export function cleanupStaleMetrics(validStreamIds: string[]): void {
@@ -524,11 +498,11 @@ export function disconnectWebSocket(): void {
   Object.values(trackListStores).forEach((store) => store.unlisten());
   trackListStores = {};
 
-  Object.values(clipLifecycleStores).forEach((store) => store.unlisten());
-  clipLifecycleStores = {};
+  Object.values(clipEventStores).forEach((store) => store.unlisten());
+  clipEventStores = {};
 
-  Object.values(dvrLifecycleStores).forEach((store) => store.unlisten());
-  dvrLifecycleStores = {};
+  Object.values(recordingEventStores).forEach((store) => store.unlisten());
+  recordingEventStores = {};
 
   if (systemHealthStore) {
     systemHealthStore.unlisten();

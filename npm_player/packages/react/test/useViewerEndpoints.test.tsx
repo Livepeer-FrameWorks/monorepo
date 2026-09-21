@@ -1,7 +1,11 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useViewerEndpoints, type ViewerEndpointsParams } from "../src/hooks/useViewerEndpoints";
-import { viewerReply, deferredReply } from "../../test-contract/viewer-endpoint-fixtures";
+import {
+  viewerReply,
+  deferredReply,
+  supportedGateway,
+} from "../../test-contract/viewer-endpoint-fixtures";
 
 afterEach(() => {
   cleanup();
@@ -12,7 +16,7 @@ afterEach(() => {
 describe("standalone React viewer placement", () => {
   it("uses the typed client, forwards both credentials and decodes only prepared output", async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => viewerReply("HLS") }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const hook = renderHook(() =>
       useViewerEndpoints({
         contentId: "playback",
@@ -44,7 +48,7 @@ describe("standalone React viewer placement", () => {
       .fn()
       .mockResolvedValueOnce({ ok: true, json: () => old.promise })
       .mockResolvedValueOnce({ ok: true, json: async () => viewerReply("DASH") });
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const hook = renderHook((params: ViewerEndpointsParams) => useViewerEndpoints(params), {
       initialProps: { contentId: "playback", protocol: "HLS" } as ViewerEndpointsParams,
     });
@@ -62,7 +66,7 @@ describe("standalone React viewer placement", () => {
   it("clears a selected destination immediately when content is cleared", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, json: async () => viewerReply("HLS") }))
+      supportedGateway(vi.fn(async () => ({ ok: true, json: async () => viewerReply("HLS") })))
     );
     const hook = renderHook(({ contentId }) => useViewerEndpoints({ contentId, protocol: "HLS" }), {
       initialProps: { contentId: "playback" },
@@ -74,7 +78,7 @@ describe("standalone React viewer placement", () => {
 
   it("rejects a mismatched format without an unqualified query", async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => viewerReply("DASH") }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const hook = renderHook(() => useViewerEndpoints({ contentId: "playback", protocol: "HLS" }));
     await waitFor(() => expect(hook.result.current.status).toBe("error"));
     expect(hook.result.current.endpoints).toBeNull();
@@ -84,7 +88,7 @@ describe("standalone React viewer placement", () => {
   it("cancels a pending retry on unmount", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn(async () => ({ ok: false, status: 503 }));
-    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("fetch", supportedGateway(fetcher));
     const hook = renderHook(() => useViewerEndpoints({ contentId: "playback", protocol: "HLS" }));
     await act(async () => {
       await Promise.resolve();

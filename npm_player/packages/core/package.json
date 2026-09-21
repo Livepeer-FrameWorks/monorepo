@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-core",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "type": "module",
   "description": "Core player logic for FrameWorks streaming - framework agnostic",
   "main": "dist/esm/index.js",
@@ -44,6 +44,7 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
+    "@livepeer-frameworks/api": "workspace:^",
     "clsx": "^2.1.1",
     "tailwind-merge": "^3.5.0"
   },
@@ -94,5 +95,10 @@
     "dash"
   ],
   "author": "Livepeer FrameWorks",
-  "license": "Unlicense"
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Livepeer-FrameWorks/monorepo.git",
+    "directory": "npm_player/packages/core"
+  }
 }

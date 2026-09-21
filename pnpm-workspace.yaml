@@ -6,6 +6,7 @@ packages:
   - npm_player/packages/*
   - npm_player/playground
   - npm_studio/packages/*
+  - npm_api
   - website_docs
 
 injectWorkspacePackages: true

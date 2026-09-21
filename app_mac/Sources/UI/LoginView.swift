@@ -97,6 +97,7 @@ struct LoginView: View {
         try await AuthService.shared.loginWithBrowser(appState: appState)
         guard !Task.isCancelled else { return }
         await ensureCLIContextIfNeeded(bridgeURL: trimmed)
+        await ServerInfoService.shared.refresh(appState: appState)
         await MainActor.run {
           isLoading = false
           loginTask = nil

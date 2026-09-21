@@ -3,6 +3,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { GetPrepaidBalanceStore } from "$houdini";
+  import { formatCents } from "$lib/utils/formatters";
 
   const WalletIcon = getIconComponent("Wallet");
   const AlertIcon = getIconComponent("AlertTriangle");
@@ -14,6 +15,7 @@
   let balanceCents = $state(0);
   let reservedBalanceCents = $state(0);
   let availableBalanceCents = $state(0);
+  // The prepaid ledger is EUR; the response confirms it.
   let currency = $state("EUR");
   let isLowBalance = $state(false);
   let error = $state<string | null>(null);
@@ -26,7 +28,7 @@
     loading = true;
     error = null;
     try {
-      const result = await balanceQuery.fetch({ variables: { currency } });
+      const result = await balanceQuery.fetch();
       if (result.data?.prepaidBalance) {
         balanceCents = result.data.prepaidBalance.balanceCents;
         reservedBalanceCents = result.data.prepaidBalance.reservedBalanceCents;
@@ -41,15 +43,7 @@
     }
   }
 
-  function formatCurrency(cents: number, curr: string): string {
-    const amount = cents / 100;
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: curr,
-    }).format(amount);
-  }
-
-  const balanceDisplay = $derived(formatCurrency(availableBalanceCents, currency));
+  const balanceDisplay = $derived(formatCents(availableBalanceCents, currency));
   const isNegative = $derived(availableBalanceCents < 0);
 </script>
 
@@ -81,8 +75,8 @@
           <span class="text-sm text-muted-foreground">{currency}</span>
         </div>
         <div class="text-xs text-muted-foreground">
-          {formatCurrency(balanceCents, currency)} settled ·
-          {formatCurrency(reservedBalanceCents, currency)} reserved in active usage
+          {formatCents(balanceCents, currency)} settled ·
+          {formatCents(reservedBalanceCents, currency)} reserved in active usage
         </div>
 
         {#if isLowBalance}

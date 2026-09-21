@@ -1,0 +1,378 @@
+{
+  "description": "Error shapes. Each case runs one query with retries off (maxAttempts 1) against one scripted response and checks the typed error. A response whose JSON body has an errors array is a GraphQL response at any status; otherwise a non-2xx status maps to an HTTP error. GraphQL errors map by extensions.code of the first error: UNAUTHORIZED to AuthenticationError, RATE_LIMITED to RateLimitError, GRAPHQL_VALIDATION_FAILED and GRAPHQL_PARSE_FAILED to SchemaMismatchError, anything else to GraphQLError. For HTTP errors code is the body's code field and message its message, then error field. When expectResult is set, the named data field is a result union: a __typename in success is returned, any other member becomes ResultError. Only the fields listed under error are checked; a listed null means the field must be absent or null.",
+  "cases": [
+    {
+      "name": "network failure",
+      "response": { "networkError": true },
+      "error": { "kind": "NetworkError" }
+    },
+    {
+      "name": "401 from the gateway",
+      "response": { "status": 401, "body": { "error": "authentication failed" } },
+      "error": {
+        "kind": "AuthenticationError",
+        "status": 401,
+        "code": null,
+        "message": "authentication failed"
+      }
+    },
+    {
+      "name": "402 with x402 payment requirements",
+      "response": {
+        "status": 402,
+        "body": {
+          "error": "insufficient_balance",
+          "message": "Insufficient balance - please top up to continue",
+          "code": "INSUFFICIENT_BALANCE",
+          "operation": "CreateStream",
+          "topup_url": "/account/billing",
+          "x402Version": 2,
+          "accepts": []
+        }
+      },
+      "error": {
+        "kind": "PaymentRequiredError",
+        "status": 402,
+        "code": "INSUFFICIENT_BALANCE",
+        "message": "Insufficient balance - please top up to continue"
+      }
+    },
+    {
+      "name": "402 payment setup required",
+      "response": {
+        "status": 402,
+        "body": {
+          "error": "payment_setup_required",
+          "message": "confirmed Stripe or Mollie collection setup is required for this paid tier",
+          "code": "PAYMENT_SETUP_REQUIRED"
+        }
+      },
+      "error": { "kind": "PaymentRequiredError", "status": 402, "code": "PAYMENT_SETUP_REQUIRED" }
+    },
+    {
+      "name": "429 rate limit with Retry-After",
+      "response": {
+        "status": 429,
+        "headers": { "Retry-After": "30" },
+        "body": {
+          "error": "rate_limit_exceeded",
+          "message": "Too many requests. Please retry after the specified time.",
+          "limit": 60,
+          "retry_after": 30
+        }
+      },
+      "error": {
+        "kind": "RateLimitError",
+        "status": 429,
+        "retryAfterSeconds": 30,
+        "message": "Too many requests. Please retry after the specified time."
+      }
+    },
+    {
+      "name": "500 with a text body",
+      "response": { "status": 500, "bodyText": "upstream error" },
+      "error": { "kind": "ServerError", "status": 500, "code": null }
+    },
+    {
+      "name": "503 settlement pending",
+      "response": {
+        "status": 503,
+        "headers": { "Retry-After": "3" },
+        "body": {
+          "error": "settlement_pending",
+          "code": "SETTLEMENT_PENDING",
+          "message": "payment settlement is pending",
+          "retry_same_payment": true
+        }
+      },
+      "error": {
+        "kind": "ServerError",
+        "status": 503,
+        "code": "SETTLEMENT_PENDING",
+        "retryAfterSeconds": 3
+      }
+    },
+    {
+      "name": "400 idempotency key required",
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "idempotency_key_required",
+          "code": "IDEMPOTENCY_KEY_REQUIRED",
+          "message": "paid GraphQL mutations require an Idempotency-Key containing 8-255 characters"
+        }
+      },
+      "error": { "kind": "HTTPError", "status": 400, "code": "IDEMPOTENCY_KEY_REQUIRED" }
+    },
+    {
+      "name": "409 paid mutation in progress",
+      "response": {
+        "status": 409,
+        "headers": { "Retry-After": "2" },
+        "body": {
+          "error": "paid_mutation_in_progress",
+          "code": "PAID_MUTATION_IN_PROGRESS",
+          "message": "the paid mutation outcome is still being recorded; retry with the same key"
+        }
+      },
+      "error": {
+        "kind": "HTTPError",
+        "status": 409,
+        "code": "PAID_MUTATION_IN_PROGRESS",
+        "retryAfterSeconds": 2
+      }
+    },
+    {
+      "name": "200 with a body that is not JSON",
+      "response": { "status": 200, "bodyText": "<html>maintenance</html>" },
+      "error": { "kind": "ProtocolError", "status": 200 }
+    },
+    {
+      "name": "200 with neither data nor errors",
+      "response": { "status": 200, "body": {} },
+      "error": { "kind": "ProtocolError", "status": 200 }
+    },
+    {
+      "name": "GraphQL UNAUTHORIZED",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": null,
+          "errors": [
+            { "message": "authentication required", "extensions": { "code": "UNAUTHORIZED" } }
+          ]
+        }
+      },
+      "error": {
+        "kind": "AuthenticationError",
+        "code": "UNAUTHORIZED",
+        "status": null,
+        "message": "authentication required"
+      }
+    },
+    {
+      "name": "GraphQL FORBIDDEN",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": { "stream": null },
+          "errors": [
+            {
+              "message": "permission denied",
+              "path": ["stream"],
+              "extensions": { "code": "FORBIDDEN" }
+            }
+          ]
+        }
+      },
+      "error": {
+        "kind": "GraphQLError",
+        "code": "FORBIDDEN",
+        "message": "permission denied",
+        "path": ["stream"]
+      }
+    },
+    {
+      "name": "GraphQL NOT_FOUND",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": { "stream": null },
+          "errors": [
+            {
+              "message": "resource not found",
+              "path": ["stream"],
+              "extensions": { "code": "NOT_FOUND" }
+            }
+          ]
+        }
+      },
+      "error": { "kind": "GraphQLError", "code": "NOT_FOUND" }
+    },
+    {
+      "name": "GraphQL VALIDATION_ERROR",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": null,
+          "errors": [
+            {
+              "message": "invalid request",
+              "path": ["createPushTarget"],
+              "extensions": { "code": "VALIDATION_ERROR" }
+            }
+          ]
+        }
+      },
+      "error": { "kind": "GraphQLError", "code": "VALIDATION_ERROR" }
+    },
+    {
+      "name": "GraphQL RATE_LIMITED",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": null,
+          "errors": [{ "message": "rate limit exceeded", "extensions": { "code": "RATE_LIMITED" } }]
+        }
+      },
+      "error": { "kind": "RateLimitError", "code": "RATE_LIMITED", "status": null }
+    },
+    {
+      "name": "GraphQL error without a code",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": { "a": 1 },
+          "errors": [{ "message": "stream name is required", "path": ["a"] }]
+        }
+      },
+      "error": {
+        "kind": "GraphQLError",
+        "code": null,
+        "message": "stream name is required",
+        "path": ["a"]
+      }
+    },
+    {
+      "name": "422 schema mismatch from a server that lacks a field",
+      "response": {
+        "status": 422,
+        "body": {
+          "data": null,
+          "errors": [
+            {
+              "message": "Cannot query field \"tenantEvents\" on type \"Subscription\".",
+              "locations": [{ "line": 2, "column": 3 }],
+              "extensions": { "code": "GRAPHQL_VALIDATION_FAILED" }
+            }
+          ]
+        }
+      },
+      "error": { "kind": "SchemaMismatchError", "status": 422, "code": "GRAPHQL_VALIDATION_FAILED" }
+    },
+    {
+      "name": "422 parse failure",
+      "response": {
+        "status": 422,
+        "body": {
+          "data": null,
+          "errors": [
+            {
+              "message": "Expected Name, found <EOF>",
+              "extensions": { "code": "GRAPHQL_PARSE_FAILED" }
+            }
+          ]
+        }
+      },
+      "error": { "kind": "SchemaMismatchError", "code": "GRAPHQL_PARSE_FAILED" }
+    },
+    {
+      "name": "result union ValidationError",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "createStream": {
+              "__typename": "ValidationError",
+              "message": "name is required",
+              "code": "REQUIRED",
+              "field": "name",
+              "constraint": null
+            }
+          }
+        }
+      },
+      "expectResult": { "field": "createStream", "success": ["Stream"] },
+      "error": {
+        "kind": "ResultError",
+        "typename": "ValidationError",
+        "message": "name is required",
+        "code": "REQUIRED",
+        "field": "name"
+      }
+    },
+    {
+      "name": "result union NotFoundError",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "deleteStream": {
+              "__typename": "NotFoundError",
+              "message": "stream not found",
+              "code": "NOT_FOUND",
+              "resourceType": "stream",
+              "resourceId": "5b0e6a2c"
+            }
+          }
+        }
+      },
+      "expectResult": { "field": "deleteStream", "success": ["DeleteSuccess"] },
+      "error": {
+        "kind": "ResultError",
+        "typename": "NotFoundError",
+        "code": "NOT_FOUND",
+        "resourceType": "stream",
+        "resourceId": "5b0e6a2c"
+      }
+    },
+    {
+      "name": "result union AuthError",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "deleteStream": {
+              "__typename": "AuthError",
+              "message": "not allowed",
+              "code": "FORBIDDEN"
+            }
+          }
+        }
+      },
+      "expectResult": { "field": "deleteStream", "success": ["DeleteSuccess"] },
+      "error": { "kind": "ResultError", "typename": "AuthError", "code": "FORBIDDEN" }
+    },
+    {
+      "name": "result union RateLimitError",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "createDeveloperToken": {
+              "__typename": "RateLimitError",
+              "message": "too many tokens",
+              "code": "RATE_LIMITED",
+              "retryAfter": 60
+            }
+          }
+        }
+      },
+      "expectResult": { "field": "createDeveloperToken", "success": ["DeveloperToken"] },
+      "error": { "kind": "ResultError", "typename": "RateLimitError", "retryAfterSeconds": 60 }
+    },
+    {
+      "name": "result union success member is returned",
+      "response": {
+        "status": 200,
+        "body": {
+          "data": {
+            "deleteStream": {
+              "__typename": "DeleteSuccess",
+              "success": true,
+              "deletedId": "5b0e6a2c",
+              "pending": null
+            }
+          }
+        }
+      },
+      "expectResult": { "field": "deleteStream", "success": ["DeleteSuccess"] },
+      "result": {
+        "__typename": "DeleteSuccess",
+        "success": true,
+        "deletedId": "5b0e6a2c",
+        "pending": null
+      }
+    }
+  ]
+}

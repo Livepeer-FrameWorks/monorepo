@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-core",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "type": "module",
   "description": "Core streaming logic for StreamCrafter - framework agnostic WebCodecs-based browser streaming",
   "main": "dist/esm/index.js",
@@ -36,6 +36,9 @@
     "test:coverage": "vitest run -c vitest.config.ts --coverage",
     "test:mutation": "stryker run"
   },
+  "dependencies": {
+    "@livepeer-frameworks/api": "workspace:^"
+  },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.2",
     "@rollup/plugin-node-resolve": "^16.0.3",
@@ -58,5 +61,10 @@
     "broadcast"
   ],
   "author": "Livepeer FrameWorks",
-  "license": "Unlicense"
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Livepeer-FrameWorks/monorepo.git",
+    "directory": "npm_studio/packages/core"
+  }
 }

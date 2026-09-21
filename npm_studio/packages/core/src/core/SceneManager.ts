@@ -879,7 +879,6 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.frameFallbacks.set(sourceId, fallback);
 
     const intervalMs = Math.max(16, Math.floor(1000 / Math.max(1, this.config.frameRate)));
-    let pushFrame: () => Promise<void>;
 
     const schedule = () => {
       if (fallback.stopped) return;
@@ -914,7 +913,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       }
     };
 
-    pushFrame = async () => {
+    // schedule() and pushFrame() call each other; schedule first runs below, after both exist.
+    const pushFrame = async (): Promise<void> => {
       if (fallback.stopped) return;
       if (!fallback.busy) {
         fallback.busy = true;

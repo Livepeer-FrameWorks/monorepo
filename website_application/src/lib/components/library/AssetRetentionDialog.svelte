@@ -16,6 +16,7 @@
     type MediaRetentionTarget$options,
   } from "$houdini";
   import { toast } from "$lib/stores/toast";
+  import { getRecordingRetentionMaxDays } from "$lib/stores/capabilities.svelte";
   import { AlertTriangle, RotateCcw, Save } from "lucide-svelte";
 
   // Per-asset retention editor used by the library page for DVR / clip / VOD
@@ -51,6 +52,10 @@
 
   let proposedDays = $state<number | null>(null);
   let saving = $state(false);
+
+  // The tier's upper bound on retention. Null means the tier is uncapped or
+  // the cap has not been read yet; the server clamps in either case.
+  let maxDays = $derived(getRecordingRetentionMaxDays());
 
   $effect(() => {
     if (open) {
@@ -171,11 +176,16 @@
           id="retention-days"
           type="number"
           min="0"
+          max={maxDays ?? undefined}
           bind:value={proposedDays}
           disabled={saving}
         />
         <div class="text-xs text-muted-foreground mt-1">
-          0 = keep forever (paid tiers only; Free clamps to the tier cap).
+          {#if maxDays !== null}
+            Your tier caps retention at {maxDays} days; longer values are clamped.
+          {:else}
+            0 = keep forever (paid tiers only; Free clamps to the tier cap).
+          {/if}
         </div>
       </div>
       <div class="border border-warning/30 bg-warning/5 rounded p-2 text-xs flex items-start gap-2">
@@ -191,7 +201,9 @@
       <Button variant="outline" onclick={resetToDefault} disabled={saving}>
         <RotateCcw class="w-4 h-4 mr-1" /> Use default
       </Button>
-      <Button variant="outline" onclick={() => save(true)} disabled={saving}>Keep forever</Button>
+      <Button variant="outline" onclick={() => save(true)} disabled={saving || maxDays !== null}>
+        Keep forever
+      </Button>
       <Button onclick={() => save(false)} disabled={saving || proposedDays === null}>
         <Save class="w-4 h-4 mr-1" /> Save
       </Button>

@@ -6,7 +6,8 @@
   "packageManager": "pnpm@10.30.3",
   "description": "FrameWorks streaming player - monorepo workspace",
   "scripts": {
-    "build": "pnpm run build:core && pnpm run build:react && pnpm run build:svelte && pnpm run build:wc",
+    "build": "pnpm run build:api && pnpm run build:core && pnpm run build:react && pnpm run build:svelte && pnpm run build:wc",
+    "build:api": "pnpm --filter @livepeer-frameworks/api build",
     "build:core": "pnpm --filter @livepeer-frameworks/player-core build",
     "build:react": "pnpm --filter @livepeer-frameworks/player-react build",
     "build:svelte": "pnpm --filter @livepeer-frameworks/player-svelte build",

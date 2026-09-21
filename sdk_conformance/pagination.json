@@ -1,0 +1,127 @@
+{
+  "description": "Pagination strategies. Each case drives one paginator with a page function that returns the listed pages in order and records the page request it was called with. relay requests {first, after} and reads nodes and pageInfo {hasNextPage, endCursor}; offset requests {first, offset} and reads nodes and hasNextPage, advancing offset by the rows returned; pageToken requests {pageSize, pageToken} and reads the itemsField list and nextPageToken. A paginator stops when the page says there is no next page, returns no rows, or has no cursor or token to continue with, and after maxItems rows when maxItems is set. expectRequests lists every page request made.",
+  "cases": [
+    {
+      "name": "relay follows endCursor until hasNextPage is false",
+      "strategy": "relay",
+      "pageSize": 2,
+      "pages": [
+        {
+          "nodes": [{ "id": "a" }, { "id": "b" }],
+          "pageInfo": { "hasNextPage": true, "endCursor": "c2" }
+        },
+        { "nodes": [{ "id": "c" }], "pageInfo": { "hasNextPage": false, "endCursor": "c3" } }
+      ],
+      "expectRequests": [
+        { "first": 2, "after": null },
+        { "first": 2, "after": "c2" }
+      ],
+      "expectItems": [{ "id": "a" }, { "id": "b" }, { "id": "c" }]
+    },
+    {
+      "name": "relay stops at maxItems without requesting another page",
+      "strategy": "relay",
+      "pageSize": 2,
+      "maxItems": 3,
+      "pages": [
+        {
+          "nodes": [{ "id": "a" }, { "id": "b" }],
+          "pageInfo": { "hasNextPage": true, "endCursor": "c2" }
+        },
+        {
+          "nodes": [{ "id": "c" }, { "id": "d" }],
+          "pageInfo": { "hasNextPage": true, "endCursor": "c4" }
+        }
+      ],
+      "expectRequests": [
+        { "first": 2, "after": null },
+        { "first": 2, "after": "c2" }
+      ],
+      "expectItems": [{ "id": "a" }, { "id": "b" }, { "id": "c" }]
+    },
+    {
+      "name": "relay stops when hasNextPage has no endCursor",
+      "strategy": "relay",
+      "pageSize": 2,
+      "pages": [
+        { "nodes": [{ "id": "a" }], "pageInfo": { "hasNextPage": true, "endCursor": null } }
+      ],
+      "expectRequests": [{ "first": 2, "after": null }],
+      "expectItems": [{ "id": "a" }]
+    },
+    {
+      "name": "relay stops on an empty page",
+      "strategy": "relay",
+      "pageSize": 2,
+      "pages": [{ "nodes": [], "pageInfo": { "hasNextPage": true, "endCursor": "c0" } }],
+      "expectRequests": [{ "first": 2, "after": null }],
+      "expectItems": []
+    },
+    {
+      "name": "offset advances by the rows returned",
+      "strategy": "offset",
+      "pageSize": 2,
+      "pages": [
+        { "nodes": [{ "id": "a" }, { "id": "b" }], "hasNextPage": true },
+        { "nodes": [{ "id": "c" }], "hasNextPage": true },
+        { "nodes": [{ "id": "d" }], "hasNextPage": false }
+      ],
+      "expectRequests": [
+        { "first": 2, "offset": 0 },
+        { "first": 2, "offset": 2 },
+        { "first": 2, "offset": 3 }
+      ],
+      "expectItems": [{ "id": "a" }, { "id": "b" }, { "id": "c" }, { "id": "d" }]
+    },
+    {
+      "name": "offset stops on an empty page even when hasNextPage is true",
+      "strategy": "offset",
+      "pageSize": 2,
+      "pages": [
+        { "nodes": [{ "id": "a" }, { "id": "b" }], "hasNextPage": true },
+        { "nodes": [], "hasNextPage": true }
+      ],
+      "expectRequests": [
+        { "first": 2, "offset": 0 },
+        { "first": 2, "offset": 2 }
+      ],
+      "expectItems": [{ "id": "a" }, { "id": "b" }]
+    },
+    {
+      "name": "page token follows nextPageToken",
+      "strategy": "pageToken",
+      "pageSize": 2,
+      "itemsField": "chapters",
+      "pages": [
+        { "chapters": [{ "chapterId": "a" }, { "chapterId": "b" }], "nextPageToken": "t2" },
+        { "chapters": [{ "chapterId": "c" }], "nextPageToken": null }
+      ],
+      "expectRequests": [
+        { "pageSize": 2, "pageToken": null },
+        { "pageSize": 2, "pageToken": "t2" }
+      ],
+      "expectItems": [{ "chapterId": "a" }, { "chapterId": "b" }, { "chapterId": "c" }]
+    },
+    {
+      "name": "page token treats an empty token as the end",
+      "strategy": "pageToken",
+      "pageSize": 2,
+      "itemsField": "chapters",
+      "pages": [{ "chapters": [{ "chapterId": "a" }], "nextPageToken": "" }],
+      "expectRequests": [{ "pageSize": 2, "pageToken": null }],
+      "expectItems": [{ "chapterId": "a" }]
+    },
+    {
+      "name": "page token stops at maxItems",
+      "strategy": "pageToken",
+      "pageSize": 2,
+      "maxItems": 1,
+      "itemsField": "chapters",
+      "pages": [
+        { "chapters": [{ "chapterId": "a" }, { "chapterId": "b" }], "nextPageToken": "t2" }
+      ],
+      "expectRequests": [{ "pageSize": 2, "pageToken": null }],
+      "expectItems": [{ "chapterId": "a" }]
+    }
+  ]
+}

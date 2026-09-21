@@ -21,9 +21,12 @@
     "test:coverage": "pnpm -r --workspace-concurrency=1 --if-present test:coverage",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "changeset": "changeset",
+    "version-packages": "changeset version && make sdk-version-sync"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@codecov/sveltekit-plugin": "^2.0.1",
     "@codecov/vite-plugin": "^2.0.1",
     "@typescript-eslint/eslint-plugin": "^8.58.2",

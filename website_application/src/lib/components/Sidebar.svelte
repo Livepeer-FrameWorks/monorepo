@@ -7,6 +7,7 @@
   import { getIconComponent } from "../iconUtils";
   import { sidebarStore } from "../stores/sidebar.svelte";
   import { auth } from "$lib/stores/auth";
+  import { getPlatformOperator } from "$lib/stores/capabilities.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
   import DiscordBadge from "./DiscordBadge.svelte";
   import { incidentCounts } from "$lib/stores/incidents.svelte";
@@ -31,7 +32,7 @@
 
   // Platform-admin sections are hidden for non-operators. Cosmetic only:
   // the GraphQL resolvers enforce the real gate.
-  let platformOperator = $derived(isPlatformOperatorUser($auth.user));
+  let platformOperator = $derived(isPlatformOperatorUser($auth.user, getPlatformOperator()));
 
   function sectionVisible(section: NavigationItem): boolean {
     return !section.requiresPlatformOperator || platformOperator;
@@ -310,8 +311,6 @@
                     <span class="badge badge-primary text-xs">{child.badge}</span>
                   {:else if child.active === "soon"}
                     <span class="badge badge-warning text-xs">Soon</span>
-                  {:else if child.tier}
-                    <span class="badge badge-danger text-xs">{child.tier}</span>
                   {/if}
                 </button>
               {/each}

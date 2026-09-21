@@ -9,6 +9,7 @@
   import { auth } from "$lib/stores/auth";
   import { createTrailingRevalidator } from "$lib/auth/revalidation";
   import { loadStreamingConfig } from "$lib/stores/streaming-config.svelte";
+  import { loadCapabilities, clearCapabilities } from "$lib/stores/capabilities.svelte";
   import { sidebarStore } from "$lib/stores/sidebar.svelte";
   import { getMarketingSiteUrl } from "$lib/config";
   import { safeReturnTo } from "$lib/auth/returnTo";
@@ -95,6 +96,10 @@
     initialized = authState.initialized;
     if (!wasAuthenticated && isAuthenticated) {
       loadStreamingConfig(true);
+      loadCapabilities(true);
+    }
+    if (wasAuthenticated && !isAuthenticated) {
+      clearCapabilities();
     }
   });
 
@@ -131,6 +136,7 @@
     void (async () => {
       await auth.checkAuth();
       loadStreamingConfig();
+      loadCapabilities();
     })();
     const revalidator = createTrailingRevalidator(() => {
       void auth.checkAuth(true);

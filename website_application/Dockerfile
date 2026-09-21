@@ -37,6 +37,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 # workspace manifests and config
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY patches/ patches/
+COPY npm_api/package.json npm_api/
 
 # npm_player workspace packages
 COPY npm_player/package.json npm_player/
@@ -73,6 +74,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     fi
 
 # copy sources
+COPY npm_api/ npm_api/
 COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/

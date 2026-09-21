@@ -35,6 +35,17 @@ struct DashboardView: View {
 
       ScrollView {
         VStack(spacing: 16) {
+          if let warning = appState.serverCompatibility.warning {
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.tnOrange)
+              Text(warning).font(.caption)
+              Spacer()
+            }
+            .padding(10)
+            .background(Color.tnOrange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+          }
           if appState.edgeDetected {
             edgeSection
           }

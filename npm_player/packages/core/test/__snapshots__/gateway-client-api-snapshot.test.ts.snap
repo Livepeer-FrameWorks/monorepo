@@ -1,0 +1,124 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`GatewayClient public API > keeps its declarations 1`] = `
+"export type GatewayStatus = "idle" | "loading" | "ready" | "error";
+export interface GatewayClientConfig {
+    gatewayUrl?: string;
+    contentId: string;
+    contentType?: ContentType;
+    authToken?: string;
+    playbackAuth?: PlaybackAuth;
+    protocol?: ViewerProtocol;
+    maxRetries?: number;
+    initialDelayMs?: number;
+}
+export interface GatewayClientEvents {
+    statusChange: {
+        status: GatewayStatus;
+        error?: string;
+    };
+    endpointsResolved: {
+        endpoints: ContentEndpoints;
+    };
+}
+export declare const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
+type CircuitBreakerState = "closed" | "open" | "half-open";
+export declare class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
+    constructor(config: GatewayClientConfig);
+    resolve(forceRefresh?: boolean): Promise<ContentEndpoints>;
+    setCacheTtl(ttlMs: number): void;
+    invalidateCache(): void;
+    getCircuitState(): {
+        state: CircuitBreakerState;
+        failures: number;
+        openedAt: number | null;
+    };
+    resetCircuitBreaker(): void;
+    abort(): void;
+    getStatus(): GatewayStatus;
+    getEndpoints(): ContentEndpoints | null;
+    getError(): string | null;
+    updateConfig(config: Partial<GatewayClientConfig>): void;
+    destroy(): void;
+}
+export default GatewayClient;"
+`;
+
+exports[`GatewayClient public API > keeps its module exports 1`] = `
+{
+  "DEFAULT_GATEWAY_URL": "https://bridge.frameworks.network/graphql",
+  "defaultIsClass": true,
+  "exports": [
+    "DEFAULT_GATEWAY_URL",
+    "GatewayClient",
+    "default",
+  ],
+}
+`;
+
+exports[`GatewayClient public API > keeps the endpoint types it returns 1`] = `
+"export type ContentType = "live" | "dvr" | "clip" | "vod";
+export interface PlaybackAuth {
+    token: string;
+    transport?: "query" | "header";
+}
+export type StreamProtocol = "WHEP" | "HLS" | "DASH" | "MP4" | "WEBM" | "RTMP" | "MIST_HTML";
+export interface OutputCapabilities {
+    supportsSeek: boolean;
+    supportsQualitySwitch: boolean;
+    maxBitrate?: number;
+    hasAudio: boolean;
+    hasVideo: boolean;
+    codecs?: string[];
+}
+export interface OutputEndpoint {
+    protocol: StreamProtocol | string;
+    url: string;
+    capabilities?: OutputCapabilities;
+}
+export interface EndpointInfo {
+    nodeId: string;
+    baseUrl?: string;
+    protocol: StreamProtocol | string;
+    url: string;
+    quality?: QualityLevel;
+    capabilities?: OutputCapabilities;
+    outputs?: Record<string, OutputEndpoint>;
+    geoDistance?: number;
+    loadScore?: number;
+}
+export interface ContentMetadata {
+    title?: string;
+    description?: string;
+    contentId?: string;
+    contentType?: ContentType;
+    durationSeconds?: number;
+    thumbnailUrl?: string;
+    createdAt?: string;
+    status?: "AVAILABLE" | "PROCESSING" | "ERROR" | "OFFLINE" | "ONLINE" | "INITIALIZING" | "BOOTING" | "WAITING_FOR_DATA" | "SHUTTING_DOWN" | "INVALID";
+    viewers?: number;
+    isLive?: boolean;
+    recordingSizeBytes?: number;
+    clipSource?: string;
+    dvrStatus?: "recording" | "completed";
+    format?: string;
+    thumbnailAssets?: ThumbnailAssetUrls;
+    telemetryToken?: string;
+    mist?: MistStreamInfo;
+    tracks?: Array<{
+        type: "video" | "audio" | "meta";
+        codec?: string;
+        width?: number;
+        height?: number;
+        bitrate?: number;
+        fps?: number;
+        channels?: number;
+        sampleRate?: number;
+    }>;
+}
+export interface ContentEndpoints {
+    primary: EndpointInfo;
+    fallbacks: EndpointInfo[];
+    metadata?: ContentMetadata;
+}"
+`;

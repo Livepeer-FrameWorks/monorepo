@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-react",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "type": "module",
   "description": "React components for FrameWorks streaming player",
   "main": "dist/esm/index.js",
@@ -77,5 +77,10 @@
     "video"
   ],
   "author": "Livepeer FrameWorks",
-  "license": "Unlicense"
+  "license": "Unlicense",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Livepeer-FrameWorks/monorepo.git",
+    "directory": "npm_player/packages/react"
+  }
 }

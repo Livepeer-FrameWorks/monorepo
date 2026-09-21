@@ -3,7 +3,13 @@ import { join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { getAllRoutes, getBreadcrumbs, getRouteInfo, navigationConfig } from "./navigation";
+import {
+  getAllRoutes,
+  getBreadcrumbs,
+  getRouteInfo,
+  isPlatformOperatorUser,
+  navigationConfig,
+} from "./navigation";
 
 describe("navigation route resolution", () => {
   it("resolves known static routes", () => {
@@ -128,8 +134,32 @@ describe("navigation route hygiene", () => {
     expect(navigationConfig.admin.children?.incidents.requiresPlatformOperator).toBe(true);
   });
 
+  it("resolves webhook routes with breadcrumbs", () => {
+    expect(navigationConfig.developer.children?.webhooks.active).toBe(true);
+    expect(getRouteInfo("/developer/webhooks")?.name).toBe("Webhooks");
+    expect(getBreadcrumbs("/developer/webhooks/ep-1")).toEqual([
+      { name: "Dashboard", href: "/" },
+      { name: "Developer" },
+      { name: "Webhooks", href: "/developer/webhooks" },
+      { name: "Webhook Endpoint" },
+    ]);
+  });
+
   it("includes hidden infrastructure routes in route metadata", () => {
     const routePaths = getAllRoutes().map((route) => route.path);
     expect(routePaths).toContain("/infrastructure/marketplace");
+  });
+});
+
+describe("isPlatformOperatorUser", () => {
+  it("follows the server capabilities reading over the token claim", () => {
+    expect(isPlatformOperatorUser({ platform_operator: false }, true)).toBe(true);
+    expect(isPlatformOperatorUser({ platform_operator: true }, false)).toBe(false);
+  });
+
+  it("falls back to the token claim while the reading is unknown", () => {
+    expect(isPlatformOperatorUser({ platform_operator: true }, null)).toBe(true);
+    expect(isPlatformOperatorUser({ platform_operator: true })).toBe(true);
+    expect(isPlatformOperatorUser(null, null)).toBe(false);
   });
 });

@@ -3,39 +3,34 @@
  * Mirrors GatewayClient from npm_player for consistency
  */
 
+import {
+  ResolveIngestEndpointDocument,
+  type ResolveIngestEndpointQuery,
+  type ResolveIngestEndpointQueryVariables,
+  ServerTooOldError,
+} from "@livepeer-frameworks/api";
+import {
+  checkGateway,
+  isSchemaMismatchCode,
+  recheckGateway,
+} from "@livepeer-frameworks/api/gateway-probe";
 import { TypedEventEmitter } from "./EventEmitter";
-import type { IngestClientConfig, IngestClientEvents, IngestEndpoints } from "../types";
+import type {
+  IngestClientConfig,
+  IngestClientEvents,
+  IngestEndpoint,
+  IngestEndpoints,
+} from "../types";
 
-const RESOLVE_INGEST_QUERY = `
-  query ResolveIngest($streamKey: String!) {
-    resolveIngestEndpoint(streamKey: $streamKey, protocol: WHIP) {
-      primary {
-        nodeId
-        baseUrl
-        whipUrl
-        rtmpUrl
-        srtUrl
-        region
-        loadScore
-      }
-      fallbacks {
-        nodeId
-        baseUrl
-        whipUrl
-        rtmpUrl
-        srtUrl
-        region
-        loadScore
-      }
-      metadata {
-        streamId
-        streamKey
-        tenantId
-        recordingEnabled
-      }
-    }
-  }
-`;
+type ResolvedIngest = NonNullable<ResolveIngestEndpointQuery["resolveIngestEndpoint"]>;
+type ResolvedIngestEndpoint = ResolvedIngest["primary"];
+
+// The document selects more endpoint fields than IngestEndpoint declares;
+// only the declared ones are kept, and the gateway's nulls pass through.
+function ingestEndpoint(endpoint: ResolvedIngestEndpoint): IngestEndpoint {
+  const { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, region, loadScore } = endpoint;
+  return { nodeId, baseUrl, whipUrl, rtmpUrl, srtUrl, region, loadScore } as IngestEndpoint;
+}
 
 export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
   private config: IngestClientConfig;
@@ -79,6 +74,12 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
       typeof maxRetries === "number" && Number.isFinite(maxRetries)
         ? Math.min(8, Math.max(0, Math.floor(maxRetries)))
         : 3;
+    // The cached serverInfo probe runs alongside the resolve and refuses a
+    // gateway older than this package; a resolved destination is held until
+    // it settles, within the same deadline.
+    const gateway = checkGateway(gatewayUrl);
+    gateway.catch(() => undefined);
+    const variables: ResolveIngestEndpointQueryVariables = { streamKey, protocol: "WHIP" };
     try {
       for (let attempt = 0; ; attempt++) {
         request.signal.throwIfAborted();
@@ -90,32 +91,54 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
                 "Content-Type": "application/json",
                 ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
               },
-              body: JSON.stringify({ query: RESOLVE_INGEST_QUERY, variables: { streamKey } }),
+              body: JSON.stringify({
+                query: String(ResolveIngestEndpointDocument),
+                operationName: "ResolveIngestEndpoint",
+                variables,
+              }),
               signal: request.signal,
             }),
             request.signal
           );
-          if (!response.ok) throw new Error("Ingest gateway unavailable");
-          const payload = await abortable(response.json(), request.signal);
+          const payload =
+            response.ok || response.status === 400 || response.status === 422
+              ? ((await abortable(
+                  response.json().catch(() => null),
+                  request.signal
+                )) as {
+                  data?: Partial<ResolveIngestEndpointQuery> | null;
+                  errors?: Array<{ extensions?: { code?: unknown } }>;
+                } | null)
+              : null;
           request.signal.throwIfAborted();
-          const data = payload.data?.resolveIngestEndpoint;
-          if (payload.errors?.length || !data || !validWhipEndpoint(data.primary)) {
+          // A gateway that rejects the resolve as invalid against its schema
+          // may have changed since the cached probe; it is asked again at
+          // once, and a fresh answer that refuses it rejects the resolve with
+          // ServerTooOldError.
+          if (isSchemaMismatchCode(payload?.errors?.[0]?.extensions?.code)) {
+            await abortable(recheckGateway(gatewayUrl), request.signal);
+          }
+          if (!response.ok) throw new Error("Ingest gateway unavailable");
+          const data = payload?.data?.resolveIngestEndpoint;
+          if (payload?.errors?.length || !data || !validWhipEndpoint(data.primary)) {
             throw new Error("No valid WHIP destination was confirmed");
           }
+          await abortable(gateway, request.signal);
           this.endpoints = {
-            primary: data.primary,
+            primary: ingestEndpoint(data.primary),
             fallbacks: Array.isArray(data.fallbacks)
-              ? data.fallbacks.filter(validWhipEndpoint)
+              ? data.fallbacks.filter(validWhipEndpoint).map(ingestEndpoint)
               : [],
-            metadata: data.metadata,
+            metadata: data.metadata ?? undefined,
           };
           this.emit("endpointsResolved", { endpoints: this.endpoints });
           request.signal.throwIfAborted();
           this.emit("statusChange", { status: "ready" });
           request.signal.throwIfAborted();
           return this.endpoints;
-        } catch {
+        } catch (error) {
           request.signal.throwIfAborted();
+          if (error instanceof ServerTooOldError) throw error;
           if (attempt >= retryLimit) {
             throw new Error(
               "Failed to resolve ingest endpoint: No valid WHIP destination was confirmed"
@@ -141,7 +164,9 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
             status: "error",
             error: timedOut
               ? "Ingest resolution timed out"
-              : "No valid WHIP destination was confirmed",
+              : error instanceof ServerTooOldError
+                ? error.message
+                : "No valid WHIP destination was confirmed",
           });
         }
       }
@@ -214,7 +239,7 @@ async function retryDelay(delay: number, signal: AbortSignal): Promise<void> {
   }
 }
 
-function validWhipEndpoint(endpoint: IngestEndpoints["primary"] | undefined): boolean {
+function validWhipEndpoint(endpoint: ResolvedIngestEndpoint | null | undefined): boolean {
   if (
     !endpoint ||
     typeof endpoint.nodeId !== "string" ||

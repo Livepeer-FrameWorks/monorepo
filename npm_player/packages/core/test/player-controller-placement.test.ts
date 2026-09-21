@@ -3,6 +3,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PlayerController } from "../src/core/PlayerController";
 import { GatewayClient } from "../src/core/GatewayClient";
+import { clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
 import { StreamStateClient } from "../src/core/StreamStateClient";
 import { PlayerManager } from "../src/core/PlayerManager";
 import { ensurePlayersRegistered } from "../src/core/PlayerRegistry";
@@ -57,6 +58,7 @@ function deferred<T>() {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  clearServerInfoProbes();
 });
 
 afterAll(async () => {
@@ -102,6 +104,16 @@ describe("controller protocol discovery", () => {
       "fetch",
       vi.fn(async (_url, options) => {
         const request = JSON.parse(options.body);
+        if (request.query.includes("serverInfo")) {
+          return {
+            ok: true,
+            json: async () => ({
+              data: {
+                serverInfo: { version: "v0.3.11", features: ["viewer-protocol-selection"] },
+              },
+            }),
+          };
+        }
         requests.push(request);
         const url = "wss://us.example/webrtc/bootstrap";
         return {

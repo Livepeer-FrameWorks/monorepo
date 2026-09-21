@@ -17,6 +17,7 @@
   import streamcrafterReactPkg from "../../../../../npm_studio/packages/react/package.json";
   import streamcrafterSveltePkg from "../../../../../npm_studio/packages/svelte/package.json";
   import streamcrafterWcPkg from "../../../../../npm_studio/packages/wc/package.json";
+  import apiPkg from "../../../../../npm_api/package.json";
 
   type Framework = "react" | "svelte" | "wc" | "vanilla";
   type PackageByFramework = Record<Exclude<Framework, "vanilla"> | "core", string>;
@@ -213,19 +214,86 @@ await controller.stopStreaming();`,
     specUrl: "https://modelcontextprotocol.io",
   };
 
+  type ApiLanguage = "typescript" | "go" | "python";
+  let selectedApiLanguage = $state<ApiLanguage>("typescript");
+
+  // One version for all three languages; npm_api/package.json is its source.
+  const apiSdk = {
+    name: "API SDKs",
+    description:
+      "Typed clients for the GraphQL API in TypeScript, Go, and Python, generated from the same operations and released under one version. They handle retries, pagination, typed errors, and the server version check, and include helpers for uploads, playback tokens, and webhooks.",
+    version: apiPkg.version,
+    languages: {
+      typescript: {
+        label: "TypeScript",
+        install: "npm install @livepeer-frameworks/api",
+        registryUrl: "https://www.npmjs.com/package/@livepeer-frameworks/api",
+        registryLabel: "npm",
+        example: `import { createClient, CreateStreamDocument, expectResult } from '@livepeer-frameworks/api';
+
+const client = createClient({
+  url: '${graphqlUrl}',
+  token: process.env.FRAMEWORKS_API_TOKEN,
+});
+
+const data = await client.request(CreateStreamDocument, { input: { name: 'Launch stream' } });
+const stream = expectResult(data.createStream, 'Stream');
+console.log(stream.streamKey, stream.playbackId);`,
+      },
+      go: {
+        label: "Go",
+        install: "go get github.com/Livepeer-FrameWorks/sdk-go",
+        registryUrl: "https://pkg.go.dev/github.com/Livepeer-FrameWorks/sdk-go",
+        registryLabel: "pkg.go.dev",
+        example: `client, err := frameworks.NewClient(frameworks.ClientOptions{
+	URL:   "${graphqlUrl}",
+	Token: os.Getenv("FRAMEWORKS_API_TOKEN"),
+})
+if err != nil {
+	log.Fatal(err)
+}
+created, err := frameworks.CreateStream(ctx, client, frameworks.CreateStreamInput{Name: "Launch stream"})
+if err != nil {
+	log.Fatal(err)
+}
+stream, err := frameworks.ExpectResult[*frameworks.CreateStreamCreateStream](created.CreateStream)`,
+      },
+      python: {
+        label: "Python",
+        install: "pip install livepeer-frameworks",
+        registryUrl: "https://pypi.org/project/livepeer-frameworks/",
+        registryLabel: "PyPI",
+        example: `from livepeer_frameworks import FrameWorksClient, expect_result
+from livepeer_frameworks.graphql import CreateStreamCreateStreamStream, CreateStreamInput
+
+with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"]) as fw:
+    created = fw.create_stream(input=CreateStreamInput(name="Launch stream"))
+    stream = expect_result(created.create_stream, CreateStreamCreateStreamStream)
+    print(stream.stream_key, stream.playback_id)`,
+      },
+    } satisfies Record<
+      ApiLanguage,
+      {
+        label: string;
+        install: string;
+        registryUrl: string;
+        registryLabel: string;
+        example: string;
+      }
+    >,
+    features: [
+      "Typed streams, media, uploads, and events",
+      "Retries with Retry-After",
+      "Relay, offset, and page-token pagination",
+      "Typed errors, the same in every language",
+      "Multipart VOD upload helper",
+      "Playback JWT signing and webhook verification",
+    ],
+    docsUrl: `${docsBaseUrl}/builders/sdks`,
+    githubUrl: `${githubBaseUrl}/tree/master/npm_api`,
+  };
+
   const upcomingSdks = [
-    {
-      name: "API Client SDK",
-      description: "Type-safe GraphQL client with built-in authentication and pagination helpers.",
-      icon: "Code2",
-      status: "Coming Soon",
-    },
-    {
-      name: "Webhook SDK",
-      description: "Type-safe webhook handlers for stream lifecycle, artifacts, and viewer events.",
-      icon: "Webhook",
-      status: "Coming Soon",
-    },
     {
       name: "CLI Tools",
       description:
@@ -311,7 +379,7 @@ await controller.stopStreaming();`,
         <div>
           <h1 class="text-xl font-bold text-foreground">SDKs & Libraries</h1>
           <p class="text-sm text-muted-foreground">
-            Player and Studio SDKs for React, Svelte, Web Components, and vanilla JavaScript
+            Player and Studio SDKs for the browser, and API SDKs for TypeScript, Go, and Python
           </p>
         </div>
       </div>
@@ -580,6 +648,127 @@ await controller.stopStreaming();`,
                   size="sm"
                   class="absolute right-2 top-2 h-7 w-7 p-0"
                   onclick={() => copyToClipboard(studioSdk.codeExamples[selectedFramework])}
+                >
+                  <CopyIcon class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- API SDKs -->
+        <div class="slab col-span-full">
+          <div class="slab-header flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
+                <Code2Icon class="w-5 h-5 text-warning" />
+              </div>
+              <div>
+                <h3 class="font-semibold text-foreground">{apiSdk.name}</h3>
+                <Button
+                  variant="link"
+                  size="sm"
+                  class="h-auto p-0 text-xs font-normal text-muted-foreground hover:text-primary inline-flex items-center gap-1"
+                  href={apiSdk.languages[selectedApiLanguage].registryUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {apiSdk.languages[selectedApiLanguage].registryLabel} v{apiSdk.version}
+                  <ExternalLinkIcon class="w-3 h-3" />
+                </Button>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-2 h-8"
+                href={apiSdk.docsUrl}
+                target="_blank"
+              >
+                <BookOpenIcon class="w-3.5 h-3.5" />
+                Docs
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-2 h-8"
+                href={apiSdk.githubUrl}
+                target="_blank"
+              >
+                <GithubIcon class="w-3.5 h-3.5" />
+                GitHub
+              </Button>
+            </div>
+          </div>
+          <div class="slab-body--padded space-y-6">
+            <p class="text-sm text-muted-foreground">{apiSdk.description}</p>
+
+            <div class="flex border border-border rounded-md overflow-hidden w-fit">
+              {#each ["typescript", "go", "python"] as const as language, i (language)}
+                <button
+                  type="button"
+                  class="px-4 py-2 text-sm font-medium transition-colors {i > 0
+                    ? 'border-l border-border'
+                    : ''} {selectedApiLanguage === language
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+                  onclick={() => (selectedApiLanguage = language)}
+                >
+                  {apiSdk.languages[language].label}
+                </button>
+              {/each}
+            </div>
+
+            <!-- Features -->
+            <div>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Features
+              </h4>
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {#each apiSdk.features as feature (feature)}
+                  <div class="flex items-center gap-2 text-sm text-foreground">
+                    <CheckIcon class="w-3.5 h-3.5 text-success shrink-0" />
+                    <span>{feature}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Install -->
+            <div>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Installation
+              </h4>
+              <div
+                class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm"
+              >
+                <code class="text-foreground">{apiSdk.languages[selectedApiLanguage].install}</code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="absolute right-2 top-2 h-7 w-7 p-0"
+                  onclick={() => copyToClipboard(apiSdk.languages[selectedApiLanguage].install)}
+                >
+                  <CopyIcon class="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            <!-- Quick Start -->
+            <div>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Quick Start
+              </h4>
+              <div class="relative bg-muted/50 border border-border rounded-md p-4 overflow-x-auto">
+                <pre class="text-sm font-mono text-foreground whitespace-pre"><code
+                    >{apiSdk.languages[selectedApiLanguage].example}</code
+                  ></pre>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="absolute right-2 top-2 h-7 w-7 p-0"
+                  onclick={() => copyToClipboard(apiSdk.languages[selectedApiLanguage].example)}
                 >
                   <CopyIcon class="w-3.5 h-3.5" />
                 </Button>

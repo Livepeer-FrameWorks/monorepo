@@ -1,4 +1,4 @@
-.PHONY: generate build run clean
+.PHONY: generate build run test clean
 
 SCHEME = FrameWorks
 BUILD_DIR = build
@@ -18,6 +18,16 @@ build: generate
 
 run: build
 	open $(BUILD_DIR)/Build/Products/$(CONFIG)/FrameWorks.app
+
+test: generate
+	xcodebuild \
+		-project FrameWorks.xcodeproj \
+		-scheme $(SCHEME) \
+		-configuration $(CONFIG) \
+		-derivedDataPath $(BUILD_DIR) \
+		-destination 'platform=macOS' \
+		CODE_SIGN_IDENTITY="-" \
+		test
 
 archive: generate
 	xcodebuild \
