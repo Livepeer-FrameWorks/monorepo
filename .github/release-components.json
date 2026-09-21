@@ -204,6 +204,10 @@
         "patches",
         "packages/site-config",
         "docs/skills",
+        "npm_api/tsconfig.json",
+        "npm_api/examples",
+        "sdk_go/examples",
+        "sdk_python/examples",
         "scripts/copy-agent-files.sh"
       ]
     }
