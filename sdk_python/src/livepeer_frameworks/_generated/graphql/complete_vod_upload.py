@@ -16,6 +16,11 @@ from .fragments import (  # noqa: F401
 
 
 class CompleteVodUpload(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     complete_vod_upload: Annotated[
         Union[
             "CompleteVodUploadCompleteVodUploadVodAsset",
@@ -25,7 +30,11 @@ class CompleteVodUpload(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="completeVodUpload")
+    ] = Field(
+        alias="completeVodUpload",
+        description="Complete a VOD upload after all parts are uploaded.\nTriggers processing and thumbnail generation.",
+    )
+    "Complete a VOD upload after all parts are uploaded.\nTriggers processing and thumbnail generation."
 
 
 class CompleteVodUploadCompleteVodUploadVodAsset(VodAsset):

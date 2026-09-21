@@ -7,9 +7,17 @@ from .base_model import BaseModel
 
 
 class GetUsageAggregates(BaseModel):
+    """Root Query type - the entry point for all read operations.
+
+    List and object fields are nullable per GraphQL best practices,
+    enabling graceful degradation when individual services are unavailable.
+    Most connection fields are non-null, but some may be nullable when upstream data is optional."""
+
     usage_aggregates: list["GetUsageAggregatesUsageAggregates"] = Field(
-        alias="usageAggregates"
+        alias="usageAggregates",
+        description="Get aggregated usage data grouped by time interval.",
     )
+    "Get aggregated usage data grouped by time interval."
 
 
 class GetUsageAggregatesUsageAggregates(BaseModel):

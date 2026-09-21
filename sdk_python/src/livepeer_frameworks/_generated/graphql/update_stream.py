@@ -16,6 +16,11 @@ from .fragments import (  # noqa: F401
 
 
 class UpdateStream(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     update_stream: Annotated[
         Union[
             "UpdateStreamUpdateStreamStream",
@@ -25,7 +30,10 @@ class UpdateStream(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="updateStream")
+    ] = Field(
+        alias="updateStream", description="Update an existing stream's configuration."
+    )
+    "Update an existing stream's configuration."
 
 
 class UpdateStreamUpdateStreamStream(Stream):

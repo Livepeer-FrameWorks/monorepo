@@ -23,13 +23,18 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/Khan/genqlient/generate"
+	"github.com/vektah/gqlparser/v2"
+	gqlast "github.com/vektah/gqlparser/v2/ast"
 )
 
 const unknownMember = "UnknownMember"
+
+var operationPattern = regexp.MustCompile("(?ms)^const ([A-Za-z0-9_]+)_Operation = `(.+?)`$")
 
 func main() {
 	if len(os.Args) != 2 {
@@ -52,12 +57,19 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	schema, err := loadSchema(config.Schema)
+	if err != nil {
+		return err
+	}
 	files, err := generate.Generate(config)
 	if err != nil {
 		return err
 	}
 	for name, src := range files {
 		if strings.HasSuffix(name, ".go") {
+			if src, err = documentOperations(src, schema); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
 			if src, err = openUnions(src); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
@@ -70,6 +82,95 @@ func run(configPath string) error {
 		}
 	}
 	return nil
+}
+
+func loadSchema(paths []string) (*gqlast.Schema, error) {
+	sources := make([]*gqlast.Source, 0, len(paths))
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read schema %s: %w", path, err)
+		}
+		sources = append(sources, &gqlast.Source{Name: path, Input: string(contents)})
+	}
+	schema, err := gqlparser.LoadSchema(sources...)
+	if err != nil {
+		return nil, fmt.Errorf("parse schema: %w", err)
+	}
+	return schema, nil
+}
+
+// documentOperations adds schema descriptions to the generated Go functions.
+func documentOperations(src []byte, schema *gqlast.Schema) ([]byte, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", src, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+	descriptions := map[string]string{}
+	for _, match := range operationPattern.FindAllSubmatch(src, -1) {
+		name, query := string(match[1]), string(match[2])
+		description, err := operationDescription(schema, query, name)
+		if err != nil {
+			return nil, fmt.Errorf("%s_Operation: %w", name, err)
+		}
+		if description != "" {
+			descriptions[name] = description
+		}
+	}
+
+	type insertion struct {
+		offset int
+		text   string
+	}
+	insertions := []insertion{}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv != nil {
+			continue
+		}
+		description := descriptions[function.Name.Name]
+		if description == "" {
+			continue
+		}
+		var comment strings.Builder
+		fmt.Fprintf(&comment, "// %s executes the corresponding GraphQL operation.\n//\n", function.Name.Name)
+		for _, line := range strings.Split(description, "\n") {
+			fmt.Fprintf(&comment, "// %s\n", line)
+		}
+		position := function.Pos()
+		if function.Doc != nil {
+			position = function.Doc.Pos()
+		}
+		insertions = append(insertions, insertion{
+			offset: fset.Position(position).Offset,
+			text:   comment.String(),
+		})
+	}
+
+	sort.Slice(insertions, func(i, j int) bool { return insertions[i].offset > insertions[j].offset })
+	documented := append([]byte(nil), src...)
+	for _, item := range insertions {
+		documented = append(documented[:item.offset], append([]byte(item.text), documented[item.offset:]...)...)
+	}
+	return format.Source(documented)
+}
+
+func operationDescription(schema *gqlast.Schema, source, operationName string) (string, error) {
+	document, errors := gqlparser.LoadQuery(schema, source)
+	if errors != nil {
+		return "", errors
+	}
+	operation := document.Operations.ForName(operationName)
+	if operation == nil {
+		return "", fmt.Errorf("operation not found")
+	}
+	for _, selection := range operation.SelectionSet {
+		if field, ok := selection.(*gqlast.Field); ok && field.Definition != nil {
+			return field.Definition.Description, nil
+		}
+	}
+	return "", nil
 }
 
 // openUnions rewrites genqlient output so each union accepts *UnknownMember.

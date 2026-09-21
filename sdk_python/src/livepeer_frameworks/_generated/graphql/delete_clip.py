@@ -8,6 +8,11 @@ from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteClip(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     delete_clip: Annotated[
         Union[
             "DeleteClipDeleteClipDeleteSuccess",
@@ -16,7 +21,8 @@ class DeleteClip(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="deleteClip")
+    ] = Field(alias="deleteClip", description="Delete a clip.")
+    "Delete a clip."
 
 
 class DeleteClipDeleteClipDeleteSuccess(DeleteSuccess):

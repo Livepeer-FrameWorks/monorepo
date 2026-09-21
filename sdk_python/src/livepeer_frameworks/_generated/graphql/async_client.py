@@ -75,6 +75,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_developer_token(
         self, input: CreateDeveloperTokenInput, **kwargs: Any
     ) -> CreateDeveloperToken:
+        """Create a new API token for programmatic access."""
         query = gql("""
             mutation CreateDeveloperToken($input: CreateDeveloperTokenInput!) {
               createDeveloperToken(input: $input) {
@@ -132,6 +133,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def revoke_developer_token(
         self, id: str, **kwargs: Any
     ) -> RevokeDeveloperToken:
+        """Revoke an API token."""
         query = gql("""
             mutation RevokeDeveloperToken($id: ID!) {
               revokeDeveloperToken(id: $id) {
@@ -176,6 +178,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_signing_key(
         self, input: CreateSigningKeyInput, **kwargs: Any
     ) -> CreateSigningKey:
+        """Generate a new ES256 playback signing keypair. The private key is returned
+        ONCE in the response and never stored or returned again — capture it.
+        Up to 10 active keys per tenant; revoke before re-creating."""
         query = gql("""
             mutation CreateSigningKey($input: CreateSigningKeyInput!) {
               createSigningKey(input: $input) {
@@ -237,6 +242,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return CreateSigningKey.model_validate(data)
 
     async def revoke_signing_key(self, id: str, **kwargs: Any) -> RevokeSigningKey:
+        """Mark an active signing key as revoked. Triggers session re-evaluation
+        across the tenant's protected playback objects: viewers with valid auth
+        continue (possibly with a brief reconnect), revoked viewers are denied."""
         query = gql("""
             mutation RevokeSigningKey($id: ID!) {
               revokeSigningKey(id: $id) {
@@ -287,6 +295,11 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def set_playback_policy(
         self, input: SetPlaybackPolicyInput, **kwargs: Any
     ) -> SetPlaybackPolicy:
+        """Set or clear the playback access policy on a stream, VOD asset, or clip.
+        Exactly one of streamId / vodAssetId / clipId must be set in the input.
+        Webhook secrets are write-only on input and never returned in queries.
+        Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for
+        affected sessions; valid viewers continue, invalid ones are denied."""
         query = gql("""
             mutation SetPlaybackPolicy($input: SetPlaybackPolicyInput!) {
               setPlaybackPolicy(input: $input) {
@@ -367,6 +380,11 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def test_playback_access(
         self, input: TestPlaybackAccessInput, **kwargs: Any
     ) -> TestPlaybackAccess:
+        """Run the same evaluator the live USER_NEW path uses against a caller-
+        supplied JWT (or webhook test request) without registering a viewer
+        session. Mutation, not query, because webhook mode (fireWebhook=true)
+        fires a real outbound HTTPS request to the customer URL.
+        Tenant ownership of the playback target is validated server-side."""
         query = gql("""
             mutation TestPlaybackAccess($input: TestPlaybackAccessInput!) {
               testPlaybackAccess(input: $input) {
@@ -421,6 +439,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return TestPlaybackAccess.model_validate(data)
 
     async def create_clip(self, input: CreateClipInput, **kwargs: Any) -> CreateClip:
+        """Create a clip from a live or recorded stream.
+        Clips are short video segments extracted from a stream."""
         query = gql("""
             mutation CreateClip($input: CreateClipInput!) {
               createClip(input: $input) {
@@ -520,6 +540,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return CreateClip.model_validate(data)
 
     async def delete_clip(self, id: str, **kwargs: Any) -> DeleteClip:
+        """Delete a clip."""
         query = gql("""
             mutation DeleteClip($id: ID!) {
               deleteClip(id: $id) {
@@ -559,6 +580,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return DeleteClip.model_validate(data)
 
     async def start_dvr(self, stream_id: str, **kwargs: Any) -> StartDVR:
+        """Start DVR recording for a live stream.
+        DVR creates one continuous archive session. Live seekback is bounded by
+        the resolved DVR policy; archive playback uses virtual chapters."""
         query = gql("""
             mutation StartDVR($streamId: ID!) {
               startDVR(streamId: $streamId) {
@@ -619,6 +643,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return StartDVR.model_validate(data)
 
     async def stop_dvr(self, dvr_hash: str, **kwargs: Any) -> StopDVR:
+        """Stop DVR recording for a stream."""
         query = gql("""
             mutation StopDVR($dvrHash: ID!) {
               stopDVR(dvrHash: $dvrHash) {
@@ -658,6 +683,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return StopDVR.model_validate(data)
 
     async def delete_dvr(self, dvr_hash: str, **kwargs: Any) -> DeleteDVR:
+        """Delete a DVR recording."""
         query = gql("""
             mutation DeleteDVR($dvrHash: ID!) {
               deleteDVR(dvrHash: $dvrHash) {
@@ -699,6 +725,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_vod_upload(
         self, input: CreateVodUploadInput, **kwargs: Any
     ) -> CreateVodUpload:
+        """Create a new VOD upload session.
+        Returns presigned URLs for multipart upload."""
         query = gql("""
             mutation CreateVodUpload($input: CreateVodUploadInput!) {
               createVodUpload(input: $input) {
@@ -744,6 +772,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def complete_vod_upload(
         self, input: CompleteVodUploadInput, **kwargs: Any
     ) -> CompleteVodUpload:
+        """Complete a VOD upload after all parts are uploaded.
+        Triggers processing and thumbnail generation."""
         query = gql("""
             mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
               completeVodUpload(input: $input) {
@@ -849,6 +879,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return CompleteVodUpload.model_validate(data)
 
     async def abort_vod_upload(self, upload_id: str, **kwargs: Any) -> AbortVodUpload:
+        """Abort an in-progress VOD upload."""
         query = gql("""
             mutation AbortVodUpload($uploadId: ID!) {
               abortVodUpload(uploadId: $uploadId) {
@@ -888,6 +919,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return AbortVodUpload.model_validate(data)
 
     async def delete_vod_asset(self, id: str, **kwargs: Any) -> DeleteVodAsset:
+        """Delete a VOD asset."""
         query = gql("""
             mutation DeleteVodAsset($id: ID!) {
               deleteVodAsset(id: $id) {
@@ -929,6 +961,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_stream(
         self, input: CreateStreamInput, **kwargs: Any
     ) -> CreateStream:
+        """Create a new stream for live broadcasting."""
         query = gql("""
             mutation CreateStream($input: CreateStreamInput!) {
               createStream(input: $input) {
@@ -1012,6 +1045,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def update_stream(
         self, id: str, input: UpdateStreamInput, **kwargs: Any
     ) -> UpdateStream:
+        """Update an existing stream's configuration."""
         query = gql("""
             mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
               updateStream(id: $id, input: $input) {
@@ -1102,6 +1136,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return UpdateStream.model_validate(data)
 
     async def delete_stream(self, id: str, **kwargs: Any) -> DeleteStream:
+        """Delete a stream and all associated data."""
         query = gql("""
             mutation DeleteStream($id: ID!) {
               deleteStream(id: $id) {
@@ -1141,6 +1176,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return DeleteStream.model_validate(data)
 
     async def refresh_stream_key(self, id: str, **kwargs: Any) -> RefreshStreamKey:
+        """Generate a new stream key, invalidating the old one."""
         query = gql("""
             mutation RefreshStreamKey($id: ID!) {
               refreshStreamKey(id: $id) {
@@ -1236,6 +1272,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_stream_key(
         self, stream_id: str, input: CreateStreamKeyInput, **kwargs: Any
     ) -> CreateStreamKey:
+        """Create an additional stream key for a stream."""
         query = gql("""
             mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
               createStreamKey(streamId: $streamId, input: $input) {
@@ -1290,6 +1327,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def delete_stream_key(
         self, stream_id: str, key_id: str, **kwargs: Any
     ) -> DeleteStreamKey:
+        """Delete a stream key."""
         query = gql("""
             mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
               deleteStreamKey(streamId: $streamId, keyId: $keyId) {
@@ -1331,6 +1369,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def create_push_target(
         self, stream_id: str, input: CreatePushTargetInput, **kwargs: Any
     ) -> CreatePushTarget:
+        """Add a multistream push target to a stream.
+        When the stream goes live, it will automatically push to all enabled targets."""
         query = gql("""
             mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
               createPushTarget(streamId: $streamId, input: $input) {
@@ -1365,6 +1405,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def update_push_target(
         self, id: str, input: UpdatePushTargetInput, **kwargs: Any
     ) -> UpdatePushTarget:
+        """Update a multistream push target."""
         query = gql("""
             mutation UpdatePushTarget($id: ID!, $input: UpdatePushTargetInput!) {
               updatePushTarget(id: $id, input: $input) {
@@ -1397,6 +1438,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return UpdatePushTarget.model_validate(data)
 
     async def delete_push_target(self, id: str, **kwargs: Any) -> DeletePushTarget:
+        """Delete a multistream push target."""
         query = gql("""
             mutation DeletePushTarget($id: ID!) {
               deletePushTarget(id: $id) {
@@ -1426,6 +1468,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         time_range: Union[Optional[TimeRangeInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> GetTenantUsage:
+        """Get aggregated usage metrics for the tenant."""
         query = gql("""
             query GetTenantUsage($timeRange: TimeRangeInput) {
               tenantUsage(timeRange: $timeRange) {
@@ -1474,6 +1517,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         time_range: Union[Optional[TimeRangeInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListUsageRecords:
+        """List detailed usage records with pagination."""
         query = gql("""
             query ListUsageRecords($page: ConnectionInput, $timeRange: TimeRangeInput) {
               usageRecordsConnection(page: $page, timeRange: $timeRange) {
@@ -1521,6 +1565,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         usage_types: Union[Optional[list[str]], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> GetUsageAggregates:
+        """Get aggregated usage data grouped by time interval."""
         query = gql("""
             query GetUsageAggregates($timeRange: TimeRangeInput!, $granularity: String, $usageTypes: [String!]) {
               usageAggregates(
@@ -1553,6 +1598,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def list_developer_tokens(
         self, page: Union[Optional[ConnectionInput], UnsetType] = UNSET, **kwargs: Any
     ) -> ListDeveloperTokens:
+        """List API tokens for programmatic access.
+        Used to authenticate requests to the Developer API."""
         query = gql("""
             query ListDeveloperTokens($page: ConnectionInput) {
               developerTokensConnection(page: $page) {
@@ -1601,6 +1648,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListSigningKeys:
+        """List the tenant's playback signing keys with optional status filter."""
         query = gql("""
             query ListSigningKeys($status: String, $page: ConnectionInput) {
               signingKeysConnection(status: $status, page: $page) {
@@ -1642,6 +1690,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListSigningKeys.model_validate(data)
 
     async def get_signing_key(self, id: str, **kwargs: Any) -> GetSigningKey:
+        """Get a single playback signing key by ID. Tenant-scoped."""
         query = gql("""
             query GetSigningKey($id: ID!) {
               signingKey(id: $id) {
@@ -1675,6 +1724,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
         protocol: Union[Optional[MediaViewerProtocol], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ResolveViewerEndpoint:
+        """Resolve a playback ID to viewer endpoints (HLS, DASH, etc.).
+        Used by players to get the optimal CDN endpoint for playback."""
         query = gql("""
             query ResolveViewerEndpoint($contentId: String!, $protocol: MediaViewerProtocol) {
               resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {
@@ -1737,6 +1788,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         protocol: Union[Optional[MediaIngestProtocol], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ResolveIngestEndpoint:
+        """Resolve a stream key to ingest endpoints for StreamCrafter.
+        Returns node-specific advertised protocols. A requested protocol filters candidates
+        before ranking; it is not permission to substitute a different protocol."""
         query = gql("""
             query ResolveIngestEndpoint($streamKey: String!, $protocol: MediaIngestProtocol) {
               resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {
@@ -1778,6 +1832,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ResolveIngestEndpoint.model_validate(data)
 
     async def get_clip(self, id: str, **kwargs: Any) -> GetClip:
+        """Fetch a single clip by its global ID."""
         query = gql("""
             query GetClip($id: ID!) {
               clip(id: $id) {
@@ -1859,6 +1914,15 @@ class AsyncGraphQLClient(AsyncBaseClient):
         interval_seconds: Union[Optional[int], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> GetDVRChapter:
+        """Retrieve a single DVR chapter, including its finalized playbackId.
+
+        Chapters are produced by the finalization queue as canonical .mkv
+        VOD artifacts. Historical chapter mode is configured at the Stream level
+        (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
+          - WINDOW_SIZED: sequential fixed-length chapters of size
+            tier.MaxWindowSeconds since the recording's start.
+          - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
+            unix epoch 0."""
         query = gql("""
             query GetDVRChapter($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRChapterMode, $intervalSeconds: Int) {
               dvrChapter(
@@ -1905,6 +1969,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
         page_token: Union[Optional[str], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListDVRChapters:
+        """List chapters for a DVR recording. Paginated for unbounded artifact
+        lifetime — default 200 per page, max 1000."""
         query = gql("""
             query ListDVRChapters($dvrId: ID!, $mode: DVRChapterMode, $intervalSeconds: Int, $rangeStartMs: Float, $rangeEndMs: Float, $pageSize: Int, $pageToken: String) {
               dvrChapters(
@@ -1953,6 +2019,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListDVRChapters.model_validate(data)
 
     async def get_vod_asset(self, id: str, **kwargs: Any) -> GetVodAsset:
+        """Fetch a single VOD asset by ID."""
         query = gql("""
             query GetVodAsset($id: ID!) {
               vodAsset(id: $id) {
@@ -2031,6 +2098,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def get_vod_upload_status(
         self, upload_id: str, **kwargs: Any
     ) -> GetVodUploadStatus:
+        """Read server-authoritative state of an in-flight VOD upload session.
+        Polling complement to the upload events of tenantEvents; intended for reload-recovery
+        and agent workflows that need a request/response shape."""
         query = gql("""
             query GetVodUploadStatus($uploadId: ID!) {
               vodUploadStatus(uploadId: $uploadId) {
@@ -2093,6 +2163,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         input: Union[Optional[StorageArtifactsInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListArtifacts:
+        """Unified storage artifact browser for the account Storage page.
+        Search, kind filters, stream scoping, sorting, and pagination are
+        resolved server-side against the tenant artifact registry."""
         query = gql("""
             query ListArtifacts($input: StorageArtifactsInput) {
               storageArtifactsConnection(input: $input) {
@@ -2144,6 +2217,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListArtifacts.model_validate(data)
 
     async def server_info(self, **kwargs: Any) -> ServerInfo:
+        """Platform release and shipped product features. Readable without
+        authentication so clients can detect what this server supports before
+        signing in."""
         query = gql("""
             query ServerInfo {
               serverInfo {
@@ -2165,6 +2241,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         search: Union[Optional[str], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListStreams:
+        """List all streams for the current tenant with pagination."""
         query = gql("""
             query ListStreams($page: ConnectionInput, $search: String) {
               streamsConnection(page: $page, search: $search) {
@@ -2242,6 +2319,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListStreams.model_validate(data)
 
     async def get_stream(self, id: str, **kwargs: Any) -> GetStream:
+        """Fetch a single stream by its global ID."""
         query = gql("""
             query GetStream($id: ID!) {
               stream(id: $id) {
@@ -2311,6 +2389,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListStreamKeys:
+        """List all stream keys for a specific stream."""
         query = gql("""
             query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
               streamKeysConnection(streamId: $streamId, page: $page) {
@@ -2350,6 +2429,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListStreamKeys.model_validate(data)
 
     async def list_push_targets(self, stream_id: str, **kwargs: Any) -> ListPushTargets:
+        """Fetch a single stream by its global ID."""
         query = gql("""
             query ListPushTargets($streamId: ID!) {
               stream(id: $streamId) {
@@ -2387,6 +2467,12 @@ class AsyncGraphQLClient(AsyncBaseClient):
         stream_id: Union[Optional[str], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> AsyncIterator[TenantEvents]:
+        """Public events of the current tenant, as webhooks deliver them: stream
+        lifecycle, clip, recording, and upload lifecycle, multistream status, API
+        tokens, billing, account, and custom domain events. Each event's data is the
+        registered payload of its type. Pass types to receive only those event types
+        (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events
+        whose payload names that stream."""
         query = gql("""
             subscription TenantEvents($types: [String!], $streamId: ID) {
               tenantEvents(types: $types, streamId: $streamId) {

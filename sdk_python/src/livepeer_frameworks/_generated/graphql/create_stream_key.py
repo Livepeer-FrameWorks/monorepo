@@ -8,6 +8,11 @@ from .fragments import AuthError, NotFoundError, StreamKey, ValidationError
 
 
 class CreateStreamKey(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     create_stream_key: Annotated[
         Union[
             "CreateStreamKeyCreateStreamKeyStreamKey",
@@ -17,7 +22,11 @@ class CreateStreamKey(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="createStreamKey")
+    ] = Field(
+        alias="createStreamKey",
+        description="Create an additional stream key for a stream.",
+    )
+    "Create an additional stream key for a stream."
 
 
 class CreateStreamKeyCreateStreamKeyStreamKey(StreamKey):

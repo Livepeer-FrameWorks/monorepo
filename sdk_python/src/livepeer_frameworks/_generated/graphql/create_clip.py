@@ -16,6 +16,11 @@ from .fragments import (  # noqa: F401
 
 
 class CreateClip(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     create_clip: Annotated[
         Union[
             "CreateClipCreateClipClip",
@@ -25,7 +30,11 @@ class CreateClip(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="createClip")
+    ] = Field(
+        alias="createClip",
+        description="Create a clip from a live or recorded stream.\nClips are short video segments extracted from a stream.",
+    )
+    "Create a clip from a live or recorded stream.\nClips are short video segments extracted from a stream."
 
 
 class CreateClipCreateClipClip(Clip):

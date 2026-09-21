@@ -16,6 +16,11 @@ from .fragments import (  # noqa: F401
 
 
 class RefreshStreamKey(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     refresh_stream_key: Annotated[
         Union[
             "RefreshStreamKeyRefreshStreamKeyStream",
@@ -25,7 +30,11 @@ class RefreshStreamKey(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="refreshStreamKey")
+    ] = Field(
+        alias="refreshStreamKey",
+        description="Generate a new stream key, invalidating the old one.",
+    )
+    "Generate a new stream key, invalidating the old one."
 
 
 class RefreshStreamKeyRefreshStreamKeyStream(Stream):

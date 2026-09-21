@@ -228,6 +228,7 @@ graphql-sdk-go: sdk-manifest
 	@cd sdk_go/tools && go run ./genclient ../genqlient.yaml
 
 test-sdk-go:
+	@cd sdk_go/tools && go test ./... -count=1
 	@cd sdk_go && go mod tidy && go vet ./... && go test -race -count=1 ./...
 
 # Python SDK (sdk_python)

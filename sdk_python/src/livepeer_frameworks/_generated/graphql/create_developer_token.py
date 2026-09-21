@@ -8,6 +8,11 @@ from .fragments import AuthError, DeveloperToken, RateLimitError, ValidationErro
 
 
 class CreateDeveloperToken(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     create_developer_token: Annotated[
         Union[
             "CreateDeveloperTokenCreateDeveloperTokenDeveloperToken",
@@ -17,7 +22,11 @@ class CreateDeveloperToken(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="createDeveloperToken")
+    ] = Field(
+        alias="createDeveloperToken",
+        description="Create a new API token for programmatic access.",
+    )
+    "Create a new API token for programmatic access."
 
 
 class CreateDeveloperTokenCreateDeveloperTokenDeveloperToken(DeveloperToken):

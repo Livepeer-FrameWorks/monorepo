@@ -8,6 +8,11 @@ from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteVodAsset(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     delete_vod_asset: Annotated[
         Union[
             "DeleteVodAssetDeleteVodAssetDeleteSuccess",
@@ -16,7 +21,8 @@ class DeleteVodAsset(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="deleteVodAsset")
+    ] = Field(alias="deleteVodAsset", description="Delete a VOD asset.")
+    "Delete a VOD asset."
 
 
 class DeleteVodAssetDeleteVodAssetDeleteSuccess(DeleteSuccess):

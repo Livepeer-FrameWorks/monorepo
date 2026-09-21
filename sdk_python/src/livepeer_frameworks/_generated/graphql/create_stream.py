@@ -15,6 +15,11 @@ from .fragments import (  # noqa: F401
 
 
 class CreateStream(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     create_stream: Annotated[
         Union[
             "CreateStreamCreateStreamStream",
@@ -23,7 +28,10 @@ class CreateStream(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="createStream")
+    ] = Field(
+        alias="createStream", description="Create a new stream for live broadcasting."
+    )
+    "Create a new stream for live broadcasting."
 
 
 class CreateStreamCreateStreamStream(Stream):

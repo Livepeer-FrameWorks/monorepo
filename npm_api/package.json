@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "codegen": "graphql-codegen --config codegen.ts",
+    "codegen": "graphql-codegen --config codegen.ts && node codegen/descriptions.mjs",
     "type-check": "tsc -p tsconfig.json --noEmit && tsc -p examples/tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

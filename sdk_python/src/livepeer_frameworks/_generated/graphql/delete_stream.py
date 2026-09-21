@@ -8,6 +8,11 @@ from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteStream(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     delete_stream: Annotated[
         Union[
             "DeleteStreamDeleteStreamDeleteSuccess",
@@ -16,7 +21,10 @@ class DeleteStream(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="deleteStream")
+    ] = Field(
+        alias="deleteStream", description="Delete a stream and all associated data."
+    )
+    "Delete a stream and all associated data."
 
 
 class DeleteStreamDeleteStreamDeleteSuccess(DeleteSuccess):

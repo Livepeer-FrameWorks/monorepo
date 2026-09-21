@@ -601,50 +601,198 @@ export type NotFoundErrorFieldsFragment = { __typename: 'NotFoundError', message
 
 export type RateLimitErrorFieldsFragment = { __typename: 'RateLimitError', message: string, code: string | null, retryAfter: number | null };
 
-export type DeleteSuccessFieldsFragment = { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null };
+export type DeleteSuccessFieldsFragment = { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null };
 
+/** Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape is `{chandlerBase}/assets/{assetKey}/poster.jpg`, `/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt` — Chandler serves the object key directly, no version resolution. assetKey is stream_id for live streams; clip_hash / dvr_hash / vod_hash (= artifact_hash) for artifacts. */
 export type ThumbnailAssetsFieldsFragment = { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string };
 
-export type EffectiveRetentionFieldsFragment = { retentionDays: number, retentionUntil: string | null, source: RetentionSource };
+/** Resolved retention horizon for a single asset (DVR, clip, or VOD). Embedded on Clip, DVRRequest, and VodAsset. */
+export type EffectiveRetentionFieldsFragment = { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource };
 
+/** Part of a public event payload (frameworks.events.public.v1.Artifact). */
 export type EventArtifactFieldsFragment = { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string };
 
+/** Part of a public event payload (frameworks.events.public.v1.Money). */
 export type EventMoneyFieldsFragment = { amountMinor: number, currency: string };
 
-export type PlaybackPolicyFieldsFragment = { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null };
+/** Per-playback-object access policy. Foghorn reads this in the USER_NEW trigger handler; the requiresAuth marker (on the playback object itself) gates whether the full policy is fetched at all. */
+export type PlaybackPolicyFieldsFragment = { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null };
 
-export type StreamFieldsFragment = { __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null };
+/** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
+export type StreamFieldsFragment = { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+streamKey: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+status: StreamStatus, /** Whether the stream is currently broadcasting. */
+isLive: boolean, /** Number of viewers currently watching. */
+currentViewers: number, /** When the current live session started (null if offline). */
+startedAt: string | null, /** When these metrics were last updated. */
+updatedAt: string } | null };
 
 export type StreamKeyFieldsFragment = { __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string };
 
-export type PushTargetFieldsFragment = { id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string };
+export type PushTargetFieldsFragment = { id: string, streamId: string, /** Platform identifier (twitch, youtube, facebook, kick, x, custom). */
+platform: string | null, /** User-friendly label for this target. */
+name: string, /** Target URI (masked in responses — stream key portion is redacted). */
+targetUri: string, /** Whether this target is enabled for automatic push on stream start. */
+isEnabled: boolean, /** Current push status: pending, pushing, retrying, stopping, idle, or failed. */
+status: string, /** Last error message if push failed. */
+lastError: string | null, /** Stable machine-readable lifecycle reason code. */
+reasonCode: string | null, /** When this target last successfully pushed. */
+lastPushedAt: string | null, createdAt: string };
 
-export type ClipFieldsFragment = { __typename: 'Clip', id: string, clipHash: string, playbackId: string, streamId: string, title: string, description: string | null, startTime: number, duration: number, sizeBytes: number | null, status: string, clipMode: string | null, createdAt: string | null, updatedAt: string | null, expiresAt: string | null, isExpired: boolean, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null };
+/** A video clip extracted from a live stream's DVR buffer. Clips are created from recorded stream segments and stored for playback. */
+export type ClipFieldsFragment = { __typename: 'Clip', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal clip hash for storage and playback. */
+clipHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Stream this clip was created from. */
+streamId: string, /** Display title for the clip. */
+title: string, /** Optional description of clip content. */
+description: string | null, /** Resolved start time (Unix seconds). */
+startTime: number, /** Clip duration in seconds. */
+duration: number, /** File size in bytes. */
+sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
+status: string, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
+clipMode: string | null, /** When the clip was requested. */
+createdAt: string | null, /** When the clip was last updated. */
+updatedAt: string | null, /** When the clip will be auto-deleted. */
+expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
+isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null };
 
-export type DVRRequestFieldsFragment = { __typename: 'DVRRequest', id: string | null, dvrHash: string, playbackId: string, streamId: string, title: string | null, status: string | null, createdAt: string, updatedAt: string, startedAt: string | null, endedAt: string | null, expiresAt: string | null, isExpired: boolean, durationSeconds: number | null, sizeBytes: number | null, errorMessage: string | null };
+export type DVRRequestFieldsFragment = { __typename: 'DVRRequest', id: string | null, dvrHash: string, playbackId: string, streamId: string, title: string | null, status: string | null, createdAt: string, updatedAt: string, startedAt: string | null, endedAt: string | null, expiresAt: string | null, /** Whether the DVR has passed its retention date (expiresAt < now). */
+isExpired: boolean, durationSeconds: number | null, sizeBytes: number | null, errorMessage: string | null };
 
-export type DVRChapterRefFieldsFragment = { chapterId: string, mode: DVRChapterMode, intervalSeconds: number | null, startMs: number, endMs: number, isCurrent: boolean, state: DVRChapterState, playbackId: string | null, hasGaps: boolean, segmentCount: number, lastFailureReason: string | null };
+/** A reference to a chapter for the chapter list UI. Same shape as DVRChapter without the timeline-zero derivations. */
+export type DVRChapterRefFieldsFragment = { chapterId: string, mode: DVRChapterMode, intervalSeconds: number | null, startMs: number, endMs: number, isCurrent: boolean, state: DVRChapterState, /** Public playback key minted by Commodore; null until finalization dispatches. */
+playbackId: string | null, hasGaps: boolean, segmentCount: number, lastFailureReason: string | null };
 
-export type VodAssetFieldsFragment = { __typename: 'VodAsset', id: string, artifactHash: string, playbackId: string, streamId: string | null, title: string | null, description: string | null, filename: string | null, status: VodAssetStatus, sizeBytes: number | null, durationMs: number | null, resolution: string | null, videoCodec: string | null, audioCodec: string | null, bitrateKbps: number | null, createdAt: string, updatedAt: string, expiresAt: string | null, errorMessage: string | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null };
+/** A Video-on-Demand asset uploaded by the tenant. VOD assets can be played back using the playbackId in playback URLs. */
+export type VodAssetFieldsFragment = { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal hash used for playback URL resolution. */
+artifactHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Source stream UUID for stream-derived VOD artifacts such as DVR chapters. */
+streamId: string | null, /** Optional display title for the asset. */
+title: string | null, /** Optional description of the asset content. */
+description: string | null, /** Original filename when uploaded. */
+filename: string | null, /** Current processing/storage status of the asset. */
+status: VodAssetStatus, /** File size in bytes (available after validation). */
+sizeBytes: number | null, /** Video duration in milliseconds. */
+durationMs: number | null, /** Video resolution (e.g., '1920x1080'). */
+resolution: string | null, /** Video codec (h264, h265, vp9, av1). */
+videoCodec: string | null, /** Audio codec (aac, opus). */
+audioCodec: string | null, /** Average bitrate in kbps. */
+bitrateKbps: number | null, /** When the asset was created/uploaded. */
+createdAt: string, /** When the asset was last modified. */
+updatedAt: string, /** Optional expiration time for auto-deletion. */
+expiresAt: string | null, /** Error message if processing failed. */
+errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null };
 
-export type StorageArtifactFieldsFragment = { key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null };
+export type StorageArtifactFieldsFragment = { key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, /** User-provided description (VOD uploads and clips); null when unset. */
+description: string | null, /** Processing failure detail for a failed artifact; null when not failed. */
+errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, /** Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized. */
+durationSeconds: number | null, /** Poster + hover-scrub sprite assets, when the artifact has thumbnails. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null };
 
 export type ViewerEndpointFieldsFragment = { nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown };
 
 export type IngestEndpointFieldsFragment = { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string };
 
-export type DeveloperTokenFieldsFragment = { __typename: 'DeveloperToken', id: string, tokenName: string, tokenValue: string | null, permissions: Array<string>, status: string, lastUsedAt: string | null, expiresAt: string | null, createdAt: string | null };
+/** An API token for programmatic access to the GraphQL API. Tokens have scoped permissions and optional expiration. */
+export type DeveloperTokenFieldsFragment = { __typename: 'DeveloperToken', /** Unique token identifier. */
+id: string, /** Human-readable name for the token. */
+tokenName: string, /** The secret token value (only returned on creation, null thereafter). */
+tokenValue: string | null, /** List of granted permissions (read:streams, write:streams, etc.). */
+permissions: Array<string>, /** Token status (active, revoked, expired). */
+status: string, /** When the token was last used for API access. */
+lastUsedAt: string | null, /** When the token expires (null for non-expiring). */
+expiresAt: string | null, /** When the token was created. */
+createdAt: string | null };
 
-export type SigningKeyFieldsFragment = { __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null };
+/** A customer-managed signing key for issuing viewer playback JWTs. The private key is returned exactly once at creation time (in CreateSigningKeySuccess); FrameWorks stores only the public key. Up to 10 active keys per tenant. */
+export type SigningKeyFieldsFragment = { __typename: 'SigningKey', id: string, /** Short ID embedded in JWT header (`kid`) for fast key lookup. */
+kid: string, /** Customer-supplied label. */
+name: string, /** Algorithm — ES256 only for v1. */
+algorithm: SigningKeyAlgorithm, /** Public key in PEM format. The private key is never stored. */
+publicKeyPem: string, /** Lifecycle status. */
+status: SigningKeyStatus, createdAt: string, /** Last time a JWT signed by this key successfully verified at playback. */
+lastUsedAt: string | null, /** When the key was revoked (null if active). */
+revokedAt: string | null };
 
 export type CreateDeveloperTokenMutationVariables = Exact<{
   input: CreateDeveloperTokenInput;
 }>;
 
 
-export type CreateDeveloperTokenMutation = { createDeveloperToken:
+/** Create a new API token for programmatic access. */
+export type CreateDeveloperTokenMutation = { /** Create a new API token for programmatic access. */
+createDeveloperToken:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeveloperToken', id: string, tokenName: string, tokenValue: string | null, permissions: Array<string>, status: string, lastUsedAt: string | null, expiresAt: string | null, createdAt: string | null }
+    | { __typename: 'DeveloperToken', /** Unique token identifier. */
+id: string, /** Human-readable name for the token. */
+tokenName: string, /** The secret token value (only returned on creation, null thereafter). */
+tokenValue: string | null, /** List of granted permissions (read:streams, write:streams, etc.). */
+permissions: Array<string>, /** Token status (active, revoked, expired). */
+status: string, /** When the token was last used for API access. */
+lastUsedAt: string | null, /** When the token expires (null for non-expiring). */
+expiresAt: string | null, /** When the token was created. */
+createdAt: string | null }
     | { __typename: 'RateLimitError', message: string, code: string | null, retryAfter: number | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -654,9 +802,12 @@ export type RevokeDeveloperTokenMutationVariables = Exact<{
 }>;
 
 
-export type RevokeDeveloperTokenMutation = { revokeDeveloperToken:
+/** Revoke an API token. */
+export type RevokeDeveloperTokenMutation = { /** Revoke an API token. */
+revokeDeveloperToken:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -665,9 +816,19 @@ export type CreateSigningKeyMutationVariables = Exact<{
 }>;
 
 
-export type CreateSigningKeyMutation = { createSigningKey:
+/** Generate a new ES256 playback signing keypair. The private key is returned ONCE in the response and never stored or returned again — capture it. Up to 10 active keys per tenant; revoke before re-creating. */
+export type CreateSigningKeyMutation = { /** Generate a new ES256 playback signing keypair. The private key is returned ONCE in the response and never stored or returned again — capture it. Up to 10 active keys per tenant; revoke before re-creating. */
+createSigningKey:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'CreateSigningKeySuccess', privateKeyPem: string, signingKey: { __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null } }
+    | { __typename: 'CreateSigningKeySuccess', /** ES256 private key in PEM format. Shown ONCE; never stored, never logged. */
+privateKeyPem: string, signingKey: { __typename: 'SigningKey', id: string, /** Short ID embedded in JWT header (`kid`) for fast key lookup. */
+kid: string, /** Customer-supplied label. */
+name: string, /** Algorithm — ES256 only for v1. */
+algorithm: SigningKeyAlgorithm, /** Public key in PEM format. The private key is never stored. */
+publicKeyPem: string, /** Lifecycle status. */
+status: SigningKeyStatus, createdAt: string, /** Last time a JWT signed by this key successfully verified at playback. */
+lastUsedAt: string | null, /** When the key was revoked (null if active). */
+revokedAt: string | null } }
     | { __typename: 'RateLimitError', message: string, code: string | null, retryAfter: number | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -677,10 +838,19 @@ export type RevokeSigningKeyMutationVariables = Exact<{
 }>;
 
 
-export type RevokeSigningKeyMutation = { revokeSigningKey:
+/** Mark an active signing key as revoked. Triggers session re-evaluation across the tenant's protected playback objects: viewers with valid auth continue (possibly with a brief reconnect), revoked viewers are denied. */
+export type RevokeSigningKeyMutation = { /** Mark an active signing key as revoked. Triggers session re-evaluation across the tenant's protected playback objects: viewers with valid auth continue (possibly with a brief reconnect), revoked viewers are denied. */
+revokeSigningKey:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null }
+    | { __typename: 'SigningKey', id: string, /** Short ID embedded in JWT header (`kid`) for fast key lookup. */
+kid: string, /** Customer-supplied label. */
+name: string, /** Algorithm — ES256 only for v1. */
+algorithm: SigningKeyAlgorithm, /** Public key in PEM format. The private key is never stored. */
+publicKeyPem: string, /** Lifecycle status. */
+status: SigningKeyStatus, createdAt: string, /** Last time a JWT signed by this key successfully verified at playback. */
+lastUsedAt: string | null, /** When the key was revoked (null if active). */
+revokedAt: string | null }
    };
 
 export type SetPlaybackPolicyMutationVariables = Exact<{
@@ -688,13 +858,42 @@ export type SetPlaybackPolicyMutationVariables = Exact<{
 }>;
 
 
-export type SetPlaybackPolicyMutation = { setPlaybackPolicy:
+/** Set or clear the playback access policy on a stream, VOD asset, or clip. Exactly one of streamId / vodAssetId / clipId must be set in the input. Webhook secrets are write-only on input and never returned in queries. Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for affected sessions; valid viewers continue, invalid ones are denied. */
+export type SetPlaybackPolicyMutation = { /** Set or clear the playback access policy on a stream, VOD asset, or clip. Exactly one of streamId / vodAssetId / clipId must be set in the input. Webhook secrets are write-only on input and never returned in queries. Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for affected sessions; valid viewers continue, invalid ones are denied. */
+setPlaybackPolicy:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'Clip', id: string, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null }
+    | { __typename: 'Clip', /** Global unique identifier for Relay compatibility. */
+id: string, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'Stream', id: string, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null }
+    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-    | { __typename: 'VodAsset', id: string, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null }
+    | { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
+id: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null }
    };
 
 export type TestPlaybackAccessMutationVariables = Exact<{
@@ -702,10 +901,20 @@ export type TestPlaybackAccessMutationVariables = Exact<{
 }>;
 
 
-export type TestPlaybackAccessMutation = { testPlaybackAccess:
+/** Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side. */
+export type TestPlaybackAccessMutation = { /** Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side. */
+testPlaybackAccess:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'PlaybackAccessDecision', allowed: boolean, policyType: string, reason: string | null, detail: string | null, kid: string | null, claimsJson: string | null, webhookStatus: number | null, webhookLatencyMs: number | null, resolvedInternalName: string | null }
+    | { __typename: 'PlaybackAccessDecision', allowed: boolean, /** Resolved policy type: 'public' | 'jwt' | 'webhook' | '' when no policy was found. */
+policyType: string, /** Empty on allow; deny reason token (e.g. 'jwt-expired', 'webhook-deny-403') otherwise. */
+reason: string | null, /** Free-form context for the operator (verifier error string, HTTP status as text). */
+detail: string | null, /** JWT key ID claimed by the token (extracted before verification). */
+kid: string | null, /** JSON-encoded JWT claims map. On allow, the verified claims. On deny, an unverified parse of the payload — useful for diagnosing aud / required- claim mismatches but never trustworthy as an auth signal. */
+claimsJson: string | null, /** HTTP status code from the customer webhook (0 if no call was made). */
+webhookStatus: number | null, /** End-to-end RTT for the webhook call in milliseconds (0 if no call was made). */
+webhookLatencyMs: number | null, /** Internal MistServer name the evaluator resolved against. Always populated when a target was found. */
+resolvedInternalName: string | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -714,9 +923,38 @@ export type CreateClipMutationVariables = Exact<{
 }>;
 
 
-export type CreateClipMutation = { createClip:
+/** Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream. */
+export type CreateClipMutation = { /** Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream. */
+createClip:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'Clip', id: string, clipHash: string, playbackId: string, streamId: string, title: string, description: string | null, startTime: number, duration: number, sizeBytes: number | null, status: string, clipMode: string | null, createdAt: string | null, updatedAt: string | null, expiresAt: string | null, isExpired: boolean, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null }
+    | { __typename: 'Clip', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal clip hash for storage and playback. */
+clipHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Stream this clip was created from. */
+streamId: string, /** Display title for the clip. */
+title: string, /** Optional description of clip content. */
+description: string | null, /** Resolved start time (Unix seconds). */
+startTime: number, /** Clip duration in seconds. */
+duration: number, /** File size in bytes. */
+sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
+status: string, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
+clipMode: string | null, /** When the clip was requested. */
+createdAt: string | null, /** When the clip was last updated. */
+updatedAt: string | null, /** When the clip will be auto-deleted. */
+expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
+isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -726,9 +964,12 @@ export type DeleteClipMutationVariables = Exact<{
 }>;
 
 
-export type DeleteClipMutation = { deleteClip:
+/** Delete a clip. */
+export type DeleteClipMutation = { /** Delete a clip. */
+deleteClip:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -737,9 +978,12 @@ export type StartDVRMutationVariables = Exact<{
 }>;
 
 
-export type StartDVRMutation = { startDVR:
+/** Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters. */
+export type StartDVRMutation = { /** Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters. */
+startDVR:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DVRRequest', id: string | null, dvrHash: string, playbackId: string, streamId: string, title: string | null, status: string | null, createdAt: string, updatedAt: string, startedAt: string | null, endedAt: string | null, expiresAt: string | null, isExpired: boolean, durationSeconds: number | null, sizeBytes: number | null, errorMessage: string | null }
+    | { __typename: 'DVRRequest', id: string | null, dvrHash: string, playbackId: string, streamId: string, title: string | null, status: string | null, createdAt: string, updatedAt: string, startedAt: string | null, endedAt: string | null, expiresAt: string | null, /** Whether the DVR has passed its retention date (expiresAt < now). */
+isExpired: boolean, durationSeconds: number | null, sizeBytes: number | null, errorMessage: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
@@ -749,9 +993,12 @@ export type StopDVRMutationVariables = Exact<{
 }>;
 
 
-export type StopDVRMutation = { stopDVR:
+/** Stop DVR recording for a stream. */
+export type StopDVRMutation = { /** Stop DVR recording for a stream. */
+stopDVR:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -760,9 +1007,12 @@ export type DeleteDVRMutationVariables = Exact<{
 }>;
 
 
-export type DeleteDVRMutation = { deleteDVR:
+/** Delete a DVR recording. */
+export type DeleteDVRMutation = { /** Delete a DVR recording. */
+deleteDVR:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -771,10 +1021,19 @@ export type CreateVodUploadMutationVariables = Exact<{
 }>;
 
 
-export type CreateVodUploadMutation = { createVodUpload:
+/** Create a new VOD upload session. Returns presigned URLs for multipart upload. */
+export type CreateVodUploadMutation = { /** Create a new VOD upload session. Returns presigned URLs for multipart upload. */
+createVodUpload:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-    | { __typename: 'VodUploadSession', id: string, artifactId: string, artifactHash: string, playbackId: string, partSize: number, expiresAt: string, parts: Array<{ partNumber: number, presignedUrl: string }> }
+    | { __typename: 'VodUploadSession', /** Upload session ID (S3 uploadId). */
+id: string, /** Internal artifact ID. */
+artifactId: string, /** Hash for playback URL resolution. */
+artifactHash: string, /** Public playback identifier. */
+playbackId: string, /** Recommended part size in bytes. */
+partSize: number, /** When presigned URLs expire (typically 2 hours). */
+expiresAt: string, /** Presigned URLs for each part. */
+parts: Array<{ partNumber: number, presignedUrl: string }> }
    };
 
 export type CompleteVodUploadMutationVariables = Exact<{
@@ -782,11 +1041,43 @@ export type CompleteVodUploadMutationVariables = Exact<{
 }>;
 
 
-export type CompleteVodUploadMutation = { completeVodUpload:
+/** Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation. */
+export type CompleteVodUploadMutation = { /** Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation. */
+completeVodUpload:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-    | { __typename: 'VodAsset', id: string, artifactHash: string, playbackId: string, streamId: string | null, title: string | null, description: string | null, filename: string | null, status: VodAssetStatus, sizeBytes: number | null, durationMs: number | null, resolution: string | null, videoCodec: string | null, audioCodec: string | null, bitrateKbps: number | null, createdAt: string, updatedAt: string, expiresAt: string | null, errorMessage: string | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null }
+    | { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal hash used for playback URL resolution. */
+artifactHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Source stream UUID for stream-derived VOD artifacts such as DVR chapters. */
+streamId: string | null, /** Optional display title for the asset. */
+title: string | null, /** Optional description of the asset content. */
+description: string | null, /** Original filename when uploaded. */
+filename: string | null, /** Current processing/storage status of the asset. */
+status: VodAssetStatus, /** File size in bytes (available after validation). */
+sizeBytes: number | null, /** Video duration in milliseconds. */
+durationMs: number | null, /** Video resolution (e.g., '1920x1080'). */
+resolution: string | null, /** Video codec (h264, h265, vp9, av1). */
+videoCodec: string | null, /** Audio codec (aac, opus). */
+audioCodec: string | null, /** Average bitrate in kbps. */
+bitrateKbps: number | null, /** When the asset was created/uploaded. */
+createdAt: string, /** When the asset was last modified. */
+updatedAt: string, /** Optional expiration time for auto-deletion. */
+expiresAt: string | null, /** Error message if processing failed. */
+errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null }
    };
 
 export type AbortVodUploadMutationVariables = Exact<{
@@ -794,9 +1085,12 @@ export type AbortVodUploadMutationVariables = Exact<{
 }>;
 
 
-export type AbortVodUploadMutation = { abortVodUpload:
+/** Abort an in-progress VOD upload. */
+export type AbortVodUploadMutation = { /** Abort an in-progress VOD upload. */
+abortVodUpload:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -805,9 +1099,12 @@ export type DeleteVodAssetMutationVariables = Exact<{
 }>;
 
 
-export type DeleteVodAssetMutation = { deleteVodAsset:
+/** Delete a VOD asset. */
+export type DeleteVodAssetMutation = { /** Delete a VOD asset. */
+deleteVodAsset:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -816,9 +1113,42 @@ export type CreateStreamMutationVariables = Exact<{
 }>;
 
 
-export type CreateStreamMutation = { createStream:
+/** Create a new stream for live broadcasting. */
+export type CreateStreamMutation = { /** Create a new stream for live broadcasting. */
+createStream:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }
+    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+streamKey: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+status: StreamStatus, /** Whether the stream is currently broadcasting. */
+isLive: boolean, /** Number of viewers currently watching. */
+currentViewers: number, /** When the current live session started (null if offline). */
+startedAt: string | null, /** When these metrics were last updated. */
+updatedAt: string } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -828,10 +1158,43 @@ export type UpdateStreamMutationVariables = Exact<{
 }>;
 
 
-export type UpdateStreamMutation = { updateStream:
+/** Update an existing stream's configuration. */
+export type UpdateStreamMutation = { /** Update an existing stream's configuration. */
+updateStream:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }
+    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+streamKey: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+status: StreamStatus, /** Whether the stream is currently broadcasting. */
+isLive: boolean, /** Number of viewers currently watching. */
+currentViewers: number, /** When the current live session started (null if offline). */
+startedAt: string | null, /** When these metrics were last updated. */
+updatedAt: string } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -840,9 +1203,12 @@ export type DeleteStreamMutationVariables = Exact<{
 }>;
 
 
-export type DeleteStreamMutation = { deleteStream:
+/** Delete a stream and all associated data. */
+export type DeleteStreamMutation = { /** Delete a stream and all associated data. */
+deleteStream:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -851,10 +1217,43 @@ export type RefreshStreamKeyMutationVariables = Exact<{
 }>;
 
 
-export type RefreshStreamKeyMutation = { refreshStreamKey:
+/** Generate a new stream key, invalidating the old one. */
+export type RefreshStreamKeyMutation = { /** Generate a new stream key, invalidating the old one. */
+refreshStreamKey:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }
+    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+streamKey: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+status: StreamStatus, /** Whether the stream is currently broadcasting. */
+isLive: boolean, /** Number of viewers currently watching. */
+currentViewers: number, /** When the current live session started (null if offline). */
+startedAt: string | null, /** When these metrics were last updated. */
+updatedAt: string } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -864,7 +1263,9 @@ export type CreateStreamKeyMutationVariables = Exact<{
 }>;
 
 
-export type CreateStreamKeyMutation = { createStreamKey:
+/** Create an additional stream key for a stream. */
+export type CreateStreamKeyMutation = { /** Create an additional stream key for a stream. */
+createStreamKey:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }
@@ -877,9 +1278,12 @@ export type DeleteStreamKeyMutationVariables = Exact<{
 }>;
 
 
-export type DeleteStreamKeyMutation = { deleteStreamKey:
+/** Delete a stream key. */
+export type DeleteStreamKeyMutation = { /** Delete a stream key. */
+deleteStreamKey:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null }
+    | { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
    };
 
@@ -889,7 +1293,17 @@ export type CreatePushTargetMutationVariables = Exact<{
 }>;
 
 
-export type CreatePushTargetMutation = { createPushTarget: { id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string } };
+/** Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets. */
+export type CreatePushTargetMutation = { /** Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets. */
+createPushTarget: { id: string, streamId: string, /** Platform identifier (twitch, youtube, facebook, kick, x, custom). */
+platform: string | null, /** User-friendly label for this target. */
+name: string, /** Target URI (masked in responses — stream key portion is redacted). */
+targetUri: string, /** Whether this target is enabled for automatic push on stream start. */
+isEnabled: boolean, /** Current push status: pending, pushing, retrying, stopping, idle, or failed. */
+status: string, /** Last error message if push failed. */
+lastError: string | null, /** Stable machine-readable lifecycle reason code. */
+reasonCode: string | null, /** When this target last successfully pushed. */
+lastPushedAt: string | null, createdAt: string } };
 
 export type UpdatePushTargetMutationVariables = Exact<{
   id: string;
@@ -897,21 +1311,39 @@ export type UpdatePushTargetMutationVariables = Exact<{
 }>;
 
 
-export type UpdatePushTargetMutation = { updatePushTarget: { id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string } };
+/** Update a multistream push target. */
+export type UpdatePushTargetMutation = { /** Update a multistream push target. */
+updatePushTarget: { id: string, streamId: string, /** Platform identifier (twitch, youtube, facebook, kick, x, custom). */
+platform: string | null, /** User-friendly label for this target. */
+name: string, /** Target URI (masked in responses — stream key portion is redacted). */
+targetUri: string, /** Whether this target is enabled for automatic push on stream start. */
+isEnabled: boolean, /** Current push status: pending, pushing, retrying, stopping, idle, or failed. */
+status: string, /** Last error message if push failed. */
+lastError: string | null, /** Stable machine-readable lifecycle reason code. */
+reasonCode: string | null, /** When this target last successfully pushed. */
+lastPushedAt: string | null, createdAt: string } };
 
 export type DeletePushTargetMutationVariables = Exact<{
   id: string;
 }>;
 
 
-export type DeletePushTargetMutation = { deletePushTarget: { __typename: 'DeleteSuccess', success: boolean, deletedId: string, pending: boolean | null } };
+/** Delete a multistream push target. */
+export type DeletePushTargetMutation = { /** Delete a multistream push target. */
+deletePushTarget: { __typename: 'DeleteSuccess', success: boolean, deletedId: string, /** True when the delete was accepted but is NOT yet finalized (e.g. a stream deletion awaiting the serving cell's cleanup-tombstone acknowledgement). The operation converges asynchronously; false means fully deleted. */
+pending: boolean | null } };
 
 export type GetTenantUsageQueryVariables = Exact<{
   timeRange?: TimeRangeInput | null | undefined;
 }>;
 
 
-export type GetTenantUsageQuery = { tenantUsage: { billingPeriod: string, currency: string, totalCost: number, baseAmount: string, usageAmount: string, usage: Array<{ resourceType: string, amount: number }>, costs: Array<{ resourceType: string, cost: number }>, lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, pricingSource: string, pricingLabel: string, unit: string }> } | null };
+/** Get aggregated usage metrics for the tenant. */
+export type GetTenantUsageQuery = { /** Get aggregated usage metrics for the tenant. */
+tenantUsage: { billingPeriod: string, currency: string, totalCost: number, /** Decimal-string base subscription portion. */
+baseAmount: string, /** Decimal-string metered portion. */
+usageAmount: string, usage: Array<{ resourceType: string, amount: number }>, costs: Array<{ resourceType: string, cost: number }>, /** Rated line items for the period (rating engine output). */
+lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, pricingSource: string, pricingLabel: string, unit: string }> } | null };
 
 export type ListUsageRecordsQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -919,7 +1351,9 @@ export type ListUsageRecordsQueryVariables = Exact<{
 }>;
 
 
-export type ListUsageRecordsQuery = { usageRecordsConnection: { totalCount: number, nodes: Array<{ id: string, clusterId: string | null, clusterName: string | null, usageType: string, unit: string, dimensions: unknown, usageValue: number, createdAt: string | null, periodStart: string | null, periodEnd: string | null, granularity: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List detailed usage records with pagination. */
+export type ListUsageRecordsQuery = { /** List detailed usage records with pagination. */
+usageRecordsConnection: { totalCount: number, nodes: Array<{ id: string, clusterId: string | null, clusterName: string | null, usageType: string, unit: string, dimensions: unknown, usageValue: number, createdAt: string | null, periodStart: string | null, periodEnd: string | null, granularity: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetUsageAggregatesQueryVariables = Exact<{
   timeRange: TimeRangeInput;
@@ -928,14 +1362,18 @@ export type GetUsageAggregatesQueryVariables = Exact<{
 }>;
 
 
-export type GetUsageAggregatesQuery = { usageAggregates: Array<{ usageType: string, periodStart: string | null, periodEnd: string | null, usageValue: number, granularity: string }> };
+/** Get aggregated usage data grouped by time interval. */
+export type GetUsageAggregatesQuery = { /** Get aggregated usage data grouped by time interval. */
+usageAggregates: Array<{ usageType: string, periodStart: string | null, periodEnd: string | null, usageValue: number, granularity: string }> };
 
 export type ListDeveloperTokensQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
 }>;
 
 
-export type ListDeveloperTokensQuery = { developerTokensConnection: { totalCount: number, nodes: Array<{ __typename: 'DeveloperToken', id: string, tokenName: string, tokenValue: string | null, permissions: Array<string>, status: string, lastUsedAt: string | null, expiresAt: string | null, createdAt: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List API tokens for programmatic access. Used to authenticate requests to the Developer API. */
+export type ListDeveloperTokensQuery = { /** List API tokens for programmatic access. Used to authenticate requests to the Developer API. */
+developerTokensConnection: { totalCount: number, nodes: Array<{ __typename: 'DeveloperToken', id: string, tokenName: string, tokenValue: string | null, permissions: Array<string>, status: string, lastUsedAt: string | null, expiresAt: string | null, createdAt: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type ListSigningKeysQueryVariables = Exact<{
   status?: string | null | undefined;
@@ -943,14 +1381,25 @@ export type ListSigningKeysQueryVariables = Exact<{
 }>;
 
 
-export type ListSigningKeysQuery = { signingKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List the tenant's playback signing keys with optional status filter. */
+export type ListSigningKeysQuery = { /** List the tenant's playback signing keys with optional status filter. */
+signingKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetSigningKeyQueryVariables = Exact<{
   id: string;
 }>;
 
 
-export type GetSigningKeyQuery = { signingKey: { __typename: 'SigningKey', id: string, kid: string, name: string, algorithm: SigningKeyAlgorithm, publicKeyPem: string, status: SigningKeyStatus, createdAt: string, lastUsedAt: string | null, revokedAt: string | null } | null };
+/** Get a single playback signing key by ID. Tenant-scoped. */
+export type GetSigningKeyQuery = { /** Get a single playback signing key by ID. Tenant-scoped. */
+signingKey: { __typename: 'SigningKey', id: string, /** Short ID embedded in JWT header (`kid`) for fast key lookup. */
+kid: string, /** Customer-supplied label. */
+name: string, /** Algorithm — ES256 only for v1. */
+algorithm: SigningKeyAlgorithm, /** Public key in PEM format. The private key is never stored. */
+publicKeyPem: string, /** Lifecycle status. */
+status: SigningKeyStatus, createdAt: string, /** Last time a JWT signed by this key successfully verified at playback. */
+lastUsedAt: string | null, /** When the key was revoked (null if active). */
+revokedAt: string | null } | null };
 
 export type ResolveViewerEndpointQueryVariables = Exact<{
   contentId: string;
@@ -958,7 +1407,10 @@ export type ResolveViewerEndpointQueryVariables = Exact<{
 }>;
 
 
-export type ResolveViewerEndpointQuery = { resolveViewerEndpoint: { primary: { nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown } | null, fallbacks: Array<{ nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown }>, metadata: { contentType: string, contentId: string, title: string | null, description: string | null, durationSeconds: number | null, status: string, isLive: boolean, viewers: number, recordingSizeBytes: number | null, clipSource: string | null, createdAt: string | null, telemetryToken: string | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null } | null } | null };
+/** Resolve a playback ID to viewer endpoints (HLS, DASH, etc.). Used by players to get the optimal CDN endpoint for playback. */
+export type ResolveViewerEndpointQuery = { /** Resolve a playback ID to viewer endpoints (HLS, DASH, etc.). Used by players to get the optimal CDN endpoint for playback. */
+resolveViewerEndpoint: { primary: { nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown } | null, fallbacks: Array<{ nodeId: string, baseUrl: string, protocol: string, url: string, geoDistance: number | null, loadScore: number | null, outputs: unknown }>, metadata: { contentType: string, contentId: string, title: string | null, description: string | null, durationSeconds: number | null, status: string, isLive: boolean, viewers: number, recordingSizeBytes: number | null, clipSource: string | null, createdAt: string | null, /** Short-lived signed token binding the resolved serving endpoint. The player echoes it on its boot-telemetry beacon so Bridge can trust cluster attribution. Infrastructure attribution only — carries no viewer identity. */
+telemetryToken: string | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null } | null } | null };
 
 export type ResolveIngestEndpointQueryVariables = Exact<{
   streamKey: string;
@@ -966,14 +1418,45 @@ export type ResolveIngestEndpointQueryVariables = Exact<{
 }>;
 
 
-export type ResolveIngestEndpointQuery = { resolveIngestEndpoint: { primary: { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }, fallbacks: Array<{ nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }>, metadata: { streamId: string, streamKey: string, tenantId: string, recordingEnabled: boolean } | null } | null };
+/** Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol. */
+export type ResolveIngestEndpointQuery = { /** Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol. */
+resolveIngestEndpoint: { primary: { nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }, fallbacks: Array<{ nodeId: string, baseUrl: string, whipUrl: string | null, rtmpUrl: string | null, srtUrl: string | null, region: string | null, loadScore: number | null, kind: IngestEndpointKind, clusterId: string }>, metadata: { streamId: string, streamKey: string, tenantId: string, recordingEnabled: boolean } | null } | null };
 
 export type GetClipQueryVariables = Exact<{
   id: string;
 }>;
 
 
-export type GetClipQuery = { clip: { __typename: 'Clip', id: string, clipHash: string, playbackId: string, streamId: string, title: string, description: string | null, startTime: number, duration: number, sizeBytes: number | null, status: string, clipMode: string | null, createdAt: string | null, updatedAt: string | null, expiresAt: string | null, isExpired: boolean, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null } | null };
+/** Fetch a single clip by its global ID. */
+export type GetClipQuery = { /** Fetch a single clip by its global ID. */
+clip: { __typename: 'Clip', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal clip hash for storage and playback. */
+clipHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Stream this clip was created from. */
+streamId: string, /** Display title for the clip. */
+title: string, /** Optional description of clip content. */
+description: string | null, /** Resolved start time (Unix seconds). */
+startTime: number, /** Clip duration in seconds. */
+duration: number, /** File size in bytes. */
+sizeBytes: number | null, /** Processing status (queued, processing, ready, failed). */
+status: string, /** Clip creation mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). */
+clipMode: string | null, /** When the clip was requested. */
+createdAt: string | null, /** When the clip was last updated. */
+updatedAt: string | null, /** When the clip will be auto-deleted. */
+expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
+isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null } | null };
 
 export type GetDVRChapterQueryVariables = Exact<{
   dvrId: string;
@@ -984,7 +1467,14 @@ export type GetDVRChapterQueryVariables = Exact<{
 }>;
 
 
-export type GetDVRChapterQuery = { dvrChapter: { chapterId: string, state: DVRChapterState, playbackId: string | null, isCurrent: boolean, hasGaps: boolean, segmentCount: number, wallClockStartUnixMs: number, wallClockEndUnixMs: number, playableNow: boolean, lastFailureReason: string | null } | null };
+/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
+export type GetDVRChapterQuery = { /** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
+dvrChapter: { chapterId: string, state: DVRChapterState, /** Public playback key minted by Commodore; null until finalization dispatches. */
+playbackId: string | null, isCurrent: boolean, hasGaps: boolean, segmentCount: number, /** Absolute Unix epoch ms of the playable MKV span start; falls back to the scheduled chapter start before finalization. */
+wallClockStartUnixMs: number, /** Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization. */
+wallClockEndUnixMs: number, /** True when state ∈ {FINALIZED, FROZEN, RECLAIMED}. */
+playableNow: boolean, /** Last finalization failure message (operator-facing); null on success or in-progress. */
+lastFailureReason: string | null } | null };
 
 export type ListDVRChaptersQueryVariables = Exact<{
   dvrId: string;
@@ -997,25 +1487,70 @@ export type ListDVRChaptersQueryVariables = Exact<{
 }>;
 
 
-export type ListDVRChaptersQuery = { dvrChapters: { nextPageToken: string | null, chapters: Array<{ chapterId: string, mode: DVRChapterMode, intervalSeconds: number | null, startMs: number, endMs: number, isCurrent: boolean, state: DVRChapterState, playbackId: string | null, hasGaps: boolean, segmentCount: number, lastFailureReason: string | null }> } | null };
+/** List chapters for a DVR recording. Paginated for unbounded artifact lifetime — default 200 per page, max 1000. */
+export type ListDVRChaptersQuery = { /** List chapters for a DVR recording. Paginated for unbounded artifact lifetime — default 200 per page, max 1000. */
+dvrChapters: { nextPageToken: string | null, chapters: Array<{ chapterId: string, mode: DVRChapterMode, intervalSeconds: number | null, startMs: number, endMs: number, isCurrent: boolean, state: DVRChapterState, playbackId: string | null, hasGaps: boolean, segmentCount: number, lastFailureReason: string | null }> } | null };
 
 export type GetVodAssetQueryVariables = Exact<{
   id: string;
 }>;
 
 
-export type GetVodAssetQuery = { vodAsset: { __typename: 'VodAsset', id: string, artifactHash: string, playbackId: string, streamId: string | null, title: string | null, description: string | null, filename: string | null, status: VodAssetStatus, sizeBytes: number | null, durationMs: number | null, resolution: string | null, videoCodec: string | null, audioCodec: string | null, bitrateKbps: number | null, createdAt: string, updatedAt: string, expiresAt: string | null, errorMessage: string | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, effectiveRetention: { retentionDays: number, retentionUntil: string | null, source: RetentionSource } | null } | null };
+/** Fetch a single VOD asset by ID. */
+export type GetVodAssetQuery = { /** Fetch a single VOD asset by ID. */
+vodAsset: { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal hash used for playback URL resolution. */
+artifactHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Source stream UUID for stream-derived VOD artifacts such as DVR chapters. */
+streamId: string | null, /** Optional display title for the asset. */
+title: string | null, /** Optional description of the asset content. */
+description: string | null, /** Original filename when uploaded. */
+filename: string | null, /** Current processing/storage status of the asset. */
+status: VodAssetStatus, /** File size in bytes (available after validation). */
+sizeBytes: number | null, /** Video duration in milliseconds. */
+durationMs: number | null, /** Video resolution (e.g., '1920x1080'). */
+resolution: string | null, /** Video codec (h264, h265, vp9, av1). */
+videoCodec: string | null, /** Audio codec (aac, opus). */
+audioCodec: string | null, /** Average bitrate in kbps. */
+bitrateKbps: number | null, /** When the asset was created/uploaded. */
+createdAt: string, /** When the asset was last modified. */
+updatedAt: string, /** Optional expiration time for auto-deletion. */
+expiresAt: string | null, /** Error message if processing failed. */
+errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null } | null };
 
 export type GetVodUploadStatusQueryVariables = Exact<{
   uploadId: string;
 }>;
 
 
-export type GetVodUploadStatusQuery = { vodUploadStatus:
+/** Read server-authoritative state of an in-flight VOD upload session. Polling complement to the upload events of tenantEvents; intended for reload-recovery and agent workflows that need a request/response shape. */
+export type GetVodUploadStatusQuery = { /** Read server-authoritative state of an in-flight VOD upload session. Polling complement to the upload events of tenantEvents; intended for reload-recovery and agent workflows that need a request/response shape. */
+vodUploadStatus:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
-    | { __typename: 'VodUploadStatus', uploadId: string, state: VodAssetStatus, expiresAt: string | null, retentionUntil: string | null, missingParts: Array<number>, lastErrorCode: string | null, artifactHash: string | null, playbackId: string | null, uploadedParts: Array<{ partNumber: number, etag: string, sizeBytes: number }> }
+    | { __typename: 'VodUploadStatus', /** Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming. */
+uploadId: string, /** Current state of the upload session. */
+state: VodAssetStatus, /** S3 multipart session deadline. Past this point, state is EXPIRED. */
+expiresAt: string | null, /** Asset retention deadline (informational; distinct from upload-session expiry). */
+retentionUntil: string | null, /** Part numbers still missing for completion (1-indexed). */
+missingParts: Array<number>, /** Last error code emitted by the pipeline, if any. */
+lastErrorCode: string | null, /** Hash for playback URL resolution. */
+artifactHash: string | null, /** Public playback identifier (available once known). */
+playbackId: string | null, /** Parts S3 has already received. */
+uploadedParts: Array<{ partNumber: number, etag: string, sizeBytes: number }> }
    };
 
 export type ListArtifactsQueryVariables = Exact<{
@@ -1023,12 +1558,18 @@ export type ListArtifactsQueryVariables = Exact<{
 }>;
 
 
-export type ListArtifactsQuery = { storageArtifactsConnection: { totalCount: number, hasNextPage: boolean, limit: number, offset: number, nodes: Array<{ key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null }> } };
+/** Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry. */
+export type ListArtifactsQuery = { /** Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry. */
+storageArtifactsConnection: { totalCount: number, hasNextPage: boolean, limit: number, offset: number, nodes: Array<{ key: string, kind: StorageArtifactKind, id: string, hash: string, playbackId: string | null, streamId: string | null, streamTitle: string, title: string, description: string | null, errorMessage: string | null, sizeBytes: number | null, status: string, createdAt: string, updatedAt: string, expiresAt: string | null, deleteId: string, durationSeconds: number | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null }> } };
 
 export type ServerInfoQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ServerInfoQuery = { serverInfo: { version: string, features: Array<string> } };
+/** Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in. */
+export type ServerInfoQuery = { /** Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in. */
+serverInfo: { /** Platform release version, for example v0.3.11. */
+version: string, /** Sorted slugs of shipped product features in the platform feature registry. */
+features: Array<string> } };
 
 export type ListStreamsQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -1036,14 +1577,49 @@ export type ListStreamsQueryVariables = Exact<{
 }>;
 
 
-export type ListStreamsQuery = { streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List all streams for the current tenant with pagination. */
+export type ListStreamsQuery = { /** List all streams for the current tenant with pagination. */
+streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetStreamQueryVariables = Exact<{
   id: string;
 }>;
 
 
-export type GetStreamQuery = { stream: { __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null } | null };
+/** Fetch a single stream by its global ID. */
+export type GetStreamQuery = { /** Fetch a single stream by its global ID. */
+stream: { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+streamKey: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+status: StreamStatus, /** Whether the stream is currently broadcasting. */
+isLive: boolean, /** Number of viewers currently watching. */
+currentViewers: number, /** When the current live session started (null if offline). */
+startedAt: string | null, /** When these metrics were last updated. */
+updatedAt: string } | null } | null };
 
 export type ListStreamKeysQueryVariables = Exact<{
   streamId: string;
@@ -1051,14 +1627,20 @@ export type ListStreamKeysQueryVariables = Exact<{
 }>;
 
 
-export type ListStreamKeysQuery = { streamKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List all stream keys for a specific stream. */
+export type ListStreamKeysQuery = { /** List all stream keys for a specific stream. */
+streamKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type ListPushTargetsQueryVariables = Exact<{
   streamId: string;
 }>;
 
 
-export type ListPushTargetsQuery = { stream: { id: string, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }> } | null };
+/** Fetch a single stream by its global ID. */
+export type ListPushTargetsQuery = { /** Fetch a single stream by its global ID. */
+stream: { /** Global unique identifier for Relay compatibility. */
+id: string, /** Configured multistream push targets for this stream. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }> } | null };
 
 export type TenantEventsSubscriptionVariables = Exact<{
   types?: Array<string> | string | null | undefined;
@@ -1066,7 +1648,13 @@ export type TenantEventsSubscriptionVariables = Exact<{
 }>;
 
 
-export type TenantEventsSubscription = { tenantEvents: { id: string, type: string, time: string, subject: string, data:
+/** Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event's data is the registered payload of its type. Pass types to receive only those event types (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events whose payload names that stream. */
+export type TenantEventsSubscription = { /** Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event's data is the registered payload of its type. Pass types to receive only those event types (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events whose payload names that stream. */
+tenantEvents: { /** Event ID, stable across redeliveries. */
+id: string, /** Registered event type, e.g. stream.live. */
+type: string, /** When the state change committed. */
+time: string, /** The aggregate the event belongs to, as <aggregate>/<id>, e.g. streams/<stream id>. */
+subject: string, data:
       | { __typename: 'AccountSuspended', suspensionReason: EventSuspensionReason }
       | { __typename: 'ApiTokenCreated', tokenId: string, name: string, permissions: Array<string>, expiresAt: string | null }
       | { __typename: 'ApiTokenRevoked', tokenId: string }
@@ -1164,6 +1752,7 @@ export const DeleteSuccessFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentStr
   pending
 }
     `, {"fragmentName":"DeleteSuccessFields"}) as unknown as TypedDocumentString<DeleteSuccessFieldsFragment, unknown>;
+/** Part of a public event payload (frameworks.events.public.v1.Artifact). */
 export const EventArtifactFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment EventArtifactFields on EventArtifact {
   artifactId
@@ -1172,12 +1761,14 @@ export const EventArtifactFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentStr
   playbackId
 }
     `, {"fragmentName":"EventArtifactFields"}) as unknown as TypedDocumentString<EventArtifactFieldsFragment, unknown>;
+/** Part of a public event payload (frameworks.events.public.v1.Money). */
 export const EventMoneyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment EventMoneyFields on EventMoney {
   amountMinor
   currency
 }
     `, {"fragmentName":"EventMoneyFields"}) as unknown as TypedDocumentString<EventMoneyFieldsFragment, unknown>;
+/** Per-playback-object access policy. Foghorn reads this in the USER_NEW trigger handler; the requiresAuth marker (on the playback object itself) gates whether the full policy is fetched at all. */
 export const PlaybackPolicyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment PlaybackPolicyFields on PlaybackPolicy {
   type
@@ -1196,6 +1787,7 @@ export const PlaybackPolicyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
   }
 }
     `, {"fragmentName":"PlaybackPolicyFields"}) as unknown as TypedDocumentString<PlaybackPolicyFieldsFragment, unknown>;
+/** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
 export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StreamFields on Stream {
   __typename
@@ -1271,6 +1863,7 @@ export const PushTargetFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString
   createdAt
 }
     `, {"fragmentName":"PushTargetFields"}) as unknown as TypedDocumentString<PushTargetFieldsFragment, unknown>;
+/** Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape is `{chandlerBase}/assets/{assetKey}/poster.jpg`, `/assets/{assetKey}/sprite.jpg`, `/assets/{assetKey}/sprite.vtt` — Chandler serves the object key directly, no version resolution. assetKey is stream_id for live streams; clip_hash / dvr_hash / vod_hash (= artifact_hash) for artifacts. */
 export const ThumbnailAssetsFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ThumbnailAssetsFields on ThumbnailAssets {
   posterUrl
@@ -1279,6 +1872,7 @@ export const ThumbnailAssetsFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentS
   assetKey
 }
     `, {"fragmentName":"ThumbnailAssetsFields"}) as unknown as TypedDocumentString<ThumbnailAssetsFieldsFragment, unknown>;
+/** Resolved retention horizon for a single asset (DVR, clip, or VOD). Embedded on Clip, DVRRequest, and VodAsset. */
 export const EffectiveRetentionFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment EffectiveRetentionFields on EffectiveRetention {
   retentionDays
@@ -1286,6 +1880,7 @@ export const EffectiveRetentionFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
   source
 }
     `, {"fragmentName":"EffectiveRetentionFields"}) as unknown as TypedDocumentString<EffectiveRetentionFieldsFragment, unknown>;
+/** A video clip extracted from a live stream's DVR buffer. Clips are created from recorded stream segments and stored for playback. */
 export const ClipFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ClipFields on Clip {
   __typename
@@ -1361,6 +1956,7 @@ export const DVRRequestFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString
   errorMessage
 }
     `, {"fragmentName":"DVRRequestFields"}) as unknown as TypedDocumentString<DVRRequestFieldsFragment, unknown>;
+/** A reference to a chapter for the chapter list UI. Same shape as DVRChapter without the timeline-zero derivations. */
 export const DVRChapterRefFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment DVRChapterRefFields on DVRChapterRef {
   chapterId
@@ -1376,6 +1972,7 @@ export const DVRChapterRefFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentStr
   lastFailureReason
 }
     `, {"fragmentName":"DVRChapterRefFields"}) as unknown as TypedDocumentString<DVRChapterRefFieldsFragment, unknown>;
+/** A Video-on-Demand asset uploaded by the tenant. VOD assets can be played back using the playbackId in playback URLs. */
 export const VodAssetFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment VodAssetFields on VodAsset {
   __typename
@@ -1487,6 +2084,7 @@ export const IngestEndpointFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
   clusterId
 }
     `, {"fragmentName":"IngestEndpointFields"}) as unknown as TypedDocumentString<IngestEndpointFieldsFragment, unknown>;
+/** An API token for programmatic access to the GraphQL API. Tokens have scoped permissions and optional expiration. */
 export const DeveloperTokenFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment DeveloperTokenFields on DeveloperToken {
   __typename
@@ -1500,6 +2098,7 @@ export const DeveloperTokenFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
   createdAt
 }
     `, {"fragmentName":"DeveloperTokenFields"}) as unknown as TypedDocumentString<DeveloperTokenFieldsFragment, unknown>;
+/** A customer-managed signing key for issuing viewer playback JWTs. The private key is returned exactly once at creation time (in CreateSigningKeySuccess); FrameWorks stores only the public key. Up to 10 active keys per tenant. */
 export const SigningKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment SigningKeyFields on SigningKey {
   __typename
@@ -1514,6 +2113,7 @@ export const SigningKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString
   revokedAt
 }
     `, {"fragmentName":"SigningKeyFields"}) as unknown as TypedDocumentString<SigningKeyFieldsFragment, unknown>;
+/** Create a new API token for programmatic access. */
 export const CreateDeveloperTokenDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateDeveloperToken($input: CreateDeveloperTokenInput!) {
   createDeveloperToken(input: $input) {
@@ -1553,6 +2153,7 @@ fragment DeveloperTokenFields on DeveloperToken {
   expiresAt
   createdAt
 }`) as unknown as TypedDocumentString<CreateDeveloperTokenMutation, CreateDeveloperTokenMutationVariables>;
+/** Revoke an API token. */
 export const RevokeDeveloperTokenDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RevokeDeveloperToken($id: ID!) {
   revokeDeveloperToken(id: $id) {
@@ -1580,6 +2181,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<RevokeDeveloperTokenMutation, RevokeDeveloperTokenMutationVariables>;
+/** Generate a new ES256 playback signing keypair. The private key is returned ONCE in the response and never stored or returned again — capture it. Up to 10 active keys per tenant; revoke before re-creating. */
 export const CreateSigningKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateSigningKey($input: CreateSigningKeyInput!) {
   createSigningKey(input: $input) {
@@ -1625,6 +2227,7 @@ fragment SigningKeyFields on SigningKey {
   lastUsedAt
   revokedAt
 }`) as unknown as TypedDocumentString<CreateSigningKeyMutation, CreateSigningKeyMutationVariables>;
+/** Mark an active signing key as revoked. Triggers session re-evaluation across the tenant's protected playback objects: viewers with valid auth continue (possibly with a brief reconnect), revoked viewers are denied. */
 export const RevokeSigningKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RevokeSigningKey($id: ID!) {
   revokeSigningKey(id: $id) {
@@ -1658,6 +2261,7 @@ fragment SigningKeyFields on SigningKey {
   lastUsedAt
   revokedAt
 }`) as unknown as TypedDocumentString<RevokeSigningKeyMutation, RevokeSigningKeyMutationVariables>;
+/** Set or clear the playback access policy on a stream, VOD asset, or clip. Exactly one of streamId / vodAssetId / clipId must be set in the input. Webhook secrets are write-only on input and never returned in queries. Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for affected sessions; valid viewers continue, invalid ones are denied. */
 export const SetPlaybackPolicyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation SetPlaybackPolicy($input: SetPlaybackPolicyInput!) {
   setPlaybackPolicy(input: $input) {
@@ -1720,6 +2324,7 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     secretMasked
   }
 }`) as unknown as TypedDocumentString<SetPlaybackPolicyMutation, SetPlaybackPolicyMutationVariables>;
+/** Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side. */
 export const TestPlaybackAccessDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation TestPlaybackAccess($input: TestPlaybackAccessInput!) {
   testPlaybackAccess(input: $input) {
@@ -1759,6 +2364,7 @@ fragment NotFoundErrorFields on NotFoundError {
   resourceType
   resourceId
 }`) as unknown as TypedDocumentString<TestPlaybackAccessMutation, TestPlaybackAccessMutationVariables>;
+/** Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream. */
 export const CreateClipDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
@@ -1842,6 +2448,7 @@ fragment ClipFields on Clip {
     ...EffectiveRetentionFields
   }
 }`) as unknown as TypedDocumentString<CreateClipMutation, CreateClipMutationVariables>;
+/** Delete a clip. */
 export const DeleteClipDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteClip($id: ID!) {
   deleteClip(id: $id) {
@@ -1869,6 +2476,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeleteClipMutation, DeleteClipMutationVariables>;
+/** Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters. */
 export const StartDVRDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation StartDVR($streamId: ID!) {
   startDVR(streamId: $streamId) {
@@ -1916,6 +2524,7 @@ fragment DVRRequestFields on DVRRequest {
   sizeBytes
   errorMessage
 }`) as unknown as TypedDocumentString<StartDVRMutation, StartDVRMutationVariables>;
+/** Stop DVR recording for a stream. */
 export const StopDVRDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation StopDVR($dvrHash: ID!) {
   stopDVR(dvrHash: $dvrHash) {
@@ -1943,6 +2552,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<StopDVRMutation, StopDVRMutationVariables>;
+/** Delete a DVR recording. */
 export const DeleteDVRDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteDVR($dvrHash: ID!) {
   deleteDVR(dvrHash: $dvrHash) {
@@ -1970,6 +2580,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeleteDVRMutation, DeleteDVRMutationVariables>;
+/** Create a new VOD upload session. Returns presigned URLs for multipart upload. */
 export const CreateVodUploadDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateVodUpload($input: CreateVodUploadInput!) {
   createVodUpload(input: $input) {
@@ -2002,6 +2613,7 @@ fragment AuthErrorFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<CreateVodUploadMutation, CreateVodUploadMutationVariables>;
+/** Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation. */
 export const CompleteVodUploadDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
   completeVodUpload(input: $input) {
@@ -2088,6 +2700,7 @@ fragment VodAssetFields on VodAsset {
     ...EffectiveRetentionFields
   }
 }`) as unknown as TypedDocumentString<CompleteVodUploadMutation, CompleteVodUploadMutationVariables>;
+/** Abort an in-progress VOD upload. */
 export const AbortVodUploadDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation AbortVodUpload($uploadId: ID!) {
   abortVodUpload(uploadId: $uploadId) {
@@ -2115,6 +2728,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<AbortVodUploadMutation, AbortVodUploadMutationVariables>;
+/** Delete a VOD asset. */
 export const DeleteVodAssetDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteVodAsset($id: ID!) {
   deleteVodAsset(id: $id) {
@@ -2142,6 +2756,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeleteVodAssetMutation, DeleteVodAssetMutationVariables>;
+/** Create a new stream for live broadcasting. */
 export const CreateStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateStream($input: CreateStreamInput!) {
   createStream(input: $input) {
@@ -2210,6 +2825,7 @@ fragment StreamFields on Stream {
     updatedAt
   }
 }`) as unknown as TypedDocumentString<CreateStreamMutation, CreateStreamMutationVariables>;
+/** Update an existing stream's configuration. */
 export const UpdateStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
   updateStream(id: $id, input: $input) {
@@ -2286,6 +2902,7 @@ fragment StreamFields on Stream {
     updatedAt
   }
 }`) as unknown as TypedDocumentString<UpdateStreamMutation, UpdateStreamMutationVariables>;
+/** Delete a stream and all associated data. */
 export const DeleteStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteStream($id: ID!) {
   deleteStream(id: $id) {
@@ -2313,6 +2930,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeleteStreamMutation, DeleteStreamMutationVariables>;
+/** Generate a new stream key, invalidating the old one. */
 export const RefreshStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
@@ -2389,6 +3007,7 @@ fragment StreamFields on Stream {
     updatedAt
   }
 }`) as unknown as TypedDocumentString<RefreshStreamKeyMutation, RefreshStreamKeyMutationVariables>;
+/** Create an additional stream key for a stream. */
 export const CreateStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
   createStreamKey(streamId: $streamId, input: $input) {
@@ -2428,6 +3047,7 @@ fragment StreamKeyFields on StreamKey {
   lastUsedAt
   createdAt
 }`) as unknown as TypedDocumentString<CreateStreamKeyMutation, CreateStreamKeyMutationVariables>;
+/** Delete a stream key. */
 export const DeleteStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
   deleteStreamKey(streamId: $streamId, keyId: $keyId) {
@@ -2455,6 +3075,7 @@ fragment DeleteSuccessFields on DeleteSuccess {
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeleteStreamKeyMutation, DeleteStreamKeyMutationVariables>;
+/** Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets. */
 export const CreatePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreatePushTarget($streamId: ID!, $input: CreatePushTargetInput!) {
   createPushTarget(streamId: $streamId, input: $input) {
@@ -2474,6 +3095,7 @@ export const CreatePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
   lastPushedAt
   createdAt
 }`) as unknown as TypedDocumentString<CreatePushTargetMutation, CreatePushTargetMutationVariables>;
+/** Update a multistream push target. */
 export const UpdatePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation UpdatePushTarget($id: ID!, $input: UpdatePushTargetInput!) {
   updatePushTarget(id: $id, input: $input) {
@@ -2493,6 +3115,7 @@ export const UpdatePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
   lastPushedAt
   createdAt
 }`) as unknown as TypedDocumentString<UpdatePushTargetMutation, UpdatePushTargetMutationVariables>;
+/** Delete a multistream push target. */
 export const DeletePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation DeletePushTarget($id: ID!) {
   deletePushTarget(id: $id) {
@@ -2505,6 +3128,7 @@ export const DeletePushTargetDocument = /*#__PURE__*/ new TypedDocumentString(`
   deletedId
   pending
 }`) as unknown as TypedDocumentString<DeletePushTargetMutation, DeletePushTargetMutationVariables>;
+/** Get aggregated usage metrics for the tenant. */
 export const GetTenantUsageDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetTenantUsage($timeRange: TimeRangeInput) {
   tenantUsage(timeRange: $timeRange) {
@@ -2540,6 +3164,7 @@ export const GetTenantUsageDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<GetTenantUsageQuery, GetTenantUsageQueryVariables>;
+/** List detailed usage records with pagination. */
 export const ListUsageRecordsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListUsageRecords($page: ConnectionInput, $timeRange: TimeRangeInput) {
   usageRecordsConnection(page: $page, timeRange: $timeRange) {
@@ -2568,6 +3193,7 @@ export const ListUsageRecordsDocument = /*#__PURE__*/ new TypedDocumentString(`
   hasNextPage
   hasPreviousPage
 }`) as unknown as TypedDocumentString<ListUsageRecordsQuery, ListUsageRecordsQueryVariables>;
+/** Get aggregated usage data grouped by time interval. */
 export const GetUsageAggregatesDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetUsageAggregates($timeRange: TimeRangeInput!, $granularity: String, $usageTypes: [String!]) {
   usageAggregates(
@@ -2583,6 +3209,7 @@ export const GetUsageAggregatesDocument = /*#__PURE__*/ new TypedDocumentString(
   }
 }
     `) as unknown as TypedDocumentString<GetUsageAggregatesQuery, GetUsageAggregatesQueryVariables>;
+/** List API tokens for programmatic access. Used to authenticate requests to the Developer API. */
 export const ListDeveloperTokensDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListDeveloperTokens($page: ConnectionInput) {
   developerTokensConnection(page: $page) {
@@ -2612,6 +3239,7 @@ fragment DeveloperTokenFields on DeveloperToken {
   expiresAt
   createdAt
 }`) as unknown as TypedDocumentString<ListDeveloperTokensQuery, ListDeveloperTokensQueryVariables>;
+/** List the tenant's playback signing keys with optional status filter. */
 export const ListSigningKeysDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListSigningKeys($status: String, $page: ConnectionInput) {
   signingKeysConnection(status: $status, page: $page) {
@@ -2642,6 +3270,7 @@ fragment SigningKeyFields on SigningKey {
   lastUsedAt
   revokedAt
 }`) as unknown as TypedDocumentString<ListSigningKeysQuery, ListSigningKeysQueryVariables>;
+/** Get a single playback signing key by ID. Tenant-scoped. */
 export const GetSigningKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetSigningKey($id: ID!) {
   signingKey(id: $id) {
@@ -2660,6 +3289,7 @@ export const GetSigningKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
   lastUsedAt
   revokedAt
 }`) as unknown as TypedDocumentString<GetSigningKeyQuery, GetSigningKeyQueryVariables>;
+/** Resolve a playback ID to viewer endpoints (HLS, DASH, etc.). Used by players to get the optimal CDN endpoint for playback. */
 export const ResolveViewerEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ResolveViewerEndpoint($contentId: String!, $protocol: MediaViewerProtocol) {
   resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {
@@ -2703,6 +3333,7 @@ fragment ViewerEndpointFields on ViewerEndpoint {
   loadScore
   outputs
 }`) as unknown as TypedDocumentString<ResolveViewerEndpointQuery, ResolveViewerEndpointQueryVariables>;
+/** Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol. */
 export const ResolveIngestEndpointDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ResolveIngestEndpoint($streamKey: String!, $protocol: MediaIngestProtocol) {
   resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {
@@ -2731,6 +3362,7 @@ export const ResolveIngestEndpointDocument = /*#__PURE__*/ new TypedDocumentStri
   kind
   clusterId
 }`) as unknown as TypedDocumentString<ResolveIngestEndpointQuery, ResolveIngestEndpointQueryVariables>;
+/** Fetch a single clip by its global ID. */
 export const GetClipDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetClip($id: ID!) {
   clip(id: $id) {
@@ -2791,6 +3423,7 @@ fragment ClipFields on Clip {
     ...EffectiveRetentionFields
   }
 }`) as unknown as TypedDocumentString<GetClipQuery, GetClipQueryVariables>;
+/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
 export const GetDVRChapterDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetDVRChapter($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRChapterMode, $intervalSeconds: Int) {
   dvrChapter(
@@ -2813,6 +3446,7 @@ export const GetDVRChapterDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<GetDVRChapterQuery, GetDVRChapterQueryVariables>;
+/** List chapters for a DVR recording. Paginated for unbounded artifact lifetime — default 200 per page, max 1000. */
 export const ListDVRChaptersDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListDVRChapters($dvrId: ID!, $mode: DVRChapterMode, $intervalSeconds: Int, $rangeStartMs: Float, $rangeEndMs: Float, $pageSize: Int, $pageToken: String) {
   dvrChapters(
@@ -2843,6 +3477,7 @@ export const ListDVRChaptersDocument = /*#__PURE__*/ new TypedDocumentString(`
   segmentCount
   lastFailureReason
 }`) as unknown as TypedDocumentString<ListDVRChaptersQuery, ListDVRChaptersQueryVariables>;
+/** Fetch a single VOD asset by ID. */
 export const GetVodAssetDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetVodAsset($id: ID!) {
   vodAsset(id: $id) {
@@ -2906,6 +3541,7 @@ fragment VodAssetFields on VodAsset {
     ...EffectiveRetentionFields
   }
 }`) as unknown as TypedDocumentString<GetVodAssetQuery, GetVodAssetQueryVariables>;
+/** Read server-authoritative state of an in-flight VOD upload session. Polling complement to the upload events of tenantEvents; intended for reload-recovery and agent workflows that need a request/response shape. */
 export const GetVodUploadStatusDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetVodUploadStatus($uploadId: ID!) {
   vodUploadStatus(uploadId: $uploadId) {
@@ -2949,6 +3585,7 @@ fragment NotFoundErrorFields on NotFoundError {
   resourceType
   resourceId
 }`) as unknown as TypedDocumentString<GetVodUploadStatusQuery, GetVodUploadStatusQueryVariables>;
+/** Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry. */
 export const ListArtifactsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListArtifacts($input: StorageArtifactsInput) {
   storageArtifactsConnection(input: $input) {
@@ -2989,6 +3626,7 @@ fragment StorageArtifactFields on StorageArtifact {
     ...ThumbnailAssetsFields
   }
 }`) as unknown as TypedDocumentString<ListArtifactsQuery, ListArtifactsQueryVariables>;
+/** Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in. */
 export const ServerInfoDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ServerInfo {
   serverInfo {
@@ -2997,6 +3635,7 @@ export const ServerInfoDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ServerInfoQuery, ServerInfoQueryVariables>;
+/** List all streams for the current tenant with pagination. */
 export const ListStreamsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListStreams($page: ConnectionInput, $search: String) {
   streamsConnection(page: $page, search: $search) {
@@ -3062,6 +3701,7 @@ fragment StreamFields on Stream {
     updatedAt
   }
 }`) as unknown as TypedDocumentString<ListStreamsQuery, ListStreamsQueryVariables>;
+/** Fetch a single stream by its global ID. */
 export const GetStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetStream($id: ID!) {
   stream(id: $id) {
@@ -3115,6 +3755,7 @@ fragment StreamFields on Stream {
     updatedAt
   }
 }`) as unknown as TypedDocumentString<GetStreamQuery, GetStreamQueryVariables>;
+/** List all stream keys for a specific stream. */
 export const ListStreamKeysDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
   streamKeysConnection(streamId: $streamId, page: $page) {
@@ -3143,6 +3784,7 @@ fragment StreamKeyFields on StreamKey {
   lastUsedAt
   createdAt
 }`) as unknown as TypedDocumentString<ListStreamKeysQuery, ListStreamKeysQueryVariables>;
+/** Fetch a single stream by its global ID. */
 export const ListPushTargetsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListPushTargets($streamId: ID!) {
   stream(id: $streamId) {
@@ -3165,6 +3807,7 @@ export const ListPushTargetsDocument = /*#__PURE__*/ new TypedDocumentString(`
   lastPushedAt
   createdAt
 }`) as unknown as TypedDocumentString<ListPushTargetsQuery, ListPushTargetsQueryVariables>;
+/** Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event's data is the registered payload of its type. Pass types to receive only those event types (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events whose payload names that stream. */
 export const TenantEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     subscription TenantEvents($types: [String!], $streamId: ID) {
   tenantEvents(types: $types, streamId: $streamId) {

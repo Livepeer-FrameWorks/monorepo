@@ -8,6 +8,11 @@ from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class RevokeDeveloperToken(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     revoke_developer_token: Annotated[
         Union[
             "RevokeDeveloperTokenRevokeDeveloperTokenDeleteSuccess",
@@ -16,7 +21,8 @@ class RevokeDeveloperToken(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="revokeDeveloperToken")
+    ] = Field(alias="revokeDeveloperToken", description="Revoke an API token.")
+    "Revoke an API token."
 
 
 class RevokeDeveloperTokenRevokeDeveloperTokenDeleteSuccess(DeleteSuccess):

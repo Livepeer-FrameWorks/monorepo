@@ -5,9 +5,17 @@ from .fragments import PageInfo, StreamKey
 
 
 class ListStreamKeys(BaseModel):
+    """Root Query type - the entry point for all read operations.
+
+    List and object fields are nullable per GraphQL best practices,
+    enabling graceful degradation when individual services are unavailable.
+    Most connection fields are non-null, but some may be nullable when upstream data is optional."""
+
     stream_keys_connection: "ListStreamKeysStreamKeysConnection" = Field(
-        alias="streamKeysConnection"
+        alias="streamKeysConnection",
+        description="List all stream keys for a specific stream.",
     )
+    "List all stream keys for a specific stream."
 
 
 class ListStreamKeysStreamKeysConnection(BaseModel):

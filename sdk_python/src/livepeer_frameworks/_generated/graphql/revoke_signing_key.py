@@ -8,6 +8,11 @@ from .fragments import AuthError, NotFoundError, SigningKey
 
 
 class RevokeSigningKey(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     revoke_signing_key: Annotated[
         Union[
             "RevokeSigningKeyRevokeSigningKeySigningKey",
@@ -16,7 +21,11 @@ class RevokeSigningKey(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="revokeSigningKey")
+    ] = Field(
+        alias="revokeSigningKey",
+        description="Mark an active signing key as revoked. Triggers session re-evaluation\nacross the tenant's protected playback objects: viewers with valid auth\ncontinue (possibly with a brief reconnect), revoked viewers are denied.",
+    )
+    "Mark an active signing key as revoked. Triggers session re-evaluation\nacross the tenant's protected playback objects: viewers with valid auth\ncontinue (possibly with a brief reconnect), revoked viewers are denied."
 
 
 class RevokeSigningKeyRevokeSigningKeySigningKey(SigningKey):

@@ -19,7 +19,19 @@ from __future__ import annotations
 import ast
 
 from ariadne_codegen.plugins.base import Plugin
-from graphql import FragmentDefinitionNode, GraphQLEnumType
+from graphql import (
+    FieldNode,
+    FragmentDefinitionNode,
+    GraphQLEnumType,
+    GraphQLInputField,
+    GraphQLNamedType,
+    GraphQLSchema,
+    InlineFragmentNode,
+    OperationDefinitionNode,
+    OperationType,
+    SelectionSetNode,
+    get_named_type,
+)
 from graphql.language import ExecutableDefinitionNode
 
 # The generated modules live in livepeer_frameworks._generated.graphql, three
@@ -37,15 +49,56 @@ class ForwardCompatPlugin(Plugin):
     def generate_enums_module(self, module: ast.Module) -> ast.Module:
         return _with_imports(module, runtime=["OpenEnum"])
 
+    def generate_input_field(
+        self,
+        field_implementation: ast.AnnAssign,
+        input_field: GraphQLInputField,
+        field_name: str,
+    ) -> ast.AnnAssign:
+        del field_name
+        return _with_description(field_implementation, input_field.description)
+
+    def generate_result_field(
+        self,
+        field_implementation: ast.AnnAssign,
+        operation_definition: ExecutableDefinitionNode,
+        field: FieldNode,
+    ) -> ast.AnnAssign:
+        schema_field = _find_field(self.schema, operation_definition, field)
+        return _with_description(
+            field_implementation, schema_field.description if schema_field else None
+        )
+
+    def generate_result_class(
+        self,
+        class_def: ast.ClassDef,
+        operation_definition: ExecutableDefinitionNode,
+        selection_set: SelectionSetNode,
+    ) -> ast.ClassDef:
+        type_ = _find_selection_type(self.schema, operation_definition, selection_set)
+        if type_ and type_.description:
+            class_def.body.insert(0, ast.Expr(value=ast.Constant(value=type_.description)))
+        return class_def
+
+    def generate_client_method(
+        self,
+        method_def: ast.FunctionDef | ast.AsyncFunctionDef,
+        operation_definition: OperationDefinitionNode,
+    ) -> ast.FunctionDef | ast.AsyncFunctionDef:
+        description = _operation_description(self.schema, operation_definition)
+        if description:
+            method_def.body.insert(0, ast.Expr(value=ast.Constant(value=description)))
+        return method_def
+
     def generate_result_types_module(
         self, module: ast.Module, operation_definition: ExecutableDefinitionNode
     ) -> ast.Module:
-        return _domain_fragment_names(_open_unions(module))
+        return _domain_fragment_names(_add_attribute_docstrings(_open_unions(module)))
 
     def generate_fragments_module(
         self, module: ast.Module, fragments_definitions: dict[str, FragmentDefinitionNode]
     ) -> ast.Module:
-        return _domain_fragment_names(_open_unions(module))
+        return _domain_fragment_names(_add_attribute_docstrings(_open_unions(module)))
 
     def generate_init_module(self, module: ast.Module) -> ast.Module:
         return _domain_fragment_names(module)
@@ -85,6 +138,146 @@ def _domain_fragment_names(module: ast.Module) -> ast.Module:
     result = Rename().visit(module)
     assert isinstance(result, ast.Module)
     return result
+
+
+def _with_description(field: ast.AnnAssign, description: str | None) -> ast.AnnAssign:
+    """Store a schema field description in Pydantic's JSON-schema metadata."""
+    if not description:
+        return field
+    keyword = ast.keyword(arg="description", value=ast.Constant(value=description))
+    if isinstance(field.value, ast.Call) and _name(field.value.func) == "Field":
+        if not any(item.arg == "description" for item in field.value.keywords):
+            field.value.keywords.append(keyword)
+        return field
+
+    keywords = [keyword]
+    if field.value is not None:
+        keywords.insert(0, ast.keyword(arg="default", value=field.value))
+    field.value = ast.Call(func=ast.Name(id="Field"), args=[], keywords=keywords)
+    return field
+
+
+def _add_attribute_docstrings(module: ast.Module) -> ast.Module:
+    """Mirror Pydantic descriptions as attribute docstrings for IDE hovers."""
+    for node in ast.walk(module):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        body: list[ast.stmt] = []
+        for statement in node.body:
+            body.append(statement)
+            if not isinstance(statement, ast.AnnAssign) or not isinstance(statement.value, ast.Call):
+                continue
+            for keyword in statement.value.keywords:
+                if (
+                    keyword.arg == "description"
+                    and isinstance(keyword.value, ast.Constant)
+                    and isinstance(keyword.value.value, str)
+                ):
+                    body.append(ast.Expr(value=ast.Constant(value=keyword.value.value)))
+                    break
+        node.body = body
+    return module
+
+
+def _definition_root(
+    schema: GraphQLSchema, definition: ExecutableDefinitionNode
+) -> GraphQLNamedType | None:
+    if isinstance(definition, FragmentDefinitionNode):
+        return schema.get_type(definition.type_condition.name.value)
+    if definition.operation == OperationType.QUERY:
+        return schema.query_type
+    if definition.operation == OperationType.MUTATION:
+        return schema.mutation_type
+    return schema.subscription_type
+
+
+def _same_node(left: object, right: object) -> bool:
+    if left is right:
+        return True
+    left_loc = getattr(left, "loc", None)
+    right_loc = getattr(right, "loc", None)
+    return bool(
+        left_loc
+        and right_loc
+        and left_loc.start == right_loc.start
+        and left_loc.end == right_loc.end
+    )
+
+
+def _field_map(type_: GraphQLNamedType | None) -> dict:
+    fields = getattr(type_, "fields", None)
+    return fields if isinstance(fields, dict) else {}
+
+
+def _inline_type(
+    schema: GraphQLSchema, selection: InlineFragmentNode, fallback: GraphQLNamedType | None
+) -> GraphQLNamedType | None:
+    if selection.type_condition:
+        return schema.get_type(selection.type_condition.name.value)
+    return fallback
+
+
+def _find_field(
+    schema: GraphQLSchema,
+    definition: ExecutableDefinitionNode,
+    target: FieldNode,
+):
+    def visit(selection_set: SelectionSetNode, parent: GraphQLNamedType | None):
+        for selection in selection_set.selections:
+            if isinstance(selection, FieldNode):
+                field = _field_map(parent).get(selection.name.value)
+                if _same_node(selection, target):
+                    return field
+                if selection.selection_set and field:
+                    found = visit(selection.selection_set, get_named_type(field.type))
+                    if found:
+                        return found
+            elif isinstance(selection, InlineFragmentNode):
+                found = visit(selection.selection_set, _inline_type(schema, selection, parent))
+                if found:
+                    return found
+        return None
+
+    return visit(definition.selection_set, _definition_root(schema, definition))
+
+
+def _find_selection_type(
+    schema: GraphQLSchema,
+    definition: ExecutableDefinitionNode,
+    target: SelectionSetNode,
+) -> GraphQLNamedType | None:
+    def visit(
+        selection_set: SelectionSetNode, parent: GraphQLNamedType | None
+    ) -> GraphQLNamedType | None:
+        if _same_node(selection_set, target):
+            return parent
+        for selection in selection_set.selections:
+            if isinstance(selection, FieldNode) and selection.selection_set:
+                field = _field_map(parent).get(selection.name.value)
+                if field:
+                    found = visit(selection.selection_set, get_named_type(field.type))
+                    if found:
+                        return found
+            elif isinstance(selection, InlineFragmentNode):
+                found = visit(
+                    selection.selection_set, _inline_type(schema, selection, parent)
+                )
+                if found:
+                    return found
+        return None
+
+    return visit(definition.selection_set, _definition_root(schema, definition))
+
+
+def _operation_description(
+    schema: GraphQLSchema, definition: OperationDefinitionNode
+) -> str | None:
+    root = _definition_root(schema, definition)
+    for selection in definition.selection_set.selections:
+        if isinstance(selection, FieldNode):
+            field = _field_map(root).get(selection.name.value)
+            return field.description if field else None
+    return None
 
 
 def _open_unions(module: ast.Module) -> ast.Module:

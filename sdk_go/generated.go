@@ -20432,6 +20432,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// AbortVodUpload executes the corresponding GraphQL operation.
+//
+// Abort an in-progress VOD upload.
 func AbortVodUpload(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -20546,6 +20549,10 @@ fragment EffectiveRetentionFields on EffectiveRetention {
 }
 `
 
+// CompleteVodUpload executes the corresponding GraphQL operation.
+//
+// Complete a VOD upload after all parts are uploaded.
+// Triggers processing and thumbnail generation.
 func CompleteVodUpload(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -20657,6 +20664,10 @@ fragment EffectiveRetentionFields on EffectiveRetention {
 }
 `
 
+// CreateClip executes the corresponding GraphQL operation.
+//
+// Create a clip from a live or recorded stream.
+// Clips are short video segments extracted from a stream.
 func CreateClip(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -20724,6 +20735,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// CreateDeveloperToken executes the corresponding GraphQL operation.
+//
+// Create a new API token for programmatic access.
 func CreateDeveloperToken(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -20771,6 +20785,10 @@ fragment PushTargetFields on PushTarget {
 }
 `
 
+// CreatePushTarget executes the corresponding GraphQL operation.
+//
+// Add a multistream push target to a stream.
+// When the stream goes live, it will automatically push to all enabled targets.
 // Push targets return the target itself; failures arrive as GraphQL errors.
 func CreatePushTarget(
 	ctx_ context.Context,
@@ -20847,6 +20865,11 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// CreateSigningKey executes the corresponding GraphQL operation.
+//
+// Generate a new ES256 playback signing keypair. The private key is returned
+// ONCE in the response and never stored or returned again — capture it.
+// Up to 10 active keys per tenant; revoke before re-creating.
 // privateKeyPem is returned once; FrameWorks keeps only the public key.
 func CreateSigningKey(
 	ctx_ context.Context,
@@ -20944,6 +20967,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }
 `
 
+// CreateStream executes the corresponding GraphQL operation.
+//
+// Create a new stream for live broadcasting.
 func CreateStream(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21011,6 +21037,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// CreateStreamKey executes the corresponding GraphQL operation.
+//
+// Create an additional stream key for a stream.
 func CreateStreamKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21073,6 +21102,10 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// CreateVodUpload executes the corresponding GraphQL operation.
+//
+// Create a new VOD upload session.
+// Returns presigned URLs for multipart upload.
 func CreateVodUpload(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21128,6 +21161,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// DeleteClip executes the corresponding GraphQL operation.
+//
+// Delete a clip.
 func DeleteClip(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21183,6 +21219,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// DeleteDVR executes the corresponding GraphQL operation.
+//
+// Delete a DVR recording.
 func DeleteDVR(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21223,6 +21262,9 @@ fragment DeleteSuccessFields on DeleteSuccess {
 }
 `
 
+// DeletePushTarget executes the corresponding GraphQL operation.
+//
+// Delete a multistream push target.
 func DeletePushTarget(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21278,6 +21320,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// DeleteStream executes the corresponding GraphQL operation.
+//
+// Delete a stream and all associated data.
 func DeleteStream(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21333,6 +21378,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// DeleteStreamKey executes the corresponding GraphQL operation.
+//
+// Delete a stream key.
 func DeleteStreamKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21390,6 +21438,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// DeleteVodAsset executes the corresponding GraphQL operation.
+//
+// Delete a VOD asset.
 func DeleteVodAsset(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21478,6 +21529,9 @@ fragment EffectiveRetentionFields on EffectiveRetention {
 }
 `
 
+// GetClip executes the corresponding GraphQL operation.
+//
+// Fetch a single clip by its global ID.
 func GetClip(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21521,6 +21575,17 @@ query GetDVRChapter ($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRCh
 }
 `
 
+// GetDVRChapter executes the corresponding GraphQL operation.
+//
+// Retrieve a single DVR chapter, including its finalized playbackId.
+//
+// Chapters are produced by the finalization queue as canonical .mkv
+// VOD artifacts. Historical chapter mode is configured at the Stream level
+// (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
+//   - WINDOW_SIZED: sequential fixed-length chapters of size
+//     tier.MaxWindowSeconds since the recording's start.
+//   - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
+//     unix epoch 0.
 func GetDVRChapter(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21575,6 +21640,9 @@ fragment SigningKeyFields on SigningKey {
 }
 `
 
+// GetSigningKey executes the corresponding GraphQL operation.
+//
+// Get a single playback signing key by ID. Tenant-scoped.
 func GetSigningKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21656,6 +21724,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }
 `
 
+// GetStream executes the corresponding GraphQL operation.
+//
+// Fetch a single stream by its global ID.
 func GetStream(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21718,6 +21789,9 @@ query GetTenantUsage ($timeRange: TimeRangeInput) {
 }
 `
 
+// GetTenantUsage executes the corresponding GraphQL operation.
+//
+// Get aggregated usage metrics for the tenant.
 func GetTenantUsage(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21756,6 +21830,9 @@ query GetUsageAggregates ($timeRange: TimeRangeInput!, $granularity: String, $us
 }
 `
 
+// GetUsageAggregates executes the corresponding GraphQL operation.
+//
+// Get aggregated usage data grouped by time interval.
 func GetUsageAggregates(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21851,6 +21928,9 @@ fragment EffectiveRetentionFields on EffectiveRetention {
 }
 `
 
+// GetVodAsset executes the corresponding GraphQL operation.
+//
+// Fetch a single VOD asset by ID.
 func GetVodAsset(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21922,6 +22002,11 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// GetVodUploadStatus executes the corresponding GraphQL operation.
+//
+// Read server-authoritative state of an in-flight VOD upload session.
+// Polling complement to the upload events of tenantEvents; intended for reload-recovery
+// and agent workflows that need a request/response shape.
 func GetVodUploadStatus(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -21990,6 +22075,11 @@ fragment ThumbnailAssetsFields on ThumbnailAssets {
 }
 `
 
+// ListArtifacts executes the corresponding GraphQL operation.
+//
+// Unified storage artifact browser for the account Storage page.
+// Search, kind filters, stream scoping, sorting, and pagination are
+// resolved server-side against the tenant artifact registry.
 func ListArtifacts(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22040,6 +22130,10 @@ fragment DVRChapterRefFields on DVRChapterRef {
 }
 `
 
+// ListDVRChapters executes the corresponding GraphQL operation.
+//
+// List chapters for a DVR recording. Paginated for unbounded artifact
+// lifetime — default 200 per page, max 1000.
 func ListDVRChapters(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22109,6 +22203,10 @@ fragment PageInfoFields on PageInfo {
 }
 `
 
+// ListDeveloperTokens executes the corresponding GraphQL operation.
+//
+// List API tokens for programmatic access.
+// Used to authenticate requests to the Developer API.
 func ListDeveloperTokens(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22159,6 +22257,9 @@ fragment PushTargetFields on PushTarget {
 }
 `
 
+// ListPushTargets executes the corresponding GraphQL operation.
+//
+// Fetch a single stream by its global ID.
 func ListPushTargets(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22217,6 +22318,9 @@ fragment PageInfoFields on PageInfo {
 }
 `
 
+// ListSigningKeys executes the corresponding GraphQL operation.
+//
+// List the tenant's playback signing keys with optional status filter.
 func ListSigningKeys(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22275,6 +22379,9 @@ fragment PageInfoFields on PageInfo {
 }
 `
 
+// ListStreamKeys executes the corresponding GraphQL operation.
+//
+// List all stream keys for a specific stream.
 func ListStreamKeys(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22370,6 +22477,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }
 `
 
+// ListStreams executes the corresponding GraphQL operation.
+//
+// List all streams for the current tenant with pagination.
 func ListStreams(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22428,6 +22538,9 @@ fragment PageInfoFields on PageInfo {
 }
 `
 
+// ListUsageRecords executes the corresponding GraphQL operation.
+//
+// List detailed usage records with pagination.
 func ListUsageRecords(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22534,6 +22647,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }
 `
 
+// RefreshStreamKey executes the corresponding GraphQL operation.
+//
+// Generate a new stream key, invalidating the old one.
 func RefreshStreamKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22590,6 +22706,11 @@ fragment IngestEndpointFields on IngestEndpoint {
 }
 `
 
+// ResolveIngestEndpoint executes the corresponding GraphQL operation.
+//
+// Resolve a stream key to ingest endpoints for StreamCrafter.
+// Returns node-specific advertised protocols. A requested protocol filters candidates
+// before ranking; it is not permission to substitute a different protocol.
 func ResolveIngestEndpoint(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22663,6 +22784,10 @@ fragment ThumbnailAssetsFields on ThumbnailAssets {
 }
 `
 
+// ResolveViewerEndpoint executes the corresponding GraphQL operation.
+//
+// Resolve a playback ID to viewer endpoints (HLS, DASH, etc.).
+// Used by players to get the optimal CDN endpoint for playback.
 func ResolveViewerEndpoint(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22720,6 +22845,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// RevokeDeveloperToken executes the corresponding GraphQL operation.
+//
+// Revoke an API token.
 func RevokeDeveloperToken(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22781,6 +22909,11 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// RevokeSigningKey executes the corresponding GraphQL operation.
+//
+// Mark an active signing key as revoked. Triggers session re-evaluation
+// across the tenant's protected playback objects: viewers with valid auth
+// continue (possibly with a brief reconnect), revoked viewers are denied.
 func RevokeSigningKey(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22816,6 +22949,11 @@ query ServerInfo {
 }
 `
 
+// ServerInfo executes the corresponding GraphQL operation.
+//
+// Platform release and shipped product features. Readable without
+// authentication so clients can detect what this server supports before
+// signing in.
 // The SDKs probe serverInfo once per URL before other operations; it is
 // public and needs no token.
 func ServerInfo(
@@ -22904,6 +23042,13 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// SetPlaybackPolicy executes the corresponding GraphQL operation.
+//
+// Set or clear the playback access policy on a stream, VOD asset, or clip.
+// Exactly one of streamId / vodAssetId / clipId must be set in the input.
+// Webhook secrets are write-only on input and never returned in queries.
+// Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for
+// affected sessions; valid viewers continue, invalid ones are denied.
 func SetPlaybackPolicy(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -22979,6 +23124,11 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// StartDVR executes the corresponding GraphQL operation.
+//
+// Start DVR recording for a live stream.
+// DVR creates one continuous archive session. Live seekback is bounded by
+// the resolved DVR policy; archive playback uses virtual chapters.
 func StartDVR(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -23034,6 +23184,9 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// StopDVR executes the corresponding GraphQL operation.
+//
+// Stop DVR recording for a stream.
 func StopDVR(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -23232,6 +23385,14 @@ fragment EventArtifactFields on EventArtifact {
 }
 `
 
+// TenantEvents executes the corresponding GraphQL operation.
+//
+// Public events of the current tenant, as webhooks deliver them: stream
+// lifecycle, clip, recording, and upload lifecycle, multistream status, API
+// tokens, billing, account, and custom domain events. Each event's data is the
+// registered payload of its type. Pass types to receive only those event types
+// (e.g. ["clip.ready", "clip.failed"]); pass streamId to receive only events
+// whose payload names that stream.
 // To unsubscribe, use [graphql.WebSocketClient.Unsubscribe]
 func TenantEvents(
 	ctx_ context.Context,
@@ -23321,6 +23482,13 @@ fragment AuthErrorFields on AuthError {
 }
 `
 
+// TestPlaybackAccess executes the corresponding GraphQL operation.
+//
+// Run the same evaluator the live USER_NEW path uses against a caller-
+// supplied JWT (or webhook test request) without registering a viewer
+// session. Mutation, not query, because webhook mode (fireWebhook=true)
+// fires a real outbound HTTPS request to the customer URL.
+// Tenant ownership of the playback target is validated server-side.
 func TestPlaybackAccess(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -23368,6 +23536,9 @@ fragment PushTargetFields on PushTarget {
 }
 `
 
+// UpdatePushTarget executes the corresponding GraphQL operation.
+//
+// Update a multistream push target.
 func UpdatePushTarget(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -23474,6 +23645,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 }
 `
 
+// UpdateStream executes the corresponding GraphQL operation.
+//
+// Update an existing stream's configuration.
 func UpdateStream(
 	ctx_ context.Context,
 	client_ graphql.Client,

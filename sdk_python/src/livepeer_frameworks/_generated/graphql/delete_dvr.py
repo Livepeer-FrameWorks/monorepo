@@ -8,6 +8,11 @@ from .fragments import AuthError, DeleteSuccess, NotFoundError
 
 
 class DeleteDVR(BaseModel):
+    """Root Mutation type - the entry point for all write operations.
+
+    All mutations return union types with explicit error states per GraphQL best practices.
+    Check the result type to handle success/error cases appropriately."""
+
     delete_dvr: Annotated[
         Union[
             "DeleteDVRDeleteDvrDeleteSuccess",
@@ -16,7 +21,8 @@ class DeleteDVR(BaseModel):
             UnknownMember,
         ],
         OpenUnion(),
-    ] = Field(alias="deleteDVR")
+    ] = Field(alias="deleteDVR", description="Delete a DVR recording.")
+    "Delete a DVR recording."
 
 
 class DeleteDVRDeleteDvrDeleteSuccess(DeleteSuccess):
