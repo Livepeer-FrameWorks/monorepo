@@ -348,6 +348,9 @@ func TestKafkaFormatDoesNotRunAsMissingServiceUserInCheckMode(t *testing.T) {
 	if !strings.Contains(formatBlock, "when: not ansible_check_mode") {
 		t.Fatal("Kafka storage formatting must not become the absent kafka user in check mode")
 	}
+	if !strings.Contains(formatBlock, `"--cluster-id={{ kafka_cluster_id }}"`) {
+		t.Fatal("Kafka storage formatting must bind the cluster ID with = so dash-prefixed UUIDs are not parsed as flags")
+	}
 	if !strings.Contains(body, "Report pending KRaft storage format under --check") {
 		t.Fatal("Kafka check mode must report pending storage formatting")
 	}
