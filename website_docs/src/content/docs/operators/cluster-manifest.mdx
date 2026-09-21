@@ -389,6 +389,10 @@ infrastructure:
   matching cluster's `DATABASE_RUNTIME_PASSWORD`, then the shared
   `DATABASE_RUNTIME_PASSWORD`. The same resolution feeds provisioning and service
   DSNs, and provisioning rejects owner/runtime credential collisions.
+  On YugabyteDB, table placement is declared in the repository rather than here:
+  provisioning creates each platform database with its colocated layout, and
+  existing databases move with
+  [`frameworks cluster yugabyte relayout`](/operators/yugabyte-layout).
 - `tuning` (optional) - key/value overrides for server tuning
 - `sql_access` (optional) - `direct` by default, or `ssh`
 - `password` (optional) - Database password override

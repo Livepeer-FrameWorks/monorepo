@@ -377,6 +377,7 @@ export default defineConfig({
                 { slug: "operators/running-upgrades" },
                 { slug: "operators/postgres-migrations" },
                 { slug: "operators/clickhouse-migrations" },
+                { slug: "operators/yugabyte-layout" },
               ],
             },
             {

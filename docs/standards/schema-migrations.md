@@ -26,6 +26,16 @@ commit.** A fresh `init` applies the baseline then only post-floor migrations; a
 upgrade applies the migration. They must converge. The verification harness (below)
 enforces this for post-floor migrations.
 
+**Invariant — every table has a YugabyteDB placement, in the same commit.** A new
+`CREATE TABLE` must be listed in `pkg/database/sql/layout/<db>.yaml` as colocated or
+distributed, following the criteria in
+[Database HA](../architecture/database-ha.md#classification-criteria). A table that an
+embedded migration drops stays placed and moves to `retired_tables`. Never write
+`WITH (COLOCATION = …)` into baseline or migration SQL: PostgreSQL rejects it, and the
+YugabyteDB path generates the clause from the layout. Every migration file, including
+`.notx.sql`, is scanned, and a table-creating form the rewriter cannot place fails
+provisioning and migration item builds.
+
 ## New service databases
 
 A database introduced by a release has a baseline and **no migrations**: its whole
@@ -120,9 +130,12 @@ may have recorded in its checksum ledger.
 
 PostgreSQL/YugabyteDB files ending in `.notx.sql` are applied in autocommit
 mode. The validator permits one or more statements only when every statement is
-an idempotent `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS`; the role sends
-those statements separately and records one checksum/ledger row for the
-unchanged migration file. This preserves an applied migration's identity while
+an idempotent `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS` that names its
+index and builds on a schema-qualified table; the role sends those statements
+separately, split by the same tokenizer the YugabyteDB layout rewriter uses, and
+records one checksum/ledger row for the unchanged migration file. Before pending
+items apply, the role drops an invalid index that a pending `.notx.sql` item
+builds, so a rerun after an interrupted build rebuilds it. This preserves an applied migration's identity while
 meeting PostgreSQL's requirement that concurrent index creation not run inside
 a transaction block. Every concurrent index must also have a same-release
 postdeploy check through `pg_index` that rejects a missing, not-ready, or invalid
@@ -371,6 +384,18 @@ Use the generated `DBTX` boundary so the same query runs through `*sql.DB` and
 `*sql.Tx` and transaction ownership stays with the caller; never split a lock or
 fencing transaction merely to fit generated methods. Converting a handwritten query
 must preserve its transaction, lock, fencing, and error semantics.
+
+Explicit transactions run through `database.WithRetryablePostgresTx`, never a bare
+`BeginTx`. Online migrations abort open transactions on colocated YugabyteDB databases,
+and both engines raise `40001` and `40P01` under contention, so the helper replays the
+whole transaction. Its callback must be safe to run more than once: database work only,
+with RPCs, publishes, and cache updates after it returns. A transaction that cannot be
+replayed keeps its `Begin` call with a `// Raw transaction: <reason>.` comment on the
+line above, and `make verify-db-transactions`, which CI runs, rejects any other
+`BeginTx`, `Begin()`, pgx `Begin(ctx)`, or `BEGIN` sent as SQL. A statement whose failure
+the transaction tolerates runs through `database.TryInSavepoint`, because a failed
+statement otherwise aborts the whole transaction. See
+[Database HA](../architecture/database-ha.md#ddl-aborts-dml-on-colocated-siblings).
 
 Dynamic reporting and filter SQL may stay handwritten where generation is impractical.
 Its repository then owns its result types and must execute representative statements
