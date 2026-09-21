@@ -12,15 +12,21 @@ account, the GitOps checkout, and its SOPS age key. Privateer must not run on de
 
 ```bash
 export FRAMEWORKS_GITOPS_DIR=../gitops
-scripts/remote-dev.sh doctor
 scripts/remote-dev.sh sync issue-123
+scripts/remote-dev.sh run issue-123 pnpm runtime set node 24 -g
+scripts/remote-dev.sh doctor
 scripts/remote-dev.sh run issue-123 make test-cli
 ```
 
+The Node runtime is installed once in the developer's isolated cache. `doctor` rejects a runtime
+outside the Node 24 range required by the repository.
+
 Use a distinct slot for each agent conversation or branch. The wrapper validates slot names and
 maps each one to `/srv/frameworks-dev/workspaces/<user>/<slot>/monorepo`. Sync removes stale files
-inside that slot only. Repository ignore rules keep local dependencies and secrets out of the
-transfer. Shared Go, pnpm, and Cargo caches live outside the slots.
+inside that slot only. It transfers unpublished commit objects first, checks out the exact local
+HEAD, and then mirrors tracked and untracked working-tree changes. Repository ignore rules keep
+local dependencies and secrets out of the transfer. Shared Go, pnpm, and Cargo caches live outside
+the slots.
 
 Two simultaneous `run` jobs are the enforced limit. A third exits with status 75 so an agent can
 retry later. Interactive shells are not counted; do not use them to bypass the limit for heavy
@@ -50,7 +56,7 @@ code-server: the SSH tunnel is the editor transport.
 ## Security boundary
 
 - No public DNS record, IPv4 port forward, or unsolicited WAN IPv6 is allowed.
-- Split DNS for `remotedev.dev.frameworks.network` exists only on the management VPN/LAN.
+- Split DNS for `remotedev.dev.frameworks.network` must resolve only on the management VPN/LAN.
 - SSH password authentication is disabled; developers do not share Unix accounts.
 - Normal builds use Docker-group access and do not need passwordless sudo.
 - A developer SOPS key can reveal deployment material. Distribute and revoke it as a privileged

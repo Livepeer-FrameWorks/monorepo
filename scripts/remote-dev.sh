@@ -58,16 +58,44 @@ export GOMODCACHE=/srv/frameworks-dev/cache/$remote_user/go-mod
 export PNPM_HOME=/srv/frameworks-dev/cache/$remote_user/pnpm-home
 export PNPM_STORE_DIR=/srv/frameworks-dev/cache/$remote_user/pnpm-store
 export CARGO_HOME=/srv/frameworks-dev/cache/$remote_user/cargo
-export PATH="\$PNPM_HOME:\$HOME/go/bin:\$CARGO_HOME/bin:\$PATH"
-mkdir -p "\$GOCACHE" "\$GOMODCACHE" "\$PNPM_HOME" "\$PNPM_STORE_DIR" "\$CARGO_HOME"
+export PATH="\$PNPM_HOME/bin:\$PNPM_HOME:\$HOME/go/bin:\$CARGO_HOME/bin:\$PATH"
+mkdir -p "\$GOCACHE" "\$GOMODCACHE" "\$PNPM_HOME/bin" "\$PNPM_STORE_DIR" "\$CARGO_HOME"
 EOF
 }
 
 initialize_slot() {
-  local head repo_url init_script
+  local base bundle head init_script remote_bundle repo_url upstream
   head=$(git -C "$repo_root" rev-parse HEAD)
   repo_url=${REMOTE_DEV_REPO_URL:-https://github.com/Livepeer-FrameWorks/monorepo.git}
-  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; cd $(printf '%q' "$remote_repo"); if git fetch --depth=1 origin $(printf '%q' "$head") >/dev/null 2>&1; then git checkout --detach --force $(printf '%q' "$head"); else printf '%s\\n' 'warning: local HEAD is not on origin; using origin/HEAD as Git baseline before mirroring files' >&2; git checkout --detach --force origin/HEAD; fi"
+  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; cd $(printf '%q' "$remote_repo"); if git fetch --depth=1 origin $(printf '%q' "$head") >/dev/null 2>&1 || git cat-file -e $(printf '%q' "$head^{commit}") 2>/dev/null; then git checkout --detach --force $(printf '%q' "$head"); else git checkout --detach --force origin/HEAD; fi"
+  # The command is deliberately assembled locally and shell-quoted before SSH.
+  # shellcheck disable=SC2029
+  ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$init_script")"
+
+  # shellcheck disable=SC2029
+  if ssh "${ssh_args[@]}" "$remote_target" \
+    "git -C $(printf '%q' "$remote_repo") cat-file -e $(printf '%q' "$head^{commit}")" 2>/dev/null; then
+    return
+  fi
+
+  upstream=$(git -C "$repo_root" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+  base=
+  if [[ -n $upstream ]]; then
+    base=$(git -C "$repo_root" merge-base "$head" "$upstream" 2>/dev/null || true)
+  fi
+  bundle=$(mktemp "${TMPDIR:-/tmp}/frameworks-remote-dev-head.XXXXXX")
+  trap 'rm -f "$bundle"' RETURN
+  if [[ -n $base && $base != "$head" ]]; then
+    git -C "$repo_root" bundle create "$bundle" HEAD "^$base"
+  else
+    git -C "$repo_root" bundle create "$bundle" HEAD
+  fi
+  remote_bundle="$remote_repo/.git/frameworks-local-head.bundle"
+  rsync --archive --compress \
+    -e "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ControlMaster=no -o ControlPath=none -p $remote_port" \
+    "$bundle" "$remote_target:$remote_bundle"
+  init_script="set -e; cd $(printf '%q' "$remote_repo"); git fetch $(printf '%q' "$remote_bundle") HEAD; git checkout --detach --force $(printf '%q' "$head"); rm -f $(printf '%q' "$remote_bundle")"
+  # shellcheck disable=SC2029
   ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$init_script")"
 }
 
@@ -87,7 +115,9 @@ case "$action" in
   doctor)
     require_command ssh
     require_command rsync
-    ssh "${ssh_args[@]}" "$remote_target" "bash -lc 'set -e; test -d /srv/frameworks-dev/workspaces; test -w /srv/frameworks-dev/workspaces/$remote_user; test -w /srv/frameworks-dev/cache; command -v git docker flock rsync go pnpm >/dev/null; docker info >/dev/null; printf \"host=%s\\nuser=%s\\ncpus=%s\\nworkspace=%s\\n\" \"\$(hostnamectl --static)\" \"\$(id -un)\" \"\$(nproc)\" /srv/frameworks-dev/workspaces/$remote_user'"
+    doctor_script="set -e; $(remote_environment); test -d /srv/frameworks-dev/workspaces; test -w /srv/frameworks-dev/workspaces/$remote_user; test -w /srv/frameworks-dev/cache; command -v git docker flock rsync go node pnpm >/dev/null; docker info >/dev/null; node_major=\$(node -p 'process.versions.node.split(\".\")[0]'); if [[ \$node_major != 24 ]]; then printf '%s\\n' 'remote-dev: Node 24 is required; initialize it with: scripts/remote-dev.sh run <slot> pnpm runtime set node 24 -g' >&2; exit 1; fi; printf 'host=%s\\nuser=%s\\ncpus=%s\\nnode=%s\\nworkspace=%s\\n' \"\$(hostnamectl --static)\" \"\$(id -un)\" \"\$(nproc)\" \"\$(node --version)\" /srv/frameworks-dev/workspaces/$remote_user"
+    # shellcheck disable=SC2029
+    ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$doctor_script")"
     ;;
   sync)
     require_command rsync
@@ -111,6 +141,7 @@ case "$action" in
     [[ $# -gt 0 ]] || die "run requires a command"
     printf -v quoted_command '%q ' "$@"
     remote_script="set -e; umask 0002; cd $(printf '%q' "$remote_repo"); $(remote_environment); for lock in /srv/frameworks-dev/cache/.heavy-1.lock /srv/frameworks-dev/cache/.heavy-2.lock; do exec {lock_fd}>\"\$lock\"; if flock -n \"\$lock_fd\"; then exec $quoted_command; fi; exec {lock_fd}>&-; done; printf '%s\\n' 'remote-dev: both heavy-job slots are occupied; retry after one finishes' >&2; exit 75"
+    # shellcheck disable=SC2029
     ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$remote_script")"
     ;;
   shell)
