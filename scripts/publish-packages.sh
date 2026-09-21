@@ -23,10 +23,11 @@
 #   3. commit, and push the commit to origin master
 #   4. scripts/publish-packages.sh
 #
-# The run publishes the checked-out commit, which must be clean and contained in origin/master:
-# the Go mirror pins pkg to that commit's pseudo-version, which the Go proxy can only resolve from
-# the public monorepo. Every step skips a version its registry already has, so re-running after a
-# failure continues where the previous run stopped.
+# The Go mirror publishes the checked-out commit, which must be contained in origin/master because
+# it pins pkg to that commit's pseudo-version and the Go proxy must resolve it from the public
+# monorepo. npm and PyPI intentionally publish the current package directories. Every step skips a
+# version its registry already has, so re-running after a failure continues where the previous run
+# stopped.
 #
 # Credentials are the owner's own: npm login (prompted once when npm whoami fails), twine's usual
 # sources (~/.pypirc, keyring, TWINE_* variables, or its prompt), and git credentials that may
@@ -192,9 +193,6 @@ fi
 
 SHA=$(git rev-parse HEAD)
 blockers=()
-if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
-  blockers+=("the working tree has uncommitted or untracked changes; publish from a clean checkout")
-fi
 pending_changesets=()
 for file in .changeset/*.md; do
   [[ -e "$file" && "$(basename "$file")" != README.md ]] && pending_changesets+=("$(basename "$file")")
@@ -345,8 +343,6 @@ if $todo_npm || $todo_pypi || $todo_go; then
   make test-foghorn GO_TEST_PACKAGES=./internal/triggers/ \
     GO_TEST_FLAGS="-run TestSDKPlaybackTokensPassThePlaybackVerifier" ||
     fail "the SDK playback tokens failed the playback verifier; nothing was published"
-  [[ -z "$(git status --porcelain --untracked-files=normal)" ]] ||
-    fail "the gates changed the working tree; nothing was published"
   echo ""
 fi
 
