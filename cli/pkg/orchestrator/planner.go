@@ -676,6 +676,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if queryErr != nil {
 		return queryErr
 	}
+	commodoreTasks, commodoreErr := p.taskNamesForDeploy("commodore")
+	if commodoreErr != nil {
+		return commodoreErr
+	}
 	purserTasks, purserErr := p.taskNamesForDeploy("purser")
 	if purserErr != nil {
 		return purserErr
@@ -722,6 +726,9 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			// every Signalman is current before any Bridge rolls.
 			if deploy == "bridge" {
 				task.DependsOn = append(task.DependsOn, signalmanTasks...)
+			}
+			if deploy == "foghorn" {
+				task.DependsOn = append(task.DependsOn, commodoreTasks...)
 			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {

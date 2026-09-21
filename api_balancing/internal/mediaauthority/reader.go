@@ -105,15 +105,46 @@ func (s *Store) RoutingClusterPeers(tenant *mediaauthoritypb.TenantAuthority, lo
 }
 
 type MediaObjectSnapshot struct {
-	Authority    *mediaauthoritypb.MediaObjectAuthority
-	AuthorityID  string
-	Version      int64
-	Ready        bool
-	IngestReady  bool
-	SourceReady  bool
-	Freshness    Freshness
-	RefreshAfter time.Time
-	ValidUntil   time.Time
+	Authority   *mediaauthoritypb.MediaObjectAuthority
+	AuthorityID string
+	Version     int64
+	// ParentVersion is captured in the same database snapshot as the object.
+	ParentVersion int64
+	Ready         bool
+	IngestReady   bool
+	SourceReady   bool
+	Freshness     Freshness
+	RefreshAfter  time.Time
+	ValidUntil    time.Time
+}
+
+// TenantForObject rejects a pair assembled across a tenant update. In
+// particular, a revival must not make an older object snapshot usable again.
+func (s *Store) TenantForObject(ctx context.Context, object MediaObjectSnapshot) (TenantSnapshot, error) {
+	tenant, err := s.Tenant(ctx, object.Authority.GetTenantId())
+	if err == nil && tenant.Version != object.ParentVersion {
+		tenant = s.recheckObjectParent(ctx, object, tenant)
+	}
+	return tenant, err
+}
+
+func (s *Store) TenantSourceForObject(ctx context.Context, object MediaObjectSnapshot) (TenantSnapshot, error) {
+	tenant, err := s.TenantSource(ctx, object.Authority.GetTenantId())
+	if err == nil && tenant.Version != object.ParentVersion {
+		tenant = s.recheckObjectParent(ctx, object, tenant)
+	}
+	return tenant, err
+}
+
+// A routine parent renewal may land between the two reads. Recheck the same
+// object version locally; a changed object or revival barrier still fails closed.
+func (s *Store) recheckObjectParent(ctx context.Context, object MediaObjectSnapshot, tenant TenantSnapshot) TenantSnapshot {
+	current, err := s.MediaObjectByInternalName(ctx, object.Authority.GetInternalName())
+	if err != nil || current.AuthorityID != object.AuthorityID || current.Version != object.Version ||
+		current.ParentVersion != tenant.Version || current.Freshness == FreshnessHardExpired {
+		tenant.Freshness = FreshnessHardExpired
+	}
+	return tenant
 }
 
 func (s *Store) MediaObjectByPublishingCredential(ctx context.Context, credential string) (MediaObjectSnapshot, error) {
@@ -126,7 +157,9 @@ func (s *Store) MediaObjectByPublishingCredential(ctx context.Context, credentia
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, false, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 	snapshot.IngestReady = row.LocalIngestReady
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.ParentVersion = row.TenantAuthorityVersion
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "media_object", snapshot.AuthorityID, row.WithheldByTenantRevival)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{AuthorityID: snapshot.AuthorityID})
 	return snapshot, err
 }
 
@@ -144,7 +177,8 @@ func (s *Store) Tenant(ctx context.Context, tenantID string) (TenantSnapshot, er
 		SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil),
 		RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil,
 	}
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "tenant", tenantID, false)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{TenantID: tenantID})
 	payload := &mediaauthoritypb.TenantAuthority{}
 	if err := verifyStoredPayload(row.Payload, row.PayloadSha256); err != nil {
 		return snapshot, err
@@ -169,7 +203,9 @@ func (s *Store) MediaObjectByPlaybackID(ctx context.Context, playbackID string) 
 		return MediaObjectSnapshot{}, err
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, row.LocalReadReady, row.RefreshAfter, row.ValidUntil, s.now().UTC())
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.ParentVersion = row.TenantAuthorityVersion
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "media_object", snapshot.AuthorityID, row.WithheldByTenantRevival)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{AuthorityID: snapshot.AuthorityID})
 	return snapshot, err
 }
 
@@ -183,7 +219,9 @@ func (s *Store) MediaObjectByInternalName(ctx context.Context, internalName stri
 		return MediaObjectSnapshot{}, err
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, row.LocalReadReady, row.RefreshAfter, row.ValidUntil, s.now().UTC())
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.ParentVersion = row.TenantAuthorityVersion
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "media_object", snapshot.AuthorityID, row.WithheldByTenantRevival)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{AuthorityID: snapshot.AuthorityID})
 	return snapshot, err
 }
 
@@ -198,7 +236,9 @@ func (s *Store) MediaObjectSourceByInternalName(ctx context.Context, internalNam
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, false, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 	snapshot.SourceReady = row.LocalSourceReady
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.ParentVersion = row.TenantAuthorityVersion
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "media_object", snapshot.AuthorityID, row.WithheldByTenantRevival)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{AuthorityID: snapshot.AuthorityID})
 	return snapshot, err
 }
 
@@ -212,7 +252,8 @@ func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapsh
 		return TenantSnapshot{}, err
 	}
 	snapshot := TenantSnapshot{Version: row.AuthorityVersion, SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil), RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil}
-	s.observeFreshness(snapshot.Freshness)
+	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "tenant", tenantID, false)
+	s.observeFreshness(snapshot.Freshness, AuthorityLookup{TenantID: tenantID})
 	payload := &mediaauthoritypb.TenantAuthority{}
 	if err := verifyStoredPayload(row.Payload, row.PayloadSha256); err != nil {
 		return snapshot, err

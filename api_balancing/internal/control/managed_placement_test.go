@@ -26,7 +26,7 @@ func (f *managedPlacementFixture) Placement(ctx context.Context, tenant, object,
 	if tenant != "tenant" || object != "live_stream:stream" || internal != "internal" {
 		f.t.Fatal("managed lookup lost exact tenant/object/name scope")
 	}
-	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > time.Second {
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > localauthority.PlacementReadTimeout {
 		f.t.Fatal("managed lookup is unbounded")
 	}
 	return f.pair, f.err

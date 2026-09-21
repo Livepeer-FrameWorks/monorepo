@@ -54,6 +54,7 @@ func (s *QuartermasterServer) runMediaAuthorityRefreshOutboxWorker(ctx context.C
 
 func (s *QuartermasterServer) deliverMediaAuthorityRefreshBatch(ctx context.Context) error {
 	queries := quartermasterdb.New(s.db)
+	s.observeMediaAuthorityRefreshQueue(ctx, queries)
 	rows, err := queries.ClaimMediaAuthorityRefreshBatch(ctx, quartermasterdb.ClaimMediaAuthorityRefreshBatchParams{
 		LeaseMs:   mediaAuthorityRefreshLease.Milliseconds(),
 		BatchSize: mediaAuthorityRefreshBatchSize,
@@ -88,19 +89,57 @@ func (s *QuartermasterServer) deliverMediaAuthorityRefreshRow(ctx context.Contex
 	_, callErr := s.mediaAuthorityRefreshClient.RequestMediaAuthorityRefresh(callCtx, "quartermaster", row.SourceEventID, row.TenantID, row.Reason)
 	cancel()
 	if callErr != nil {
+		s.incMediaAuthorityRefreshFailure("commodore_delivery")
 		message := callErr.Error()
 		_, failErr := queries.FailMediaAuthorityRefresh(ctx, quartermasterdb.FailMediaAuthorityRefreshParams{
 			NextAttemptAt: time.Now().UTC().Add(mediaAuthorityRefreshBackoff(row.Attempts)),
 			LastError:     sql.NullString{String: message, Valid: true},
 			ID:            row.ID,
+			Revision:      row.Revision,
 		})
 		if failErr != nil {
 			return fmt.Errorf("record refresh failure: %w", failErr)
 		}
 		return nil
 	}
-	if _, err := queries.CompleteMediaAuthorityRefresh(ctx, row.ID); err != nil {
+	completed, err := queries.CompleteMediaAuthorityRefresh(ctx, quartermasterdb.CompleteMediaAuthorityRefreshParams{ID: row.ID, Revision: row.Revision})
+	if err != nil {
+		s.incMediaAuthorityRefreshFailure("complete")
 		return fmt.Errorf("complete refresh delivery: %w", err)
 	}
+	if completed == 1 {
+		return nil
+	}
+	// A change folded into this row while it was being delivered. The row is
+	// already pending at a newer revision; releasing it makes that revision
+	// claimable now instead of after the delivery lease runs out.
+	released, err := queries.ReleaseSupersededMediaAuthorityRefresh(ctx, quartermasterdb.ReleaseSupersededMediaAuthorityRefreshParams{ID: row.ID, Revision: row.Revision})
+	if err != nil {
+		s.incMediaAuthorityRefreshFailure("superseded_release")
+		return fmt.Errorf("release superseded refresh delivery: %w", err)
+	}
+	if released == 0 {
+		s.incMediaAuthorityRefreshFailure("completion_fence_miss")
+		return fmt.Errorf("refresh completion fence missed without a superseding revision")
+	}
 	return nil
+}
+
+func (s *QuartermasterServer) incMediaAuthorityRefreshFailure(stage string) {
+	if s.metrics != nil && s.metrics.MediaAuthorityRefreshFailures != nil {
+		s.metrics.MediaAuthorityRefreshFailures.WithLabelValues(stage).Inc()
+	}
+}
+
+func (s *QuartermasterServer) observeMediaAuthorityRefreshQueue(ctx context.Context, queries *quartermasterdb.Queries) {
+	if s.metrics == nil || s.metrics.MediaAuthorityRefreshPending == nil || s.metrics.MediaAuthorityRefreshOldest == nil {
+		return
+	}
+	stats, err := queries.GetMediaAuthorityRefreshOutboxStats(ctx)
+	if err != nil {
+		s.incMediaAuthorityRefreshFailure("observe")
+		return
+	}
+	s.metrics.MediaAuthorityRefreshPending.WithLabelValues().Set(float64(stats.PendingCount))
+	s.metrics.MediaAuthorityRefreshOldest.WithLabelValues().Set(stats.OldestPendingSeconds)
 }

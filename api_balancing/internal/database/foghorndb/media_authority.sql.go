@@ -12,6 +12,127 @@ import (
 	"time"
 )
 
+const beginMediaAuthorityConfirmation = `-- name: BeginMediaAuthorityConfirmation :one
+SELECT clock_timestamp()::timestamptz AS started_at
+`
+
+func (q *Queries) BeginMediaAuthorityConfirmation(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, beginMediaAuthorityConfirmation)
+	var started_at time.Time
+	err := row.Scan(&started_at)
+	return started_at, err
+}
+
+const confirmMediaAuthority = `-- name: ConfirmMediaAuthority :exec
+UPDATE foghorn.media_authorities
+SET confirmed_at = GREATEST(confirmed_at, $1::timestamptz)
+WHERE authority_kind = $2
+  AND authority_id = $3
+  AND authority_version = $4
+`
+
+type ConfirmMediaAuthorityParams struct {
+	ConfirmedAt      time.Time `db:"confirmed_at" json:"confirmed_at"`
+	AuthorityKind    string    `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
+}
+
+// Only a fetch begun after a trust barrier can confirm the held version.
+func (q *Queries) ConfirmMediaAuthority(ctx context.Context, arg ConfirmMediaAuthorityParams) error {
+	_, err := q.db.ExecContext(ctx, confirmMediaAuthority,
+		arg.ConfirmedAt,
+		arg.AuthorityKind,
+		arg.AuthorityID,
+		arg.AuthorityVersion,
+	)
+	return err
+}
+
+const confirmRecoveredMediaAuthority = `-- name: ConfirmRecoveredMediaAuthority :execrows
+UPDATE foghorn.media_authorities
+SET confirmed_at = GREATEST(confirmed_at, $1::timestamptz)
+WHERE authority_kind = $2
+  AND authority_id = $3
+  AND authority_version = $4
+`
+
+type ConfirmRecoveredMediaAuthorityParams struct {
+	ConfirmedAt      time.Time `db:"confirmed_at" json:"confirmed_at"`
+	AuthorityKind    string    `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
+}
+
+func (q *Queries) ConfirmRecoveredMediaAuthority(ctx context.Context, arg ConfirmRecoveredMediaAuthorityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, confirmRecoveredMediaAuthority,
+		arg.ConfirmedAt,
+		arg.AuthorityKind,
+		arg.AuthorityID,
+		arg.AuthorityVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteCollectedMediaAuthority = `-- name: DeleteCollectedMediaAuthority :execrows
+DELETE FROM foghorn.media_authorities
+WHERE authority_kind = $1
+  AND authority_id = $2
+  AND authority_version = $3
+  AND valid_until < NOW()
+`
+
+type DeleteCollectedMediaAuthorityParams struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+// Fenced on the version that was found collectable and on its still being past
+// its validity: an apply that advanced the authority in between keeps it.
+func (q *Queries) DeleteCollectedMediaAuthority(ctx context.Context, arg DeleteCollectedMediaAuthorityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteCollectedMediaAuthority, arg.AuthorityKind, arg.AuthorityID, arg.AuthorityVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteCollectedMediaObjectAuthorityProjection = `-- name: DeleteCollectedMediaObjectAuthorityProjection :exec
+DELETE FROM foghorn.media_object_authority_projection
+WHERE authority_id = $1
+  AND authority_version = $2
+`
+
+type DeleteCollectedMediaObjectAuthorityProjectionParams struct {
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+func (q *Queries) DeleteCollectedMediaObjectAuthorityProjection(ctx context.Context, arg DeleteCollectedMediaObjectAuthorityProjectionParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectedMediaObjectAuthorityProjection, arg.AuthorityID, arg.AuthorityVersion)
+	return err
+}
+
+const deleteCollectedTenantAuthorityProjection = `-- name: DeleteCollectedTenantAuthorityProjection :exec
+DELETE FROM foghorn.tenant_authority_projection
+WHERE tenant_id = $1::uuid
+  AND authority_version = $2
+`
+
+type DeleteCollectedTenantAuthorityProjectionParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+func (q *Queries) DeleteCollectedTenantAuthorityProjection(ctx context.Context, arg DeleteCollectedTenantAuthorityProjectionParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectedTenantAuthorityProjection, arg.TenantID, arg.AuthorityVersion)
+	return err
+}
+
 const deleteTenantAuthorityGrants = `-- name: DeleteTenantAuthorityGrants :exec
 DELETE FROM foghorn.tenant_authority_grants
 WHERE tenant_id = $1::uuid
@@ -24,7 +145,12 @@ func (q *Queries) DeleteTenantAuthorityGrants(ctx context.Context, tenantID stri
 
 const getLocalMediaObjectAuthorityByInternalName = `-- name: GetLocalMediaObjectAuthorityByInternalName :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
-       projection.authority_id, projection.authority_version, projection.local_read_ready
+       projection.authority_id, projection.authority_version, projection.local_read_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -36,13 +162,15 @@ LIMIT 1
 `
 
 type GetLocalMediaObjectAuthorityByInternalNameRow struct {
-	Payload          []byte    `db:"payload" json:"payload"`
-	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
-	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
-	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
-	AuthorityID      string    `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
-	LocalReadReady   bool      `db:"local_read_ready" json:"local_read_ready"`
+	Payload                 []byte    `db:"payload" json:"payload"`
+	PayloadSha256           []byte    `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time `db:"valid_until" json:"valid_until"`
+	AuthorityID             string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64     `db:"authority_version" json:"authority_version"`
+	LocalReadReady          bool      `db:"local_read_ready" json:"local_read_ready"`
+	WithheldByTenantRevival bool      `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
 }
 
 func (q *Queries) GetLocalMediaObjectAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectAuthorityByInternalNameRow, error) {
@@ -56,13 +184,20 @@ func (q *Queries) GetLocalMediaObjectAuthorityByInternalName(ctx context.Context
 		&i.AuthorityID,
 		&i.AuthorityVersion,
 		&i.LocalReadReady,
+		&i.WithheldByTenantRevival,
+		&i.TenantAuthorityVersion,
 	)
 	return i, err
 }
 
 const getLocalMediaObjectAuthorityByPlaybackID = `-- name: GetLocalMediaObjectAuthorityByPlaybackID :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
-       projection.authority_id, projection.authority_version, projection.local_read_ready
+       projection.authority_id, projection.authority_version, projection.local_read_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -74,13 +209,15 @@ LIMIT 1
 `
 
 type GetLocalMediaObjectAuthorityByPlaybackIDRow struct {
-	Payload          []byte    `db:"payload" json:"payload"`
-	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
-	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
-	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
-	AuthorityID      string    `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
-	LocalReadReady   bool      `db:"local_read_ready" json:"local_read_ready"`
+	Payload                 []byte    `db:"payload" json:"payload"`
+	PayloadSha256           []byte    `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time `db:"valid_until" json:"valid_until"`
+	AuthorityID             string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64     `db:"authority_version" json:"authority_version"`
+	LocalReadReady          bool      `db:"local_read_ready" json:"local_read_ready"`
+	WithheldByTenantRevival bool      `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
 }
 
 func (q *Queries) GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (GetLocalMediaObjectAuthorityByPlaybackIDRow, error) {
@@ -94,6 +231,8 @@ func (q *Queries) GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, 
 		&i.AuthorityID,
 		&i.AuthorityVersion,
 		&i.LocalReadReady,
+		&i.WithheldByTenantRevival,
+		&i.TenantAuthorityVersion,
 	)
 	return i, err
 }
@@ -101,7 +240,12 @@ func (q *Queries) GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, 
 const getLocalMediaObjectAuthorityByPublishingCredential = `-- name: GetLocalMediaObjectAuthorityByPublishingCredential :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_id, projection.authority_version,
-       projection.local_ingest_ready
+       projection.local_ingest_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -112,13 +256,15 @@ WHERE projection.publishing_credential_sha256 = $1
 `
 
 type GetLocalMediaObjectAuthorityByPublishingCredentialRow struct {
-	Payload          []byte    `db:"payload" json:"payload"`
-	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
-	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
-	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
-	AuthorityID      string    `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
-	LocalIngestReady bool      `db:"local_ingest_ready" json:"local_ingest_ready"`
+	Payload                 []byte    `db:"payload" json:"payload"`
+	PayloadSha256           []byte    `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time `db:"valid_until" json:"valid_until"`
+	AuthorityID             string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64     `db:"authority_version" json:"authority_version"`
+	LocalIngestReady        bool      `db:"local_ingest_ready" json:"local_ingest_ready"`
+	WithheldByTenantRevival bool      `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
 }
 
 func (q *Queries) GetLocalMediaObjectAuthorityByPublishingCredential(ctx context.Context, publishingCredentialSha256 []byte) (GetLocalMediaObjectAuthorityByPublishingCredentialRow, error) {
@@ -132,6 +278,8 @@ func (q *Queries) GetLocalMediaObjectAuthorityByPublishingCredential(ctx context
 		&i.AuthorityID,
 		&i.AuthorityVersion,
 		&i.LocalIngestReady,
+		&i.WithheldByTenantRevival,
+		&i.TenantAuthorityVersion,
 	)
 	return i, err
 }
@@ -139,7 +287,12 @@ func (q *Queries) GetLocalMediaObjectAuthorityByPublishingCredential(ctx context
 const getLocalMediaObjectSourceAuthorityByInternalName = `-- name: GetLocalMediaObjectSourceAuthorityByInternalName :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_id, projection.authority_version,
-       projection.local_source_ready
+       projection.local_source_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -151,13 +304,15 @@ LIMIT 1
 `
 
 type GetLocalMediaObjectSourceAuthorityByInternalNameRow struct {
-	Payload          []byte    `db:"payload" json:"payload"`
-	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
-	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
-	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
-	AuthorityID      string    `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
-	LocalSourceReady bool      `db:"local_source_ready" json:"local_source_ready"`
+	Payload                 []byte    `db:"payload" json:"payload"`
+	PayloadSha256           []byte    `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time `db:"valid_until" json:"valid_until"`
+	AuthorityID             string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64     `db:"authority_version" json:"authority_version"`
+	LocalSourceReady        bool      `db:"local_source_ready" json:"local_source_ready"`
+	WithheldByTenantRevival bool      `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
 }
 
 func (q *Queries) GetLocalMediaObjectSourceAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectSourceAuthorityByInternalNameRow, error) {
@@ -171,6 +326,8 @@ func (q *Queries) GetLocalMediaObjectSourceAuthorityByInternalName(ctx context.C
 		&i.AuthorityID,
 		&i.AuthorityVersion,
 		&i.LocalSourceReady,
+		&i.WithheldByTenantRevival,
+		&i.TenantAuthorityVersion,
 	)
 	return i, err
 }
@@ -192,7 +349,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.authority_version AS tenant_authority_version,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
-       tenant_projection.local_source_ready AS tenant_source_ready
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
   ON object_authority.authority_kind = 'media_object'
@@ -216,23 +374,24 @@ type GetLocalPlacementAuthorityPairParams struct {
 }
 
 type GetLocalPlacementAuthorityPairRow struct {
-	ObjectPayload          []byte    `db:"object_payload" json:"object_payload"`
-	ObjectPayloadSha256    []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
-	ObjectRefreshAfter     time.Time `db:"object_refresh_after" json:"object_refresh_after"`
-	ObjectValidUntil       time.Time `db:"object_valid_until" json:"object_valid_until"`
-	ObjectAuthorityID      string    `db:"object_authority_id" json:"object_authority_id"`
-	ObjectAuthorityVersion int64     `db:"object_authority_version" json:"object_authority_version"`
-	ObjectReadReady        bool      `db:"object_read_ready" json:"object_read_ready"`
-	ObjectIngestReady      bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
-	ObjectSourceReady      bool      `db:"object_source_ready" json:"object_source_ready"`
-	TenantPayload          []byte    `db:"tenant_payload" json:"tenant_payload"`
-	TenantPayloadSha256    []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
-	TenantRefreshAfter     time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
-	TenantValidUntil       time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
-	TenantAuthorityVersion int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
-	TenantReadReady        bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
-	TenantIngestReady      bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
-	TenantSourceReady      bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+	ObjectPayload                 []byte    `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256           []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter            time.Time `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil              time.Time `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID             string    `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion        int64     `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady               bool      `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady             bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady             bool      `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload                 []byte    `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256           []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter            time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil              time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion        int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady               bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady             bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady             bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+	ObjectWithheldByTenantRevival bool      `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
 }
 
 func (q *Queries) GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLocalPlacementAuthorityPairParams) (GetLocalPlacementAuthorityPairRow, error) {
@@ -256,6 +415,7 @@ func (q *Queries) GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLoc
 		&i.TenantReadReady,
 		&i.TenantIngestReady,
 		&i.TenantSourceReady,
+		&i.ObjectWithheldByTenantRevival,
 	)
 	return i, err
 }
@@ -277,7 +437,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.authority_version AS tenant_authority_version,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
-       tenant_projection.local_source_ready AS tenant_source_ready
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
   ON object_authority.authority_kind = 'media_object'
@@ -299,23 +460,24 @@ type GetLocalPlacementAuthorityPairByInternalNameParams struct {
 }
 
 type GetLocalPlacementAuthorityPairByInternalNameRow struct {
-	ObjectPayload          []byte    `db:"object_payload" json:"object_payload"`
-	ObjectPayloadSha256    []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
-	ObjectRefreshAfter     time.Time `db:"object_refresh_after" json:"object_refresh_after"`
-	ObjectValidUntil       time.Time `db:"object_valid_until" json:"object_valid_until"`
-	ObjectAuthorityID      string    `db:"object_authority_id" json:"object_authority_id"`
-	ObjectAuthorityVersion int64     `db:"object_authority_version" json:"object_authority_version"`
-	ObjectReadReady        bool      `db:"object_read_ready" json:"object_read_ready"`
-	ObjectIngestReady      bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
-	ObjectSourceReady      bool      `db:"object_source_ready" json:"object_source_ready"`
-	TenantPayload          []byte    `db:"tenant_payload" json:"tenant_payload"`
-	TenantPayloadSha256    []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
-	TenantRefreshAfter     time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
-	TenantValidUntil       time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
-	TenantAuthorityVersion int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
-	TenantReadReady        bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
-	TenantIngestReady      bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
-	TenantSourceReady      bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+	ObjectPayload                 []byte    `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256           []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter            time.Time `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil              time.Time `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID             string    `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion        int64     `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady               bool      `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady             bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady             bool      `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload                 []byte    `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256           []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter            time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil              time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion        int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady               bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady             bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady             bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+	ObjectWithheldByTenantRevival bool      `db:"object_withheld_by_tenant_revival" json:"object_withheld_by_tenant_revival"`
 }
 
 func (q *Queries) GetLocalPlacementAuthorityPairByInternalName(ctx context.Context, arg GetLocalPlacementAuthorityPairByInternalNameParams) (GetLocalPlacementAuthorityPairByInternalNameRow, error) {
@@ -339,6 +501,7 @@ func (q *Queries) GetLocalPlacementAuthorityPairByInternalName(ctx context.Conte
 		&i.TenantReadReady,
 		&i.TenantIngestReady,
 		&i.TenantSourceReady,
+		&i.ObjectWithheldByTenantRevival,
 	)
 	return i, err
 }
@@ -417,7 +580,7 @@ func (q *Queries) GetLocalTenantSourceAuthority(ctx context.Context, tenantID st
 }
 
 const getMediaAuthorityForUpdate = `-- name: GetMediaAuthorityForUpdate :one
-SELECT authority_version, payload_sha256, payload
+SELECT authority_version, payload_sha256, payload, valid_until
 FROM foghorn.media_authorities
 WHERE authority_kind = $1
   AND authority_id = $2
@@ -430,16 +593,37 @@ type GetMediaAuthorityForUpdateParams struct {
 }
 
 type GetMediaAuthorityForUpdateRow struct {
-	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
-	PayloadSha256    []byte `db:"payload_sha256" json:"payload_sha256"`
-	Payload          []byte `db:"payload" json:"payload"`
+	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
+	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
+	Payload          []byte    `db:"payload" json:"payload"`
+	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
 }
 
 func (q *Queries) GetMediaAuthorityForUpdate(ctx context.Context, arg GetMediaAuthorityForUpdateParams) (GetMediaAuthorityForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getMediaAuthorityForUpdate, arg.AuthorityKind, arg.AuthorityID)
 	var i GetMediaAuthorityForUpdateRow
-	err := row.Scan(&i.AuthorityVersion, &i.PayloadSha256, &i.Payload)
+	err := row.Scan(
+		&i.AuthorityVersion,
+		&i.PayloadSha256,
+		&i.Payload,
+		&i.ValidUntil,
+	)
 	return i, err
+}
+
+const getMediaAuthorityRestoreFence = `-- name: GetMediaAuthorityRestoreFence :one
+SELECT COALESCE(
+    (SELECT fenced_at FROM foghorn.media_authority_restore_fence WHERE singleton),
+    'epoch'::timestamptz
+)::timestamptz AS fenced_at
+`
+
+// When the fence was raised; the zero instant when there is none.
+func (q *Queries) GetMediaAuthorityRestoreFence(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityRestoreFence)
+	var fenced_at time.Time
+	err := row.Scan(&fenced_at)
+	return fenced_at, err
 }
 
 const getMediaObjectAuthorityByInternalName = `-- name: GetMediaObjectAuthorityByInternalName :one
@@ -558,6 +742,24 @@ func (q *Queries) GetTenantAuthorityProjection(ctx context.Context, tenantID str
 	return i, err
 }
 
+const hasMediaAuthorityConfirmationRequired = `-- name: HasMediaAuthorityConfirmationRequired :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.tenant_authority_projection AS tenant
+    JOIN foghorn.media_object_authority_projection AS object ON object.tenant_id = tenant.tenant_id
+    JOIN foghorn.media_authorities AS authority
+      ON authority.authority_kind = 'media_object' AND authority.authority_id = object.authority_id
+    WHERE object.lifecycle = 'active' AND authority.valid_until > $1::timestamptz
+      AND tenant.objects_trusted_from > authority.confirmed_at
+)::boolean AS required
+`
+
+func (q *Queries) HasMediaAuthorityConfirmationRequired(ctx context.Context, asOf time.Time) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasMediaAuthorityConfirmationRequired, asOf)
+	var required bool
+	err := row.Scan(&required)
+	return required, err
+}
+
 const insertMediaAuthorityApplyAudit = `-- name: InsertMediaAuthorityApplyAudit :exec
 INSERT INTO foghorn.media_authority_apply_audit (
     authority_kind, authority_id, authority_version, signer_key_id,
@@ -635,10 +837,162 @@ func (q *Queries) InsertTenantAuthorityGrant(ctx context.Context, arg InsertTena
 	return err
 }
 
+const listCollectableMediaAuthorities = `-- name: ListCollectableMediaAuthorities :many
+SELECT held.authority_kind, held.authority_id, held.authority_version,
+       COALESCE(object.artifact_hash, '')::text AS artifact_hash
+FROM foghorn.media_authorities AS held
+LEFT JOIN foghorn.tenant_authority_projection AS tenant
+       ON held.authority_kind = 'tenant' AND tenant.tenant_id::text = held.authority_id
+LEFT JOIN foghorn.media_object_authority_projection AS object
+       ON held.authority_kind = 'media_object' AND object.authority_id = held.authority_id
+WHERE held.valid_until < NOW()
+  AND held.issued_at < $1::timestamptz
+  AND COALESCE(tenant.lifecycle, object.lifecycle, '') <> 'tombstone'
+ORDER BY held.valid_until
+LIMIT $2
+`
+
+type ListCollectableMediaAuthoritiesParams struct {
+	IssuedBefore time.Time `db:"issued_before" json:"issued_before"`
+	BatchSize    int32     `db:"batch_size" json:"batch_size"`
+}
+
+type ListCollectableMediaAuthoritiesRow struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+	ArtifactHash     string `db:"artifact_hash" json:"artifact_hash"`
+}
+
+// Authorities this cell can forget: past their validity, and issued so long ago
+// that no older signed version of them can still verify, so forgetting the
+// version fence cannot let one back in. A tombstone is never forgotten: it is
+// what refuses the object's return.
+func (q *Queries) ListCollectableMediaAuthorities(ctx context.Context, arg ListCollectableMediaAuthoritiesParams) ([]ListCollectableMediaAuthoritiesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCollectableMediaAuthorities, arg.IssuedBefore, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCollectableMediaAuthoritiesRow{}
+	for rows.Next() {
+		var i ListCollectableMediaAuthoritiesRow
+		if err := rows.Scan(
+			&i.AuthorityKind,
+			&i.AuthorityID,
+			&i.AuthorityVersion,
+			&i.ArtifactHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHeldMediaAuthorityPage = `-- name: ListHeldMediaAuthorityPage :many
+SELECT authority_kind, authority_id, authority_version
+FROM foghorn.media_authorities
+WHERE valid_until > $1::timestamptz
+  AND (authority_kind COLLATE "C", authority_id COLLATE "C") >
+      ($2::text COLLATE "C", $3::text COLLATE "C")
+ORDER BY authority_kind COLLATE "C", authority_id COLLATE "C"
+LIMIT $4
+`
+
+type ListHeldMediaAuthorityPageParams struct {
+	AsOf      time.Time `db:"as_of" json:"as_of"`
+	AfterKind string    `db:"after_kind" json:"after_kind"`
+	AfterID   string    `db:"after_id" json:"after_id"`
+	PageSize  int32     `db:"page_size" json:"page_size"`
+}
+
+type ListHeldMediaAuthorityPageRow struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+func (q *Queries) ListHeldMediaAuthorityPage(ctx context.Context, arg ListHeldMediaAuthorityPageParams) ([]ListHeldMediaAuthorityPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listHeldMediaAuthorityPage,
+		arg.AsOf,
+		arg.AfterKind,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHeldMediaAuthorityPageRow{}
+	for rows.Next() {
+		var i ListHeldMediaAuthorityPageRow
+		if err := rows.Scan(&i.AuthorityKind, &i.AuthorityID, &i.AuthorityVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHeldMediaAuthorityVersions = `-- name: ListHeldMediaAuthorityVersions :many
+SELECT authority_kind, authority_id, authority_version
+FROM foghorn.media_authorities
+WHERE valid_until > $1::timestamptz
+`
+
+type ListHeldMediaAuthorityVersionsRow struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+// What this cell holds as valid at as_of, to tell the control plane whether it
+// has anything to repeat.
+func (q *Queries) ListHeldMediaAuthorityVersions(ctx context.Context, asOf time.Time) ([]ListHeldMediaAuthorityVersionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listHeldMediaAuthorityVersions, asOf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHeldMediaAuthorityVersionsRow{}
+	for rows.Next() {
+		var i ListHeldMediaAuthorityVersionsRow
+		if err := rows.Scan(&i.AuthorityKind, &i.AuthorityID, &i.AuthorityVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocalManagedStreamAuthorities = `-- name: ListLocalManagedStreamAuthorities :many
 SELECT authority.authority_id, authority.authority_version, authority.payload, authority.payload_sha256,
        authority.refresh_after, authority.valid_until,
-       projection.local_source_ready
+       projection.local_source_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -650,13 +1004,15 @@ ORDER BY authority.authority_id
 `
 
 type ListLocalManagedStreamAuthoritiesRow struct {
-	AuthorityID      string    `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
-	Payload          []byte    `db:"payload" json:"payload"`
-	PayloadSha256    []byte    `db:"payload_sha256" json:"payload_sha256"`
-	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
-	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
-	LocalSourceReady bool      `db:"local_source_ready" json:"local_source_ready"`
+	AuthorityID             string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64     `db:"authority_version" json:"authority_version"`
+	Payload                 []byte    `db:"payload" json:"payload"`
+	PayloadSha256           []byte    `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time `db:"valid_until" json:"valid_until"`
+	LocalSourceReady        bool      `db:"local_source_ready" json:"local_source_ready"`
+	WithheldByTenantRevival bool      `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
 }
 
 func (q *Queries) ListLocalManagedStreamAuthorities(ctx context.Context) ([]ListLocalManagedStreamAuthoritiesRow, error) {
@@ -676,6 +1032,8 @@ func (q *Queries) ListLocalManagedStreamAuthorities(ctx context.Context) ([]List
 			&i.RefreshAfter,
 			&i.ValidUntil,
 			&i.LocalSourceReady,
+			&i.WithheldByTenantRevival,
+			&i.TenantAuthorityVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -765,6 +1123,21 @@ type LockMediaAuthorityParams struct {
 func (q *Queries) LockMediaAuthority(ctx context.Context, arg LockMediaAuthorityParams) error {
 	_, err := q.db.ExecContext(ctx, lockMediaAuthority, arg.LockNamespace, arg.AuthorityKind, arg.AuthorityID)
 	return err
+}
+
+const lowerMediaAuthorityRestoreFence = `-- name: LowerMediaAuthorityRestoreFence :execrows
+DELETE FROM foghorn.media_authority_restore_fence
+WHERE singleton AND fenced_at <= $1::timestamptz
+`
+
+// Fenced on the instant the caller confirmed against, so a fence raised again
+// after that confirmation stays up.
+func (q *Queries) LowerMediaAuthorityRestoreFence(ctx context.Context, confirmedAt time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, lowerMediaAuthorityRestoreFence, confirmedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markMediaObjectAuthorityLocalIngestReady = `-- name: MarkMediaObjectAuthorityLocalIngestReady :execrows
@@ -893,6 +1266,30 @@ func (q *Queries) MarkTenantAuthorityLocalSourceReady(ctx context.Context, arg M
 	return result.RowsAffected()
 }
 
+const mediaAuthorityConfirmationRequired = `-- name: MediaAuthorityConfirmationRequired :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.media_authorities AS authority
+    JOIN foghorn.media_object_authority_projection AS object
+      ON authority.authority_kind = 'media_object' AND authority.authority_id = object.authority_id
+    JOIN foghorn.tenant_authority_projection AS tenant ON tenant.tenant_id = object.tenant_id
+    WHERE authority.authority_id = $1
+      AND object.lifecycle = 'active' AND authority.valid_until > $2::timestamptz
+      AND tenant.objects_trusted_from > authority.confirmed_at
+)::boolean AS required
+`
+
+type MediaAuthorityConfirmationRequiredParams struct {
+	AuthorityID string    `db:"authority_id" json:"authority_id"`
+	AsOf        time.Time `db:"as_of" json:"as_of"`
+}
+
+func (q *Queries) MediaAuthorityConfirmationRequired(ctx context.Context, arg MediaAuthorityConfirmationRequiredParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, mediaAuthorityConfirmationRequired, arg.AuthorityID, arg.AsOf)
+	var required bool
+	err := row.Scan(&required)
+	return required, err
+}
+
 const pruneMediaAuthorityApplyAudit = `-- name: PruneMediaAuthorityApplyAudit :execrows
 WITH expired AS (
     SELECT id
@@ -917,6 +1314,18 @@ func (q *Queries) PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMe
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const raiseMediaAuthorityRestoreFence = `-- name: RaiseMediaAuthorityRestoreFence :exec
+INSERT INTO foghorn.media_authority_restore_fence (singleton, fenced_at)
+VALUES (TRUE, clock_timestamp())
+ON CONFLICT (singleton) DO UPDATE SET fenced_at = clock_timestamp()
+`
+
+// A new restore invalidates confirmations begun before this raise.
+func (q *Queries) RaiseMediaAuthorityRestoreFence(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, raiseMediaAuthorityRestoreFence)
+	return err
 }
 
 const setLocalMediaAuthorityLockTimeout = `-- name: SetLocalMediaAuthorityLockTimeout :exec
@@ -1196,5 +1605,23 @@ func (q *Queries) UpsertTenantAuthorityProjection(ctx context.Context, arg Upser
 		arg.PreserveLocalIngestReady,
 		arg.PreserveLocalSourceReady,
 	)
+	return err
+}
+
+const withholdTenantObjectsAppliedBefore = `-- name: WithholdTenantObjectsAppliedBefore :exec
+UPDATE foghorn.tenant_authority_projection
+SET objects_trusted_from = GREATEST(objects_trusted_from, COALESCE($1::timestamptz, clock_timestamp()))
+WHERE tenant_id = $2::uuid
+`
+
+type WithholdTenantObjectsAppliedBeforeParams struct {
+	ConfirmedAt sql.NullTime `db:"confirmed_at" json:"confirmed_at"`
+	TenantID    string       `db:"tenant_id" json:"tenant_id"`
+}
+
+// A revived tenant withholds objects not confirmed by a fetch begun after its
+// barrier. A fetched parent and its objects share one confirmation instant.
+func (q *Queries) WithholdTenantObjectsAppliedBefore(ctx context.Context, arg WithholdTenantObjectsAppliedBeforeParams) error {
+	_, err := q.db.ExecContext(ctx, withholdTenantObjectsAppliedBefore, arg.ConfirmedAt, arg.TenantID)
 	return err
 }

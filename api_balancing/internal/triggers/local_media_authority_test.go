@@ -309,8 +309,8 @@ func TestHandleMediaAuthorityApplySkipsTombstoneAndMissingLocalGrant(t *testing.
 		validUntil := time.Now().Add(time.Hour)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 			WithArgs("stream-internal").
-			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
-				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), false))
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), false, false, int64(8)))
 		if err := p.HandleMediaAuthorityApply(context.Background(), localauthority.ApplyResult{
 			Kind: "media_object", InternalName: "stream-internal", TenantID: "10000000-0000-0000-0000-000000000001", Version: 9,
 		}); err != nil {
@@ -327,8 +327,8 @@ func TestHandleMediaAuthorityApplySkipsTombstoneAndMissingLocalGrant(t *testing.
 		validUntil := time.Now().Add(time.Hour)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 			WithArgs("stream-internal").
-			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
-				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true))
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true, false, int64(8)))
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 			WithArgs("10000000-0000-0000-0000-000000000001").
 			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
@@ -349,8 +349,8 @@ func TestHandleMediaAuthorityApplySkipsTombstoneAndMissingLocalGrant(t *testing.
 		validUntil := time.Now().Add(time.Hour)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 			WithArgs("stream-internal").
-			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
-				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true))
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true, false, int64(8)))
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 			WithArgs("10000000-0000-0000-0000-000000000001").
 			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
@@ -372,8 +372,8 @@ func TestReadyLocalIngestAuthorityVerifiesCredentialAndFencesOwner(t *testing.T)
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("SK_LOCAL")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true, false, int64(8)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), false, true, false))
@@ -410,8 +410,8 @@ func TestReadyLocalIngestAuthorityRejectsMismatchedProjectedCredential(t *testin
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("presented-key")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(mismatchedBytes, localPayloadDigest(mismatchedBytes), time.Now().Add(time.Minute), time.Now().Add(time.Hour), sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(mismatchedBytes, localPayloadDigest(mismatchedBytes), time.Now().Add(time.Minute), time.Now().Add(time.Hour), sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4), true, false, int64(8)))
 
 	response, _, found, err := p.resolveReadyLocalIngest(context.Background(), "presented-key")
 	if err != nil || !found || response == nil || response.GetValid() {
@@ -439,8 +439,8 @@ func TestReadyLocalIngestUsesNonPushModeRejectionContract(t *testing.T) {
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(pullBytes, localPayloadDigest(pullBytes), time.Now().Add(time.Minute), time.Now().Add(time.Hour), sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(pullBytes, localPayloadDigest(pullBytes), time.Now().Add(time.Minute), time.Now().Add(time.Hour), sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4), true, false, int64(8)))
 
 	response, _, found, err := p.resolveReadyLocalIngest(context.Background(), "sk_local")
 	if err != nil || !found || response == nil || response.GetValid() {
@@ -457,8 +457,8 @@ func TestReadyLocalIngestContextDoesNotChooseOutageOwnerBeforeFrontDoorFallback(
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true, false, int64(8)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), false, true, false))
@@ -490,8 +490,8 @@ func TestPushRewriteUsesReadyLocalAuthorityOnlyOnSignedOutageOwner(t *testing.T)
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true, false, int64(8)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), false, true, false))
@@ -537,8 +537,8 @@ func TestPushRewriteRejectsReadyLocalAuthorityOnNonOwnerCluster(t *testing.T) {
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true, false, int64(8)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), false, true, false))
@@ -563,8 +563,8 @@ func TestPushRewriteHardExpiredMarkedAuthorityNeverFallsBack(t *testing.T) {
 	defer closeDB()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(-2*time.Minute), time.Now().Add(-time.Minute), sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_ingest_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(-2*time.Minute), time.Now().Add(-time.Minute), sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), true, false, int64(8)))
 
 	trigger := &ipcpb.MistTrigger{NodeId: "edge-node-1", TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 		PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "expired", TriggerUnixMillis: 1, StreamName: "sk_local"},
@@ -580,14 +580,32 @@ func TestPushRewriteHardExpiredMarkedAuthorityNeverFallsBack(t *testing.T) {
 
 func expectLocalObject(mock sqlmock.Sqlmock, objectBytes []byte, validUntil time.Time, ready bool) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready, false, int64(8)))
 }
 
 func expectLocalTenant(mock sqlmock.Sqlmock, tenantBytes []byte, validUntil time.Time, ready bool) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), ready, false, false))
+}
+
+func TestPlaybackRejectsParentChangedBetweenObjectAndTenantReads(t *testing.T) {
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+	defer closeDB()
+	validUntil := time.Now().Add(time.Hour)
+	expectLocalObject(mock, objectBytes, validUntil, true) // captures parent version 8
+	mock.ExpectQuery("GetLocalTenantAuthority").WillReturnRows(sqlmock.NewRows([]string{
+		"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version",
+		"local_read_ready", "local_ingest_ready", "local_source_ready",
+	}).AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, 9, true, true, true))
+	_, found, err := p.readReadyLocalPlayback(context.Background(), "playbackkey", true)
+	if !found || !IsLocalAuthorityExpired(err) {
+		t.Fatalf("mixed parent generations admitted playback: found=%v err=%v", found, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReadyLocalAuthorityResolvesWithoutControlPlane(t *testing.T) {
@@ -968,8 +986,8 @@ func TestDVRStreamSourceUsesMarkedLocalAuthorityWithoutControlPlane(t *testing.T
 	validUntil := time.Now().Add(time.Hour)
 	authorityMock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs("dvr-internal-local").
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_source_ready"}).
-			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.ArtifactAuthorityID("artifact-dvr-local"), int64(4), true))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.ArtifactAuthorityID("artifact-dvr-local"), int64(4), true, false, int64(8)))
 	authorityMock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_source_ready"}).

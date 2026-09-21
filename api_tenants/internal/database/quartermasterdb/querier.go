@@ -26,7 +26,9 @@ type Querier interface {
 	ClearBootstrapDefaultCluster(ctx context.Context, keepClusterID string) error
 	ClearDefaultCluster(ctx context.Context) error
 	CompleteBillingEntitlementHandoff(ctx context.Context, arg CompleteBillingEntitlementHandoffParams) (int64, error)
-	CompleteMediaAuthorityRefresh(ctx context.Context, id string) (int64, error)
+	// A change folded into the row during delivery bumps its revision, so the
+	// delivery that claimed the older revision cannot complete the newer one away.
+	CompleteMediaAuthorityRefresh(ctx context.Context, arg CompleteMediaAuthorityRefreshParams) (int64, error)
 	CompleteNavigatorCustomDomainOutbox(ctx context.Context, id string) error
 	CompleteNavigatorTenantAliasOutbox(ctx context.Context, id string) error
 	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
@@ -83,6 +85,7 @@ type Querier interface {
 	GetInfrastructureCluster(ctx context.Context, clusterID string) (GetInfrastructureClusterRow, error)
 	GetInfrastructureClusterType(ctx context.Context, clusterID string) (string, error)
 	GetInfrastructureNode(ctx context.Context, nodeID string) (GetInfrastructureNodeRow, error)
+	GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error)
 	GetMediaPlacementInventory(ctx context.Context, arg GetMediaPlacementInventoryParams) ([]GetMediaPlacementInventoryRow, error)
 	GetNodeOwnerRecord(ctx context.Context, nodeID string) (GetNodeOwnerRecordRow, error)
 	GetOwnedMediaCapacityConsent(ctx context.Context, arg GetOwnedMediaCapacityConsentParams) (GetOwnedMediaCapacityConsentRow, error)
@@ -172,6 +175,7 @@ type Querier interface {
 	PeerCensusFingerprint(ctx context.Context) (PeerCensusFingerprintRow, error)
 	PersistServiceHealthStatus(ctx context.Context, arg PersistServiceHealthStatusParams) (PersistServiceHealthStatusRow, error)
 	RejectClusterSubscriptionRecord(ctx context.Context, arg RejectClusterSubscriptionRecordParams) error
+	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)
 	RepairTenantPrivateBaseURLBatch(ctx context.Context, batchSize int32) (int64, error)
 	RepointTenantPrimaryToOfficialIfCluster(ctx context.Context, arg RepointTenantPrimaryToOfficialIfClusterParams) (int64, error)
 	ResolveBootstrapTenantAliases(ctx context.Context, aliases []string) ([]ResolveBootstrapTenantAliasesRow, error)

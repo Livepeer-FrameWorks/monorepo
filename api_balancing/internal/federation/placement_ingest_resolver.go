@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 )
@@ -37,7 +38,7 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 	}
 	identity := PlacementIngestIdentity{TenantID: request.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID), InternalName: request.InternalName}
 	read := func() (balancer.PlacementAuthority, error) {
-		readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+		readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 		defer stopRead()
 		pair, err := resolver.Authority.Placement(readCtx, identity.TenantID, identity.ObjectID, identity.InternalName)
 		if err != nil {

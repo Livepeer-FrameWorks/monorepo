@@ -933,6 +933,41 @@ func TestPlan_ChandlerDependsOnFoghornAliasSameCluster(t *testing.T) {
 	}
 }
 
+func TestPlan_FoghornWaitsForEveryCommodoreReplica(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"eu": {Roles: []string{"control"}}, "core-a": {Roles: []string{"control"}}, "core-b": {Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"commodore-core": {Enabled: true, Deploy: "commodore", Hosts: []string{"core-a", "core-b"}},
+			"chandler-eu":    {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "eu"},
+			"foghorn-eu":     {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "eu"},
+		},
+	}
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var core []string
+	var cell *Task
+	for _, task := range plan.AllTasks {
+		if task.Type == "commodore" {
+			core = append(core, task.Name)
+		}
+		if task.Type == "foghorn" {
+			cell = task
+		}
+	}
+	if len(core) != 2 || cell == nil {
+		t.Fatalf("missing core/cell tasks: core=%v cell=%v", core, cell)
+	}
+	for _, name := range core {
+		if !slices.Contains(cell.DependsOn, name) {
+			t.Fatalf("cell starts before core replica %s: %v", name, cell.DependsOn)
+		}
+	}
+}
+
 // A Foghorn whose cluster has no Chandler is rejected even if a Chandler exists in a DIFFERENT cluster.
 func TestPlan_FoghornChandlerDifferentClusterFails(t *testing.T) {
 	manifest := &inventory.Manifest{

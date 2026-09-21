@@ -44,10 +44,17 @@ SELECT 'tenant','load-'||n,1,2,''::bytea,decode(repeat('00',32),'hex'),'[]'::jso
 FROM generate_series(1,$1::integer) AS n`, history+pending, history); err != nil {
 		t.Fatal(err)
 	}
+	// Only the current version of an authority is claimable, so the plan is only
+	// meaningful against a backlog whose versions are current.
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO commodore.media_authority_current (authority_kind,authority_id,authority_version)
+SELECT 'tenant','load-'||n,1 FROM generate_series(1,$1::integer) AS n`, history+pending); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO commodore.media_authority_deliveries
-    (authority_kind,authority_id,authority_version,cell_id,signed_envelope,status,next_attempt_at,created_at)
-SELECT 'tenant','load-'||n,1,'cell-'||(n%$3::integer),repeat(md5(n::text),32)::bytea,
+    (authority_kind,authority_id,authority_version,cell_id,signed_envelope,short_lease,status,next_attempt_at,created_at)
+SELECT 'tenant','load-'||n,1,'cell-'||(n%$3::integer),repeat(md5(n::text),32)::bytea,TRUE,
        CASE WHEN n<=$2 THEN 'acknowledged' ELSE 'pending' END,
        NOW()-INTERVAL '1 second',NOW()-INTERVAL '1 hour'+n*INTERVAL '1 millisecond'
 FROM generate_series(1,$1::integer) AS n`, history+pending, history, cells); err != nil {

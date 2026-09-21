@@ -184,15 +184,10 @@ UPDATE purser.tenant_subscriptions
 SET billing_period_start = COALESCE(billing_period_start, $1),
     billing_period_end = COALESCE(billing_period_end, $2),
     next_billing_date = COALESCE(next_billing_date, $2),
-    updated_at = CASE
-        WHEN billing_period_start IS NULL
-          OR billing_period_end IS NULL
-          OR next_billing_date IS NULL
-        THEN NOW()
-        ELSE updated_at
-    END
+    updated_at = NOW()
 WHERE tenant_id = $3::text::uuid
   AND status = 'active'
+  AND (billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL)
 `
 
 type BackfillSubscriptionPeriodFromDraftParams struct {
@@ -201,6 +196,10 @@ type BackfillSubscriptionPeriodFromDraftParams struct {
 	TenantID    string       `db:"tenant_id" json:"tenant_id"`
 }
 
+// This runs for every usage summary. The IS NULL filter keeps a subscription
+// whose period is already set from being rewritten with its own values: an
+// UPDATE that names a column fires that column's UPDATE OF triggers even when
+// the value does not change.
 func (q *Queries) BackfillSubscriptionPeriodFromDraft(ctx context.Context, arg BackfillSubscriptionPeriodFromDraftParams) error {
 	_, err := q.db.ExecContext(ctx, backfillSubscriptionPeriodFromDraft, arg.PeriodStart, arg.PeriodEnd, arg.TenantID)
 	return err

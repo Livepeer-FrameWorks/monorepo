@@ -2763,6 +2763,10 @@ DECLARE
     affected_subscription UUID;
     affected_tenant UUID;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     affected_subscription := CASE WHEN TG_OP = 'DELETE' THEN OLD.subscription_id ELSE NEW.subscription_id END;
     SELECT tenant_id INTO affected_tenant
     FROM purser.tenant_subscriptions
@@ -2785,6 +2789,10 @@ DECLARE
     new_tier UUID;
     change_reason TEXT;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     old_tier := CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.tier_id ELSE NULL END;
     new_tier := CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.tier_id ELSE NULL END;
     change_reason := CASE TG_TABLE_NAME
@@ -2826,6 +2834,10 @@ AS $$
 DECLARE
     affected_tier UUID;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     affected_tier := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
     INSERT INTO purser.media_authority_refresh_outbox(source_event_id, tenant_id, reason)
     SELECT 'billing_tier_authority_changed:' || gen_random_uuid()::text,
@@ -2862,6 +2874,10 @@ DECLARE
     affected_tenant UUID;
     affected_meter TEXT;
 BEGIN
+    -- A redelivered usage report upserts the same values and changes no allowance.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     affected_tenant := CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END;
     affected_meter := CASE WHEN TG_OP = 'DELETE' THEN OLD.usage_type ELSE NEW.usage_type END;
     IF affected_meter = 'delivered_minutes' THEN

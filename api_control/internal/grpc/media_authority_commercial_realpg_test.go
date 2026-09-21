@@ -35,6 +35,9 @@ func seedCommercialTenantVersion(ctx context.Context, db *sql.DB, tenant *mediap
 	if _, err := q.UpsertCurrentMediaAuthority(ctx, commodoredb.UpsertCurrentMediaAuthorityParams{AuthorityKind: "tenant", AuthorityID: tenant.TenantId, AuthorityVersion: version}); err != nil {
 		return err
 	}
+	if err := q.UpsertMediaAuthorityTarget(ctx, commodoredb.UpsertMediaAuthorityTargetParams{AuthorityKind: "tenant", AuthorityID: tenant.TenantId, AuthorityVersion: version, CellID: "cell-a"}); err != nil {
+		return err
+	}
 	_, err = q.EnqueueMediaAuthorityDelivery(ctx, commodoredb.EnqueueMediaAuthorityDeliveryParams{AuthorityKind: "tenant", AuthorityID: tenant.TenantId, AuthorityVersion: version, CellID: "cell-a", SignedEnvelope: []byte{1}})
 	return err
 }

@@ -32,12 +32,17 @@ const (
 	SignatureDomain            = "frameworks-media-authority-v1\x00"
 	maxClockSkewFuture         = 30 * time.Second
 	maxTenantValidity          = 24 * time.Hour
-	maxLiveValidity            = 24 * time.Hour
-	maxArtifactValidity        = 7 * 24 * time.Hour
-	maxPayloadBytes            = 1 << 20
-	maxIdentifierBytes         = 255
-	maxSignerKeyIDBytes        = 255
-	maxAudienceCellIDBytes     = 255
+	// MaxMediaObjectValidity bounds how long any signed media-object authority
+	// can verify. A cell relies on it being a hard bound: once an expired
+	// authority was issued longer ago than this, no older version of it can
+	// still verify, so the cell may forget the authority and its version fence.
+	// Every decision also requires the tenant authority, which stays short, so
+	// a long object validity does not lengthen what a cell serves unattended.
+	MaxMediaObjectValidity = 30 * 24 * time.Hour
+	maxPayloadBytes        = 1 << 20
+	maxIdentifierBytes     = 255
+	maxSignerKeyIDBytes    = 255
+	maxAudienceCellIDBytes = 255
 )
 
 func LiveStreamAuthorityID(streamID string) string {
@@ -49,15 +54,16 @@ func ArtifactAuthorityID(artifactID string) string {
 }
 
 var (
-	ErrMalformed        = errors.New("media authority is malformed")
-	ErrUnknownSchema    = errors.New("media authority schema is unsupported")
-	ErrWrongAudience    = errors.New("media authority audience does not match this cell")
-	ErrUnknownSigner    = errors.New("media authority signer is not trusted")
-	ErrInvalidSignature = errors.New("media authority signature is invalid")
-	ErrPayloadDigest    = errors.New("media authority payload digest does not match")
-	ErrExpired          = errors.New("media authority has hard-expired")
-	ErrNotYetValid      = errors.New("media authority was issued in the future")
-	ErrNonCanonical     = errors.New("media authority is not canonical")
+	ErrMalformed           = errors.New("media authority is malformed")
+	ErrUnknownSchema       = errors.New("media authority schema is unsupported")
+	ErrWrongAudience       = errors.New("media authority audience does not match this cell")
+	ErrUnknownSigner       = errors.New("media authority signer is not trusted")
+	ErrInvalidSignature    = errors.New("media authority signature is invalid")
+	ErrPayloadDigest       = errors.New("media authority payload digest does not match")
+	ErrExpired             = errors.New("media authority has hard-expired")
+	ErrNotYetValid         = errors.New("media authority was issued in the future")
+	ErrNonCanonical        = errors.New("media authority is not canonical")
+	ErrEntitlementMismatch = errors.New("commercial quote and tenant authority describe different entitlements")
 )
 
 // TrustSet maps an envelope signer_key_id to its Ed25519 public key.
@@ -421,7 +427,7 @@ func validateMediaObject(envelope *mediaauthoritypb.AuthorityEnvelope, payload *
 	}
 	switch payload.GetObjectKind() {
 	case mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM:
-		if err := validateMaxValidity(envelope, maxLiveValidity, "live stream"); err != nil {
+		if err := validateMaxValidity(envelope, MaxMediaObjectValidity, "live stream"); err != nil {
 			return err
 		}
 		stream := payload.GetLiveStream()
@@ -445,7 +451,7 @@ func validateMediaObject(envelope *mediaauthoritypb.AuthorityEnvelope, payload *
 			return err
 		}
 	case mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_ARTIFACT:
-		if err := validateMaxValidity(envelope, maxArtifactValidity, "artifact"); err != nil {
+		if err := validateMaxValidity(envelope, MaxMediaObjectValidity, "artifact"); err != nil {
 			return err
 		}
 		artifact := payload.GetArtifact()

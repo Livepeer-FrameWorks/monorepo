@@ -76,6 +76,43 @@ func TestPlacementAdmissionRebuildsAuthorityForDirectDestination(t *testing.T) {
 	}
 }
 
+// A cell that holds no valid copy of the object fetches it inside the placement
+// read. Admission has three seconds; a fetch that takes longer than a local read
+// but fits in them must end in a decision, not in the read's own deadline.
+func TestPlacementAdmissionWaitsOutAnAuthorityFetch(t *testing.T) {
+	f := newDiscoveryFixture(t)
+	f.pair.Tenant.Authority.EffectiveClusterGrants[1].ControlCellId = "eu-cell"
+	f.pair.Tenant.Authority.EffectiveClusterGrants[1].ClusterId = "eu"
+	local := f.discovery.Authority
+	// The first read fetches; once applied, later reads are local.
+	var fetched atomic.Bool
+	fetching := placementAuthorityReaderFunc(func(ctx context.Context, tenant, object, internal string) (localauthority.PlacementPair, error) {
+		if !fetched.Swap(true) {
+			select {
+			case <-ctx.Done():
+				return localauthority.PlacementPair{}, ctx.Err()
+			case <-time.After(1200 * time.Millisecond):
+			}
+		}
+		return local.Placement(ctx, tenant, object, internal)
+	})
+	gate := &PlacementPolicyGate{CellID: "us-cell", Authority: fetching, Now: func() time.Time { return f.now },
+		IngestFence: placementFenceFunc(func(context.Context, string, string) (string, error) { return "", nil }),
+		Router: balancer.PlacementRouter{Observe: func(_ context.Context, cell balancer.PlacementCell, _ balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {
+			observation := balancer.PlacementCellObservation{Complete: true, ObservedAt: f.now, ExpiresAt: f.now.Add(10 * time.Second)}
+			observation.Candidates = []placement.Candidate{{TenantID: "tenant", ClusterID: cell.ClusterIDs[0], NodeID: "edge", OwnerTenantID: "tenant",
+				AllowedVerbs: []placement.Verb{placement.Serve}, ObservedAt: f.now, ExpiresAt: observation.ExpiresAt, Capacity: placement.CapacityAvailable,
+				BWLimit: 1000, BWAvailable: 900, RAMMax: 100, RAMUsed: 10, Presence: placement.Present, SourceFeasible: true}}
+			return observation, nil
+		}},
+	}
+	input := PlacementAdmissionInput{TenantID: "tenant", ObjectID: "live_stream:stream", InternalName: "internal", ClusterID: "us", NodeID: "edge",
+		Protocol: "hls", SourceGeneration: "source-generation", Verb: placement.Serve}
+	if result, err := gate.Admit(context.Background(), input); err != nil || result.NodeID != "edge" {
+		t.Fatalf("admission after a 1.2 s authority fetch = %+v, %v; want a decision", result, err)
+	}
+}
+
 func TestPlacementAdmissionRejectsInvalidAndChangingAuthority(t *testing.T) {
 	for _, scenario := range []string{"foreign tenant", "foreign object", "wrong cell", "wrong node", "unknown verb", "missing generation", "invalid geo", "protocol case", "not ready", "schema one", "policy changed", "tenant version changed", "object version changed", "source authority differs", "partial source authority", "negative source authority", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -80,22 +80,26 @@ func (s *FoghornGRPCServer) attestCellPlacementCapability(ctx context.Context) *
 		EnforcementReady:        capability.EnforcementReady,
 		LiveReplicas:            uint32(capability.LiveReplicas),
 		NodePlacementReady:      capability.NodePlacementReady,
+		LongValidityReady:       capability.LongValidityReady,
+		UseReportsReady:         capability.UseReportsReady,
 	}
 }
 
 func mediaAuthorityStatus(err error) error {
 	switch {
+	case errors.Is(err, localauthority.ErrAuthorityConfirmationRequired), errors.Is(err, sharedauthority.ErrNotYetValid):
+		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, sharedauthority.ErrWrongAudience),
 		errors.Is(err, sharedauthority.ErrUnknownSigner),
 		errors.Is(err, sharedauthority.ErrInvalidSignature):
 		return status.Error(codes.PermissionDenied, err.Error())
-	case errors.Is(err, localauthority.ErrRollback), errors.Is(err, localauthority.ErrVersionConflict):
+	case errors.Is(err, localauthority.ErrRollback), errors.Is(err, localauthority.ErrVersionConflict),
+		errors.Is(err, localauthority.ErrTombstoneTerminal):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, sharedauthority.ErrMalformed),
 		errors.Is(err, sharedauthority.ErrUnknownSchema),
 		errors.Is(err, sharedauthority.ErrPayloadDigest),
 		errors.Is(err, sharedauthority.ErrExpired),
-		errors.Is(err, sharedauthority.ErrNotYetValid),
 		errors.Is(err, sharedauthority.ErrNonCanonical):
 		return status.Error(codes.InvalidArgument, err.Error())
 	default:

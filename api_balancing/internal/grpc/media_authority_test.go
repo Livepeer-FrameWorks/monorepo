@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
+	"github.com/DATA-DOG/go-sqlmock"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -13,6 +14,26 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestRuntimeNameSkipsViewerPlaybackIDFetch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store, err := localauthority.NewStore(db, "cell-a", sharedauthority.TrustSet{"key": make([]byte, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &FoghornGRPCServer{mediaAuthorityStore: store}
+	_, _, handled, err := s.resolveLocalViewerContent(context.Background(), "live+stream-internal")
+	if handled || err != nil {
+		t.Fatalf("runtime name was not delegated to internal-name resolution: %v, %v", handled, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMediaAuthorityServiceIsInternalServerSurface(t *testing.T) {
 	server := grpc.NewServer()
@@ -42,11 +63,12 @@ func TestMediaAuthorityStatusClassification(t *testing.T) {
 		{sharedauthority.ErrInvalidSignature, codes.PermissionDenied},
 		{localauthority.ErrRollback, codes.FailedPrecondition},
 		{localauthority.ErrVersionConflict, codes.FailedPrecondition},
+		{localauthority.ErrAuthorityConfirmationRequired, codes.Aborted},
 		{sharedauthority.ErrMalformed, codes.InvalidArgument},
 		{sharedauthority.ErrUnknownSchema, codes.InvalidArgument},
 		{sharedauthority.ErrPayloadDigest, codes.InvalidArgument},
 		{sharedauthority.ErrExpired, codes.InvalidArgument},
-		{sharedauthority.ErrNotYetValid, codes.InvalidArgument},
+		{sharedauthority.ErrNotYetValid, codes.Aborted},
 		{sharedauthority.ErrNonCanonical, codes.InvalidArgument},
 		{errors.New("database unavailable"), codes.Unavailable},
 	}

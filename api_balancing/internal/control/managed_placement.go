@@ -40,7 +40,7 @@ func filterManagedNodesByPlacement(ctx context.Context, reader managedPlacementR
 	if row.GetTenantId() == "" || row.GetStreamId() == "" || row.GetInternalName() == "" {
 		return nil, placementTransient
 	}
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	if readCtx.Err() != nil {
 		return nil, placementTransient
@@ -78,7 +78,7 @@ func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacement
 	if reader == nil || row == nil || streamCtx == nil || row.GetTenantId() == "" || row.GetStreamId() == "" || row.GetInternalName() == "" {
 		return materializeTransient
 	}
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	if readCtx.Err() != nil {
 		return materializeTransient

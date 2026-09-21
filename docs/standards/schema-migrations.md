@@ -112,6 +112,12 @@ validator independently rejects migrations newer than its highest catalog entry.
 wrong-bucket, multiple-pending, and immutable-migration cases in a temporary Git
 repository.
 
+Release candidates use lowercase `vX.Y.Z-rcN` tags and share the base `vX.Y.Z`
+catalog entry and migration directory. The base remains pending until GA, but
+SQL files included in a reachable RC tag are already immutable. Append new
+migrations for later candidates; never rewrite a file that a staging database
+may have recorded in its checksum ledger.
+
 PostgreSQL/YugabyteDB files ending in `.notx.sql` are applied in autocommit
 mode. The validator permits one or more statements only when every statement is
 an idempotent `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS`; the role sends

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/DATA-DOG/go-sqlmock"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -55,6 +56,19 @@ func commercialResponse(tenant *mediapb.TenantAuthority, request *pb.CommercialQ
 		response.Clusters = append(response.Clusters, &pb.ClusterCommercialQuote{ClusterId: id, Facts: &pb.CommercialFacts{Charging: pb.Charging_CHARGING_RATED, Revision: strings.Repeat("b", 64), ExpiresAt: proto.CloneOf(response.ExpiresAt)}})
 	}
 	return response, nil
+}
+
+func TestCommercialEntitlementRaceWaitsForTenant(t *testing.T) {
+	tenant, object := quotedCommercialAuthorityFixture()
+	newTenant := proto.CloneOf(tenant)
+	newTenant.EffectiveClusterGrants[0].MediaConsent.AllowExternalSource = false
+	source := commercialSourceFunc(func(_ context.Context, request *pb.CommercialQuoteRequest) (*pb.CommercialQuoteResponse, error) {
+		return commercialResponse(newTenant, request)
+	})
+	_, err := collectMediaObjectCommercial(context.Background(), source, tenant, object, time.Now().Add(time.Hour))
+	if class, _ := classifyAuthorityCompileError(err); class != authorityCompileAwaitTenant {
+		t.Fatalf("ordinary cross-service entitlement race must wait for refreshed parent: %v", err)
+	}
 }
 
 func TestCollectMediaObjectCommercialConcurrentCompleteAndDetached(t *testing.T) {
@@ -165,7 +179,7 @@ func TestPersistMediaObjectCommercialRechecksParentAfterQuoteReads(t *testing.T)
 			}
 			until := time.Now().Add(time.Minute)
 			mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WithArgs("tenant", tenant.TenantId).WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, until))
-			mock.ExpectQuery("ListCurrentMediaAuthorityDeliveryCells").WithArgs("tenant", tenant.TenantId).WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("cell-a"))
+			mock.ExpectQuery("ListActiveMediaAuthorityCells").WithArgs("tenant", tenant.TenantId).WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("cell-a"))
 			var calls atomic.Int32
 			source := commercialSourceFunc(func(_ context.Context, request *pb.CommercialQuoteRequest) (*pb.CommercialQuoteResponse, error) {
 				calls.Add(1)
@@ -187,14 +201,17 @@ func TestPersistMediaObjectCommercialRechecksParentAfterQuoteReads(t *testing.T)
 			if changed {
 				mock.ExpectRollback()
 			} else {
-				mock.ExpectQuery("ListMediaAuthorityPriorCells").WithArgs("media_object", "live_stream:stream").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}))
+				mock.ExpectExec("RetireMediaAuthorityTargets").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectQuery("LockMediaAuthorityTargetHorizons").WillReturnRows(sqlmock.NewRows([]string{"cell_id", "correction_until"}))
+				mock.ExpectQuery("ListMediaAuthorityHoldingCells").WithArgs("media_object", "live_stream:stream").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}))
+				expectNoCurrentMediaAuthorityPublication(mock, "media_object", "live_stream:stream")
 				mock.ExpectQuery("AllocateMediaAuthorityVersion").WithArgs("media_object", "live_stream:stream").WillReturnRows(sqlmock.NewRows([]string{"last_version"}).AddRow(int64(1)))
 				mock.ExpectExec("InsertMediaAuthorityVersion").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec("UpsertCurrentMediaAuthority").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec("SupersedeOlderMediaAuthorityDeliveries").WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectExec("UpsertMediaAuthorityTarget").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectExec("EnqueueMediaAuthorityDelivery").WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectExec("ScheduleMediaAuthorityRefresh").WillReturnResult(sqlmock.NewResult(0, 1))
+				expectMediaAuthorityRenewalScheduled(mock, "object_deadline", "media_object:live_stream:stream", 1)
 				mock.ExpectCommit()
 			}
 			_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -225,8 +242,43 @@ func TestCommercialAuthorityRefreshKeepsRenewalHeadroom(t *testing.T) {
 	if got := mediaAuthorityRefreshAfter(now, now.Add(30*time.Second)); !got.Equal(now.Add(15 * time.Second)) {
 		t.Fatalf("short lease refresh = %v", got)
 	}
-	if got := mediaAuthorityRefreshAfter(now, now.Add(time.Hour)); !got.Equal(now.Add(mediaAuthorityRefreshInterval)) {
+	if got := mediaAuthorityRefreshAfter(now, now.Add(24*time.Hour)); !got.Equal(now.Add(12 * time.Hour)) {
 		t.Fatalf("long lease refresh = %v", got)
+	}
+}
+
+func TestMediaAuthorityRenewsBeforeRefreshAfterAtItsOwnOffset(t *testing.T) {
+	issued := time.Unix(1_800_000_000, 0).UTC()
+	validUntil := issued.Add(24 * time.Hour)
+	refreshAfter := mediaAuthorityRefreshAfter(issued, validUntil)
+	third, window := issued.Add(8*time.Hour), 24*time.Hour/36
+
+	// Tenants are offset like everything else: a cohort published together (a
+	// startup, a re-issue) would otherwise renew together for as long as it lives.
+	renewals := map[time.Time]struct{}{}
+	for _, target := range []commodoredb.MediaAuthorityTarget{
+		commodoredb.TenantMediaAuthorityTarget("10000000-0000-0000-0000-000000000001"),
+		commodoredb.TenantMediaAuthorityTarget("10000000-0000-0000-0000-000000000002"),
+		commodoredb.LiveStreamMediaAuthorityTarget("20000000-0000-0000-0000-000000000001"),
+	} {
+		renewAt := mediaAuthorityRenewAt(target, issued, refreshAfter, validUntil)
+		if renewAt.Before(third) || !renewAt.Before(third.Add(window)) || !renewAt.Before(refreshAfter) {
+			t.Fatalf("%s renew_at = %v, want within [%v, %v)", target.Key, renewAt, third, third.Add(window))
+		}
+		if again := mediaAuthorityRenewAt(target, issued, refreshAfter, validUntil); !again.Equal(renewAt) {
+			t.Fatalf("%s renewal offset must be deterministic per authority", target.Key)
+		}
+		renewals[renewAt] = struct{}{}
+	}
+	if len(renewals) != 3 {
+		t.Fatalf("authorities issued together renew at %d distinct instants, want 3", len(renewals))
+	}
+
+	// A version issued under the ten-minute refresh rule renews by its own
+	// refresh_after rather than waiting a third of a day.
+	legacyRefresh := issued.Add(10 * time.Minute)
+	if got := mediaAuthorityRenewAt(commodoredb.TenantMediaAuthorityTarget("10000000-0000-0000-0000-000000000001"), issued, legacyRefresh, validUntil); !got.Equal(legacyRefresh) {
+		t.Fatalf("renew_at = %v, want capped at refresh_after %v", got, legacyRefresh)
 	}
 }
 

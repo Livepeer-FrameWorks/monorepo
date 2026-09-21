@@ -79,6 +79,8 @@ const (
 	InternalService_ListPullSourceEvents_FullMethodName               = "/commodore.InternalService/ListPullSourceEvents"
 	InternalService_RequestMediaAuthorityRefresh_FullMethodName       = "/commodore.InternalService/RequestMediaAuthorityRefresh"
 	InternalService_RequestMediaAuthorityReplay_FullMethodName        = "/commodore.InternalService/RequestMediaAuthorityReplay"
+	InternalService_FetchMediaAuthority_FullMethodName                = "/commodore.InternalService/FetchMediaAuthority"
+	InternalService_ReportMediaAuthorityUse_FullMethodName            = "/commodore.InternalService/ReportMediaAuthorityUse"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -310,6 +312,15 @@ type InternalServiceClient interface {
 	// this control cell, closing the gap where a previously acknowledged cell
 	// database was restored or rebuilt after that acknowledgement.
 	RequestMediaAuthorityReplay(ctx context.Context, in *RequestMediaAuthorityReplayRequest, opts ...grpc.CallOption) (*RequestMediaAuthorityReplayResponse, error)
+	// Called by Foghorn when a decision needs an authority the cell does not
+	// hold, or holds only past its validity. Commodore compiles the object and
+	// its tenant now and returns the envelopes signed for this cell; Foghorn
+	// applies them and decides locally. This is how an object nobody has used
+	// for a while is served without being kept in every cell.
+	FetchMediaAuthority(ctx context.Context, in *FetchMediaAuthorityRequest, opts ...grpc.CallOption) (*FetchMediaAuthorityResponse, error)
+	// Foghorn reports the authorities it decided on, at most once per authority
+	// per day. Commodore keeps renewing an object only while it is in use.
+	ReportMediaAuthorityUse(ctx context.Context, in *ReportMediaAuthorityUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type internalServiceClient struct {
@@ -880,6 +891,26 @@ func (c *internalServiceClient) RequestMediaAuthorityReplay(ctx context.Context,
 	return out, nil
 }
 
+func (c *internalServiceClient) FetchMediaAuthority(ctx context.Context, in *FetchMediaAuthorityRequest, opts ...grpc.CallOption) (*FetchMediaAuthorityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchMediaAuthorityResponse)
+	err := c.cc.Invoke(ctx, InternalService_FetchMediaAuthority_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ReportMediaAuthorityUse(ctx context.Context, in *ReportMediaAuthorityUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, InternalService_ReportMediaAuthorityUse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -1109,6 +1140,15 @@ type InternalServiceServer interface {
 	// this control cell, closing the gap where a previously acknowledged cell
 	// database was restored or rebuilt after that acknowledgement.
 	RequestMediaAuthorityReplay(context.Context, *RequestMediaAuthorityReplayRequest) (*RequestMediaAuthorityReplayResponse, error)
+	// Called by Foghorn when a decision needs an authority the cell does not
+	// hold, or holds only past its validity. Commodore compiles the object and
+	// its tenant now and returns the envelopes signed for this cell; Foghorn
+	// applies them and decides locally. This is how an object nobody has used
+	// for a while is served without being kept in every cell.
+	FetchMediaAuthority(context.Context, *FetchMediaAuthorityRequest) (*FetchMediaAuthorityResponse, error)
+	// Foghorn reports the authorities it decided on, at most once per authority
+	// per day. Commodore keeps renewing an object only while it is in use.
+	ReportMediaAuthorityUse(context.Context, *ReportMediaAuthorityUseRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -1286,6 +1326,12 @@ func (UnimplementedInternalServiceServer) RequestMediaAuthorityRefresh(context.C
 }
 func (UnimplementedInternalServiceServer) RequestMediaAuthorityReplay(context.Context, *RequestMediaAuthorityReplayRequest) (*RequestMediaAuthorityReplayResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestMediaAuthorityReplay not implemented")
+}
+func (UnimplementedInternalServiceServer) FetchMediaAuthority(context.Context, *FetchMediaAuthorityRequest) (*FetchMediaAuthorityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchMediaAuthority not implemented")
+}
+func (UnimplementedInternalServiceServer) ReportMediaAuthorityUse(context.Context, *ReportMediaAuthorityUseRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportMediaAuthorityUse not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -2316,6 +2362,42 @@ func _InternalService_RequestMediaAuthorityReplay_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_FetchMediaAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchMediaAuthorityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).FetchMediaAuthority(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_FetchMediaAuthority_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).FetchMediaAuthority(ctx, req.(*FetchMediaAuthorityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ReportMediaAuthorityUse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportMediaAuthorityUseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ReportMediaAuthorityUse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ReportMediaAuthorityUse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ReportMediaAuthorityUse(ctx, req.(*ReportMediaAuthorityUseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2546,6 +2628,14 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestMediaAuthorityReplay",
 			Handler:    _InternalService_RequestMediaAuthorityReplay_Handler,
+		},
+		{
+			MethodName: "FetchMediaAuthority",
+			Handler:    _InternalService_FetchMediaAuthority_Handler,
+		},
+		{
+			MethodName: "ReportMediaAuthorityUse",
+			Handler:    _InternalService_ReportMediaAuthorityUse_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

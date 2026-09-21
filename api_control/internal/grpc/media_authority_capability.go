@@ -54,10 +54,9 @@ func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCap
 	return maxSchema, ready, replicas
 }
 
-// recordCellPlacementCapability persists one cell's attestation and, whenever
-// the cell is ready, enqueues a refresh for every tenant that cell still holds
-// on a pre-placement schema. The inbox key includes the cell's first-ready
-// time, so repeated acknowledgements collapse into one compile per readiness.
+// recordCellPlacementCapability queues activation only when readiness advances.
+// The attestation row lock serializes the activation marker and tenant enqueues
+// in one transaction, including concurrent first acknowledgements.
 func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cellID string, capability *foghornpb.MediaCellPlacementCapability) error {
 	cellID = strings.TrimSpace(cellID)
 	if cellID == "" || s == nil || s.db == nil {
@@ -68,6 +67,11 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		queries := commodoredb.New(tx)
 		row, err := queries.UpsertMediaCellPlacementCapability(ctx, commodoredb.UpsertMediaCellPlacementCapabilityParams{
 			CellID: cellID, MaxSchemaVersion: maxSchema, EnforcementReady: ready, LiveReplicas: replicas,
+			// These two do not depend on placement enforcement: a cell that only
+			// reads legacy-schema authorities still accepts long validity and
+			// reports use. An absent attestation reads as not ready.
+			LongValidityReady: capability.GetLiveReplicas() > 0 && capability.GetLongValidityReady(),
+			UseReportsReady:   capability.GetLiveReplicas() > 0 && capability.GetUseReportsReady(),
 		})
 		if err != nil {
 			return fmt.Errorf("record cell placement capability: %w", err)
@@ -75,12 +79,14 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		if !row.EnforcementReady || !row.FirstReadyAt.Valid {
 			return nil
 		}
-		// A cell that attests node placement also refreshes tenants still below
-		// schema 3. first_ready_at does not move when an already ready cell starts
-		// attesting schema 3, so that readiness carries its own inbox key.
+		// Advancing from schema 2 to 3 is a distinct activation even when the
+		// cell never withdrew its enforcement readiness.
 		listSchema, keySuffix := int32(sharedauthority.PlacementSchemaVersion), ""
 		if maxSchema >= int32(sharedauthority.NodePlacementSchemaVersion) {
 			listSchema, keySuffix = int32(sharedauthority.NodePlacementSchemaVersion), ":schema-3"
+		}
+		if row.ActivationSchemaVersion >= listSchema {
+			return nil
 		}
 		tenants, err := queries.ListLegacySchemaTenantsTargetingCell(ctx, commodoredb.ListLegacySchemaTenantsTargetingCellParams{
 			CellID: cellID, SchemaVersion: listSchema,
@@ -90,14 +96,14 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		}
 		readiness := strconv.FormatInt(row.FirstReadyAt.Time.UTC().Unix(), 10)
 		for _, tenantID := range tenants {
-			if _, err := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-				SourceService: "commodore", SourceEventID: "cell-capability:" + cellID + ":" + tenantID + ":" + readiness + keySuffix,
-				TenantID: tenantID, Reason: cellPlacementCapabilityRefreshReason,
-			}); err != nil {
+			if err := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaAuthorityTarget(tenantID), tenantID,
+				cellPlacementCapabilityRefreshReason, "commodore", "cell-capability:"+cellID+":"+tenantID+":"+readiness+keySuffix); err != nil {
 				return fmt.Errorf("enqueue placement activation refresh for tenant %q: %w", tenantID, err)
 			}
 		}
-		return nil
+		return queries.MarkMediaCellPlacementActivated(ctx, commodoredb.MarkMediaCellPlacementActivatedParams{
+			CellID: cellID, SchemaVersion: listSchema,
+		})
 	})
 }
 

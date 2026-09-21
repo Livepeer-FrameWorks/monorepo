@@ -1189,6 +1189,14 @@ func main() {
 			mediaAuthorityLocalReads.WithLabelValues(index, outcome).Add(0)
 		}
 	}
+	mediaAuthorityFetches := metricsCollector.NewCounter(
+		"media_authority_fetches_total",
+		"Outcomes of asking the control plane for an authority a decision needed and the cell did not hold as valid",
+		[]string{"outcome"},
+	)
+	for _, outcome := range localauthority.FetchOutcomes {
+		mediaAuthorityFetches.WithLabelValues(outcome).Add(0)
+	}
 	mediaAuthorityShadow := metricsCollector.NewCounter(
 		"media_authority_shadow_total",
 		"Connected-to-local authority comparison outcomes",
@@ -1552,11 +1560,20 @@ func main() {
 			[]string{"authority_kind", "outcome"},
 		)
 		for _, kind := range []string{"tenant", "media_object", "unknown"} {
-			for _, outcome := range []string{"applied", "duplicate", "verification_rejected", "rollback_rejected", "conflict_rejected", "persist_error"} {
+			for _, outcome := range []string{"applied", "duplicate", "verification_rejected", "stale_version_rejected", "rollback_rejected", "conflict_rejected", "terminal_lifecycle_rejected", "persist_error"} {
 				mediaAuthorityApplyOutcomes.WithLabelValues(kind, outcome).Add(0)
 			}
 		}
 		authorityStore.SetApplyOutcomeMetric(mediaAuthorityApplyOutcomes)
+		authorityStore.SetFetchOutcomeMetric(mediaAuthorityFetches)
+		authorityStore.SetLogger(logger)
+		// Read the local restore marker before serving. Ordinary restart is
+		// independent of core availability; restored state requires confirmation.
+		fenceCtx, stopFence := context.WithTimeout(context.Background(), 10*time.Second)
+		if fenceErr := authorityStore.RaiseStartupFence(fenceCtx); fenceErr != nil {
+			logger.WithError(fenceErr).Warn("Could not read the media authority restore fence; withholding local authority until the local marker can be read")
+		}
+		stopFence()
 		sealKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_KEY_ID"))
 		sealPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"))
 		if sealKeyID != "" || sealPrivateEncoded != "" {
@@ -1576,6 +1593,7 @@ func main() {
 		authorityStore.SetApplyObserver(triggerProcessor.HandleMediaAuthorityApply)
 		control.SetLocalMediaAuthorityStore(authorityStore)
 		go authorityStore.RunAuditRetention(context.Background(), logger)
+		go authorityStore.RunCollection(context.Background(), logger)
 		logger.WithFields(logging.Fields{"trusted_signers": len(trust), "control_cell_id": mediaAuthorityCellID}).Info("Signed media authority apply enabled")
 	} else {
 		logger.Warn("MEDIA_AUTHORITY_TRUST_SET is not configured; signed media authority apply is disabled")
@@ -1628,20 +1646,56 @@ func main() {
 		placementCommodore.Store(client)
 		if authorityStore != nil {
 			authorityStore.SetRefreshRequester(func(ctx context.Context) error {
-				_, refreshErr := client.RequestMediaAuthorityReplay(ctx, mediaAuthorityCellID)
+				refreshErr := authorityStore.Reconcile(ctx, client.RequestMediaAuthorityReplayIfDrifted)
 				if refreshErr != nil {
 					logger.WithError(refreshErr).Warn("Soft-expired local media authority refresh request failed; valid authority remains active")
 				}
 				return refreshErr
 			})
+			// A cell holds only the authorities in use. One it does not hold, or
+			// holds past its validity, is asked for when a decision needs it.
+			authorityStore.SetAuthorityFetcher(func(ctx context.Context, lookup localauthority.AuthorityLookup) ([][]byte, error) {
+				request := &commodorepb.FetchMediaAuthorityRequest{ControlCellId: mediaAuthorityCellID}
+				switch {
+				case lookup.AuthorityID != "":
+					request.Lookup = &commodorepb.FetchMediaAuthorityRequest_AuthorityId{AuthorityId: lookup.AuthorityID}
+				case lookup.PlaybackID != "":
+					request.Lookup = &commodorepb.FetchMediaAuthorityRequest_PlaybackId{PlaybackId: lookup.PlaybackID}
+				case lookup.InternalName != "":
+					request.Lookup = &commodorepb.FetchMediaAuthorityRequest_InternalName{InternalName: lookup.InternalName}
+				default:
+					request.Lookup = &commodorepb.FetchMediaAuthorityRequest_TenantId{TenantId: lookup.TenantID}
+				}
+				response, fetchErr := client.FetchMediaAuthority(ctx, request)
+				if fetchErr != nil {
+					return nil, fetchErr
+				}
+				return response.GetSignedAuthorities(), nil
+			})
 		}
 		commodoreDependentWorkers.Do(func() {
+			if authorityStore != nil {
+				go authorityStore.RunUseReporter(context.Background(), func(ctx context.Context, uses []localauthority.AuthorityUse) error {
+					current := placementCommodore.Load()
+					if current == nil {
+						return errors.New("commodore is not connected")
+					}
+					reported := make([]*commodorepb.MediaAuthorityUse, 0, len(uses))
+					for _, use := range uses {
+						reported = append(reported, &commodorepb.MediaAuthorityUse{AuthorityKind: use.Kind, AuthorityId: use.ID, TenantId: use.TenantID})
+					}
+					return current.ReportMediaAuthorityUse(ctx, mediaAuthorityCellID, reported)
+				}, logger)
+			}
 			go pushstatusoutbox.NewWorker(db, client, logger, pushStatusMetrics).Run(context.Background())
 			go managedplacementoutbox.NewWorker(db, client, logger).Run(context.Background())
 			go signingkeyuseoutbox.NewWorker(db, client, logger).Run(context.Background())
 		})
 	}
 	onCommodoreConnected(commodoreClient)
+	if authorityStore != nil {
+		go runMediaAuthorityRestoreFence(authorityStore, placementCommodore.Load, mediaAuthorityCellID, logger)
+	}
 	if qmClient != nil {
 		foghornServer.SetQuartermasterClient(qmClient)
 	}
@@ -2356,17 +2410,34 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+	// The order is what makes a deploy invisible at the edge. The listeners close
+	// before any node is told to go, so its immediate redial lands on another
+	// instance. The trigger processor stays up until the nodes have gone, so the
+	// requests they had in flight are answered rather than denied. Conn owners
+	// are cleaned last: for a node that already re-registered elsewhere at a
+	// higher fence that is a no-op.
+	done := make(chan struct{})
+	control.BeginShutdown(shutdownCtx, func() {
+		// Both at once: GracefulStop closes its listener first and then waits for
+		// open calls, and the control streams live on the external server.
+		var stopping sync.WaitGroup
+		for _, gracefulStop := range []func(){grpcServers.Internal.GracefulStop, grpcServers.External.GracefulStop} {
+			stopping.Add(1)
+			go func() {
+				defer stopping.Done()
+				gracefulStop()
+			}()
+		}
+		go func() {
+			stopping.Wait()
+			close(done)
+		}()
+	}, logger)
 	control.CleanupLocalConnOwners(shutdownCtx)
 	if err := triggerProcessor.Shutdown(shutdownCtx); err != nil {
 		logger.WithError(err).Warn("Trigger processor shutdown did not finish cleanly; some client lifecycle batches may have been lost")
 	}
 
-	done := make(chan struct{})
-	go func() {
-		grpcServers.Internal.GracefulStop()
-		grpcServers.External.GracefulStop()
-		close(done)
-	}()
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():
@@ -2522,18 +2593,55 @@ func reconnectCommodore(
 	}
 }
 
-func requestMediaAuthorityReplay(client *commodore.GRPCClient, controlCellID string, logger logging.Logger) {
+func requestMediaAuthorityReplay(client *commodore.GRPCClient, controlCellID string, logger logging.Logger) bool {
 	if client == nil || strings.TrimSpace(controlCellID) == "" {
-		return
+		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
-	resp, err := client.RequestMediaAuthorityReplay(ctx, controlCellID)
-	if err != nil {
-		logger.WithError(err).WithField("control_cell_id", controlCellID).Warn("Failed to request media authority replay")
-		return
+	store := control.LocalMediaAuthorityStore()
+	if store == nil {
+		return false
 	}
-	logger.WithField("control_cell_id", controlCellID).WithField("requeued_count", resp.GetRequeuedCount()).Info("Requested current media authority replay")
+	if err := store.Reconcile(ctx, client.RequestMediaAuthorityReplayIfDrifted); err != nil {
+		logger.WithError(err).WithField("control_cell_id", controlCellID).Warn("Failed to request media authority replay")
+		return false
+	}
+	logger.WithField("control_cell_id", controlCellID).Info("Checked media authority recovery")
+	return store.RecoveryInProgress()
+}
+
+// runMediaAuthorityRestoreFence ends the startup fence when there is no control
+// plane to answer (an unreachable control plane does not stop the cell), and
+// keeps summarising what the cell holds while one is owed (Store.SummaryOwed).
+// It also follows the fence as other replicas of the cell raise or lower it.
+func runMediaAuthorityRestoreFence(store *localauthority.Store, client func() *commodore.GRPCClient, controlCellID string, logger logging.Logger) {
+	if client() == nil {
+		settleCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := store.SettleFence(settleCtx, localauthority.FenceCheck{}); err != nil {
+			logger.WithError(err).Warn("Could not settle the media authority restore fence")
+		}
+		cancel()
+	}
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	for range timer.C {
+		delay := 30 * time.Second
+		reloadCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := store.ReloadFence(reloadCtx); err != nil {
+			logger.WithError(err).Warn("Could not reload the media authority restore fence")
+		}
+		cancel()
+		// Summarise again while a durable fence waits for a match, and until the
+		// control plane has answered once: a first summary lost to an outage is
+		// retried on the same connection once the control plane is back.
+		if current := client(); current != nil && store.SummaryOwed() {
+			if requestMediaAuthorityReplay(current, controlCellID, logger) {
+				delay = time.Second
+			}
+		}
+		timer.Reset(delay)
+	}
 }
 
 const (

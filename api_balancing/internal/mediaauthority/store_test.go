@@ -17,6 +17,8 @@ import (
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -326,7 +328,7 @@ func expectApplyPrefix(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	expectMediaAuthorityLockTimeout(mock)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload"}))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.media_authorities")).WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
@@ -389,7 +391,7 @@ func TestStoreApplyIsIdempotentAndRejectsRollbackAndConflict(t *testing.T) {
 		outcome    string
 	}{
 		{name: "duplicate", version: 7, digest: signed.GetEnvelope().GetPayloadSha256(), wantStatus: ApplyStatusDuplicate, outcome: "duplicate"},
-		{name: "rollback", version: 8, digest: signed.GetEnvelope().GetPayloadSha256(), wantErr: ErrRollback, outcome: "rollback_rejected"},
+		{name: "rollback", version: 8, digest: signed.GetEnvelope().GetPayloadSha256(), wantErr: ErrRollback, outcome: "stale_version_rejected"},
 		{name: "same version conflict", version: 7, digest: make([]byte, 32), wantErr: ErrVersionConflict, outcome: "conflict_rejected"},
 	}
 	for _, test := range tests {
@@ -400,7 +402,7 @@ func TestStoreApplyIsIdempotentAndRejectsRollbackAndConflict(t *testing.T) {
 			expectMediaAuthorityLockTimeout(mock)
 			mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(
-				sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload"}).AddRow(test.version, test.digest, signed.GetEnvelope().GetPayload()),
+				sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}).AddRow(test.version, test.digest, signed.GetEnvelope().GetPayload(), storeFixtureNow.Add(time.Hour)),
 			)
 			mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.media_authority_apply_audit")).
 				WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), test.outcome, sqlmock.AnyArg()).
@@ -421,6 +423,39 @@ func TestStoreApplyIsIdempotentAndRejectsRollbackAndConflict(t *testing.T) {
 	}
 }
 
+func TestCommittedDuplicateObserverRetryIsNotPersistenceFailure(t *testing.T) {
+	store, mock, closeDB := newFixtureStore(t, "cell-a")
+	defer closeDB()
+	encoded, _, signed := storeFixture(t, "cell-a")
+	outcomes := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_apply_total", Help: "test"}, []string{"kind", "outcome"})
+	store.SetApplyOutcomeMetric(outcomes)
+	wantErr := errors.New("authority confirmation pending")
+	store.SetApplyObserver(func(context.Context, ApplyResult) error { return wantErr })
+	mock.ExpectBegin()
+	expectMediaAuthorityLockTimeout(mock)
+	mock.ExpectExec("SELECT pg_advisory_xact_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT authority_version, payload_sha256, payload").WillReturnRows(
+		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}).
+			AddRow(7, signed.GetEnvelope().GetPayloadSha256(), signed.GetEnvelope().GetPayload(), storeFixtureNow.Add(time.Hour)),
+	)
+	mock.ExpectExec("INSERT INTO foghorn.media_authority_apply_audit").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	result, err := store.Apply(context.Background(), encoded)
+	if result.Status != ApplyStatusDuplicate || !errors.Is(err, wantErr) {
+		t.Fatalf("observer failure lost retry semantics: %+v, %v", result, err)
+	}
+	if store.RecoveryPending() {
+		t.Fatal("post-commit observer error started unrelated cell-wide recovery")
+	}
+	if testutil.ToFloat64(outcomes.WithLabelValues("tenant", "duplicate")) != 1 ||
+		testutil.ToFloat64(outcomes.WithLabelValues("tenant", "persist_error")) != 0 {
+		t.Fatal("post-commit retry was reported as failed signed-authority persistence")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStoreApplyRejectsNewerActiveObjectAfterTombstone(t *testing.T) {
 	store, mock, closeDB := newFixtureStore(t, "cell-a")
 	defer closeDB()
@@ -432,7 +467,7 @@ func TestStoreApplyRejectsNewerActiveObjectAfterTombstone(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(
-		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload"}).AddRow(int64(1), testPayloadDigest(tombstonePayload), tombstonePayload),
+		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}).AddRow(int64(1), testPayloadDigest(tombstonePayload), tombstonePayload, storeFixtureNow.Add(time.Hour)),
 	)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.media_authority_apply_audit")).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "terminal_lifecycle_rejected", ErrTombstoneTerminal.Error()).
@@ -461,7 +496,7 @@ func TestStoreApplyRejectsNewerObjectWhenCurrentLifecycleIsCorrupt(t *testing.T)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(
-		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload"}).AddRow(int64(1), make([]byte, sha256.Size), []byte{0xff}),
+		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}).AddRow(int64(1), make([]byte, sha256.Size), []byte{0xff}, storeFixtureNow.Add(time.Hour)),
 	)
 	mock.ExpectRollback()
 
@@ -553,8 +588,8 @@ func TestStoreReadsMediaObjectCaseInsensitiveAndMarksExactVersion(t *testing.T) 
 	authorityID := sharedauthority.ArtifactAuthorityID(payload.GetArtifact().GetArtifactId())
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs("abcd1234").
-		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
-			AddRow(encoded, testPayloadDigest(encoded), storeFixtureNow.Add(10*time.Minute), storeFixtureNow.Add(time.Hour), authorityID, int64(9), false))
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
+			AddRow(encoded, testPayloadDigest(encoded), storeFixtureNow.Add(10*time.Minute), storeFixtureNow.Add(time.Hour), authorityID, int64(9), false, false, int64(7)))
 
 	snapshot, err := store.MediaObjectByPlaybackID(context.Background(), "abcd1234")
 	if err != nil {

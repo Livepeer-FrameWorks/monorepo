@@ -381,7 +381,17 @@ message ControlMessage {
     // durable offline obligation remains pending until this acknowledgement is
     // recorded, so a delivered command is never mistaken for a completed stop.
     DeactivatePushTargetsResult deactivate_push_targets_result = 170;
+    // Foghorn is shutting down. Helmsman stops sending on this stream, lets
+    // in-flight requests finish, closes it, and redials at once: the address
+    // resolves to the cell's other instances, and this one has already closed
+    // its listener. A Helmsman that predates the message ignores it and
+    // reconnects when the stream ends.
+    GoingAway going_away = 171;
   }
+}
+
+message GoingAway {
+  string reason = 1;
 }
 
 // ApplyManagedStream is sent by Foghorn to instruct Helmsman to add (or

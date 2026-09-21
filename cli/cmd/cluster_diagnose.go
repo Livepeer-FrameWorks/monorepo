@@ -18,7 +18,7 @@ import (
 
 // newClusterDiagnoseCmd creates the diagnose command
 func newClusterDiagnoseCmd() *cobra.Command {
-	opts := diagnoseOptions{Since: "4 hours ago"}
+	opts := diagnoseOptions{Since: "4 hours ago", WindowHours: 24}
 	cmd := &cobra.Command{
 		Use:   "diagnose <component>",
 		Short: "Run diagnostics on cluster components",
@@ -30,13 +30,15 @@ Supported diagnostics:
   ports      - Check for port conflicts
   kafka      - Check Kafka cluster health, topic lag, broker status
   media      - Capture media/DNS/federation service state without provisioning
+  media-authority - Trace media-authority refresh, versioning, delivery, and apply state
 
 Diagnostics help troubleshoot issues and identify problems before they
 cause outages.`,
 		Example: `  frameworks cluster diagnose network
   frameworks cluster diagnose resources
   frameworks cluster diagnose kafka
-  frameworks cluster diagnose media`,
+  frameworks cluster diagnose media
+  frameworks cluster diagnose media-authority --window-hours 6`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := resolveClusterManifest(cmd)
@@ -44,28 +46,31 @@ cause outages.`,
 				return err
 			}
 			defer rc.Cleanup()
-			return runDiagnose(cmd, rc.Manifest, args[0], opts)
+			return runDiagnose(cmd, rc, args[0], opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.StreamID, "stream-id", "", "Stream ID to trace in media diagnostics")
 	cmd.Flags().StringVar(&opts.TenantID, "tenant-id", "", "Tenant ID to include in stream database probes")
 	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "Journal time window for media diagnostics")
+	cmd.Flags().IntVar(&opts.WindowHours, "window-hours", opts.WindowHours, "Database lookback in hours for media-authority diagnostics")
 
 	return cmd
 }
 
 type diagnoseOptions struct {
-	StreamID   string
-	TenantID   string
-	Since      string
-	OutputJSON bool
+	StreamID    string
+	TenantID    string
+	Since       string
+	WindowHours int
+	OutputJSON  bool
 }
 
-// runDiagnose executes diagnostic checks against an already-loaded manifest.
-func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component string, opts diagnoseOptions) error {
+// runDiagnose executes diagnostic checks against an already-resolved cluster.
+func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts diagnoseOptions) error {
+	manifest := rc.Manifest
 	jsonMode := output == "json"
-	if jsonMode && component != "media" {
-		return fmt.Errorf("--output json is currently supported for media diagnostics only")
+	if jsonMode && component != "media" && component != "media-authority" {
+		return fmt.Errorf("--output json is currently supported for media and media-authority diagnostics only")
 	}
 	if !jsonMode {
 		ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Running %s diagnostics", component))
@@ -91,8 +96,10 @@ func runDiagnose(cmd *cobra.Command, manifest *inventory.Manifest, component str
 		return diagnoseKafka(ctx, cmd, manifest, sshPool)
 	case "media":
 		return diagnoseMedia(ctx, cmd, manifest, sshPool, opts)
+	case "media-authority":
+		return diagnoseMediaAuthority(ctx, cmd, rc, sshPool, opts)
 	default:
-		return fmt.Errorf("unknown component: %s (must be network, resources, ports, kafka, or media)", component)
+		return fmt.Errorf("unknown component: %s (must be network, resources, ports, kafka, media, or media-authority)", component)
 	}
 }
 
@@ -569,12 +576,7 @@ STREAM_ID=%s
 TENANT_ID=%s
 STREAM_SQL=%s
 QMASTER_SQL=%s
-fw_libpq_url() {
-  # psql/libpq rejects pgx-only connection params (load_balance,
-  # default_query_exec_mode); strip them, then normalize separators (handles
-  # adjacent params). Multi-host URIs and connect_timeout ARE libpq-safe, kept.
-  printf '%%s' "$1" | sed -E 's/(load_balance|default_query_exec_mode)=[^&]*//g; s/&+/\&/g; s/\?&/?/g; s/[?&]+$//'
-}
+%s
 echo "== host =="
 hostname -f 2>/dev/null || hostname
 echo "== resource snapshot =="
@@ -638,8 +640,17 @@ if printf '%%s\n' %s | grep -qx commodore && [ -n "${STREAM_SQL}" ]; then
     echo "/etc/frameworks/commodore.env unavailable"
   fi
 fi
-`, ssh.ShellQuote(since), ssh.ShellQuote(streamID), ssh.ShellQuote(tenantID), ssh.ShellQuote(streamSQL), ssh.ShellQuote(quartermasterSQL), ssh.ShellQuote(portRegex), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "))
+`, ssh.ShellQuote(since), ssh.ShellQuote(streamID), ssh.ShellQuote(tenantID), ssh.ShellQuote(streamSQL), ssh.ShellQuote(quartermasterSQL), diagnosticLibpqURLShellFunc, ssh.ShellQuote(portRegex), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "), strings.Join(quotedServices, " "))
 }
+
+// diagnosticLibpqURLShellFunc defines fw_libpq_url for host-side probes that
+// hand a service's DATABASE_URL to psql.
+const diagnosticLibpqURLShellFunc = `fw_libpq_url() {
+  # psql/libpq rejects pgx-only connection params (load_balance,
+  # default_query_exec_mode); strip them, then normalize separators (handles
+  # adjacent params). Multi-host URIs and connect_timeout ARE libpq-safe, kept.
+  printf '%s' "$1" | sed -E 's/(load_balance|default_query_exec_mode)=[^&]*//g; s/&+/\&/g; s/\?&/?/g; s/[?&]+$//'
+}`
 
 func safeDiagnosticValue(value string) string {
 	value = strings.TrimSpace(value)

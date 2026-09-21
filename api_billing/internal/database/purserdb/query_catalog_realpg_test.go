@@ -178,6 +178,40 @@ func assertMediaAuthorityRefreshTriggers(t *testing.T, db *sql.DB) {
 		t.Fatalf("changed subscription update authority revision = %d, want %d", changedRevision, subscriptionRevision+1)
 	}
 
+	// A redelivered usage report upserts a row with its own values. It changes
+	// no allowance and must not request a tenant authority refresh; a changed
+	// value must.
+	usageRevision := func() int64 {
+		t.Helper()
+		var revision int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT revision FROM purser.media_authority_refresh_outbox
+			WHERE tenant_id = $1 AND reason = 'allowance_usage_changed'
+		`, tenantID).Scan(&revision); err != nil {
+			t.Fatalf("read allowance usage revision: %v", err)
+		}
+		return revision
+	}
+	beforeUsage := usageRevision()
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.usage_records SET usage_value = usage_value, updated_at = NOW()
+		WHERE tenant_id = $1 AND usage_type = 'delivered_minutes'
+	`, tenantID); err != nil {
+		t.Fatalf("replay unchanged usage: %v", err)
+	}
+	if got := usageRevision(); got != beforeUsage {
+		t.Fatalf("unchanged usage replay advanced authority revision: got %d want %d", got, beforeUsage)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.usage_records SET usage_value = usage_value + 1
+		WHERE tenant_id = $1 AND usage_type = 'delivered_minutes'
+	`, tenantID); err != nil {
+		t.Fatalf("write changed usage: %v", err)
+	}
+	if got := usageRevision(); got != beforeUsage+1 {
+		t.Fatalf("changed usage authority revision = %d, want %d", got, beforeUsage+1)
+	}
+
 	if _, err := db.ExecContext(ctx, `
 		UPDATE purser.media_authority_refresh_outbox
 		SET pending_since = NOW() - INTERVAL '2 hours'

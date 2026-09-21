@@ -1432,6 +1432,16 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_versions (
     payload_schema_version INTEGER NOT NULL CHECK (payload_schema_version > 0),
     payload BYTEA NOT NULL,
     payload_sha256 BYTEA NOT NULL CHECK (octet_length(payload_sha256) = 32),
+    -- content_digest identifies what the authority says independent of per-compile
+    -- entropy (fresh seal keys and nonces), so an unchanged recompile publishes
+    -- nothing. dependents_digest covers only the tenant fields media objects are
+    -- derived from and decides whether a tenant publication fans out to them.
+    -- NULL means no digest was recorded for the version; NULL never matches.
+    content_digest BYTEA,
+    dependents_digest BYTEA,
+    -- A tombstone is terminal; renewal continues only while older valid copies
+    -- still require correction. Workers inspect this without decoding payloads.
+    tombstone BOOLEAN NOT NULL DEFAULT FALSE,
     source_revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
     issued_at TIMESTAMPTZ NOT NULL,
     refresh_after TIMESTAMPTZ NOT NULL,
@@ -1465,6 +1475,17 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_deliveries (
     authority_version BIGINT NOT NULL CHECK (authority_version > 0),
     cell_id VARCHAR(255) NOT NULL,
     signed_envelope BYTEA NOT NULL,
+    -- NULL inherits version validity; corrections carry their recipient's
+    -- immutable ceiling, even if that cell is subsequently granted access again.
+    correction_until TIMESTAMPTZ,
+    -- TRUE for an envelope valid for a minute or less. Those are delivered by
+    -- their own worker within a one-second claim budget, so the property is
+    -- stored on the queue row instead of derived from the version history.
+    short_lease BOOLEAN NOT NULL DEFAULT FALSE,
+    -- TRUE for a delivery a cell asked to have repeated. Within a cell, replayed
+    -- rows are served after fresh ones, so a cell that lost its database cannot
+    -- hold back a change or a revocation behind its own catch-up.
+    replay BOOLEAN NOT NULL DEFAULT FALSE,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1480,7 +1501,7 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_deliveries (
     CONSTRAINT chk_media_authority_delivery_kind
         CHECK (authority_kind IN ('tenant', 'media_object')),
     CONSTRAINT chk_media_authority_delivery_status
-        CHECK (status IN ('pending', 'delivering', 'acknowledged', 'superseded')),
+        CHECK (status IN ('pending', 'delivering', 'acknowledged', 'superseded', 'rejected')),
     CONSTRAINT chk_media_authority_delivery_cell
         CHECK (btrim(cell_id) <> '')
 );
@@ -1488,6 +1509,21 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_deliveries (
 CREATE INDEX IF NOT EXISTS idx_media_authority_deliveries_due_v2
     ON commodore.media_authority_deliveries(next_attempt_at ASC, created_at ASC)
     WHERE status IN ('pending', 'delivering');
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_deliveries_short_lease_due
+    ON commodore.media_authority_deliveries(cell_id ASC, next_attempt_at ASC, created_at ASC)
+    WHERE short_lease AND status IN ('pending', 'delivering');
+
+-- Ordinary deliveries are claimed one cell at a time, so a cell that is slow or
+-- down cannot take the workers another cell needs.
+CREATE INDEX IF NOT EXISTS idx_media_authority_deliveries_cell_due
+    ON commodore.media_authority_deliveries(cell_id ASC, replay ASC, next_attempt_at ASC, created_at ASC)
+    WHERE NOT short_lease AND status IN ('pending', 'delivering');
+
+-- A delivery a cell refused is rare and is counted on a timer.
+CREATE INDEX IF NOT EXISTS idx_media_authority_deliveries_rejected
+    ON commodore.media_authority_deliveries(authority_kind ASC, authority_id ASC)
+    WHERE status = 'rejected';
 
 CREATE INDEX IF NOT EXISTS idx_media_authority_versions_expiry_v2
     ON commodore.media_authority_versions(valid_until ASC, authority_kind ASC, authority_id ASC, authority_version ASC);
@@ -1499,11 +1535,16 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_targets (
     highest_targeted_version BIGINT NOT NULL CHECK (highest_targeted_version > 0),
     first_targeted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_targeted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    correction_until TIMESTAMPTZ,
     PRIMARY KEY (authority_kind, authority_id, cell_id),
     CONSTRAINT chk_media_authority_target_kind
         CHECK (authority_kind IN ('tenant', 'media_object')),
     CONSTRAINT chk_media_authority_target_cell CHECK (btrim(cell_id) <> '')
 );
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_targets_retired
+    ON commodore.media_authority_targets(correction_until ASC, authority_kind ASC, authority_id ASC, cell_id ASC)
+    WHERE correction_until IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS commodore.media_authority_distribution (
     authority_kind VARCHAR(32) NOT NULL,
@@ -1521,6 +1562,10 @@ CREATE TABLE IF NOT EXISTS commodore.media_authority_distribution (
         CHECK (first_acknowledged_at <= last_acknowledged_at)
 );
 
+CREATE INDEX IF NOT EXISTS idx_media_authority_distribution_cell_ack
+    ON commodore.media_authority_distribution(cell_id ASC, authority_kind COLLATE "C" ASC, authority_id COLLATE "C" ASC)
+    INCLUDE (highest_acknowledged_version, last_acknowledged_at);
+
 -- Per-cell placement capability as attested by that cell's Foghorn in media
 -- authority acknowledgements. The compiler issues the first schema-2 tenant
 -- authority only when every target cell has attested enforcement readiness.
@@ -1530,7 +1575,62 @@ CREATE TABLE IF NOT EXISTS commodore.media_cell_placement_capabilities (
     enforcement_ready BOOLEAN NOT NULL DEFAULT FALSE,
     live_replicas INTEGER NOT NULL DEFAULT 0 CHECK (live_replicas >= 0),
     first_ready_at TIMESTAMPTZ,
+    activation_schema_version INTEGER NOT NULL DEFAULT 0,
     attested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Every live replica of the cell accepts 30-day media-object authorities /
+    -- reports the authorities it decides on. FALSE until the cell attests it.
+    long_validity_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    use_reports_ready BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- When an authority was last decided on in any cell, to the day. An object is
+-- kept in cells and renewed only while it is in use; one nobody uses stops being
+-- renewed and its copies expire. A tenant row is advanced by every use of one
+-- of its objects, so a tenant is never colder than its objects.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_use (
+    authority_kind VARCHAR(32) NOT NULL,
+    authority_id VARCHAR(255) NOT NULL,
+    tenant_id UUID NOT NULL,
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (authority_kind, authority_id),
+    CONSTRAINT chk_media_authority_use_kind
+        CHECK (authority_kind IN ('tenant', 'media_object'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_use_tenant
+    ON commodore.media_authority_use(tenant_id);
+
+-- When a cell last reported holding something other than what it acknowledged
+-- (its database was restored, or deliveries were lost). Acknowledgements made
+-- before then no longer bound which versions the cell may hold.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_cell_ack_resets (
+    cell_id VARCHAR(255) PRIMARY KEY,
+    reset_at TIMESTAMPTZ NOT NULL
+);
+
+-- The recently used set, read on a timer to find renewals of authorities in use
+-- that were left dormant, without reading the authorities nobody uses.
+CREATE INDEX IF NOT EXISTS idx_media_authority_use_recent
+    ON commodore.media_authority_use(last_used_at ASC);
+
+-- When use started being recorded. An authority with no use row counts as used
+-- at this instant, so an authority that predates the record is not mistaken for
+-- one nobody uses.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_use_epoch (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO commodore.media_authority_use_epoch (singleton) VALUES (TRUE)
+ON CONFLICT (singleton) DO NOTHING;
+
+-- What the running compiler signs with and how it shapes payloads. A change
+-- means every published authority has to be issued again, which is otherwise
+-- never due: an unchanged compile publishes nothing.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_compiler_state (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    fingerprint VARCHAR(512) NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -1562,6 +1662,155 @@ CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_inbox_completed_v2
     ON commodore.media_authority_refresh_inbox(completed_at ASC, source_service ASC, source_event_id ASC)
     WHERE status = 'completed';
 
+-- One refresh obligation per (target, lane). Any number of change events for a
+-- target fold into its single row, so refresh work is bounded by the number of
+-- authorities rather than by event volume or by how long a target has been
+-- failing. target_key leads the primary key so rows hash by target.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_refresh_obligations (
+    target_key VARCHAR(320) NOT NULL,
+    lane VARCHAR(20) NOT NULL,
+    tenant_id UUID NOT NULL,
+    target_kind VARCHAR(24) NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+    bound_version BIGINT CHECK (bound_version IS NULL OR bound_version > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    lease_expires_at TIMESTAMPTZ,
+    -- Names the claim that holds the lease. Settling requires it, so a worker
+    -- whose lease lapsed cannot settle the attempt that replaced it.
+    claim_token UUID,
+    pending_since TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Renewal lanes only: when the version this renewal is bound to stops being
+    -- valid. A live renewal past it is an authority in use that expired.
+    expires_at TIMESTAMPTZ,
+    park_reason VARCHAR(64),
+    last_reason VARCHAR(255) NOT NULL,
+    last_source_service VARCHAR(64) NOT NULL,
+    last_source_event_id VARCHAR(255) NOT NULL,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (target_key, lane),
+    CONSTRAINT chk_media_authority_obligation_lane
+        CHECK (lane IN ('event', 'bulk', 'object_deadline', 'tenant_deadline')),
+    CONSTRAINT chk_media_authority_obligation_kind
+        CHECK (target_kind IN ('tenant', 'live_stream', 'artifact', 'tenant_media_objects')),
+    CONSTRAINT chk_media_authority_obligation_status
+        CHECK (status IN ('pending', 'processing', 'completed', 'parked', 'dormant')),
+    CONSTRAINT chk_media_authority_obligation_parked
+        CHECK ((status = 'parked') = (park_reason IS NOT NULL)),
+    CONSTRAINT chk_media_authority_obligation_reason
+        CHECK (btrim(last_reason) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_obligations_due
+    ON commodore.media_authority_refresh_obligations(lane ASC, next_attempt_at ASC, pending_since ASC)
+    WHERE status IN ('pending', 'processing');
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_obligations_tenant
+    ON commodore.media_authority_refresh_obligations(tenant_id, status);
+
+-- Which lane is compiling a target. Every claim writes this row, which is what
+-- keeps two lanes from compiling the same target at once: a lease check on
+-- another lane's obligation reads a snapshot and cannot. Deleted when the
+-- compile settles; lease_expires_at covers a worker that never settles.
+CREATE TABLE IF NOT EXISTS commodore.media_authority_target_claims (
+    target_key VARCHAR(320) PRIMARY KEY,
+    lane VARCHAR(20) NOT NULL,
+    lease_expires_at TIMESTAMPTZ NOT NULL,
+    claim_token UUID NOT NULL
+);
+
+-- Parked targets are few and are counted on a timer; the table is not read to
+-- find them.
+CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_obligations_parked
+    ON commodore.media_authority_refresh_obligations(target_kind)
+    WHERE status = 'parked';
+
+-- Counts authorities in use that ran past their validity without scanning the
+-- catalog: a dormant renewal belongs to an object nobody uses and is expected
+-- to expire.
+CREATE INDEX IF NOT EXISTS idx_media_authority_refresh_obligations_expiry
+    ON commodore.media_authority_refresh_obligations(expires_at ASC)
+    WHERE lane IN ('object_deadline', 'tenant_deadline') AND status IN ('pending', 'processing', 'parked');
+
+-- The only writer of refresh obligations. A fold bumps the revision so a worker
+-- that claimed the previous revision cannot complete away the newer change; it
+-- keeps an active lease as a short serialization fence and re-arms a parked
+-- target, because new source state may now compile. A dormant renewal (its
+-- object went unused) is revived the same way by the next publication.
+CREATE OR REPLACE FUNCTION commodore.enqueue_media_authority_obligation(
+    p_lane TEXT,
+    p_target_key TEXT,
+    p_target_kind TEXT,
+    p_tenant_id UUID,
+    p_reason TEXT,
+    p_source_service TEXT,
+    p_source_event_id TEXT,
+    p_next_attempt_at TIMESTAMPTZ,
+    p_bound_version BIGINT
+) RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    bound_expires_at TIMESTAMPTZ;
+BEGIN
+    IF p_tenant_id IS NULL OR btrim(COALESCE(p_target_key, '')) = '' THEN
+        RETURN;
+    END IF;
+    -- A renewal's target key is "<authority_kind>:<authority_id>", and it is
+    -- scheduled in the transaction that published the version it is bound to.
+    IF p_lane IN ('object_deadline', 'tenant_deadline') AND p_bound_version IS NOT NULL THEN
+        SELECT versions.valid_until INTO bound_expires_at
+        FROM commodore.media_authority_versions AS versions
+        WHERE versions.authority_kind = split_part(p_target_key, ':', 1)
+          AND versions.authority_id = substr(p_target_key, strpos(p_target_key, ':') + 1)
+          AND versions.authority_version = p_bound_version;
+    END IF;
+    INSERT INTO commodore.media_authority_refresh_obligations AS obligation (
+        target_key, lane, tenant_id, target_kind, bound_version, next_attempt_at, expires_at,
+        last_reason, last_source_service, last_source_event_id
+    ) VALUES (
+        p_target_key, p_lane, p_tenant_id, p_target_kind, p_bound_version,
+        COALESCE(p_next_attempt_at, NOW()), bound_expires_at, p_reason, p_source_service, p_source_event_id
+    )
+    ON CONFLICT (target_key, lane) DO UPDATE SET
+        revision = obligation.revision + 1,
+        status = 'pending',
+        attempts = 0,
+        tenant_id = EXCLUDED.tenant_id,
+        target_kind = EXCLUDED.target_kind,
+        bound_version = EXCLUDED.bound_version,
+        expires_at = EXCLUDED.expires_at,
+        -- A renewal lane's schedule is replaced by each publication. An event
+        -- that is already waiting keeps its place: the claim orders by due time,
+        -- so taking the new one would send a target that keeps changing to the
+        -- back of a backlog every time it changed.
+        next_attempt_at = CASE
+            WHEN obligation.lane IN ('event', 'bulk') AND obligation.status = 'pending'
+            THEN LEAST(obligation.next_attempt_at, EXCLUDED.next_attempt_at)
+            ELSE EXCLUDED.next_attempt_at
+        END,
+        pending_since = CASE
+            WHEN obligation.status IN ('pending', 'processing') THEN obligation.pending_since
+            ELSE NOW()
+        END,
+        -- A live lease marks a compile in flight whatever the status reads: an
+        -- earlier fold during the same compile has already flipped it to pending.
+        lease_expires_at = CASE
+            WHEN obligation.lease_expires_at > NOW() THEN obligation.lease_expires_at
+            ELSE NULL
+        END,
+        park_reason = NULL,
+        last_error = NULL,
+        last_reason = EXCLUDED.last_reason,
+        last_source_service = EXCLUDED.last_source_service,
+        last_source_event_id = EXCLUDED.last_source_event_id,
+        updated_at = NOW();
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION commodore.enqueue_live_stream_media_authority_refresh(
     p_stream_id UUID,
     p_tenant_id UUID,
@@ -1573,11 +1822,10 @@ BEGIN
     IF p_stream_id IS NULL OR p_tenant_id IS NULL THEN
         RETURN;
     END IF;
-    INSERT INTO commodore.media_authority_refresh_inbox(
-        source_service, source_event_id, tenant_id, reason
-    ) VALUES (
-        'commodore', 'live_stream:' || p_stream_id::text || ':' || gen_random_uuid()::text,
-        p_tenant_id, 'media_object:live_stream:' || p_stream_id::text || ':' || p_reason
+    PERFORM commodore.enqueue_media_authority_obligation(
+        'event', 'media_object:live_stream:' || p_stream_id::text, 'live_stream', p_tenant_id,
+        'media_object:live_stream:' || p_stream_id::text || ':' || p_reason,
+        'commodore', 'live_stream:' || p_stream_id::text, NOW(), NULL
     );
 END;
 $$;
@@ -1664,18 +1912,21 @@ AFTER INSERT OR DELETE OR UPDATE OF processes_live, processes_dvr, processes_cli
 ON commodore.stream_processing_config
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_child_media_authority_changed('stream_processing_changed');
 
+-- One obligation for the tenant's objects, not one per stream: the worker that
+-- takes it refreshes only the objects cells still hold.
 CREATE OR REPLACE FUNCTION commodore.tenant_processing_media_authority_changed()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 DECLARE
     affected_tenant UUID;
-    affected_stream RECORD;
 BEGIN
     affected_tenant := CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END;
-    FOR affected_stream IN SELECT id, tenant_id FROM commodore.streams WHERE tenant_id = affected_tenant LOOP
-        PERFORM commodore.enqueue_live_stream_media_authority_refresh(affected_stream.id, affected_stream.tenant_id, 'tenant_processing_changed');
-    END LOOP;
+    PERFORM commodore.enqueue_media_authority_obligation(
+        'event', 'tenant_media_objects:' || affected_tenant::text, 'tenant_media_objects', affected_tenant,
+        'tenant_media_objects:tenant_processing_changed', 'commodore', 'tenant_processing:' || affected_tenant::text,
+        NOW(), NULL
+    );
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
 $$;
@@ -1692,10 +1943,10 @@ DECLARE
     affected_tenant UUID;
 BEGIN
     affected_tenant := CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END;
-    INSERT INTO commodore.media_authority_refresh_inbox(source_service, source_event_id, tenant_id, reason)
-    VALUES (
-        'commodore', 'signing_key:' || gen_random_uuid()::text, affected_tenant,
-        'tenant_media_objects:signing_key_changed'
+    PERFORM commodore.enqueue_media_authority_obligation(
+        'event', 'tenant_media_objects:' || affected_tenant::text, 'tenant_media_objects', affected_tenant,
+        'tenant_media_objects:signing_key_changed', 'commodore', 'signing_key:' || affected_tenant::text,
+        NOW(), NULL
     );
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
@@ -1718,10 +1969,12 @@ BEGIN
     IF p_artifact_id IS NULL OR p_tenant_id IS NULL THEN
         RETURN;
     END IF;
-    INSERT INTO commodore.media_authority_refresh_inbox(source_service, source_event_id, tenant_id, reason)
-    VALUES (
-        'commodore', p_kind || ':' || p_artifact_id::text || ':' || gen_random_uuid()::text,
-        p_tenant_id, 'media_object:' || p_kind || ':' || p_artifact_id::text || ':' || p_reason
+    -- The target is the artifact authority, not the kind: a chapter and the VOD
+    -- row that backs it name the same authority and must share one obligation.
+    PERFORM commodore.enqueue_media_authority_obligation(
+        'event', 'media_object:artifact:' || p_artifact_id::text, 'artifact', p_tenant_id,
+        'media_object:' || p_kind || ':' || p_artifact_id::text || ':' || p_reason,
+        'commodore', p_kind || ':' || p_artifact_id::text, NOW(), NULL
     );
 END;
 $$;
@@ -1787,6 +2040,40 @@ AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, stream_id, vod_hash, int
     playback_id, origin_cluster_id, origin_type, requires_auth, playback_policy, playback_webhook_secret_enc
 ON commodore.vod_assets
 FOR EACH ROW EXECUTE FUNCTION commodore.artifact_media_authority_changed('vod');
+
+-- A rejected current delivery needs intervention only while it, or an older
+-- copy this cell could still hold, can authorize a decision.
+CREATE OR REPLACE VIEW commodore.media_authority_actionable_rejections AS
+SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.cell_id
+FROM commodore.media_authority_deliveries AS delivery
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = delivery.authority_kind
+ AND current.authority_id = delivery.authority_id
+ AND current.authority_version = delivery.authority_version
+LEFT JOIN commodore.media_authority_targets AS target
+  ON target.authority_kind = delivery.authority_kind
+ AND target.authority_id = delivery.authority_id
+ AND target.cell_id = delivery.cell_id
+LEFT JOIN commodore.media_authority_distribution AS distribution
+  ON distribution.authority_kind = delivery.authority_kind
+ AND distribution.authority_id = delivery.authority_id
+ AND distribution.cell_id = delivery.cell_id
+LEFT JOIN commodore.media_authority_cell_ack_resets AS reset
+  ON reset.cell_id = delivery.cell_id
+WHERE delivery.status = 'rejected'
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_versions AS versions
+      JOIN commodore.media_authority_deliveries AS copy USING (authority_kind, authority_id, authority_version)
+      WHERE versions.authority_kind = delivery.authority_kind
+        AND versions.authority_id = delivery.authority_id
+        AND copy.cell_id = delivery.cell_id
+        AND LEAST(versions.valid_until, copy.correction_until) > NOW()
+        AND (versions.authority_version = current.authority_version OR (
+            versions.authority_version <= target.highest_targeted_version
+            AND versions.authority_version >= CASE
+                WHEN distribution.last_acknowledged_at > COALESCE(reset.reset_at, '-infinity'::timestamptz)
+                THEN distribution.highest_acknowledged_version ELSE 0 END))
+  );
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

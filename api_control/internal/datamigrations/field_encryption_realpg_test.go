@@ -122,7 +122,7 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 				t.Fatal(seedErr)
 			}
 		}
-		if _, clearErr := db.Exec(`DELETE FROM commodore.media_authority_refresh_inbox`); clearErr != nil {
+		if _, clearErr := db.Exec(`DELETE FROM commodore.media_authority_refresh_obligations`); clearErr != nil {
 			t.Fatal(clearErr)
 		}
 		armed, armErr := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 10})
@@ -137,7 +137,7 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 			t.Fatalf("legacy push target was not rewritten: %+v", progress)
 		}
 		var refreshes int
-		if countErr := db.QueryRow(`SELECT count(*) FROM commodore.media_authority_refresh_inbox`).Scan(&refreshes); countErr != nil {
+		if countErr := db.QueryRow(`SELECT count(*) FROM commodore.media_authority_refresh_obligations`).Scan(&refreshes); countErr != nil {
 			t.Fatal(countErr)
 		}
 		if refreshes != 0 {

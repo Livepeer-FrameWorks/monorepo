@@ -28,4 +28,13 @@ mkdir -p "$(dirname "$coverage_file")"
 coverage_file=$(cd "$(dirname "$coverage_file")" && pwd)/$(basename "$coverage_file")
 
 cd "$module_dir"
-exec go test "$@" -coverpkg=./... -covermode=atomic -coverprofile="$coverage_file"
+go test "$@" -coverpkg=./... -covermode=atomic -coverprofile="$coverage_file"
+if ! awk '
+NR == 1 { if ($0 != "mode: atomic") exit 1; next }
+NF != 3 || $1 !~ /:[0-9]+[.][0-9]+,[0-9]+[.][0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { exit 1 }
+{ records++ }
+END { if (!records) exit 1 }
+' "$coverage_file"; then
+	echo "ERROR: contract coverage is missing or empty: $coverage_file" >&2
+	exit 1
+fi

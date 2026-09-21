@@ -48,6 +48,96 @@ groups:
           summary: "Media authority versions are lagging"
           description: "At least one target cell is more than one {{ $labels.authority_kind }} version behind."
 
+      # The bulk lane is excluded: it carries fan-out and reconciliation, where a
+      # tenant with thousands of objects legitimately takes longer than this, and
+      # it never stands in front of a change.
+      - alert: MediaAuthorityRefreshStuck
+        expr: commodore_media_authority_refresh_oldest_pending_seconds{lane!="bulk"} > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Media authority refresh is not converging"
+          description: "The oldest due {{ $labels.lane }} refresh obligation has waited more than five minutes. Source changes, including revocations, are not reaching signed authority. Run `frameworks cluster diagnose media-authority`."
+
+      - alert: MediaAuthorityBulkRefreshStuck
+        expr: commodore_media_authority_refresh_oldest_pending_seconds{lane="bulk"} > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Media authority fan-out is not draining"
+          description: "The oldest due bulk refresh obligation has waited more than an hour. A tenant change or a re-issue is not reaching that tenant's objects. Run `frameworks cluster diagnose media-authority`."
+
+      # A cell asks the control plane about an authority past its validity, so this
+      # costs latency while the control plane answers and refusals when it does
+      # not. It means renewal did not reach an authority that is in use.
+      - alert: MediaAuthorityExpiredWarm
+        expr: commodore_media_authority_expired_warm > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A media authority in use has expired"
+          description: "{{ $value }} {{ $labels.authority_kind }} authorities that are still being renewed hold a version past its validity. Cells fetch them on every decision and refuse them if Commodore cannot be reached. Run `frameworks cluster diagnose media-authority`."
+
+      - alert: MediaAuthorityObservationStale
+        expr: time() - commodore_media_authority_observation_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Media authority queue health is no longer being observed"
+          description: "Queue observation has not completed for more than five minutes. Refresh and expiry gauges may be stale; inspect Commodore database-query failures with `frameworks cluster diagnose media-authority`."
+
+      - alert: FoghornMediaAuthorityFetchFailing
+        expr: sum by (instance) (rate(foghorn_media_authority_fetches_total{outcome="unavailable"}[10m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A cell cannot fetch media authority it does not hold"
+          description: "{{ $labels.instance }} could not fetch an authority for {{ $value }} decisions per second. Objects that have not been used for a while cannot be served from this cell until Commodore answers."
+
+      - alert: MediaAuthorityRefreshParked
+        expr: commodore_media_authority_refresh_parked > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A media authority target cannot compile"
+          description: "{{ $value }} {{ $labels.target_kind }} refresh target(s) are parked: their source state or static configuration cannot produce a valid authority. They are retried once per reconcile pass. `frameworks cluster diagnose media-authority` lists each target with its reason."
+
+      - alert: MediaAuthorityRevocationCheckFailed
+        expr: sum by (instance, stage) (increase(commodore_media_authority_revocation_check_failures_total[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A media authority access-revocation check could not complete"
+          description: "Commodore could not complete {{ $labels.stage }} during compile-failure access checking. A previously signed allow may remain usable until retry or expiry. Inspect Commodore logs for authority_id and stage; original compile obligations retain their retry classification."
+
+      - alert: MediaAuthorityRejectedDelivery
+        expr: commodore_media_authority_rejected_deliveries > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A cell refuses the current media authority"
+          description: "{{ $value }} current {{ $labels.authority_kind }} authority deliveries were refused by their target cell on a precondition (newer held version, digest conflict, or terminal tombstone). Retrying cannot converge them; the cell and Commodore disagree about authority state."
+
+      # Renewal is due a third of the way into a version's validity, whatever
+      # that validity is (24 hours, 30 days, a 30-second quote). A renewal of a
+      # version that has used less than a quarter of it is a scheduling defect,
+      # so any sustained rate is one, regardless of how many authorities exist.
+      - alert: MediaAuthorityVersionChurn
+        expr: sum by (authority_kind) (rate(commodore_media_authority_early_renewals_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Media authorities are renewed before they are due"
+          description: "{{ $labels.authority_kind }} authorities are being renewed early, {{ $value }} per second: versions replaced before a quarter of their validity had passed. Check renewal scheduling before delivery and audit tables grow."
+
       - alert: PurserMediaAuthorityRefreshWorkerDisabled
         expr: purser_media_authority_refresh_worker_ready == 0
         for: 2m
@@ -74,21 +164,52 @@ groups:
           summary: "Purser media-authority refresh delivery failed"
           description: "Purser failed during authority refresh stage {{ $labels.stage }}."
 
-      - alert: FoghornAuthorityHardExpired
-        expr: increase(foghorn_media_authority_local_reads_total{outcome="hard_expired"}[5m]) > 0
+      - alert: QuartermasterMediaAuthorityRefreshStuck
+        expr: quartermaster_media_authority_refresh_oldest_pending_seconds > 300
+        for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Foghorn encountered hard-expired local authority"
-          description: "A media request could not use its local signed authority. Investigate delivery convergence before a control-plane outage."
+          summary: "Quartermaster media-authority refresh queue is not converging"
+          description: "The oldest tenant- or cluster-owned authority refresh was first enqueued more than five minutes ago and still has not reached Commodore. Tenant, cluster-access, and consent changes are not becoming signed authority."
+
+      - alert: QuartermasterMediaAuthorityRefreshFailures
+        expr: increase(quartermaster_media_authority_refresh_failures_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Quartermaster media-authority refresh delivery failed"
+          description: "Quartermaster failed during authority refresh stage {{ $labels.stage }}."
+
+      # One such read is ordinary: an object nobody used for a while runs out, and
+      # the read that finds it asks the control plane for it and carries on. A
+      # sustained rate is reads that keep finding expired authority, which is an
+      # authority in use that renewal is not reaching (MediaAuthorityExpiredWarm
+      # says which side) or a cell that cannot fetch.
+      - alert: FoghornAuthorityHardExpired
+        expr: sum by (instance) (rate(foghorn_media_authority_local_reads_total{outcome="hard_expired"}[15m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Foghorn keeps finding hard-expired local authority"
+          description: "{{ $labels.instance }} has been reading authority past its validity for fifteen minutes. Each such read asks Commodore, and is refused when Commodore cannot be reached. Check `commodore_media_authority_expired_warm` and the cell's fetch outcomes."
 
       - alert: FoghornMediaAuthorityApplyRejected
-        expr: increase(foghorn_media_authority_apply_total{outcome=~"verification_rejected|rollback_rejected|conflict_rejected|persist_error"}[5m]) > 0
+        expr: increase(foghorn_media_authority_apply_total{outcome=~"verification_rejected|rollback_rejected|conflict_rejected|terminal_lifecycle_rejected|persist_error"}[5m]) > 0
         labels:
           severity: critical
         annotations:
           summary: "Foghorn rejected or could not persist signed authority"
           description: "A {{ $labels.authority_kind }} authority apply ended as {{ $labels.outcome }}. Delivery cannot converge until the signer, version, payload, or local database failure is corrected."
+
+      - alert: FoghornMediaAuthorityStaleDelivery
+        expr: increase(foghorn_media_authority_apply_total{outcome="stale_version_rejected"}[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Foghorn repeatedly received obsolete signed authority"
+          description: "More than two already-superseded {{ $labels.authority_kind }} authorities reached one Foghorn within fifteen minutes. Current authority remains protected, but delivery ordering or replay is unhealthy."
 
       - alert: FoghornNodeAdmissionFailure
         expr: increase(foghorn_node_admission_events_total{result=~"failure|saturated"}[5m]) > 0

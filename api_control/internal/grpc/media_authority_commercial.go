@@ -26,16 +26,29 @@ type mediaObjectCommercialSnapshot struct {
 	tenant     *mediapb.TenantAuthority
 	validUntil time.Time
 	revision   string
+	// quoted is true when the object carries commercial quotes. Only then is its
+	// validity bound by the quotes and the tenant; a policy without commercial
+	// predicates still captures its parent for consistency, and nothing more.
+	quoted bool
 }
 
 // Quote RPCs run before the object write transaction; the captured tenant is
 // compared again under its current-pointer lock before any version is published.
+//
+// A correction compiled on a lapsed tenant (withMediaAuthorityLapsedParent)
+// captures that tenant version as its parent all the same, and is not capped
+// by its validity: no cell can decide on the tenant until it is renewed. Quotes
+// still bound a quoted object.
 func (s *CommodoreServer) prepareMediaObjectCommercial(ctx context.Context, object *mediapb.MediaObjectAuthority, targets []string) (*mediaObjectCommercialSnapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	tenant, currentTargets, _, tenantUntil, err := s.currentTenantAuthorityContext(ctx, object.GetTenantId())
+	lapsed := mediaAuthorityLapsedParent(ctx)
+	tenant, currentTargets, _, tenantUntil, err := s.tenantAuthorityContext(ctx, object.GetTenantId(), lapsed)
 	if err != nil {
 		return nil, err
+	}
+	if lapsed {
+		tenantUntil = time.Time{}
 	}
 	if !slices.Equal(sortedUnique(targets), sortedUnique(currentTargets)) {
 		return nil, errors.New("commercial authority recipients changed")
@@ -46,11 +59,15 @@ func (s *CommodoreServer) prepareMediaObjectCommercial(ctx context.Context, obje
 	return collectMediaObjectCommercial(ctx, s.authorityCommercialSource, tenant, object, tenantUntil)
 }
 
+// collectMediaObjectCommercial captures the parent and collects quotes.
+// tenantUntil caps the snapshot's validity; the zero time is a lapsed parent,
+// which caps nothing (see prepareMediaObjectCommercial).
 func collectMediaObjectCommercial(ctx context.Context, source mediaAuthorityCommercialSource, tenant *mediapb.TenantAuthority, object *mediapb.MediaObjectAuthority, tenantUntil time.Time) (*mediaObjectCommercialSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !sharedauthority.IsPlacementSchema(object.GetSchemaVersion()) || object.GetSchemaVersion() != tenant.GetSchemaVersion() || object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || !tenantUntil.After(time.Now()) {
+	if !sharedauthority.IsPlacementSchema(object.GetSchemaVersion()) || object.GetSchemaVersion() != tenant.GetSchemaVersion() || object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
+		(!tenantUntil.IsZero() && !tenantUntil.After(time.Now())) {
 		return nil, errors.New("commercial object authority is not issuable")
 	}
 	capturedTenant, capturedObject := proto.CloneOf(tenant), proto.CloneOf(object)
@@ -114,9 +131,12 @@ func collectMediaObjectCommercial(ctx context.Context, source mediaAuthorityComm
 	for _, verb := range quotedVerbs {
 		quote, err := sharedauthority.PlacementCommercialQuote(capturedTenant, capturedObject, verb, time.Now())
 		if err != nil {
+			if errors.Is(err, sharedauthority.ErrEntitlementMismatch) {
+				return nil, fmt.Errorf("commercial grants changed while compiling: %w", errTenantAuthorityMissing)
+			}
 			return nil, err
 		}
-		if quote.GetExpiresAt().AsTime().Before(until) {
+		if until.IsZero() || quote.GetExpiresAt().AsTime().Before(until) {
 			until = quote.GetExpiresAt().AsTime()
 		}
 	}
@@ -125,13 +145,13 @@ func collectMediaObjectCommercial(ctx context.Context, source mediaAuthorityComm
 		return nil, err
 	}
 	digest := sha256.Sum256(append([]byte("frameworks/placement/object-commercial/v1\x00"), encoded...))
-	return &mediaObjectCommercialSnapshot{payload: capturedObject, tenant: capturedTenant, validUntil: until, revision: hex.EncodeToString(digest[:])}, nil
+	return &mediaObjectCommercialSnapshot{payload: capturedObject, tenant: capturedTenant, validUntil: until, revision: hex.EncodeToString(digest[:]), quoted: true}, nil
 }
 
+// mediaAuthorityRefreshAfter is when a cell that still holds the version asks
+// for replay. Renewal is scheduled a third of the way through validity, so a
+// cell reaches refresh_after only when renewal is overdue, and half the
+// validity remains to recover in.
 func mediaAuthorityRefreshAfter(issuedAt, validUntil time.Time) time.Time {
-	interval := validUntil.Sub(issuedAt) / 2
-	if interval > mediaAuthorityRefreshInterval {
-		interval = mediaAuthorityRefreshInterval
-	}
-	return issuedAt.Add(interval)
+	return issuedAt.Add(validUntil.Sub(issuedAt) / 2)
 }

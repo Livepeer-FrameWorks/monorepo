@@ -42,6 +42,7 @@ jobs:
         with:
           filters: |
             go:
+              - '.github/workflows/**'
               - '**/*.go'
               - '**/*.proto'
               - '**/*.sql'
@@ -84,6 +85,7 @@ jobs:
               - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
             database:
+              - '.github/workflows/**'
               - 'ansible/collections/ansible_collections/frameworks/infra/roles/postgres/**'
               - 'ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/**'
               - 'api_analytics_ingest/**/*.go'
@@ -105,6 +107,10 @@ jobs:
               - 'docker-compose.yml'
               - 'infrastructure/postgres/**'
               - 'pkg/database/**'
+              - 'pkg/mediaauthority/**'
+              - 'pkg/placement/**'
+              - 'pkg/auth/**'
+              - 'pkg/proto/**'
               - 'pkg/testutil/dockerch/**'
               - 'pkg/testutil/dockerpg/**'
               - 'pkg/testutil/dockervalkey/**'
@@ -116,6 +122,7 @@ jobs:
               - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
             yugabyte_core:
+              - '.github/workflows/**'
               - 'ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/**'
               - 'cli/internal/releases/catalog.yaml'
               - 'cli/pkg/provisioner/**'
@@ -144,7 +151,12 @@ jobs:
               - 'api_incidents/go.mod'
               - 'api_incidents/go.sum'
             yugabyte_commodore:
-              - 'api_control/internal/database/commodoredb/**'
+              - 'api_control/internal/**'
+              - 'api_control/cmd/**'
+              - 'pkg/auth/**'
+              - 'pkg/mediaauthority/**'
+              - 'pkg/placement/**'
+              - 'pkg/proto/**'
               - 'api_control/go.mod'
               - 'api_control/go.sum'
             yugabyte_purser:
@@ -437,7 +449,7 @@ jobs:
         with:
           name: postgres-clickhouse-contract-coverage
           path: coverage/contracts/
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Upload PostgreSQL contract coverage to Codecov
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -445,7 +457,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/lookout-query-catalog.out,coverage/contracts/postgres/lookout-incidents.out,coverage/contracts/postgres/lookout-delivery.out,coverage/contracts/postgres/lookout-grpc.out,coverage/contracts/postgres/lookout-ownership.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/quartermaster-bootstrap.out,coverage/contracts/postgres/quartermaster-query-catalog.out,coverage/contracts/postgres/foghorn-query-catalog.out,coverage/contracts/postgres/foghorn-control.out,coverage/contracts/postgres/foghorn-jobs.out,coverage/contracts/postgres/foghorn-federation.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
+          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/lookout-query-catalog.out,coverage/contracts/postgres/lookout-incidents.out,coverage/contracts/postgres/lookout-delivery.out,coverage/contracts/postgres/lookout-grpc.out,coverage/contracts/postgres/lookout-ownership.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-placement.out,coverage/contracts/postgres/commodore-media-authority.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/quartermaster-bootstrap.out,coverage/contracts/postgres/quartermaster-query-catalog.out,coverage/contracts/postgres/foghorn-query-catalog.out,coverage/contracts/postgres/foghorn-control.out,coverage/contracts/postgres/foghorn-jobs.out,coverage/contracts/postgres/foghorn-federation.out,coverage/contracts/postgres/foghorn-media-authority.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
           flags: postgres-contract
           name: postgres-contract-coverage
           fail_ci_if_error: false
@@ -543,7 +555,7 @@ jobs:
         with:
           name: yugabyte-contract-coverage
           path: coverage/contracts/yugabyte/
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Upload Yugabyte contract coverage to Codecov
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -551,7 +563,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema-selection.out,coverage/contracts/yugabyte/schema-commodore.out,coverage/contracts/yugabyte/schema-foghorn.out,coverage/contracts/yugabyte/schema-lookout.out,coverage/contracts/yugabyte/schema-navigator.out,coverage/contracts/yugabyte/schema-periscope.out,coverage/contracts/yugabyte/schema-purser.out,coverage/contracts/yugabyte/schema-quartermaster.out,coverage/contracts/yugabyte/schema-skipper.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/commodore-placement-a.out,coverage/contracts/yugabyte/commodore-placement-b.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/quartermaster-consent-management.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/lookout-query-catalog.out,coverage/contracts/yugabyte/lookout-incidents.out,coverage/contracts/yugabyte/lookout-delivery.out,coverage/contracts/yugabyte/lookout-ownership.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema-selection.out,coverage/contracts/yugabyte/schema-commodore.out,coverage/contracts/yugabyte/schema-foghorn.out,coverage/contracts/yugabyte/schema-lookout.out,coverage/contracts/yugabyte/schema-navigator.out,coverage/contracts/yugabyte/schema-periscope.out,coverage/contracts/yugabyte/schema-purser.out,coverage/contracts/yugabyte/schema-quartermaster.out,coverage/contracts/yugabyte/schema-skipper.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/commodore-placement-a.out,coverage/contracts/yugabyte/commodore-placement-b.out,coverage/contracts/yugabyte/commodore-media-authority-c.out,coverage/contracts/yugabyte/commodore-media-authority-d.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/quartermaster-consent-management.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/lookout-query-catalog.out,coverage/contracts/yugabyte/lookout-incidents.out,coverage/contracts/yugabyte/lookout-delivery.out,coverage/contracts/yugabyte/lookout-ownership.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false

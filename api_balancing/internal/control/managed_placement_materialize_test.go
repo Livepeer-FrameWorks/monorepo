@@ -85,7 +85,8 @@ func TestManagedPlacementDenialPrecedesMaterializationAndApply(t *testing.T) {
 			mock.ExpectQuery("SELECT object_authority.payload AS object_payload").WithArgs(tenantID, authorityID, "internal").WillReturnRows(sqlmock.NewRows([]string{
 				"object_payload", "object_payload_sha256", "object_refresh_after", "object_valid_until", "object_authority_id", "object_authority_version", "object_read_ready", "object_ingest_ready", "object_source_ready",
 				"tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until", "tenant_authority_version", "tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready",
-			}).AddRow(objectPayload, objectHash[:], now, now.Add(time.Minute), authorityID, int64(1), true, true, true, tenantPayload, tenantHash[:], now, now.Add(time.Minute), int64(1), true, true, true))
+				"object_withheld_by_tenant_revival",
+			}).AddRow(objectPayload, objectHash[:], now, now.Add(time.Minute), authorityID, int64(1), true, true, true, tenantPayload, tenantHash[:], now, now.Add(time.Minute), int64(1), true, true, true, false))
 			if path == "apply" {
 				if err := sendApplyManagedStream(context.Background(), logging.NewLogger(), "source", "node", row, streamCtx); err == nil || err.Error() != "managed-stream placement does not permit apply" {
 					t.Fatalf("Apply bypassed placement: %v", err)

@@ -13,6 +13,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -47,6 +48,9 @@ type ApplyResult struct {
 	TenantID     string
 	StreamID     string
 	InternalName string
+	// Confirmed reports that this apply made an authority the restore fence was
+	// holding back usable again, even when the version was one already held.
+	Confirmed bool
 }
 
 type Store struct {
@@ -57,10 +61,40 @@ type Store struct {
 	sealKeyID      string
 	sealPrivateKey *ecdh.PrivateKey
 	refresh        *refreshCoordinator
+	fetcher        *fetchCoordinator
+	uses           *useRecorder
+	fence          *restoreFence
+	recovery       recoveryCoordinator
+	fetchOutcomes  *prometheus.CounterVec
 	runtimePeers   RuntimePeerResolver
 	servedCluster  func(clusterID string) bool
 	applyOutcomes  *prometheus.CounterVec
 	applyObserver  func(context.Context, ApplyResult) error
+	logger         logging.Logger
+}
+
+// SetLogger installs the logger used for rejected applies. Accepted and
+// duplicate applies stay silent; they are the steady-state delivery volume.
+func (s *Store) SetLogger(logger logging.Logger) {
+	if s != nil {
+		s.logger = logger
+	}
+}
+
+// logRejectedApply records why a signed authority was refused. heldVersion is
+// zero when this cell holds no authority for the identity.
+func (s *Store) logRejectedApply(result ApplyResult, outcome string, heldVersion int64, cause error) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.WithError(cause).WithFields(logging.Fields{
+		"authority_kind":   result.Kind,
+		"authority_id":     result.ID,
+		"incoming_version": result.Version,
+		"held_version":     heldVersion,
+		"outcome":          outcome,
+		"cell_id":          s.cellID,
+	}).Warn("Rejected signed media authority")
 }
 
 // SetApplyObserver installs a post-commit observer. Returning an error makes
@@ -114,7 +148,7 @@ func NewStore(db *sql.DB, cellID string, trust sharedauthority.TrustSet) (*Store
 	if db == nil || strings.TrimSpace(cellID) == "" || len(trust) == 0 {
 		return nil, errors.New("media authority store requires database, control-cell ID, and trust set")
 	}
-	return &Store{db: db, cellID: strings.TrimSpace(cellID), trust: cloneTrust(trust), now: time.Now, refresh: &refreshCoordinator{}}, nil
+	return &Store{db: db, cellID: strings.TrimSpace(cellID), trust: cloneTrust(trust), now: time.Now, refresh: &refreshCoordinator{}, fetcher: &fetchCoordinator{}, uses: newUseRecorder(), fence: &restoreFence{}}, nil
 }
 
 func (s *Store) SetSealPrivateKey(keyID string, privateKey *ecdh.PrivateKey) error {
@@ -132,6 +166,27 @@ func (s *Store) SetSealPrivateKey(keyID string, privateKey *ecdh.PrivateKey) err
 // Apply verifies before opening the transaction, then serializes by authority
 // identity and commits the envelope and decoded projection atomically.
 func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, applyErr error) {
+	result, applyErr = s.apply(ctx, encoded, time.Time{}, 0)
+	if result.Kind != "media_object" || (result.Status != ApplyStatusApplied && result.Status != ApplyStatusDuplicate) {
+		return result, applyErr
+	}
+	if applyErr != nil {
+		return result, applyErr
+	}
+	required, err := foghorndb.New(s.db).MediaAuthorityConfirmationRequired(ctx, foghorndb.MediaAuthorityConfirmationRequiredParams{AuthorityID: result.ID, AsOf: s.now().UTC()})
+	if err != nil {
+		return result, fmt.Errorf("check authority confirmation: %w", err)
+	}
+	if required {
+		s.fence.requireRecovery()
+		return result, ErrAuthorityConfirmationRequired
+	}
+	return result, nil
+}
+
+var ErrAuthorityConfirmationRequired = errors.New("persisted media authority awaits current-version confirmation after tenant revival")
+
+func (s *Store) apply(ctx context.Context, encoded []byte, confirmedAt time.Time, fenceGeneration uint64) (result ApplyResult, applyErr error) {
 	signed := &mediaauthoritypb.SignedAuthorityEnvelope{}
 	metricOutcome := "persist_error"
 	defer func() {
@@ -145,7 +200,9 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 		if kind == "" {
 			kind = "unknown"
 		}
-		if applyErr == nil {
+		// Post-commit reconciliation may retry while a trust barrier is up;
+		// the signed authority itself was persisted successfully in that case.
+		if result.Status == ApplyStatusApplied || result.Status == ApplyStatusDuplicate {
 			metricOutcome = string(result.Status)
 		}
 		s.applyOutcomes.WithLabelValues(kind, metricOutcome).Inc()
@@ -213,13 +270,14 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 	})
 	switch {
 	case currentErr == nil && current.AuthorityVersion > int64(envelope.GetAuthorityVersion()):
-		metricOutcome = "rollback_rejected"
-		if err := insertAudit(ctx, queries, signed, "rollback_rejected", ErrRollback.Error()); err != nil {
+		metricOutcome = "stale_version_rejected"
+		if err := insertAudit(ctx, queries, signed, "stale_version_rejected", ErrRollback.Error()); err != nil {
 			return ApplyResult{}, fmt.Errorf("record media authority rollback: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return ApplyResult{}, fmt.Errorf("commit media authority rollback audit: %w", err)
 		}
+		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrRollback)
 		return result, ErrRollback
 	case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()) && !bytes.Equal(current.PayloadSha256, envelope.GetPayloadSha256()):
 		metricOutcome = "conflict_rejected"
@@ -229,15 +287,22 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 		if err := tx.Commit(); err != nil {
 			return ApplyResult{}, fmt.Errorf("commit media authority conflict audit: %w", err)
 		}
+		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrVersionConflict)
 		return result, ErrVersionConflict
 	case currentErr == nil && current.AuthorityVersion == int64(envelope.GetAuthorityVersion()):
 		if err := insertAudit(ctx, queries, signed, "duplicate", ""); err != nil {
 			return ApplyResult{}, fmt.Errorf("record duplicate media authority: %w", err)
 		}
+		if err := confirmFetchedAuthority(ctx, queries, result, confirmedAt); err != nil {
+			return ApplyResult{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return ApplyResult{}, fmt.Errorf("commit duplicate media authority audit: %w", err)
 		}
 		result.Status = ApplyStatusDuplicate
+		if !confirmedAt.IsZero() {
+			result.Confirmed = s.fence.confirm(result.Kind, result.ID, fenceGeneration)
+		}
 		if s.applyObserver != nil {
 			return result, s.applyObserver(ctx, result)
 		}
@@ -255,6 +320,7 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 		if err := tx.Commit(); err != nil {
 			return ApplyResult{}, fmt.Errorf("commit media authority terminal lifecycle audit: %w", err)
 		}
+		s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrTombstoneTerminal)
 		return result, ErrTombstoneTerminal
 	}
 	if currentErr == nil {
@@ -270,6 +336,7 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 			if err := tx.Commit(); err != nil {
 				return ApplyResult{}, fmt.Errorf("commit placement rollback audit: %w", err)
 			}
+			s.logRejectedApply(result, metricOutcome, current.AuthorityVersion, ErrRollback)
 			return result, ErrRollback
 		}
 	}
@@ -290,20 +357,57 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 	if err := applyProjection(ctx, queries, verified, preserve); err != nil {
 		return ApplyResult{}, err
 	}
+	// A tenant authority that brings back a tenant the cell held only past its
+	// validity makes the tenant usable again, and with it every
+	// object copy the cell still holds. Those copies were not corrected while
+	// the tenant was out: an object change on a lapsed tenant is published, but
+	// nothing orders its delivery before the tenant's, and another object's
+	// fetch can bring the tenant too. Objects stay withheld until a current
+	// fetch begun after this barrier confirms them. A fetch that revives the
+	// tenant and supplies the object uses the same start instant for both.
+	revived := verified.Tenant != nil && currentErr == nil && !current.ValidUntil.After(s.now().UTC())
+	if revived {
+		if err := queries.WithholdTenantObjectsAppliedBefore(ctx, foghorndb.WithholdTenantObjectsAppliedBeforeParams{
+			TenantID: verified.Tenant.GetTenantId(), ConfirmedAt: sql.NullTime{Time: confirmedAt, Valid: !confirmedAt.IsZero()},
+		}); err != nil {
+			return ApplyResult{}, fmt.Errorf("withhold objects of a revived tenant: %w", err)
+		}
+	}
 	if err := promotePlacementReadiness(ctx, queries, verified); err != nil {
 		return ApplyResult{}, fmt.Errorf("promote schema-2 media authority readiness: %w", err)
 	}
 	if err := insertAudit(ctx, queries, signed, "applied", ""); err != nil {
 		return ApplyResult{}, fmt.Errorf("record applied media authority: %w", err)
 	}
+	if err := confirmFetchedAuthority(ctx, queries, result, confirmedAt); err != nil {
+		return ApplyResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ApplyResult{}, fmt.Errorf("commit media authority apply: %w", err)
 	}
 	result.Status = ApplyStatusApplied
+	if revived {
+		s.fence.requireRecovery()
+	}
+	if !confirmedAt.IsZero() {
+		result.Confirmed = s.fence.confirm(result.Kind, result.ID, fenceGeneration)
+	}
 	if s.applyObserver != nil {
 		return result, s.applyObserver(ctx, result)
 	}
 	return result, nil
+}
+
+func confirmFetchedAuthority(ctx context.Context, queries *foghorndb.Queries, result ApplyResult, startedAt time.Time) error {
+	if startedAt.IsZero() {
+		return nil
+	}
+	if err := queries.ConfirmMediaAuthority(ctx, foghorndb.ConfirmMediaAuthorityParams{
+		AuthorityKind: result.Kind, AuthorityID: result.ID, AuthorityVersion: int64(result.Version), ConfirmedAt: startedAt,
+	}); err != nil {
+		return fmt.Errorf("confirm fetched media authority: %w", err)
+	}
+	return nil
 }
 
 func rejectsObjectTombstoneResurrection(current foghorndb.GetMediaAuthorityForUpdateRow, hasCurrent bool, verified *sharedauthority.Verified) (bool, error) {
@@ -470,6 +574,11 @@ func rejectsPlacementRollback(payload []byte, verified *sharedauthority.Verified
 }
 
 func (s *Store) recordVerificationFailure(ctx context.Context, signed *mediaauthoritypb.SignedAuthorityEnvelope, cause error) error {
+	rejected := ApplyResult{}
+	if envelope := signed.GetEnvelope(); envelope != nil {
+		rejected = ApplyResult{Kind: authorityKind(envelope.GetKind()), ID: envelope.GetAuthorityId(), Version: envelope.GetAuthorityVersion()}
+	}
+	s.logRejectedApply(rejected, "verification_rejected", 0, cause)
 	return insertAudit(ctx, foghorndb.New(s.db), signed, "verification_rejected", cause.Error())
 }
 

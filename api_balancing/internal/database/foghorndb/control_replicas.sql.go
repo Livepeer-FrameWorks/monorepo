@@ -25,34 +25,44 @@ func (q *Queries) DeleteStaleControlReplicas(ctx context.Context, retentionSecon
 const readControlCellPlacementCapability = `-- name: ReadControlCellPlacementCapability :one
 SELECT COUNT(*)::bigint AS live_replicas,
        COALESCE(MIN(placement_schema_version), 0)::integer AS min_schema_version,
-       COALESCE(BOOL_AND(placement_enforced), FALSE)::boolean AS all_enforced
+       COALESCE(BOOL_AND(placement_enforced), FALSE)::boolean AS all_enforced,
+       COALESCE(MIN(authority_feature_level), 0)::integer AS min_authority_feature_level
 FROM foghorn.control_replicas
 WHERE last_seen_at > NOW() - ($1::integer * INTERVAL '1 second')
 `
 
 type ReadControlCellPlacementCapabilityRow struct {
-	LiveReplicas     int64 `db:"live_replicas" json:"live_replicas"`
-	MinSchemaVersion int32 `db:"min_schema_version" json:"min_schema_version"`
-	AllEnforced      bool  `db:"all_enforced" json:"all_enforced"`
+	LiveReplicas             int64 `db:"live_replicas" json:"live_replicas"`
+	MinSchemaVersion         int32 `db:"min_schema_version" json:"min_schema_version"`
+	AllEnforced              bool  `db:"all_enforced" json:"all_enforced"`
+	MinAuthorityFeatureLevel int32 `db:"min_authority_feature_level" json:"min_authority_feature_level"`
 }
 
 func (q *Queries) ReadControlCellPlacementCapability(ctx context.Context, livenessSeconds int32) (ReadControlCellPlacementCapabilityRow, error) {
 	row := q.db.QueryRowContext(ctx, readControlCellPlacementCapability, livenessSeconds)
 	var i ReadControlCellPlacementCapabilityRow
-	err := row.Scan(&i.LiveReplicas, &i.MinSchemaVersion, &i.AllEnforced)
+	err := row.Scan(
+		&i.LiveReplicas,
+		&i.MinSchemaVersion,
+		&i.AllEnforced,
+		&i.MinAuthorityFeatureLevel,
+	)
 	return i, err
 }
 
 const upsertControlReplicaHeartbeat = `-- name: UpsertControlReplicaHeartbeat :exec
 INSERT INTO foghorn.control_replicas (
-    replica_id, release_version, placement_schema_version, placement_enforced, started_at, last_seen_at
+    replica_id, release_version, placement_schema_version, placement_enforced,
+    authority_feature_level, started_at, last_seen_at
 ) VALUES (
-    $1, $2, $3, $4, NOW(), NOW()
+    $1, $2, $3, $4,
+    $5, NOW(), NOW()
 )
 ON CONFLICT (replica_id) DO UPDATE SET
     release_version = EXCLUDED.release_version,
     placement_schema_version = EXCLUDED.placement_schema_version,
     placement_enforced = EXCLUDED.placement_enforced,
+    authority_feature_level = EXCLUDED.authority_feature_level,
     last_seen_at = NOW()
 `
 
@@ -61,6 +71,7 @@ type UpsertControlReplicaHeartbeatParams struct {
 	ReleaseVersion         string `db:"release_version" json:"release_version"`
 	PlacementSchemaVersion int32  `db:"placement_schema_version" json:"placement_schema_version"`
 	PlacementEnforced      bool   `db:"placement_enforced" json:"placement_enforced"`
+	AuthorityFeatureLevel  int32  `db:"authority_feature_level" json:"authority_feature_level"`
 }
 
 func (q *Queries) UpsertControlReplicaHeartbeat(ctx context.Context, arg UpsertControlReplicaHeartbeatParams) error {
@@ -69,6 +80,7 @@ func (q *Queries) UpsertControlReplicaHeartbeat(ctx context.Context, arg UpsertC
 		arg.ReleaseVersion,
 		arg.PlacementSchemaVersion,
 		arg.PlacementEnforced,
+		arg.AuthorityFeatureLevel,
 	)
 	return err
 }

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"frameworks/api_control/internal/placementpolicy"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
@@ -22,7 +23,7 @@ func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *me
 		return nil
 	}
 	if !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetMediaPlacement() == nil || tenant.GetTenantId() != object.GetTenantId() {
-		return errors.New("unsupported object placement parent")
+		return parkAuthorityCompile("invalid_placement_parent", errors.New("unsupported object placement parent"))
 	}
 	if object.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
 		object.SchemaVersion = tenant.GetSchemaVersion()
@@ -40,7 +41,7 @@ func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *me
 			scope.Kind, scope.ID = "tenant", scope.TenantID
 		}
 	default:
-		return errors.New("unsupported placement object kind")
+		return parkAuthorityCompile("invalid_placement_object", errors.New("unsupported placement object kind"))
 	}
 	store := placementpolicy.NewStore(s.db)
 	var snapshot placementpolicy.Snapshot
@@ -58,14 +59,14 @@ func (s *CommodoreServer) compileObjectPlacement(ctx context.Context, tenant *me
 		parent = snapshot.Own
 	}
 	if !proto.Equal(parent, tenant.GetMediaPlacement()) {
-		return errors.New("object placement parent differs from current signed tenant policy")
+		return fmt.Errorf("%w: object placement parent differs from current signed tenant policy", errTenantAuthorityMissing)
 	}
 	own := &pb.PolicySet{}
 	if scope.Kind == "stream" {
 		own = proto.CloneOf(snapshot.Own)
 	}
 	if tenant.GetSchemaVersion() != sharedauthority.NodePlacementSchemaVersion && placement.PolicySetHasNodeSelectors(own) {
-		return errors.New("stream placement names nodes but the tenant authority has not reached node placement schema")
+		return fmt.Errorf("%w: stream placement names nodes but the tenant authority has not reached node placement schema", errTenantAuthorityMissing)
 	}
 	object.SchemaVersion = tenant.GetSchemaVersion()
 	object.PlacementTenantRevision = tenant.GetMediaPlacement().GetRevision()

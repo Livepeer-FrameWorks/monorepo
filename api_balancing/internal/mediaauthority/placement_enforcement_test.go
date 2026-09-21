@@ -47,30 +47,36 @@ func TestCellPlacementCapabilityRequiresEveryLiveReplicaAndLocalEnforcement(t *t
 		minSchema   int32
 		allEnforced bool
 		local       bool
+		minFeatures int32
 		want        bool
 		nodeReady   bool
+		features    bool
 	}{
-		{"no live replicas", 0, 0, false, true, false, false},
-		{"replica below schema 2", 2, 1, true, true, false, false},
-		{"replica not enforcing", 2, 2, false, true, false, false},
-		{"local process not enforcing", 2, 2, true, false, false, false},
-		{"mixed-release cell withholds node placement", 2, 2, true, true, true, false},
-		{"every live replica supports node placement", 2, 3, true, true, true, true},
+		{"no live replicas", 0, 0, false, true, 0, false, false, false},
+		{"replica below schema 2", 2, 1, true, true, 1, false, false, true},
+		{"replica not enforcing", 2, 2, false, true, 1, false, false, true},
+		{"local process not enforcing", 2, 2, true, false, 1, false, false, true},
+		{"mixed-release cell withholds node placement", 2, 2, true, true, 0, true, false, false},
+		{"every live replica supports node placement", 2, 3, true, true, 1, true, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			withPlacementEnforced(t, test.local)
 			store, mock, closeDB := newFixtureStore(t, "cell-a")
 			defer closeDB()
 			mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)::bigint AS live_replicas")).WithArgs(int32(ReplicaLivenessWindow.Seconds())).
-				WillReturnRows(sqlmock.NewRows([]string{"live_replicas", "min_schema_version", "all_enforced"}).AddRow(test.live, test.minSchema, test.allEnforced))
+				WillReturnRows(sqlmock.NewRows([]string{"live_replicas", "min_schema_version", "all_enforced", "min_authority_feature_level"}).
+					AddRow(test.live, test.minSchema, test.allEnforced, test.minFeatures))
 			capability, err := store.CellPlacementCapability(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
 			// The listed versions never exceed 2: releases without node
-			// placement reject a higher version as a malformed attestation.
+			// placement reject a higher version as a malformed attestation. Long
+			// validity and use reporting follow the replicas' feature level alone:
+			// they do not depend on placement enforcement.
 			if capability.EnforcementReady != test.want || capability.LiveReplicas != test.live ||
 				capability.NodePlacementReady != test.nodeReady ||
+				capability.LongValidityReady != test.features || capability.UseReportsReady != test.features ||
 				!slices.Equal(capability.SupportedSchemaVersions, []uint32{1, 2}) {
 				t.Fatalf("capability = %+v, want ready=%t", capability, test.want)
 			}
@@ -90,7 +96,7 @@ func TestRecordReplicaHeartbeatWritesCurrentEnforcementState(t *testing.T) {
 		withPlacementEnforced(t, enforced)
 		store, mock, closeDB := newFixtureStore(t, "cell-a")
 		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.control_replicas")).
-			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.NodePlacementSchemaVersion), enforced).WillReturnResult(sqlmock.NewResult(1, 1))
+			WithArgs("replica-1", "v0.3.0", int32(sharedauthority.NodePlacementSchemaVersion), enforced, int32(replicaAuthorityFeatureLevel)).WillReturnResult(sqlmock.NewResult(1, 1))
 		if err := store.RecordReplicaHeartbeat(context.Background(), " replica-1 ", "v0.3.0"); err != nil {
 			t.Fatal(err)
 		}

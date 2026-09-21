@@ -322,6 +322,17 @@ service InternalService {
   // this control cell, closing the gap where a previously acknowledged cell
   // database was restored or rebuilt after that acknowledgement.
   rpc RequestMediaAuthorityReplay(RequestMediaAuthorityReplayRequest) returns (RequestMediaAuthorityReplayResponse);
+
+  // Called by Foghorn when a decision needs an authority the cell does not
+  // hold, or holds only past its validity. Commodore compiles the object and
+  // its tenant now and returns the envelopes signed for this cell; Foghorn
+  // applies them and decides locally. This is how an object nobody has used
+  // for a while is served without being kept in every cell.
+  rpc FetchMediaAuthority(FetchMediaAuthorityRequest) returns (FetchMediaAuthorityResponse);
+
+  // Foghorn reports the authorities it decided on, at most once per authority
+  // per day. Commodore keeps renewing an object only while it is in use.
+  rpc ReportMediaAuthorityUse(ReportMediaAuthorityUseRequest) returns (google.protobuf.Empty);
 }
 
 message RequestMediaAuthorityRefreshRequest {
@@ -337,10 +348,83 @@ message RequestMediaAuthorityRefreshResponse {
 
 message RequestMediaAuthorityReplayRequest {
   string control_cell_id = 1;
+  // What the cell holds: the number of authorities valid at as_of and the XOR
+  // of SHA-256 over each one's "kind\x00id\x00version". When both match what
+  // Commodore has on record as acknowledged by this cell, nothing is requeued.
+  // A valid as_of is required. Unsupported recovery protocols fail explicitly.
+  int64 held_count = 2;
+  bytes held_digest = 3;
+  google.protobuf.Timestamp as_of = 4;
+  // Detailed recovery is paginated in byte order by (authority_kind, authority_id).
+  // This page covers (after, last held member], or (after, infinity) when final.
+  // Missing acknowledged authorities inside that range are detectable even
+  // while unrelated delivery obligations are pending.
+  bool inventory_page = 5;
+  repeated HeldMediaAuthority held = 6;
+  string after_kind = 7;
+  string after_id = 8;
+  bool final_page = 9;
+  // Core database time returned by the preceding response, received before
+  // this page's local read. It orders ACKs without comparing database clocks.
+  google.protobuf.Timestamp acknowledged_before = 10;
+}
+
+message HeldMediaAuthority {
+  string authority_kind = 1;
+  string authority_id = 2;
+  int64 authority_version = 3;
 }
 
 message RequestMediaAuthorityReplayResponse {
   int64 requeued_count = 1;
+  // Set by a Commodore that compared the cell's summary with its record.
+  // held_matches is the result. A cell that does not hold what it acknowledged
+  // (its database was restored, or deliveries were lost) keeps its fence until
+  // a later summary matches: Commodore has stopped trusting the cell's
+  // acknowledgements and re-issues what the cell may hold stale.
+  bool summary_checked = 2;
+  bool held_matches = 3;
+  // Required recovery protocol. A cell must not interpret a response from an
+  // unsupported implementation as evidence that its durable state is safe.
+  uint32 recovery_protocol = 4;
+  bool inventory_required = 5;
+  // Exact held versions that are still current, valid and assigned to this
+  // cell. Confirmation is bound to the requesting cell's recovery generation.
+  repeated HeldMediaAuthority confirmed = 6;
+  google.protobuf.Timestamp observed_at = 7;
+}
+
+message FetchMediaAuthorityRequest {
+  string control_cell_id = 1;
+  // How the deciding path knows the object. A publishing credential is not a
+  // lookup: ingest validates the key against Commodore first, which names the
+  // stream, and fetches by authority_id.
+  oneof lookup {
+    string authority_id = 2;
+    string playback_id = 3;
+    string internal_name = 4;
+    // The tenant authority alone, for a path that holds a valid object
+    // authority whose tenant authority is missing or expired.
+    string tenant_id = 5;
+  }
+}
+
+message FetchMediaAuthorityResponse {
+  // Encoded media_authority.SignedAuthorityEnvelope values for this cell, the
+  // tenant's before the object's. Empty when the object exists but is not
+  // delivered to this cell (the tenant holds no grant that names it).
+  repeated bytes signed_authorities = 1;
+}
+
+message MediaAuthorityUse {
+  string authority_kind = 1; // tenant | media_object
+  string authority_id = 2;
+  string tenant_id = 3;
+}
+
+message ReportMediaAuthorityUseRequest {
+  string control_cell_id = 1;
+  repeated MediaAuthorityUse uses = 2;
 }
 
 // ============================================================================

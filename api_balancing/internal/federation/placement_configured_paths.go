@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -74,7 +75,7 @@ func (reader *ConfiguredSourcePlacementPaths) describe(ctx context.Context, auth
 		authority.TenantAuthorityVersion <= 0 || authority.ObjectAuthorityVersion <= 0 {
 		return control.MediaSourceDescriptor{}, nil, errors.New("configured source authority is not a managed live input")
 	}
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	pair, err := reader.Authority.Placement(readCtx, authority.TenantID, authority.ObjectID, authority.InternalName)
 	if err != nil {

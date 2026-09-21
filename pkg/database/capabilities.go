@@ -41,6 +41,10 @@ func (e *CapabilityError) Unwrap() error { return e.Err }
 
 var capabilityCatalog = map[string][]Capability{
 	"commodore": {
+		{Name: "media cell activation edge", Engine: EnginePostgres, Probe: "SELECT cell_id, activation_schema_version FROM commodore.media_cell_placement_capabilities LIMIT 0"},
+		{Name: "media authority target retirement", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_targets LIMIT 0"},
+		{Name: "media authority recipient validity", Engine: EnginePostgres, Probe: "SELECT correction_until FROM commodore.media_authority_deliveries LIMIT 0"},
+		{Name: "actionable media authority rejections", Engine: EnginePostgres, Probe: "SELECT authority_kind, authority_id, authority_version, cell_id FROM commodore.media_authority_actionable_rejections LIMIT 0"},
 		{Name: "media placement revisions", Engine: EnginePostgres, Probe: "SELECT tenant_id, scope_kind, scope_id, revision, policy_payload, active_revision, active_policy_payload FROM commodore.media_placement_policies LIMIT 0"},
 		{Name: "media placement apply receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, idempotency_key, request_sha256, revision, parent_revision, rollout_status FROM commodore.media_placement_changes LIMIT 0"},
 		{Name: "wallet authentication", Engine: EnginePostgres, Probe: "SELECT wallet_address, chain_id, message_hash, expires_at, consumed_at FROM commodore.wallet_auth_challenges LIMIT 0"},
@@ -48,6 +52,7 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "artifact creation acknowledgement leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, kind, artifact_hash, command_ack_pending, command_ack_next_at, command_ack_leased_until, command_ack_lease_token FROM commodore.artifact_creation_intents LIMIT 0"},
 	},
 	"foghorn": {
+		{Name: "media authority recovery confirmation", Engine: EnginePostgres, Probe: "SELECT authority_id, confirmed_at FROM foghorn.media_authorities LIMIT 0"},
 		{Name: "ingest admission fencing", Engine: EnginePostgres, Probe: "SELECT id, tenant_id, node_id, stream_internal_name, connector_pid, projection_state, source_revision FROM foghorn.ingest_sessions LIMIT 0"},
 		{Name: "restream activation-attempt fencing", Engine: EnginePostgres, Probe: "SELECT source_generation, target_revision, activation_attempt, mist_push_ids FROM foghorn.admission_push_target_revisions LIMIT 0"},
 		{Name: "cell storage identity", Engine: EnginePostgres, Probe: "SELECT backend_id, bucket, endpoint, region, prefix FROM foghorn.cell_storage_identity LIMIT 0"},

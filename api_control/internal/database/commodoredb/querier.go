@@ -7,11 +7,16 @@ package commodoredb
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 type Querier interface {
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
+	// Settles unfinished rows of the pre-obligation inbox so their targets can be
+	// folded into obligations. Leased rows belong to a replica still draining the
+	// inbox and are left alone.
+	AdoptLegacyMediaAuthorityRefreshInbox(ctx context.Context, batchSize int32) ([]AdoptLegacyMediaAuthorityRefreshInboxRow, error)
 	AllocateMediaAuthorityVersion(ctx context.Context, arg AllocateMediaAuthorityVersionParams) (int64, error)
 	ApplyClipCatalogSnapshot(ctx context.Context, arg ApplyClipCatalogSnapshotParams) (ApplyClipCatalogSnapshotRow, error)
 	ApplyClipRetentionState(ctx context.Context, arg ApplyClipRetentionStateParams) error
@@ -26,18 +31,42 @@ type Querier interface {
 	ClaimArtifactCreationCommandAcks(ctx context.Context, arg ClaimArtifactCreationCommandAcksParams) ([]ClaimArtifactCreationCommandAcksRow, error)
 	ClaimArtifactCreationIntents(ctx context.Context, arg ClaimArtifactCreationIntentsParams) ([]ClaimArtifactCreationIntentsRow, error)
 	ClaimInvalidationBatch(ctx context.Context, batchSize int32) ([]ClaimInvalidationBatchRow, error)
+	// short_lease is recorded on the delivery when it is enqueued. Deriving it here
+	// from the version's validity would join the queue to the whole version
+	// history on an expression no index can serve, and this claim runs every
+	// second inside a one-second budget.
 	ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg ClaimMediaAuthorityDeadlineDeliveryParams) ([]ClaimMediaAuthorityDeadlineDeliveryRow, error)
-	ClaimMediaAuthorityDeadlineRefresh(ctx context.Context, arg ClaimMediaAuthorityDeadlineRefreshParams) ([]ClaimMediaAuthorityDeadlineRefreshRow, error)
+	// Deliveries are claimed one cell at a time, each cell with its own workers, so
+	// a cell that is slow or down cannot take the workers another cell needs. Within
+	// a cell, a delivery the cell asked to have repeated waits behind fresh ones: a
+	// cell catching up after losing its database must not hold back a change or a
+	// revocation. A version past its validity is never sent; the cell would refuse
+	// it, and it has nothing left to say.
 	ClaimMediaAuthorityDeliveries(ctx context.Context, arg ClaimMediaAuthorityDeliveriesParams) ([]ClaimMediaAuthorityDeliveriesRow, error)
-	ClaimMediaAuthorityRefreshInbox(ctx context.Context, arg ClaimMediaAuthorityRefreshInboxParams) ([]ClaimMediaAuthorityRefreshInboxRow, error)
+	// A target is never compiled by two lanes at once: an event compile and a
+	// renewal of the same authority would otherwise both run, and the compile fence
+	// would discard one after its source reads and signing were already paid for.
+	//
+	// The lease check below only filters: it reads a snapshot, and two lanes can
+	// both pass it before either commits. What serializes them is the target's claim
+	// row, which every claim has to write. A second lane claiming the same target
+	// waits on the first lane's write and then finds a live claim held by another
+	// lane, and skips the target (under snapshot isolation it fails instead, and the
+	// next pass sees the claim). Settlement deletes the claim row; an abandoned one
+	// lapses with the lease it carries.
+	//
+	// Each claim carries a fresh token on the obligation and on the claim row.
+	// Settlement and release require it: a worker whose lease lapsed and whose
+	// target was claimed again cannot settle or release the attempt that replaced
+	// it, even at the same revision.
+	ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimMediaAuthorityObligationsParams) ([]ClaimMediaAuthorityObligationsRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClaimStreamCleanupBatch(ctx context.Context, batchSize int32) ([]ClaimStreamCleanupBatchRow, error)
-	ClaimTenantMediaAuthorityDeadlineRefresh(ctx context.Context, arg ClaimTenantMediaAuthorityDeadlineRefreshParams) ([]ClaimTenantMediaAuthorityDeadlineRefreshRow, error)
 	ClearArtifactCatalogTombstone(ctx context.Context, arg ClearArtifactCatalogTombstoneParams) error
 	ClearArtifactCreationCommandAck(ctx context.Context, arg ClearArtifactCreationCommandAckParams) error
 	ClearManagedStreamActiveCluster(ctx context.Context, arg ClearManagedStreamActiveClusterParams) (int64, error)
 	CompleteInvalidation(ctx context.Context, id string) error
-	CompleteMediaAuthorityRefreshInbox(ctx context.Context, arg CompleteMediaAuthorityRefreshInboxParams) (int64, error)
+	CompleteMediaAuthorityObligation(ctx context.Context, arg CompleteMediaAuthorityObligationParams) (int64, error)
 	CompleteServiceEventOutbox(ctx context.Context, id string) error
 	ConsumeAuthorizationCode(ctx context.Context, id string) error
 	ConsumeWalletChallenge(ctx context.Context, arg ConsumeWalletChallengeParams) (string, error)
@@ -67,17 +96,43 @@ type Querier interface {
 	DeleteOrphanedMediaAuthorityVersions(ctx context.Context, arg DeleteOrphanedMediaAuthorityVersionsParams) (int64, error)
 	DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error)
 	DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefreshTokensForUserParams) error
+	DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error)
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
 	EnableCreatedStreamRecording(ctx context.Context, id string) error
 	EnqueueInvalidation(ctx context.Context, arg EnqueueInvalidationParams) (string, error)
+	// For a cell that does not hold what it acknowledged: every authority whose
+	// current version has run out while the cell may still hold a valid older one.
+	// Replay cannot resend an expired version, so these are compiled again, which
+	// re-issues them (see decideMediaAuthorityPublication, correcting). Current
+	// versions still valid are replayed as they are. The renewal rows index every
+	// published authority; their status does not matter.
+	EnqueueMediaAuthorityCorrectionsForCell(ctx context.Context, cellID string) (int64, error)
 	EnqueueMediaAuthorityDelivery(ctx context.Context, arg EnqueueMediaAuthorityDeliveryParams) (int64, error)
+	// A NULL next_attempt_at means due now by the database clock, which is the
+	// clock the claim compares against. An event stamped with the caller's clock
+	// would not be claimable until any skew between the two had passed.
+	EnqueueMediaAuthorityObligation(ctx context.Context, arg EnqueueMediaAuthorityObligationParams) error
 	EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error)
 	EnqueueStreamCleanup(ctx context.Context, arg EnqueueStreamCleanupParams) (string, error)
+	// Refreshes the tenant's objects that some cell may still hold a valid copy of:
+	// any version of the object is valid, and the current one is not a tombstone.
+	// The current version alone does not decide it: a shorter-lived replacement can
+	// run out while a cell that never received it still holds the longer original.
+	// An object with no valid copy anywhere has nothing to correct and is compiled
+	// when it is next used. The renewal rows are the tenant's index into its
+	// published objects; their status does not matter.
+	EnqueueTenantMediaObjectRefreshes(ctx context.Context, arg EnqueueTenantMediaObjectRefreshesParams) (int64, error)
+	// Gives a live authority a renewal obligation when it has none or only a
+	// settled one. A pending, processing, or parked renewal is left exactly as it
+	// is: this is the recovery path, not a way to move a schedule. A dormant
+	// renewal belongs to an object nobody uses; it is revived only when the caller
+	// found the object in use again.
+	EnsureMediaAuthorityRenewal(ctx context.Context, arg EnsureMediaAuthorityRenewalParams) error
 	EnsureMediaPlacementPolicy(ctx context.Context, arg EnsureMediaPlacementPolicyParams) error
 	ExpireDeviceAuthorization(ctx context.Context, id string) error
 	FailInvalidation(ctx context.Context, arg FailInvalidationParams) error
-	FailMediaAuthorityRefreshInbox(ctx context.Context, arg FailMediaAuthorityRefreshInboxParams) (int64, error)
+	FailMediaAuthorityObligation(ctx context.Context, arg FailMediaAuthorityObligationParams) (int64, error)
 	FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error
 	FailStreamCleanup(ctx context.Context, arg FailStreamCleanupParams) error
 	FenceParentStreamLive(ctx context.Context, arg FenceParentStreamLiveParams) (bool, error)
@@ -104,6 +159,8 @@ type Querier interface {
 	GetClipSourceStream(ctx context.Context, arg GetClipSourceStreamParams) (GetClipSourceStreamRow, error)
 	GetClipWebhookSecret(ctx context.Context, arg GetClipWebhookSecretParams) (sql.NullString, error)
 	GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCurrentMediaAuthorityPayloadParams) (GetCurrentMediaAuthorityPayloadRow, error)
+	GetCurrentMediaAuthorityPlaybackSourceRevision(ctx context.Context, authorityID string) (string, error)
+	GetCurrentMediaAuthorityPublication(ctx context.Context, arg GetCurrentMediaAuthorityPublicationParams) (GetCurrentMediaAuthorityPublicationRow, error)
 	GetDVRCatalogState(ctx context.Context, arg GetDVRCatalogStateParams) (GetDVRCatalogStateRow, error)
 	GetDVRDeletionRoute(ctx context.Context, arg GetDVRDeletionRouteParams) (GetDVRDeletionRouteRow, error)
 	GetDVRRetentionStreamID(ctx context.Context, arg GetDVRRetentionStreamIDParams) (string, error)
@@ -116,6 +173,18 @@ type Querier interface {
 	GetLiveStreamMediaAuthoritySource(ctx context.Context, streamID string) (GetLiveStreamMediaAuthoritySourceRow, error)
 	GetLiveVODCatalogStateForUpdate(ctx context.Context, arg GetLiveVODCatalogStateForUpdateParams) (GetLiveVODCatalogStateForUpdateRow, error)
 	GetLoginUserByEmail(ctx context.Context, email sql.NullString) (GetLoginUserByEmailRow, error)
+	GetMediaAuthorityCompilerFingerprint(ctx context.Context) (string, error)
+	// An authority with no use row counts as used when use started being recorded.
+	GetMediaAuthorityLastUse(ctx context.Context, arg GetMediaAuthorityLastUseParams) (time.Time, error)
+	// The latest instant a copy some cell may hold is valid until. A replacement can
+	// be shorter-lived than what it replaced, and a cell that never received the
+	// replacement still holds the longer one, so the current version alone does
+	// not decide it. A cell holds at least the version it last acknowledged (its
+	// fence refuses anything older) and at most the last one it was sent, so only
+	// those versions count; once every cell has acknowledged the current version,
+	// the horizon is the current version's own validity. Versions are kept well
+	// past their validity, so none that matters is missing.
+	GetMediaAuthorityValidHorizon(ctx context.Context, arg GetMediaAuthorityValidHorizonParams) (time.Time, error)
 	GetMediaCellPlacementCapability(ctx context.Context, cellID string) (GetMediaCellPlacementCapabilityRow, error)
 	GetMediaPlacementChange(ctx context.Context, arg GetMediaPlacementChangeParams) (CommodoreMediaPlacementChange, error)
 	GetMediaPlacementPolicy(ctx context.Context, arg GetMediaPlacementPolicyParams) (CommodoreMediaPlacementPolicy, error)
@@ -128,7 +197,6 @@ type Querier interface {
 	GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
 	GetRefreshUser(ctx context.Context, arg GetRefreshUserParams) (GetRefreshUserRow, error)
-	GetScheduledMediaAuthorityVersion(ctx context.Context, arg GetScheduledMediaAuthorityVersionParams) (int64, error)
 	GetSigningKey(ctx context.Context, arg GetSigningKeyParams) (GetSigningKeyRow, error)
 	GetSigningKeyCursor(ctx context.Context, arg GetSigningKeyCursorParams) (sql.NullTime, error)
 	GetStreamAdmissionByKey(ctx context.Context, streamKey string) (GetStreamAdmissionByKeyRow, error)
@@ -178,7 +246,6 @@ type Querier interface {
 	InsertDVRRegistration(ctx context.Context, arg InsertDVRRegistrationParams) error
 	InsertDeviceAuthorization(ctx context.Context, arg InsertDeviceAuthorizationParams) error
 	InsertLinkedWallet(ctx context.Context, arg InsertLinkedWalletParams) (InsertLinkedWalletRow, error)
-	InsertMediaAuthorityRefreshInbox(ctx context.Context, arg InsertMediaAuthorityRefreshInboxParams) (int64, error)
 	InsertMediaAuthorityVersion(ctx context.Context, arg InsertMediaAuthorityVersionParams) error
 	InsertMediaPlacementChange(ctx context.Context, arg InsertMediaPlacementChangeParams) (CommodoreMediaPlacementChange, error)
 	InsertPolicyBundle(ctx context.Context, arg InsertPolicyBundleParams) error
@@ -202,6 +269,9 @@ type Querier interface {
 	ListAPITokensBackwardBefore(ctx context.Context, arg ListAPITokensBackwardBeforeParams) ([]ListAPITokensBackwardBeforeRow, error)
 	ListAPITokensForward(ctx context.Context, arg ListAPITokensForwardParams) ([]ListAPITokensForwardRow, error)
 	ListAPITokensForwardAfter(ctx context.Context, arg ListAPITokensForwardAfterParams) ([]ListAPITokensForwardAfterRow, error)
+	// Publishing a successor does not change what a cell acknowledged holding.
+	ListAcknowledgedMediaAuthoritiesForCell(ctx context.Context, arg ListAcknowledgedMediaAuthoritiesForCellParams) ([]ListAcknowledgedMediaAuthoritiesForCellRow, error)
+	ListActiveMediaAuthorityCells(ctx context.Context, arg ListActiveMediaAuthorityCellsParams) ([]string, error)
 	ListActivePlaybackSigningKeys(ctx context.Context, tenantID string) ([]ListActivePlaybackSigningKeysRow, error)
 	ListArtifactMediaAuthoritySources(ctx context.Context) ([]ListArtifactMediaAuthoritySourcesRow, error)
 	// One page of placement scopes whose change is still unresolved. Activation is
@@ -222,16 +292,53 @@ type Querier interface {
 	// index scan rather than a sort of every pending row once a second.
 	ListAuthoritiesAwaitingActivation(ctx context.Context, arg ListAuthoritiesAwaitingActivationParams) ([]ListAuthoritiesAwaitingActivationRow, error)
 	ListBootstrapMistNativeStreams(ctx context.Context, tenantID string) ([]ListBootstrapMistNativeStreamsRow, error)
+	// Current live authorities with no live renewal obligation. A settled row does
+	// not count: only a tombstone may rest on one. Versions published before the
+	// tombstone column existed all read as live, so the caller still decodes the
+	// payload; newest validity first keeps those aging tombstones from crowding
+	// live authorities out of a batch.
+	ListCurrentMediaAuthoritiesWithoutRenewal(ctx context.Context, batchSize int32) ([]ListCurrentMediaAuthoritiesWithoutRenewalRow, error)
 	ListCurrentMediaAuthorityDeliveryCells(ctx context.Context, arg ListCurrentMediaAuthorityDeliveryCellsParams) ([]string, error)
+	// The signed envelope of an authority's current version for one cell, tenant
+	// before object. An expired version is never handed out.
+	ListCurrentMediaAuthorityEnvelopesForCell(ctx context.Context, arg ListCurrentMediaAuthorityEnvelopesForCellParams) ([]ListCurrentMediaAuthorityEnvelopesForCellRow, error)
 	ListCurrentMediaAuthorityRollout(ctx context.Context, arg ListCurrentMediaAuthorityRolloutParams) ([]ListCurrentMediaAuthorityRolloutRow, error)
 	ListCurrentTenantAuthorityIDs(ctx context.Context) ([]string, error)
 	ListEnabledPushTargets(ctx context.Context, arg ListEnabledPushTargetsParams) ([]ListEnabledPushTargetsRow, error)
+	// Authorities still being renewed whose bound version has run out: renewal did
+	// not reach them in time, and cells are refusing them or asking for them on
+	// every decision. A dormant renewal is an authority nobody uses and is expected
+	// to run out, unless it was used within the use window after all: that is a
+	// renewal whose revival was lost, and it is counted too.
+	// Each branch is driven by its own index so neither reads the cold catalog: live
+	// renewals through the expiry index, dormant ones from the recently used set
+	// through its last_used_at index and the obligation key.
+	ListExpiredWarmMediaAuthorityCounts(ctx context.Context) ([]ListExpiredWarmMediaAuthorityCountsRow, error)
 	ListLegacySchemaTenantsTargetingCell(ctx context.Context, arg ListLegacySchemaTenantsTargetingCellParams) ([]string, error)
 	ListLiveStreamMediaAuthoritySources(ctx context.Context) ([]ListLiveStreamMediaAuthoritySourcesRow, error)
 	ListManagedStreams(ctx context.Context, clusterID string) ([]ListManagedStreamsRow, error)
+	// The cells that have an ordinary delivery waiting, found by stepping through
+	// the per-cell index from one cell to the next instead of reading the queue.
+	ListMediaAuthorityDeliveryCells(ctx context.Context) ([]string, error)
+	// Reads the deliveries that are not settled, through their partial indexes, and
+	// nothing else: a delivery that was acknowledged has no backlog, no age, and no
+	// version lag to report, and those are nearly all of them.
 	ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMediaAuthorityDeliveryStatsRow, error)
+	// Cells that may still hold a valid copy: some version between the last one
+	// they acknowledged and the last one they were sent has not expired (see
+	// GetMediaAuthorityValidHorizon). A change must reach them even when they are
+	// no longer targets, and a cell whose every copy has expired has nothing left
+	// to correct.
+	ListMediaAuthorityHoldingCells(ctx context.Context, arg ListMediaAuthorityHoldingCellsParams) ([]string, error)
+	// Reads only what is due, through the due index. The table holds a renewal row
+	// for every published authority, nearly all of them scheduled for later.
+	ListMediaAuthorityObligationStats(ctx context.Context) ([]ListMediaAuthorityObligationStatsRow, error)
 	ListMediaAuthorityPriorCells(ctx context.Context, arg ListMediaAuthorityPriorCellsParams) ([]string, error)
+	// What each cell's replicas do with media authority, independent of placement.
+	// A cell with no row has attested nothing.
+	ListMediaCellAuthorityFeatures(ctx context.Context, cellIds []string) ([]ListMediaCellAuthorityFeaturesRow, error)
 	ListMediaCellPlacementCapabilities(ctx context.Context, cellIds []string) ([]ListMediaCellPlacementCapabilitiesRow, error)
+	ListParkedMediaAuthorityObligationCounts(ctx context.Context) ([]ListParkedMediaAuthorityObligationCountsRow, error)
 	ListPullSourceEventsByInternalName(ctx context.Context, arg ListPullSourceEventsByInternalNameParams) ([]ListPullSourceEventsByInternalNameRow, error)
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
 	ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPushTargetSiblingsForOwnerParams) ([]ListPushTargetSiblingsForOwnerRow, error)
@@ -255,6 +362,9 @@ type Querier interface {
 	ListTenantArtifactMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantArtifactMediaAuthoritySourcesRow, error)
 	ListTenantLiveStreamMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantLiveStreamMediaAuthoritySourcesRow, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
+	// Tenants whose authority is still being renewed. Reconciliation covers these;
+	// a tenant nobody uses is compiled when it is next used.
+	ListWarmTenantIDs(ctx context.Context) ([]string, error)
 	LockArtifactCatalogKey(ctx context.Context, hashtext string) error
 	LockArtifactCreationIdentity(ctx context.Context, lockKey string) error
 	LockAuthorizationCode(ctx context.Context, codeHash string) (LockAuthorizationCodeRow, error)
@@ -272,6 +382,9 @@ type Querier interface {
 	// unnamespaced authority id could collide with one of those.
 	LockMediaAuthorityActivation(ctx context.Context, arg LockMediaAuthorityActivationParams) error
 	LockMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
+	// Publication keeps these rows locked through enqueue. The pruning sweep skips
+	// them, so a correction recipient cannot disappear and be reinserted as active.
+	LockMediaAuthorityTargetHorizons(ctx context.Context, arg LockMediaAuthorityTargetHorizonsParams) ([]LockMediaAuthorityTargetHorizonsRow, error)
 	LockMediaPlacementPolicy(ctx context.Context, arg LockMediaPlacementPolicyParams) (CommodoreMediaPlacementPolicy, error)
 	LockMediaPlacementStream(ctx context.Context, arg LockMediaPlacementStreamParams) (string, error)
 	LockPolicyBundleStream(ctx context.Context, arg LockPolicyBundleStreamParams) error
@@ -289,20 +402,52 @@ type Querier interface {
 	LookupVODPolicyByInternalName(ctx context.Context, internalName string) (LookupVODPolicyByInternalNameRow, error)
 	LookupVODPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupVODPolicyByPlaybackIDRow, error)
 	MarkCreatedStreamPull(ctx context.Context, arg MarkCreatedStreamPullParams) error
+	// A cell reported holding something other than what it acknowledged. Until it
+	// acknowledges again, it may hold any version it was ever sent.
+	MarkMediaAuthorityCellAcknowledgementsUntrusted(ctx context.Context, cellID string) error
 	MarkMediaAuthorityDeliveryAcknowledged(ctx context.Context, arg MarkMediaAuthorityDeliveryAcknowledgedParams) (int64, error)
+	MarkMediaAuthorityVersionTombstone(ctx context.Context, arg MarkMediaAuthorityVersionTombstoneParams) (int64, error)
+	MarkMediaCellPlacementActivated(ctx context.Context, arg MarkMediaCellPlacementActivatedParams) error
 	MarkMediaPlacementChangesEffective(ctx context.Context, arg MarkMediaPlacementChangesEffectiveParams) (int64, error)
 	MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error
 	MarkStreamThumbnailCleanupAcked(ctx context.Context, arg MarkStreamThumbnailCleanupAckedParams) error
+	MediaAuthorityRecoveryTime(ctx context.Context) (time.Time, error)
 	MediaPlacementStreamExists(ctx context.Context, arg MediaPlacementStreamExistsParams) (bool, error)
 	NextPolicyBundleVersion(ctx context.Context, arg NextPolicyBundleVersionParams) (int64, error)
 	NormalizeArtifactPlaybackID(ctx context.Context, clipHash string) (string, error)
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
+	ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error)
+	RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error)
+	RearmParkedMediaAuthorityObligations(ctx context.Context) (int64, error)
+	// Compare each identity with its acknowledged floor. An unrelated delivery
+	// cannot hide a regression; an apply ahead of its acknowledgement is normal.
+	ReconcileMediaAuthorityPage(ctx context.Context, arg ReconcileMediaAuthorityPageParams) ([]ReconcileMediaAuthorityPageRow, error)
 	RecordManagedStreamActiveCluster(ctx context.Context, arg RecordManagedStreamActiveClusterParams) (int64, error)
+	// A cell that refuses the current version on a precondition (it holds a newer
+	// version, a conflicting digest, or a terminal tombstone) will refuse every
+	// retry of the same envelope, so that delivery settles as rejected instead of
+	// returning to the queue. Cell replay re-opens it.
 	RecordMediaAuthorityDeliveryFailure(ctx context.Context, arg RecordMediaAuthorityDeliveryFailureParams) (int64, error)
+	// Use is kept to the day: a row is written at most once a day per authority
+	// however often it is decided on. One row means the day advanced.
+	RecordMediaAuthorityUse(ctx context.Context, arg RecordMediaAuthorityUseParams) (int64, error)
 	RecordSigningKeyUse(ctx context.Context, arg RecordSigningKeyUseParams) error
 	RefreshPrimaryStreamKey(ctx context.Context, arg RefreshPrimaryStreamKeyParams) (int64, error)
 	RegisterStreamThumbnailServingCell(ctx context.Context, arg RegisterStreamThumbnailServingCellParams) (int64, error)
+	// A lane's compile of a target has settled, whatever its outcome; another lane
+	// may claim the target now instead of when the lease would have lapsed. Only
+	// the claim that compiled may release it.
+	ReleaseMediaAuthorityTargetClaim(ctx context.Context, arg ReleaseMediaAuthorityTargetClaimParams) error
+	// A fold during processing already re-armed the row at a newer revision; only
+	// the serialization lease the fold preserved is left to clear. The status and
+	// token filters matter: once another worker has claimed the newer revision the
+	// row is processing again under its token, and that lease belongs to it.
+	ReleaseSupersededMediaAuthorityObligation(ctx context.Context, arg ReleaseSupersededMediaAuthorityObligationParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
+	// Repeats what the cell was sent, for a cell whose database was restored or
+	// rebuilt. The rows are marked as a replay, which the claim serves after fresh
+	// deliveries, and a version past its validity is left alone: the cell would
+	// refuse it.
 	RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cellID string) (int64, error)
 	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int64, error)
 	ResolveChapterByPlaybackID(ctx context.Context, playbackID string) (ResolveChapterByPlaybackIDRow, error)
@@ -315,6 +460,10 @@ type Querier interface {
 	ResolveDVRByPlaybackID(ctx context.Context, dollar_1 string) (ResolveDVRByPlaybackIDRow, error)
 	ResolveDVRTenantArtifact(ctx context.Context, arg ResolveDVRTenantArtifactParams) (ResolveDVRTenantArtifactRow, error)
 	ResolveIdentifierCatalog(ctx context.Context, arg ResolveIdentifierCatalogParams) (ResolveIdentifierCatalogRow, error)
+	ResolveMediaAuthorityIdentityByInternalName(ctx context.Context, internalName string) (ResolveMediaAuthorityIdentityByInternalNameRow, error)
+	// Names the authority a cell asked for by playback id. object_id is the stream
+	// or artifact id the compiler takes.
+	ResolveMediaAuthorityIdentityByPlaybackID(ctx context.Context, playbackID string) (ResolveMediaAuthorityIdentityByPlaybackIDRow, error)
 	ResolveOwnedInternalNameByPlaybackID(ctx context.Context, arg ResolveOwnedInternalNameByPlaybackIDParams) (string, error)
 	ResolvePullSourceByInternalName(ctx context.Context, internalName string) (ResolvePullSourceByInternalNameRow, error)
 	ResolveStreamByInternalName(ctx context.Context, internalName string) (ResolveStreamByInternalNameRow, error)
@@ -326,24 +475,41 @@ type Querier interface {
 	ResolveVODByPlaybackID(ctx context.Context, dollar_1 string) (ResolveVODByPlaybackIDRow, error)
 	ResolveVODTenantArtifact(ctx context.Context, arg ResolveVODTenantArtifactParams) (ResolveVODTenantArtifactRow, error)
 	RetainDeletedStreamMediaPlacementPolicy(ctx context.Context, arg RetainDeletedStreamMediaPlacementPolicyParams) (int64, error)
+	// Freeze the horizon on departure, including unacknowledged and restored
+	// copies. Subsequent corrections cannot extend this cell's retention.
+	RetireMediaAuthorityTargets(ctx context.Context, arg RetireMediaAuthorityTargetsParams) (int64, error)
+	// Use puts an authority's renewal back in the queue. A dormant renewal is made
+	// due now. A renewal being compiled is folded like any other change: its
+	// revision moves, so the compile in flight cannot settle it dormant, and its
+	// lease is kept so it is not compiled twice at once. The lane doing the compile
+	// that recorded the use is left alone, or it would fold itself on every run.
+	ReviveDormantMediaAuthorityRenewal(ctx context.Context, arg ReviveDormantMediaAuthorityRenewalParams) (int64, error)
 	RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (string, error)
 	RevokeRefreshTokenByID(ctx context.Context, id string) error
 	RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) error
-	ScheduleMediaAuthorityRefresh(ctx context.Context, arg ScheduleMediaAuthorityRefreshParams) (int64, error)
 	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (string, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
+	SetMediaAuthorityCompilerFingerprint(ctx context.Context, fingerprint string) error
 	SetMediaPlacementChangeRollout(ctx context.Context, arg SetMediaPlacementChangeRolloutParams) (int64, error)
 	SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error
 	SetPasswordResetTokenIfAllowed(ctx context.Context, arg SetPasswordResetTokenIfAllowedParams) (int64, error)
 	SetStreamPlaybackPolicy(ctx context.Context, arg SetStreamPlaybackPolicyParams) (string, error)
 	SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (string, error)
+	// The renewal of an object nobody uses. Dormant is not claimable, is not
+	// re-armed by reconciliation, and still counts as the authority's renewal, so
+	// nothing schedules another one. Use or the next publication revives it.
+	SettleDormantMediaAuthorityObligation(ctx context.Context, arg SettleDormantMediaAuthorityObligationParams) (int64, error)
+	// A delivery whose version ran out before it could be made has nothing left to
+	// say and would only be refused. It leaves the queue.
+	SettleExpiredMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error)
 	SettleStreamCleanupForFinalization(ctx context.Context, arg SettleStreamCleanupForFinalizationParams) (string, error)
 	SoftDeleteStream(ctx context.Context, arg SoftDeleteStreamParams) error
 	StampResolvedPullStreamPlacement(ctx context.Context, arg StampResolvedPullStreamPlacementParams) error
 	StreamExistsForPushTargetManager(ctx context.Context, arg StreamExistsForPushTargetManagerParams) (bool, error)
 	StreamExistsForUser(ctx context.Context, arg StreamExistsForUserParams) (bool, error)
+	SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error)
 	SupersedeMediaPlacementChanges(ctx context.Context, arg SupersedeMediaPlacementChangesParams) error
 	SupersedeOlderMediaAuthorityDeliveries(ctx context.Context, arg SupersedeOlderMediaAuthorityDeliveriesParams) (int64, error)
 	TerminalizeArtifactCreationIntent(ctx context.Context, arg TerminalizeArtifactCreationIntentParams) (int64, error)

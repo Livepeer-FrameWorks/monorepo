@@ -6,6 +6,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -145,13 +146,15 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 	if err := placement.ValidatePreparationDeadline(req, runtime.now()); err != nil || req.GetQuery().GetVerb() != placementpb.Verb_VERB_SERVE {
 		return pushPreparationState{}, status.Error(codes.InvalidArgument, "push preparation requires a valid serving request")
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
 	q := req.Query
-	pair, err := runtime.Authority.Placement(ctx, q.TenantId, q.ObjectId, q.InternalName)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
+	pair, err := runtime.Authority.Placement(readCtx, q.TenantId, q.ObjectId, q.InternalName)
+	stopRead()
 	if err != nil {
 		return pushPreparationState{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 	now := runtime.now()
 	authority, err := balancer.CompilePlacementAuthority(pair, placement.Serve, now)
 	if err != nil {

@@ -144,15 +144,21 @@ func main() {
 	// on the GRPCRequests / GRPCDuration vectors; separate tenant_/cluster_/
 	// node_/service_operations counters would only rename the same axis.
 	serverMetrics := &qmgrpc.ServerMetrics{
-		GRPCRequests:             metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:             metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
-		SyncMeshPhaseDuration:    metricsCollector.NewHistogram("sync_mesh_phase_duration_seconds", "SyncMesh phase duration", []string{"phase"}, nil),
-		NodeIdentityRejections:   metricsCollector.NewCounter("node_identity_rejections_total", "Node fingerprint identity proof rejections", []string{"reason"}),
-		BillingEntitlementStale:  metricsCollector.NewCounter("billing_entitlement_stale_total", "Stale Purser billing entitlement observations rejected", nil),
-		DNSBackstopRepairs:       metricsCollector.NewCounter("dns_backstop_repairs_total", "DNS desired/applied drift repairs enqueued", []string{"resource", "action"}),
-		NavigatorOutboxFailures:  metricsCollector.NewCounter("navigator_outbox_failures_total", "Navigator outbox delivery failures", []string{"resource"}),
-		NavigatorOutboxPending:   metricsCollector.NewGauge("navigator_outbox_pending", "Incomplete Navigator outbox rows", []string{"resource"}),
-		ControlCellReassignments: metricsCollector.NewGauge("control_cell_reassignments", "Tenant-private clusters by control-cell reassignment state", []string{"state"}),
+		GRPCRequests:                  metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:                  metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		SyncMeshPhaseDuration:         metricsCollector.NewHistogram("sync_mesh_phase_duration_seconds", "SyncMesh phase duration", []string{"phase"}, nil),
+		NodeIdentityRejections:        metricsCollector.NewCounter("node_identity_rejections_total", "Node fingerprint identity proof rejections", []string{"reason"}),
+		BillingEntitlementStale:       metricsCollector.NewCounter("billing_entitlement_stale_total", "Stale Purser billing entitlement observations rejected", nil),
+		DNSBackstopRepairs:            metricsCollector.NewCounter("dns_backstop_repairs_total", "DNS desired/applied drift repairs enqueued", []string{"resource", "action"}),
+		NavigatorOutboxFailures:       metricsCollector.NewCounter("navigator_outbox_failures_total", "Navigator outbox delivery failures", []string{"resource"}),
+		NavigatorOutboxPending:        metricsCollector.NewGauge("navigator_outbox_pending", "Incomplete Navigator outbox rows", []string{"resource"}),
+		ControlCellReassignments:      metricsCollector.NewGauge("control_cell_reassignments", "Tenant-private clusters by control-cell reassignment state", []string{"state"}),
+		MediaAuthorityRefreshPending:  metricsCollector.NewGauge("media_authority_refresh_pending", "Pending media-authority refresh obligations", nil),
+		MediaAuthorityRefreshOldest:   metricsCollector.NewGauge("media_authority_refresh_oldest_pending_seconds", "Age of the oldest pending media-authority refresh obligation", nil),
+		MediaAuthorityRefreshFailures: metricsCollector.NewCounter("media_authority_refresh_failures_total", "Media-authority refresh failures", []string{"stage"}),
+	}
+	for _, stage := range []string{"commodore_delivery", "complete", "superseded_release", "completion_fence_miss", "observe"} {
+		serverMetrics.MediaAuthorityRefreshFailures.WithLabelValues(stage).Add(0)
 	}
 
 	// Initialize Navigator client

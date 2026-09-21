@@ -506,8 +506,27 @@ func (x *RequestMediaAuthorityRefreshResponse) GetAccepted() bool {
 type RequestMediaAuthorityReplayRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ControlCellId string                 `protobuf:"bytes,1,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// What the cell holds: the number of authorities valid at as_of and the XOR
+	// of SHA-256 over each one's "kind\x00id\x00version". When both match what
+	// Commodore has on record as acknowledged by this cell, nothing is requeued.
+	// A valid as_of is required. Unsupported recovery protocols fail explicitly.
+	HeldCount  int64                  `protobuf:"varint,2,opt,name=held_count,json=heldCount,proto3" json:"held_count,omitempty"`
+	HeldDigest []byte                 `protobuf:"bytes,3,opt,name=held_digest,json=heldDigest,proto3" json:"held_digest,omitempty"`
+	AsOf       *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=as_of,json=asOf,proto3" json:"as_of,omitempty"`
+	// Detailed recovery is paginated in byte order by (authority_kind, authority_id).
+	// This page covers (after, last held member], or (after, infinity) when final.
+	// Missing acknowledged authorities inside that range are detectable even
+	// while unrelated delivery obligations are pending.
+	InventoryPage bool                  `protobuf:"varint,5,opt,name=inventory_page,json=inventoryPage,proto3" json:"inventory_page,omitempty"`
+	Held          []*HeldMediaAuthority `protobuf:"bytes,6,rep,name=held,proto3" json:"held,omitempty"`
+	AfterKind     string                `protobuf:"bytes,7,opt,name=after_kind,json=afterKind,proto3" json:"after_kind,omitempty"`
+	AfterId       string                `protobuf:"bytes,8,opt,name=after_id,json=afterId,proto3" json:"after_id,omitempty"`
+	FinalPage     bool                  `protobuf:"varint,9,opt,name=final_page,json=finalPage,proto3" json:"final_page,omitempty"`
+	// Core database time returned by the preceding response, received before
+	// this page's local read. It orders ACKs without comparing database clocks.
+	AcknowledgedBefore *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=acknowledged_before,json=acknowledgedBefore,proto3" json:"acknowledged_before,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RequestMediaAuthorityReplayRequest) Reset() {
@@ -547,16 +566,154 @@ func (x *RequestMediaAuthorityReplayRequest) GetControlCellId() string {
 	return ""
 }
 
+func (x *RequestMediaAuthorityReplayRequest) GetHeldCount() int64 {
+	if x != nil {
+		return x.HeldCount
+	}
+	return 0
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetHeldDigest() []byte {
+	if x != nil {
+		return x.HeldDigest
+	}
+	return nil
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetAsOf() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AsOf
+	}
+	return nil
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetInventoryPage() bool {
+	if x != nil {
+		return x.InventoryPage
+	}
+	return false
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetHeld() []*HeldMediaAuthority {
+	if x != nil {
+		return x.Held
+	}
+	return nil
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetAfterKind() string {
+	if x != nil {
+		return x.AfterKind
+	}
+	return ""
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetAfterId() string {
+	if x != nil {
+		return x.AfterId
+	}
+	return ""
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetFinalPage() bool {
+	if x != nil {
+		return x.FinalPage
+	}
+	return false
+}
+
+func (x *RequestMediaAuthorityReplayRequest) GetAcknowledgedBefore() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AcknowledgedBefore
+	}
+	return nil
+}
+
+type HeldMediaAuthority struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	AuthorityKind    string                 `protobuf:"bytes,1,opt,name=authority_kind,json=authorityKind,proto3" json:"authority_kind,omitempty"`
+	AuthorityId      string                 `protobuf:"bytes,2,opt,name=authority_id,json=authorityId,proto3" json:"authority_id,omitempty"`
+	AuthorityVersion int64                  `protobuf:"varint,3,opt,name=authority_version,json=authorityVersion,proto3" json:"authority_version,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *HeldMediaAuthority) Reset() {
+	*x = HeldMediaAuthority{}
+	mi := &file_commodore_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeldMediaAuthority) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeldMediaAuthority) ProtoMessage() {}
+
+func (x *HeldMediaAuthority) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeldMediaAuthority.ProtoReflect.Descriptor instead.
+func (*HeldMediaAuthority) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *HeldMediaAuthority) GetAuthorityKind() string {
+	if x != nil {
+		return x.AuthorityKind
+	}
+	return ""
+}
+
+func (x *HeldMediaAuthority) GetAuthorityId() string {
+	if x != nil {
+		return x.AuthorityId
+	}
+	return ""
+}
+
+func (x *HeldMediaAuthority) GetAuthorityVersion() int64 {
+	if x != nil {
+		return x.AuthorityVersion
+	}
+	return 0
+}
+
 type RequestMediaAuthorityReplayResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RequeuedCount int64                  `protobuf:"varint,1,opt,name=requeued_count,json=requeuedCount,proto3" json:"requeued_count,omitempty"`
+	// Set by a Commodore that compared the cell's summary with its record.
+	// held_matches is the result. A cell that does not hold what it acknowledged
+	// (its database was restored, or deliveries were lost) keeps its fence until
+	// a later summary matches: Commodore has stopped trusting the cell's
+	// acknowledgements and re-issues what the cell may hold stale.
+	SummaryChecked bool `protobuf:"varint,2,opt,name=summary_checked,json=summaryChecked,proto3" json:"summary_checked,omitempty"`
+	HeldMatches    bool `protobuf:"varint,3,opt,name=held_matches,json=heldMatches,proto3" json:"held_matches,omitempty"`
+	// Required recovery protocol. A cell must not interpret a response from an
+	// unsupported implementation as evidence that its durable state is safe.
+	RecoveryProtocol  uint32 `protobuf:"varint,4,opt,name=recovery_protocol,json=recoveryProtocol,proto3" json:"recovery_protocol,omitempty"`
+	InventoryRequired bool   `protobuf:"varint,5,opt,name=inventory_required,json=inventoryRequired,proto3" json:"inventory_required,omitempty"`
+	// Exact held versions that are still current, valid and assigned to this
+	// cell. Confirmation is bound to the requesting cell's recovery generation.
+	Confirmed     []*HeldMediaAuthority  `protobuf:"bytes,6,rep,name=confirmed,proto3" json:"confirmed,omitempty"`
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RequestMediaAuthorityReplayResponse) Reset() {
 	*x = RequestMediaAuthorityReplayResponse{}
-	mi := &file_commodore_proto_msgTypes[3]
+	mi := &file_commodore_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -568,7 +725,7 @@ func (x *RequestMediaAuthorityReplayResponse) String() string {
 func (*RequestMediaAuthorityReplayResponse) ProtoMessage() {}
 
 func (x *RequestMediaAuthorityReplayResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[3]
+	mi := &file_commodore_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -581,7 +738,7 @@ func (x *RequestMediaAuthorityReplayResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use RequestMediaAuthorityReplayResponse.ProtoReflect.Descriptor instead.
 func (*RequestMediaAuthorityReplayResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{3}
+	return file_commodore_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RequestMediaAuthorityReplayResponse) GetRequeuedCount() int64 {
@@ -589,6 +746,335 @@ func (x *RequestMediaAuthorityReplayResponse) GetRequeuedCount() int64 {
 		return x.RequeuedCount
 	}
 	return 0
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetSummaryChecked() bool {
+	if x != nil {
+		return x.SummaryChecked
+	}
+	return false
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetHeldMatches() bool {
+	if x != nil {
+		return x.HeldMatches
+	}
+	return false
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetRecoveryProtocol() uint32 {
+	if x != nil {
+		return x.RecoveryProtocol
+	}
+	return 0
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetInventoryRequired() bool {
+	if x != nil {
+		return x.InventoryRequired
+	}
+	return false
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetConfirmed() []*HeldMediaAuthority {
+	if x != nil {
+		return x.Confirmed
+	}
+	return nil
+}
+
+func (x *RequestMediaAuthorityReplayResponse) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+type FetchMediaAuthorityRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ControlCellId string                 `protobuf:"bytes,1,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	// How the deciding path knows the object. A publishing credential is not a
+	// lookup: ingest validates the key against Commodore first, which names the
+	// stream, and fetches by authority_id.
+	//
+	// Types that are valid to be assigned to Lookup:
+	//
+	//	*FetchMediaAuthorityRequest_AuthorityId
+	//	*FetchMediaAuthorityRequest_PlaybackId
+	//	*FetchMediaAuthorityRequest_InternalName
+	//	*FetchMediaAuthorityRequest_TenantId
+	Lookup        isFetchMediaAuthorityRequest_Lookup `protobuf_oneof:"lookup"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchMediaAuthorityRequest) Reset() {
+	*x = FetchMediaAuthorityRequest{}
+	mi := &file_commodore_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchMediaAuthorityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchMediaAuthorityRequest) ProtoMessage() {}
+
+func (x *FetchMediaAuthorityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchMediaAuthorityRequest.ProtoReflect.Descriptor instead.
+func (*FetchMediaAuthorityRequest) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FetchMediaAuthorityRequest) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
+}
+
+func (x *FetchMediaAuthorityRequest) GetLookup() isFetchMediaAuthorityRequest_Lookup {
+	if x != nil {
+		return x.Lookup
+	}
+	return nil
+}
+
+func (x *FetchMediaAuthorityRequest) GetAuthorityId() string {
+	if x != nil {
+		if x, ok := x.Lookup.(*FetchMediaAuthorityRequest_AuthorityId); ok {
+			return x.AuthorityId
+		}
+	}
+	return ""
+}
+
+func (x *FetchMediaAuthorityRequest) GetPlaybackId() string {
+	if x != nil {
+		if x, ok := x.Lookup.(*FetchMediaAuthorityRequest_PlaybackId); ok {
+			return x.PlaybackId
+		}
+	}
+	return ""
+}
+
+func (x *FetchMediaAuthorityRequest) GetInternalName() string {
+	if x != nil {
+		if x, ok := x.Lookup.(*FetchMediaAuthorityRequest_InternalName); ok {
+			return x.InternalName
+		}
+	}
+	return ""
+}
+
+func (x *FetchMediaAuthorityRequest) GetTenantId() string {
+	if x != nil {
+		if x, ok := x.Lookup.(*FetchMediaAuthorityRequest_TenantId); ok {
+			return x.TenantId
+		}
+	}
+	return ""
+}
+
+type isFetchMediaAuthorityRequest_Lookup interface {
+	isFetchMediaAuthorityRequest_Lookup()
+}
+
+type FetchMediaAuthorityRequest_AuthorityId struct {
+	AuthorityId string `protobuf:"bytes,2,opt,name=authority_id,json=authorityId,proto3,oneof"`
+}
+
+type FetchMediaAuthorityRequest_PlaybackId struct {
+	PlaybackId string `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3,oneof"`
+}
+
+type FetchMediaAuthorityRequest_InternalName struct {
+	InternalName string `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3,oneof"`
+}
+
+type FetchMediaAuthorityRequest_TenantId struct {
+	// The tenant authority alone, for a path that holds a valid object
+	// authority whose tenant authority is missing or expired.
+	TenantId string `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3,oneof"`
+}
+
+func (*FetchMediaAuthorityRequest_AuthorityId) isFetchMediaAuthorityRequest_Lookup() {}
+
+func (*FetchMediaAuthorityRequest_PlaybackId) isFetchMediaAuthorityRequest_Lookup() {}
+
+func (*FetchMediaAuthorityRequest_InternalName) isFetchMediaAuthorityRequest_Lookup() {}
+
+func (*FetchMediaAuthorityRequest_TenantId) isFetchMediaAuthorityRequest_Lookup() {}
+
+type FetchMediaAuthorityResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Encoded media_authority.SignedAuthorityEnvelope values for this cell, the
+	// tenant's before the object's. Empty when the object exists but is not
+	// delivered to this cell (the tenant holds no grant that names it).
+	SignedAuthorities [][]byte `protobuf:"bytes,1,rep,name=signed_authorities,json=signedAuthorities,proto3" json:"signed_authorities,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *FetchMediaAuthorityResponse) Reset() {
+	*x = FetchMediaAuthorityResponse{}
+	mi := &file_commodore_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchMediaAuthorityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchMediaAuthorityResponse) ProtoMessage() {}
+
+func (x *FetchMediaAuthorityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchMediaAuthorityResponse.ProtoReflect.Descriptor instead.
+func (*FetchMediaAuthorityResponse) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *FetchMediaAuthorityResponse) GetSignedAuthorities() [][]byte {
+	if x != nil {
+		return x.SignedAuthorities
+	}
+	return nil
+}
+
+type MediaAuthorityUse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AuthorityKind string                 `protobuf:"bytes,1,opt,name=authority_kind,json=authorityKind,proto3" json:"authority_kind,omitempty"` // tenant | media_object
+	AuthorityId   string                 `protobuf:"bytes,2,opt,name=authority_id,json=authorityId,proto3" json:"authority_id,omitempty"`
+	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaAuthorityUse) Reset() {
+	*x = MediaAuthorityUse{}
+	mi := &file_commodore_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaAuthorityUse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaAuthorityUse) ProtoMessage() {}
+
+func (x *MediaAuthorityUse) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaAuthorityUse.ProtoReflect.Descriptor instead.
+func (*MediaAuthorityUse) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *MediaAuthorityUse) GetAuthorityKind() string {
+	if x != nil {
+		return x.AuthorityKind
+	}
+	return ""
+}
+
+func (x *MediaAuthorityUse) GetAuthorityId() string {
+	if x != nil {
+		return x.AuthorityId
+	}
+	return ""
+}
+
+func (x *MediaAuthorityUse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+type ReportMediaAuthorityUseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ControlCellId string                 `protobuf:"bytes,1,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	Uses          []*MediaAuthorityUse   `protobuf:"bytes,2,rep,name=uses,proto3" json:"uses,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportMediaAuthorityUseRequest) Reset() {
+	*x = ReportMediaAuthorityUseRequest{}
+	mi := &file_commodore_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportMediaAuthorityUseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportMediaAuthorityUseRequest) ProtoMessage() {}
+
+func (x *ReportMediaAuthorityUseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportMediaAuthorityUseRequest.ProtoReflect.Descriptor instead.
+func (*ReportMediaAuthorityUseRequest) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ReportMediaAuthorityUseRequest) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
+}
+
+func (x *ReportMediaAuthorityUseRequest) GetUses() []*MediaAuthorityUse {
+	if x != nil {
+		return x.Uses
+	}
+	return nil
 }
 
 type ValidateStreamKeyRequest struct {
@@ -611,7 +1097,7 @@ type ValidateStreamKeyRequest struct {
 
 func (x *ValidateStreamKeyRequest) Reset() {
 	*x = ValidateStreamKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[4]
+	mi := &file_commodore_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +1109,7 @@ func (x *ValidateStreamKeyRequest) String() string {
 func (*ValidateStreamKeyRequest) ProtoMessage() {}
 
 func (x *ValidateStreamKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[4]
+	mi := &file_commodore_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +1122,7 @@ func (x *ValidateStreamKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateStreamKeyRequest.ProtoReflect.Descriptor instead.
 func (*ValidateStreamKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{4}
+	return file_commodore_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ValidateStreamKeyRequest) GetStreamKey() string {
@@ -737,7 +1223,7 @@ type ValidateStreamKeyResponse struct {
 
 func (x *ValidateStreamKeyResponse) Reset() {
 	*x = ValidateStreamKeyResponse{}
-	mi := &file_commodore_proto_msgTypes[5]
+	mi := &file_commodore_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -749,7 +1235,7 @@ func (x *ValidateStreamKeyResponse) String() string {
 func (*ValidateStreamKeyResponse) ProtoMessage() {}
 
 func (x *ValidateStreamKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[5]
+	mi := &file_commodore_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -762,7 +1248,7 @@ func (x *ValidateStreamKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateStreamKeyResponse.ProtoReflect.Descriptor instead.
 func (*ValidateStreamKeyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{5}
+	return file_commodore_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ValidateStreamKeyResponse) GetValid() bool {
@@ -949,7 +1435,7 @@ type ResolveStreamContextRequest struct {
 
 func (x *ResolveStreamContextRequest) Reset() {
 	*x = ResolveStreamContextRequest{}
-	mi := &file_commodore_proto_msgTypes[6]
+	mi := &file_commodore_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -961,7 +1447,7 @@ func (x *ResolveStreamContextRequest) String() string {
 func (*ResolveStreamContextRequest) ProtoMessage() {}
 
 func (x *ResolveStreamContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[6]
+	mi := &file_commodore_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -974,7 +1460,7 @@ func (x *ResolveStreamContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveStreamContextRequest.ProtoReflect.Descriptor instead.
 func (*ResolveStreamContextRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{6}
+	return file_commodore_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ResolveStreamContextRequest) GetIdentifier() isResolveStreamContextRequest_Identifier {
@@ -1115,7 +1601,7 @@ type ResolveStreamContextResponse struct {
 
 func (x *ResolveStreamContextResponse) Reset() {
 	*x = ResolveStreamContextResponse{}
-	mi := &file_commodore_proto_msgTypes[7]
+	mi := &file_commodore_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1127,7 +1613,7 @@ func (x *ResolveStreamContextResponse) String() string {
 func (*ResolveStreamContextResponse) ProtoMessage() {}
 
 func (x *ResolveStreamContextResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[7]
+	mi := &file_commodore_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1140,7 +1626,7 @@ func (x *ResolveStreamContextResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveStreamContextResponse.ProtoReflect.Descriptor instead.
 func (*ResolveStreamContextResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{7}
+	return file_commodore_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ResolveStreamContextResponse) GetAdmitted() bool {
@@ -1320,7 +1806,7 @@ type ListManagedStreamsRequest struct {
 
 func (x *ListManagedStreamsRequest) Reset() {
 	*x = ListManagedStreamsRequest{}
-	mi := &file_commodore_proto_msgTypes[8]
+	mi := &file_commodore_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1332,7 +1818,7 @@ func (x *ListManagedStreamsRequest) String() string {
 func (*ListManagedStreamsRequest) ProtoMessage() {}
 
 func (x *ListManagedStreamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[8]
+	mi := &file_commodore_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1345,7 +1831,7 @@ func (x *ListManagedStreamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListManagedStreamsRequest.ProtoReflect.Descriptor instead.
 func (*ListManagedStreamsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{8}
+	return file_commodore_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListManagedStreamsRequest) GetClusterId() string {
@@ -1373,7 +1859,7 @@ type ManagedStreamRow struct {
 
 func (x *ManagedStreamRow) Reset() {
 	*x = ManagedStreamRow{}
-	mi := &file_commodore_proto_msgTypes[9]
+	mi := &file_commodore_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1385,7 +1871,7 @@ func (x *ManagedStreamRow) String() string {
 func (*ManagedStreamRow) ProtoMessage() {}
 
 func (x *ManagedStreamRow) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[9]
+	mi := &file_commodore_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1398,7 +1884,7 @@ func (x *ManagedStreamRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ManagedStreamRow.ProtoReflect.Descriptor instead.
 func (*ManagedStreamRow) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{9}
+	return file_commodore_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ManagedStreamRow) GetStreamId() string {
@@ -1480,7 +1966,7 @@ type ListManagedStreamsResponse struct {
 
 func (x *ListManagedStreamsResponse) Reset() {
 	*x = ListManagedStreamsResponse{}
-	mi := &file_commodore_proto_msgTypes[10]
+	mi := &file_commodore_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1492,7 +1978,7 @@ func (x *ListManagedStreamsResponse) String() string {
 func (*ListManagedStreamsResponse) ProtoMessage() {}
 
 func (x *ListManagedStreamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[10]
+	mi := &file_commodore_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1505,7 +1991,7 @@ func (x *ListManagedStreamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListManagedStreamsResponse.ProtoReflect.Descriptor instead.
 func (*ListManagedStreamsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{10}
+	return file_commodore_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListManagedStreamsResponse) GetStreams() []*ManagedStreamRow {
@@ -1524,7 +2010,7 @@ type ListStreamMonitoringRequest struct {
 
 func (x *ListStreamMonitoringRequest) Reset() {
 	*x = ListStreamMonitoringRequest{}
-	mi := &file_commodore_proto_msgTypes[11]
+	mi := &file_commodore_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1536,7 +2022,7 @@ func (x *ListStreamMonitoringRequest) String() string {
 func (*ListStreamMonitoringRequest) ProtoMessage() {}
 
 func (x *ListStreamMonitoringRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[11]
+	mi := &file_commodore_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1549,7 +2035,7 @@ func (x *ListStreamMonitoringRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamMonitoringRequest.ProtoReflect.Descriptor instead.
 func (*ListStreamMonitoringRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{11}
+	return file_commodore_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListStreamMonitoringRequest) GetTenantId() string {
@@ -1570,7 +2056,7 @@ type StreamMonitoringRow struct {
 
 func (x *StreamMonitoringRow) Reset() {
 	*x = StreamMonitoringRow{}
-	mi := &file_commodore_proto_msgTypes[12]
+	mi := &file_commodore_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1582,7 +2068,7 @@ func (x *StreamMonitoringRow) String() string {
 func (*StreamMonitoringRow) ProtoMessage() {}
 
 func (x *StreamMonitoringRow) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[12]
+	mi := &file_commodore_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1595,7 +2081,7 @@ func (x *StreamMonitoringRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamMonitoringRow.ProtoReflect.Descriptor instead.
 func (*StreamMonitoringRow) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{12}
+	return file_commodore_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *StreamMonitoringRow) GetStreamId() string {
@@ -1628,7 +2114,7 @@ type ListStreamMonitoringResponse struct {
 
 func (x *ListStreamMonitoringResponse) Reset() {
 	*x = ListStreamMonitoringResponse{}
-	mi := &file_commodore_proto_msgTypes[13]
+	mi := &file_commodore_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1640,7 +2126,7 @@ func (x *ListStreamMonitoringResponse) String() string {
 func (*ListStreamMonitoringResponse) ProtoMessage() {}
 
 func (x *ListStreamMonitoringResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[13]
+	mi := &file_commodore_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1653,7 +2139,7 @@ func (x *ListStreamMonitoringResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamMonitoringResponse.ProtoReflect.Descriptor instead.
 func (*ListStreamMonitoringResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{13}
+	return file_commodore_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ListStreamMonitoringResponse) GetStreams() []*StreamMonitoringRow {
@@ -1674,7 +2160,7 @@ type RecordStreamActiveClusterRequest struct {
 
 func (x *RecordStreamActiveClusterRequest) Reset() {
 	*x = RecordStreamActiveClusterRequest{}
-	mi := &file_commodore_proto_msgTypes[14]
+	mi := &file_commodore_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1686,7 +2172,7 @@ func (x *RecordStreamActiveClusterRequest) String() string {
 func (*RecordStreamActiveClusterRequest) ProtoMessage() {}
 
 func (x *RecordStreamActiveClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[14]
+	mi := &file_commodore_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1699,7 +2185,7 @@ func (x *RecordStreamActiveClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordStreamActiveClusterRequest.ProtoReflect.Descriptor instead.
 func (*RecordStreamActiveClusterRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{14}
+	return file_commodore_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RecordStreamActiveClusterRequest) GetStreamId() string {
@@ -1734,7 +2220,7 @@ type RecordStreamActiveClusterResponse struct {
 
 func (x *RecordStreamActiveClusterResponse) Reset() {
 	*x = RecordStreamActiveClusterResponse{}
-	mi := &file_commodore_proto_msgTypes[15]
+	mi := &file_commodore_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1746,7 +2232,7 @@ func (x *RecordStreamActiveClusterResponse) String() string {
 func (*RecordStreamActiveClusterResponse) ProtoMessage() {}
 
 func (x *RecordStreamActiveClusterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[15]
+	mi := &file_commodore_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1759,7 +2245,7 @@ func (x *RecordStreamActiveClusterResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use RecordStreamActiveClusterResponse.ProtoReflect.Descriptor instead.
 func (*RecordStreamActiveClusterResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{15}
+	return file_commodore_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RecordStreamActiveClusterResponse) GetUpdated() bool {
@@ -1780,7 +2266,7 @@ type RegisterStreamThumbnailServingCellRequest struct {
 
 func (x *RegisterStreamThumbnailServingCellRequest) Reset() {
 	*x = RegisterStreamThumbnailServingCellRequest{}
-	mi := &file_commodore_proto_msgTypes[16]
+	mi := &file_commodore_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1792,7 +2278,7 @@ func (x *RegisterStreamThumbnailServingCellRequest) String() string {
 func (*RegisterStreamThumbnailServingCellRequest) ProtoMessage() {}
 
 func (x *RegisterStreamThumbnailServingCellRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[16]
+	mi := &file_commodore_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1805,7 +2291,7 @@ func (x *RegisterStreamThumbnailServingCellRequest) ProtoReflect() protoreflect.
 
 // Deprecated: Use RegisterStreamThumbnailServingCellRequest.ProtoReflect.Descriptor instead.
 func (*RegisterStreamThumbnailServingCellRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{16}
+	return file_commodore_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RegisterStreamThumbnailServingCellRequest) GetStreamId() string {
@@ -1840,7 +2326,7 @@ type RegisterStreamThumbnailServingCellResponse struct {
 
 func (x *RegisterStreamThumbnailServingCellResponse) Reset() {
 	*x = RegisterStreamThumbnailServingCellResponse{}
-	mi := &file_commodore_proto_msgTypes[17]
+	mi := &file_commodore_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1852,7 +2338,7 @@ func (x *RegisterStreamThumbnailServingCellResponse) String() string {
 func (*RegisterStreamThumbnailServingCellResponse) ProtoMessage() {}
 
 func (x *RegisterStreamThumbnailServingCellResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[17]
+	mi := &file_commodore_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1865,7 +2351,7 @@ func (x *RegisterStreamThumbnailServingCellResponse) ProtoReflect() protoreflect
 
 // Deprecated: Use RegisterStreamThumbnailServingCellResponse.ProtoReflect.Descriptor instead.
 func (*RegisterStreamThumbnailServingCellResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{17}
+	return file_commodore_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RegisterStreamThumbnailServingCellResponse) GetRegistered() bool {
@@ -1888,7 +2374,7 @@ type ClearStreamActiveClusterRequest struct {
 
 func (x *ClearStreamActiveClusterRequest) Reset() {
 	*x = ClearStreamActiveClusterRequest{}
-	mi := &file_commodore_proto_msgTypes[18]
+	mi := &file_commodore_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1900,7 +2386,7 @@ func (x *ClearStreamActiveClusterRequest) String() string {
 func (*ClearStreamActiveClusterRequest) ProtoMessage() {}
 
 func (x *ClearStreamActiveClusterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[18]
+	mi := &file_commodore_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1913,7 +2399,7 @@ func (x *ClearStreamActiveClusterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearStreamActiveClusterRequest.ProtoReflect.Descriptor instead.
 func (*ClearStreamActiveClusterRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{18}
+	return file_commodore_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ClearStreamActiveClusterRequest) GetStreamId() string {
@@ -1946,7 +2432,7 @@ type ClearStreamActiveClusterResponse struct {
 
 func (x *ClearStreamActiveClusterResponse) Reset() {
 	*x = ClearStreamActiveClusterResponse{}
-	mi := &file_commodore_proto_msgTypes[19]
+	mi := &file_commodore_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1958,7 +2444,7 @@ func (x *ClearStreamActiveClusterResponse) String() string {
 func (*ClearStreamActiveClusterResponse) ProtoMessage() {}
 
 func (x *ClearStreamActiveClusterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[19]
+	mi := &file_commodore_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1971,7 +2457,7 @@ func (x *ClearStreamActiveClusterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearStreamActiveClusterResponse.ProtoReflect.Descriptor instead.
 func (*ClearStreamActiveClusterResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{19}
+	return file_commodore_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ClearStreamActiveClusterResponse) GetCleared() bool {
@@ -2002,7 +2488,7 @@ type ActiveIngestStream struct {
 
 func (x *ActiveIngestStream) Reset() {
 	*x = ActiveIngestStream{}
-	mi := &file_commodore_proto_msgTypes[20]
+	mi := &file_commodore_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2014,7 +2500,7 @@ func (x *ActiveIngestStream) String() string {
 func (*ActiveIngestStream) ProtoMessage() {}
 
 func (x *ActiveIngestStream) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[20]
+	mi := &file_commodore_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2027,7 +2513,7 @@ func (x *ActiveIngestStream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActiveIngestStream.ProtoReflect.Descriptor instead.
 func (*ActiveIngestStream) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{20}
+	return file_commodore_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ActiveIngestStream) GetTenantId() string {
@@ -2079,7 +2565,7 @@ type SyncActiveIngestPlacementRequest struct {
 
 func (x *SyncActiveIngestPlacementRequest) Reset() {
 	*x = SyncActiveIngestPlacementRequest{}
-	mi := &file_commodore_proto_msgTypes[21]
+	mi := &file_commodore_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2091,7 +2577,7 @@ func (x *SyncActiveIngestPlacementRequest) String() string {
 func (*SyncActiveIngestPlacementRequest) ProtoMessage() {}
 
 func (x *SyncActiveIngestPlacementRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[21]
+	mi := &file_commodore_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2104,7 +2590,7 @@ func (x *SyncActiveIngestPlacementRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncActiveIngestPlacementRequest.ProtoReflect.Descriptor instead.
 func (*SyncActiveIngestPlacementRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{21}
+	return file_commodore_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SyncActiveIngestPlacementRequest) GetClusterId() string {
@@ -2142,7 +2628,7 @@ type SyncActiveIngestPlacementResponse struct {
 
 func (x *SyncActiveIngestPlacementResponse) Reset() {
 	*x = SyncActiveIngestPlacementResponse{}
-	mi := &file_commodore_proto_msgTypes[22]
+	mi := &file_commodore_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2154,7 +2640,7 @@ func (x *SyncActiveIngestPlacementResponse) String() string {
 func (*SyncActiveIngestPlacementResponse) ProtoMessage() {}
 
 func (x *SyncActiveIngestPlacementResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[22]
+	mi := &file_commodore_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2167,7 +2653,7 @@ func (x *SyncActiveIngestPlacementResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use SyncActiveIngestPlacementResponse.ProtoReflect.Descriptor instead.
 func (*SyncActiveIngestPlacementResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{22}
+	return file_commodore_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SyncActiveIngestPlacementResponse) GetRenewed() int32 {
@@ -2207,7 +2693,7 @@ type ResolvePlaybackIDRequest struct {
 
 func (x *ResolvePlaybackIDRequest) Reset() {
 	*x = ResolvePlaybackIDRequest{}
-	mi := &file_commodore_proto_msgTypes[23]
+	mi := &file_commodore_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2219,7 +2705,7 @@ func (x *ResolvePlaybackIDRequest) String() string {
 func (*ResolvePlaybackIDRequest) ProtoMessage() {}
 
 func (x *ResolvePlaybackIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[23]
+	mi := &file_commodore_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2232,7 +2718,7 @@ func (x *ResolvePlaybackIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePlaybackIDRequest.ProtoReflect.Descriptor instead.
 func (*ResolvePlaybackIDRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{23}
+	return file_commodore_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ResolvePlaybackIDRequest) GetPlaybackId() string {
@@ -2274,7 +2760,7 @@ type ResolvePlaybackIDResponse struct {
 
 func (x *ResolvePlaybackIDResponse) Reset() {
 	*x = ResolvePlaybackIDResponse{}
-	mi := &file_commodore_proto_msgTypes[24]
+	mi := &file_commodore_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2286,7 +2772,7 @@ func (x *ResolvePlaybackIDResponse) String() string {
 func (*ResolvePlaybackIDResponse) ProtoMessage() {}
 
 func (x *ResolvePlaybackIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[24]
+	mi := &file_commodore_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2299,7 +2785,7 @@ func (x *ResolvePlaybackIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePlaybackIDResponse.ProtoReflect.Descriptor instead.
 func (*ResolvePlaybackIDResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{24}
+	return file_commodore_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ResolvePlaybackIDResponse) GetInternalName() string {
@@ -2409,7 +2895,7 @@ type ResolvePullSourceByInternalNameRequest struct {
 
 func (x *ResolvePullSourceByInternalNameRequest) Reset() {
 	*x = ResolvePullSourceByInternalNameRequest{}
-	mi := &file_commodore_proto_msgTypes[25]
+	mi := &file_commodore_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2421,7 +2907,7 @@ func (x *ResolvePullSourceByInternalNameRequest) String() string {
 func (*ResolvePullSourceByInternalNameRequest) ProtoMessage() {}
 
 func (x *ResolvePullSourceByInternalNameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[25]
+	mi := &file_commodore_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2434,7 +2920,7 @@ func (x *ResolvePullSourceByInternalNameRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use ResolvePullSourceByInternalNameRequest.ProtoReflect.Descriptor instead.
 func (*ResolvePullSourceByInternalNameRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{25}
+	return file_commodore_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ResolvePullSourceByInternalNameRequest) GetInternalName() string {
@@ -2463,7 +2949,7 @@ type ResolvePullSourceByInternalNameResponse struct {
 
 func (x *ResolvePullSourceByInternalNameResponse) Reset() {
 	*x = ResolvePullSourceByInternalNameResponse{}
-	mi := &file_commodore_proto_msgTypes[26]
+	mi := &file_commodore_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2475,7 +2961,7 @@ func (x *ResolvePullSourceByInternalNameResponse) String() string {
 func (*ResolvePullSourceByInternalNameResponse) ProtoMessage() {}
 
 func (x *ResolvePullSourceByInternalNameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[26]
+	mi := &file_commodore_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2488,7 +2974,7 @@ func (x *ResolvePullSourceByInternalNameResponse) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use ResolvePullSourceByInternalNameResponse.ProtoReflect.Descriptor instead.
 func (*ResolvePullSourceByInternalNameResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{26}
+	return file_commodore_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ResolvePullSourceByInternalNameResponse) GetFound() bool {
@@ -2545,7 +3031,7 @@ type ResolvePlaybackPolicyRequest struct {
 
 func (x *ResolvePlaybackPolicyRequest) Reset() {
 	*x = ResolvePlaybackPolicyRequest{}
-	mi := &file_commodore_proto_msgTypes[27]
+	mi := &file_commodore_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2557,7 +3043,7 @@ func (x *ResolvePlaybackPolicyRequest) String() string {
 func (*ResolvePlaybackPolicyRequest) ProtoMessage() {}
 
 func (x *ResolvePlaybackPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[27]
+	mi := &file_commodore_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2570,7 +3056,7 @@ func (x *ResolvePlaybackPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePlaybackPolicyRequest.ProtoReflect.Descriptor instead.
 func (*ResolvePlaybackPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{27}
+	return file_commodore_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ResolvePlaybackPolicyRequest) GetPlaybackId() string {
@@ -2604,7 +3090,7 @@ type RecordSigningKeyUseRequest struct {
 
 func (x *RecordSigningKeyUseRequest) Reset() {
 	*x = RecordSigningKeyUseRequest{}
-	mi := &file_commodore_proto_msgTypes[28]
+	mi := &file_commodore_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2616,7 +3102,7 @@ func (x *RecordSigningKeyUseRequest) String() string {
 func (*RecordSigningKeyUseRequest) ProtoMessage() {}
 
 func (x *RecordSigningKeyUseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[28]
+	mi := &file_commodore_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2629,7 +3115,7 @@ func (x *RecordSigningKeyUseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordSigningKeyUseRequest.ProtoReflect.Descriptor instead.
 func (*RecordSigningKeyUseRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{28}
+	return file_commodore_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *RecordSigningKeyUseRequest) GetTenantId() string {
@@ -2657,7 +3143,7 @@ type PlaybackSigningKey struct {
 
 func (x *PlaybackSigningKey) Reset() {
 	*x = PlaybackSigningKey{}
-	mi := &file_commodore_proto_msgTypes[29]
+	mi := &file_commodore_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2669,7 +3155,7 @@ func (x *PlaybackSigningKey) String() string {
 func (*PlaybackSigningKey) ProtoMessage() {}
 
 func (x *PlaybackSigningKey) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[29]
+	mi := &file_commodore_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2682,7 +3168,7 @@ func (x *PlaybackSigningKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackSigningKey.ProtoReflect.Descriptor instead.
 func (*PlaybackSigningKey) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{29}
+	return file_commodore_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PlaybackSigningKey) GetKid() string {
@@ -2720,7 +3206,7 @@ type PlaybackJwtPolicy struct {
 
 func (x *PlaybackJwtPolicy) Reset() {
 	*x = PlaybackJwtPolicy{}
-	mi := &file_commodore_proto_msgTypes[30]
+	mi := &file_commodore_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2732,7 +3218,7 @@ func (x *PlaybackJwtPolicy) String() string {
 func (*PlaybackJwtPolicy) ProtoMessage() {}
 
 func (x *PlaybackJwtPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[30]
+	mi := &file_commodore_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2745,7 +3231,7 @@ func (x *PlaybackJwtPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackJwtPolicy.ProtoReflect.Descriptor instead.
 func (*PlaybackJwtPolicy) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{30}
+	return file_commodore_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PlaybackJwtPolicy) GetAllowedKids() []string {
@@ -2787,7 +3273,7 @@ type PlaybackWebhookPolicy struct {
 
 func (x *PlaybackWebhookPolicy) Reset() {
 	*x = PlaybackWebhookPolicy{}
-	mi := &file_commodore_proto_msgTypes[31]
+	mi := &file_commodore_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2799,7 +3285,7 @@ func (x *PlaybackWebhookPolicy) String() string {
 func (*PlaybackWebhookPolicy) ProtoMessage() {}
 
 func (x *PlaybackWebhookPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[31]
+	mi := &file_commodore_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2812,7 +3298,7 @@ func (x *PlaybackWebhookPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlaybackWebhookPolicy.ProtoReflect.Descriptor instead.
 func (*PlaybackWebhookPolicy) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{31}
+	return file_commodore_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PlaybackWebhookPolicy) GetUrl() string {
@@ -2854,7 +3340,7 @@ type ResolvePlaybackPolicyResponse struct {
 
 func (x *ResolvePlaybackPolicyResponse) Reset() {
 	*x = ResolvePlaybackPolicyResponse{}
-	mi := &file_commodore_proto_msgTypes[32]
+	mi := &file_commodore_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2866,7 +3352,7 @@ func (x *ResolvePlaybackPolicyResponse) String() string {
 func (*ResolvePlaybackPolicyResponse) ProtoMessage() {}
 
 func (x *ResolvePlaybackPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[32]
+	mi := &file_commodore_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2879,7 +3365,7 @@ func (x *ResolvePlaybackPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvePlaybackPolicyResponse.ProtoReflect.Descriptor instead.
 func (*ResolvePlaybackPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{32}
+	return file_commodore_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ResolvePlaybackPolicyResponse) GetType() string {
@@ -2919,7 +3405,7 @@ type ResolveInternalNameRequest struct {
 
 func (x *ResolveInternalNameRequest) Reset() {
 	*x = ResolveInternalNameRequest{}
-	mi := &file_commodore_proto_msgTypes[33]
+	mi := &file_commodore_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2931,7 +3417,7 @@ func (x *ResolveInternalNameRequest) String() string {
 func (*ResolveInternalNameRequest) ProtoMessage() {}
 
 func (x *ResolveInternalNameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[33]
+	mi := &file_commodore_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2944,7 +3430,7 @@ func (x *ResolveInternalNameRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveInternalNameRequest.ProtoReflect.Descriptor instead.
 func (*ResolveInternalNameRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{33}
+	return file_commodore_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ResolveInternalNameRequest) GetInternalName() string {
@@ -2977,7 +3463,7 @@ type ResolveInternalNameResponse struct {
 
 func (x *ResolveInternalNameResponse) Reset() {
 	*x = ResolveInternalNameResponse{}
-	mi := &file_commodore_proto_msgTypes[34]
+	mi := &file_commodore_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2989,7 +3475,7 @@ func (x *ResolveInternalNameResponse) String() string {
 func (*ResolveInternalNameResponse) ProtoMessage() {}
 
 func (x *ResolveInternalNameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[34]
+	mi := &file_commodore_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3002,7 +3488,7 @@ func (x *ResolveInternalNameResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveInternalNameResponse.ProtoReflect.Descriptor instead.
 func (*ResolveInternalNameResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{34}
+	return file_commodore_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ResolveInternalNameResponse) GetInternalName() string {
@@ -3091,7 +3577,7 @@ type ValidateAPITokenRequest struct {
 
 func (x *ValidateAPITokenRequest) Reset() {
 	*x = ValidateAPITokenRequest{}
-	mi := &file_commodore_proto_msgTypes[35]
+	mi := &file_commodore_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3103,7 +3589,7 @@ func (x *ValidateAPITokenRequest) String() string {
 func (*ValidateAPITokenRequest) ProtoMessage() {}
 
 func (x *ValidateAPITokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[35]
+	mi := &file_commodore_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3116,7 +3602,7 @@ func (x *ValidateAPITokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateAPITokenRequest.ProtoReflect.Descriptor instead.
 func (*ValidateAPITokenRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{35}
+	return file_commodore_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ValidateAPITokenRequest) GetToken() string {
@@ -3143,7 +3629,7 @@ type ValidateAPITokenResponse struct {
 
 func (x *ValidateAPITokenResponse) Reset() {
 	*x = ValidateAPITokenResponse{}
-	mi := &file_commodore_proto_msgTypes[36]
+	mi := &file_commodore_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3155,7 +3641,7 @@ func (x *ValidateAPITokenResponse) String() string {
 func (*ValidateAPITokenResponse) ProtoMessage() {}
 
 func (x *ValidateAPITokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[36]
+	mi := &file_commodore_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3168,7 +3654,7 @@ func (x *ValidateAPITokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateAPITokenResponse.ProtoReflect.Descriptor instead.
 func (*ValidateAPITokenResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{36}
+	return file_commodore_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ValidateAPITokenResponse) GetValid() bool {
@@ -3242,7 +3728,7 @@ type MintMistAdminSessionRequest struct {
 
 func (x *MintMistAdminSessionRequest) Reset() {
 	*x = MintMistAdminSessionRequest{}
-	mi := &file_commodore_proto_msgTypes[37]
+	mi := &file_commodore_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3254,7 +3740,7 @@ func (x *MintMistAdminSessionRequest) String() string {
 func (*MintMistAdminSessionRequest) ProtoMessage() {}
 
 func (x *MintMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[37]
+	mi := &file_commodore_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3267,7 +3753,7 @@ func (x *MintMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintMistAdminSessionRequest.ProtoReflect.Descriptor instead.
 func (*MintMistAdminSessionRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{37}
+	return file_commodore_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *MintMistAdminSessionRequest) GetNodeId() string {
@@ -3292,7 +3778,7 @@ type MintMistAdminSessionResponse struct {
 
 func (x *MintMistAdminSessionResponse) Reset() {
 	*x = MintMistAdminSessionResponse{}
-	mi := &file_commodore_proto_msgTypes[38]
+	mi := &file_commodore_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3304,7 +3790,7 @@ func (x *MintMistAdminSessionResponse) String() string {
 func (*MintMistAdminSessionResponse) ProtoMessage() {}
 
 func (x *MintMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[38]
+	mi := &file_commodore_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3317,7 +3803,7 @@ func (x *MintMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintMistAdminSessionResponse.ProtoReflect.Descriptor instead.
 func (*MintMistAdminSessionResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{38}
+	return file_commodore_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *MintMistAdminSessionResponse) GetToken() string {
@@ -3353,7 +3839,7 @@ type ValidateMistAdminSessionRequest struct {
 
 func (x *ValidateMistAdminSessionRequest) Reset() {
 	*x = ValidateMistAdminSessionRequest{}
-	mi := &file_commodore_proto_msgTypes[39]
+	mi := &file_commodore_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3365,7 +3851,7 @@ func (x *ValidateMistAdminSessionRequest) String() string {
 func (*ValidateMistAdminSessionRequest) ProtoMessage() {}
 
 func (x *ValidateMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[39]
+	mi := &file_commodore_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3378,7 +3864,7 @@ func (x *ValidateMistAdminSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateMistAdminSessionRequest.ProtoReflect.Descriptor instead.
 func (*ValidateMistAdminSessionRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{39}
+	return file_commodore_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ValidateMistAdminSessionRequest) GetToken() string {
@@ -3410,7 +3896,7 @@ type ValidateMistAdminSessionResponse struct {
 
 func (x *ValidateMistAdminSessionResponse) Reset() {
 	*x = ValidateMistAdminSessionResponse{}
-	mi := &file_commodore_proto_msgTypes[40]
+	mi := &file_commodore_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3422,7 +3908,7 @@ func (x *ValidateMistAdminSessionResponse) String() string {
 func (*ValidateMistAdminSessionResponse) ProtoMessage() {}
 
 func (x *ValidateMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[40]
+	mi := &file_commodore_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3435,7 +3921,7 @@ func (x *ValidateMistAdminSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateMistAdminSessionResponse.ProtoReflect.Descriptor instead.
 func (*ValidateMistAdminSessionResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{40}
+	return file_commodore_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ValidateMistAdminSessionResponse) GetValid() bool {
@@ -3504,7 +3990,7 @@ type RegisterDVRRequest struct {
 
 func (x *RegisterDVRRequest) Reset() {
 	*x = RegisterDVRRequest{}
-	mi := &file_commodore_proto_msgTypes[41]
+	mi := &file_commodore_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3516,7 +4002,7 @@ func (x *RegisterDVRRequest) String() string {
 func (*RegisterDVRRequest) ProtoMessage() {}
 
 func (x *RegisterDVRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[41]
+	mi := &file_commodore_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3529,7 +4015,7 @@ func (x *RegisterDVRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterDVRRequest.ProtoReflect.Descriptor instead.
 func (*RegisterDVRRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{41}
+	return file_commodore_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RegisterDVRRequest) GetTenantId() string {
@@ -3598,7 +4084,7 @@ type RegisterDVRResponse struct {
 
 func (x *RegisterDVRResponse) Reset() {
 	*x = RegisterDVRResponse{}
-	mi := &file_commodore_proto_msgTypes[42]
+	mi := &file_commodore_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3610,7 +4096,7 @@ func (x *RegisterDVRResponse) String() string {
 func (*RegisterDVRResponse) ProtoMessage() {}
 
 func (x *RegisterDVRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[42]
+	mi := &file_commodore_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3623,7 +4109,7 @@ func (x *RegisterDVRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterDVRResponse.ProtoReflect.Descriptor instead.
 func (*RegisterDVRResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{42}
+	return file_commodore_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *RegisterDVRResponse) GetDvrHash() string {
@@ -3683,7 +4169,7 @@ type UpdateDVRRetentionRequest struct {
 
 func (x *UpdateDVRRetentionRequest) Reset() {
 	*x = UpdateDVRRetentionRequest{}
-	mi := &file_commodore_proto_msgTypes[43]
+	mi := &file_commodore_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3695,7 +4181,7 @@ func (x *UpdateDVRRetentionRequest) String() string {
 func (*UpdateDVRRetentionRequest) ProtoMessage() {}
 
 func (x *UpdateDVRRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[43]
+	mi := &file_commodore_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3708,7 +4194,7 @@ func (x *UpdateDVRRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDVRRetentionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateDVRRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{43}
+	return file_commodore_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *UpdateDVRRetentionRequest) GetTenantId() string {
@@ -3741,7 +4227,7 @@ type UpdateDVRRetentionResponse struct {
 
 func (x *UpdateDVRRetentionResponse) Reset() {
 	*x = UpdateDVRRetentionResponse{}
-	mi := &file_commodore_proto_msgTypes[44]
+	mi := &file_commodore_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3753,7 +4239,7 @@ func (x *UpdateDVRRetentionResponse) String() string {
 func (*UpdateDVRRetentionResponse) ProtoMessage() {}
 
 func (x *UpdateDVRRetentionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[44]
+	mi := &file_commodore_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3766,7 +4252,7 @@ func (x *UpdateDVRRetentionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDVRRetentionResponse.ProtoReflect.Descriptor instead.
 func (*UpdateDVRRetentionResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{44}
+	return file_commodore_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *UpdateDVRRetentionResponse) GetUpdated() bool {
@@ -3796,7 +4282,7 @@ type MediaTrack struct {
 
 func (x *MediaTrack) Reset() {
 	*x = MediaTrack{}
-	mi := &file_commodore_proto_msgTypes[45]
+	mi := &file_commodore_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3808,7 +4294,7 @@ func (x *MediaTrack) String() string {
 func (*MediaTrack) ProtoMessage() {}
 
 func (x *MediaTrack) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[45]
+	mi := &file_commodore_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3821,7 +4307,7 @@ func (x *MediaTrack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MediaTrack.ProtoReflect.Descriptor instead.
 func (*MediaTrack) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{45}
+	return file_commodore_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *MediaTrack) GetType() string {
@@ -3952,7 +4438,7 @@ type UpdateArtifactCatalogSnapshotRequest struct {
 
 func (x *UpdateArtifactCatalogSnapshotRequest) Reset() {
 	*x = UpdateArtifactCatalogSnapshotRequest{}
-	mi := &file_commodore_proto_msgTypes[46]
+	mi := &file_commodore_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3964,7 +4450,7 @@ func (x *UpdateArtifactCatalogSnapshotRequest) String() string {
 func (*UpdateArtifactCatalogSnapshotRequest) ProtoMessage() {}
 
 func (x *UpdateArtifactCatalogSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[46]
+	mi := &file_commodore_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3977,7 +4463,7 @@ func (x *UpdateArtifactCatalogSnapshotRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use UpdateArtifactCatalogSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*UpdateArtifactCatalogSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{46}
+	return file_commodore_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *UpdateArtifactCatalogSnapshotRequest) GetTenantId() string {
@@ -4138,7 +4624,7 @@ type UpdateArtifactCatalogSnapshotResponse struct {
 
 func (x *UpdateArtifactCatalogSnapshotResponse) Reset() {
 	*x = UpdateArtifactCatalogSnapshotResponse{}
-	mi := &file_commodore_proto_msgTypes[47]
+	mi := &file_commodore_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4150,7 +4636,7 @@ func (x *UpdateArtifactCatalogSnapshotResponse) String() string {
 func (*UpdateArtifactCatalogSnapshotResponse) ProtoMessage() {}
 
 func (x *UpdateArtifactCatalogSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[47]
+	mi := &file_commodore_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4163,7 +4649,7 @@ func (x *UpdateArtifactCatalogSnapshotResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use UpdateArtifactCatalogSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*UpdateArtifactCatalogSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{47}
+	return file_commodore_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *UpdateArtifactCatalogSnapshotResponse) GetFound() bool {
@@ -4198,7 +4684,7 @@ type ResolveClipHashRequest struct {
 
 func (x *ResolveClipHashRequest) Reset() {
 	*x = ResolveClipHashRequest{}
-	mi := &file_commodore_proto_msgTypes[48]
+	mi := &file_commodore_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4210,7 +4696,7 @@ func (x *ResolveClipHashRequest) String() string {
 func (*ResolveClipHashRequest) ProtoMessage() {}
 
 func (x *ResolveClipHashRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[48]
+	mi := &file_commodore_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4223,7 +4709,7 @@ func (x *ResolveClipHashRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveClipHashRequest.ProtoReflect.Descriptor instead.
 func (*ResolveClipHashRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{48}
+	return file_commodore_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ResolveClipHashRequest) GetClipHash() string {
@@ -4254,7 +4740,7 @@ type ResolveClipHashResponse struct {
 
 func (x *ResolveClipHashResponse) Reset() {
 	*x = ResolveClipHashResponse{}
-	mi := &file_commodore_proto_msgTypes[49]
+	mi := &file_commodore_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4266,7 +4752,7 @@ func (x *ResolveClipHashResponse) String() string {
 func (*ResolveClipHashResponse) ProtoMessage() {}
 
 func (x *ResolveClipHashResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[49]
+	mi := &file_commodore_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4279,7 +4765,7 @@ func (x *ResolveClipHashResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveClipHashResponse.ProtoReflect.Descriptor instead.
 func (*ResolveClipHashResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{49}
+	return file_commodore_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ResolveClipHashResponse) GetFound() bool {
@@ -4384,7 +4870,7 @@ type ResolveDVRHashRequest struct {
 
 func (x *ResolveDVRHashRequest) Reset() {
 	*x = ResolveDVRHashRequest{}
-	mi := &file_commodore_proto_msgTypes[50]
+	mi := &file_commodore_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4396,7 +4882,7 @@ func (x *ResolveDVRHashRequest) String() string {
 func (*ResolveDVRHashRequest) ProtoMessage() {}
 
 func (x *ResolveDVRHashRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[50]
+	mi := &file_commodore_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4409,7 +4895,7 @@ func (x *ResolveDVRHashRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDVRHashRequest.ProtoReflect.Descriptor instead.
 func (*ResolveDVRHashRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{50}
+	return file_commodore_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ResolveDVRHashRequest) GetDvrHash() string {
@@ -4435,7 +4921,7 @@ type ResolveDVRHashResponse struct {
 
 func (x *ResolveDVRHashResponse) Reset() {
 	*x = ResolveDVRHashResponse{}
-	mi := &file_commodore_proto_msgTypes[51]
+	mi := &file_commodore_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4447,7 +4933,7 @@ func (x *ResolveDVRHashResponse) String() string {
 func (*ResolveDVRHashResponse) ProtoMessage() {}
 
 func (x *ResolveDVRHashResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[51]
+	mi := &file_commodore_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4460,7 +4946,7 @@ func (x *ResolveDVRHashResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveDVRHashResponse.ProtoReflect.Descriptor instead.
 func (*ResolveDVRHashResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{51}
+	return file_commodore_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ResolveDVRHashResponse) GetFound() bool {
@@ -4531,7 +5017,7 @@ type ResolveIdentifierRequest struct {
 
 func (x *ResolveIdentifierRequest) Reset() {
 	*x = ResolveIdentifierRequest{}
-	mi := &file_commodore_proto_msgTypes[52]
+	mi := &file_commodore_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4543,7 +5029,7 @@ func (x *ResolveIdentifierRequest) String() string {
 func (*ResolveIdentifierRequest) ProtoMessage() {}
 
 func (x *ResolveIdentifierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[52]
+	mi := &file_commodore_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4556,7 +5042,7 @@ func (x *ResolveIdentifierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveIdentifierRequest.ProtoReflect.Descriptor instead.
 func (*ResolveIdentifierRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{52}
+	return file_commodore_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ResolveIdentifierRequest) GetIdentifier() string {
@@ -4587,7 +5073,7 @@ type ResolveIdentifierResponse struct {
 
 func (x *ResolveIdentifierResponse) Reset() {
 	*x = ResolveIdentifierResponse{}
-	mi := &file_commodore_proto_msgTypes[53]
+	mi := &file_commodore_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4599,7 +5085,7 @@ func (x *ResolveIdentifierResponse) String() string {
 func (*ResolveIdentifierResponse) ProtoMessage() {}
 
 func (x *ResolveIdentifierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[53]
+	mi := &file_commodore_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4612,7 +5098,7 @@ func (x *ResolveIdentifierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveIdentifierResponse.ProtoReflect.Descriptor instead.
 func (*ResolveIdentifierResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{53}
+	return file_commodore_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ResolveIdentifierResponse) GetFound() bool {
@@ -4696,7 +5182,7 @@ type ResolveVodHashRequest struct {
 
 func (x *ResolveVodHashRequest) Reset() {
 	*x = ResolveVodHashRequest{}
-	mi := &file_commodore_proto_msgTypes[54]
+	mi := &file_commodore_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4708,7 +5194,7 @@ func (x *ResolveVodHashRequest) String() string {
 func (*ResolveVodHashRequest) ProtoMessage() {}
 
 func (x *ResolveVodHashRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[54]
+	mi := &file_commodore_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4721,7 +5207,7 @@ func (x *ResolveVodHashRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveVodHashRequest.ProtoReflect.Descriptor instead.
 func (*ResolveVodHashRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{54}
+	return file_commodore_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ResolveVodHashRequest) GetVodHash() string {
@@ -4751,7 +5237,7 @@ type ResolveVodHashResponse struct {
 
 func (x *ResolveVodHashResponse) Reset() {
 	*x = ResolveVodHashResponse{}
-	mi := &file_commodore_proto_msgTypes[55]
+	mi := &file_commodore_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4763,7 +5249,7 @@ func (x *ResolveVodHashResponse) String() string {
 func (*ResolveVodHashResponse) ProtoMessage() {}
 
 func (x *ResolveVodHashResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[55]
+	mi := &file_commodore_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4776,7 +5262,7 @@ func (x *ResolveVodHashResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveVodHashResponse.ProtoReflect.Descriptor instead.
 func (*ResolveVodHashResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{55}
+	return file_commodore_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ResolveVodHashResponse) GetFound() bool {
@@ -4873,7 +5359,7 @@ type ResolveVodIDRequest struct {
 
 func (x *ResolveVodIDRequest) Reset() {
 	*x = ResolveVodIDRequest{}
-	mi := &file_commodore_proto_msgTypes[56]
+	mi := &file_commodore_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4885,7 +5371,7 @@ func (x *ResolveVodIDRequest) String() string {
 func (*ResolveVodIDRequest) ProtoMessage() {}
 
 func (x *ResolveVodIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[56]
+	mi := &file_commodore_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4898,7 +5384,7 @@ func (x *ResolveVodIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveVodIDRequest.ProtoReflect.Descriptor instead.
 func (*ResolveVodIDRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{56}
+	return file_commodore_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ResolveVodIDRequest) GetVodId() string {
@@ -4922,7 +5408,7 @@ type ResolveVodIDResponse struct {
 
 func (x *ResolveVodIDResponse) Reset() {
 	*x = ResolveVodIDResponse{}
-	mi := &file_commodore_proto_msgTypes[57]
+	mi := &file_commodore_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4934,7 +5420,7 @@ func (x *ResolveVodIDResponse) String() string {
 func (*ResolveVodIDResponse) ProtoMessage() {}
 
 func (x *ResolveVodIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[57]
+	mi := &file_commodore_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4947,7 +5433,7 @@ func (x *ResolveVodIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveVodIDResponse.ProtoReflect.Descriptor instead.
 func (*ResolveVodIDResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{57}
+	return file_commodore_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ResolveVodIDResponse) GetFound() bool {
@@ -5015,7 +5501,7 @@ type MintChapterPlaybackIDRequest struct {
 
 func (x *MintChapterPlaybackIDRequest) Reset() {
 	*x = MintChapterPlaybackIDRequest{}
-	mi := &file_commodore_proto_msgTypes[58]
+	mi := &file_commodore_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5027,7 +5513,7 @@ func (x *MintChapterPlaybackIDRequest) String() string {
 func (*MintChapterPlaybackIDRequest) ProtoMessage() {}
 
 func (x *MintChapterPlaybackIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[58]
+	mi := &file_commodore_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5040,7 +5526,7 @@ func (x *MintChapterPlaybackIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintChapterPlaybackIDRequest.ProtoReflect.Descriptor instead.
 func (*MintChapterPlaybackIDRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{58}
+	return file_commodore_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *MintChapterPlaybackIDRequest) GetChapterId() string {
@@ -5129,7 +5615,7 @@ type MintChapterPlaybackIDResponse struct {
 
 func (x *MintChapterPlaybackIDResponse) Reset() {
 	*x = MintChapterPlaybackIDResponse{}
-	mi := &file_commodore_proto_msgTypes[59]
+	mi := &file_commodore_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5141,7 +5627,7 @@ func (x *MintChapterPlaybackIDResponse) String() string {
 func (*MintChapterPlaybackIDResponse) ProtoMessage() {}
 
 func (x *MintChapterPlaybackIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[59]
+	mi := &file_commodore_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5154,7 +5640,7 @@ func (x *MintChapterPlaybackIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintChapterPlaybackIDResponse.ProtoReflect.Descriptor instead.
 func (*MintChapterPlaybackIDResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{59}
+	return file_commodore_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *MintChapterPlaybackIDResponse) GetPlaybackId() string {
@@ -5176,7 +5662,7 @@ type ResolveChapterPlaybackIDRequest struct {
 
 func (x *ResolveChapterPlaybackIDRequest) Reset() {
 	*x = ResolveChapterPlaybackIDRequest{}
-	mi := &file_commodore_proto_msgTypes[60]
+	mi := &file_commodore_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5188,7 +5674,7 @@ func (x *ResolveChapterPlaybackIDRequest) String() string {
 func (*ResolveChapterPlaybackIDRequest) ProtoMessage() {}
 
 func (x *ResolveChapterPlaybackIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[60]
+	mi := &file_commodore_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5201,7 +5687,7 @@ func (x *ResolveChapterPlaybackIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveChapterPlaybackIDRequest.ProtoReflect.Descriptor instead.
 func (*ResolveChapterPlaybackIDRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{60}
+	return file_commodore_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ResolveChapterPlaybackIDRequest) GetPlaybackId() string {
@@ -5223,7 +5709,7 @@ type ResolveChapterPlaybackIDResponse struct {
 
 func (x *ResolveChapterPlaybackIDResponse) Reset() {
 	*x = ResolveChapterPlaybackIDResponse{}
-	mi := &file_commodore_proto_msgTypes[61]
+	mi := &file_commodore_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5235,7 +5721,7 @@ func (x *ResolveChapterPlaybackIDResponse) String() string {
 func (*ResolveChapterPlaybackIDResponse) ProtoMessage() {}
 
 func (x *ResolveChapterPlaybackIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[61]
+	mi := &file_commodore_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5248,7 +5734,7 @@ func (x *ResolveChapterPlaybackIDResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveChapterPlaybackIDResponse.ProtoReflect.Descriptor instead.
 func (*ResolveChapterPlaybackIDResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{61}
+	return file_commodore_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ResolveChapterPlaybackIDResponse) GetFound() bool {
@@ -5296,7 +5782,7 @@ type GetTenantProcessesJSONRequest struct {
 
 func (x *GetTenantProcessesJSONRequest) Reset() {
 	*x = GetTenantProcessesJSONRequest{}
-	mi := &file_commodore_proto_msgTypes[62]
+	mi := &file_commodore_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5308,7 +5794,7 @@ func (x *GetTenantProcessesJSONRequest) String() string {
 func (*GetTenantProcessesJSONRequest) ProtoMessage() {}
 
 func (x *GetTenantProcessesJSONRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[62]
+	mi := &file_commodore_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5321,7 +5807,7 @@ func (x *GetTenantProcessesJSONRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantProcessesJSONRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantProcessesJSONRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{62}
+	return file_commodore_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetTenantProcessesJSONRequest) GetTenantId() string {
@@ -5368,7 +5854,7 @@ type GetTenantProcessesJSONResponse struct {
 
 func (x *GetTenantProcessesJSONResponse) Reset() {
 	*x = GetTenantProcessesJSONResponse{}
-	mi := &file_commodore_proto_msgTypes[63]
+	mi := &file_commodore_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5380,7 +5866,7 @@ func (x *GetTenantProcessesJSONResponse) String() string {
 func (*GetTenantProcessesJSONResponse) ProtoMessage() {}
 
 func (x *GetTenantProcessesJSONResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[63]
+	mi := &file_commodore_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5393,7 +5879,7 @@ func (x *GetTenantProcessesJSONResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantProcessesJSONResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantProcessesJSONResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{63}
+	return file_commodore_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetTenantProcessesJSONResponse) GetProcessesJson() string {
@@ -5422,7 +5908,7 @@ type ListStorageArtifactsRequest struct {
 
 func (x *ListStorageArtifactsRequest) Reset() {
 	*x = ListStorageArtifactsRequest{}
-	mi := &file_commodore_proto_msgTypes[64]
+	mi := &file_commodore_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5434,7 +5920,7 @@ func (x *ListStorageArtifactsRequest) String() string {
 func (*ListStorageArtifactsRequest) ProtoMessage() {}
 
 func (x *ListStorageArtifactsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[64]
+	mi := &file_commodore_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5447,7 +5933,7 @@ func (x *ListStorageArtifactsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStorageArtifactsRequest.ProtoReflect.Descriptor instead.
 func (*ListStorageArtifactsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{64}
+	return file_commodore_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ListStorageArtifactsRequest) GetTenantId() string {
@@ -5564,7 +6050,7 @@ type StorageArtifactInfo struct {
 
 func (x *StorageArtifactInfo) Reset() {
 	*x = StorageArtifactInfo{}
-	mi := &file_commodore_proto_msgTypes[65]
+	mi := &file_commodore_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5576,7 +6062,7 @@ func (x *StorageArtifactInfo) String() string {
 func (*StorageArtifactInfo) ProtoMessage() {}
 
 func (x *StorageArtifactInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[65]
+	mi := &file_commodore_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5589,7 +6075,7 @@ func (x *StorageArtifactInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageArtifactInfo.ProtoReflect.Descriptor instead.
 func (*StorageArtifactInfo) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{65}
+	return file_commodore_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *StorageArtifactInfo) GetKind() string {
@@ -5803,7 +6289,7 @@ type ListStorageArtifactsResponse struct {
 
 func (x *ListStorageArtifactsResponse) Reset() {
 	*x = ListStorageArtifactsResponse{}
-	mi := &file_commodore_proto_msgTypes[66]
+	mi := &file_commodore_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5815,7 +6301,7 @@ func (x *ListStorageArtifactsResponse) String() string {
 func (*ListStorageArtifactsResponse) ProtoMessage() {}
 
 func (x *ListStorageArtifactsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[66]
+	mi := &file_commodore_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5828,7 +6314,7 @@ func (x *ListStorageArtifactsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStorageArtifactsResponse.ProtoReflect.Descriptor instead.
 func (*ListStorageArtifactsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{66}
+	return file_commodore_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListStorageArtifactsResponse) GetArtifacts() []*StorageArtifactInfo {
@@ -5869,7 +6355,7 @@ type ResolveArtifactPlaybackIDRequest struct {
 
 func (x *ResolveArtifactPlaybackIDRequest) Reset() {
 	*x = ResolveArtifactPlaybackIDRequest{}
-	mi := &file_commodore_proto_msgTypes[67]
+	mi := &file_commodore_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5881,7 +6367,7 @@ func (x *ResolveArtifactPlaybackIDRequest) String() string {
 func (*ResolveArtifactPlaybackIDRequest) ProtoMessage() {}
 
 func (x *ResolveArtifactPlaybackIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[67]
+	mi := &file_commodore_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5894,7 +6380,7 @@ func (x *ResolveArtifactPlaybackIDRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveArtifactPlaybackIDRequest.ProtoReflect.Descriptor instead.
 func (*ResolveArtifactPlaybackIDRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{67}
+	return file_commodore_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ResolveArtifactPlaybackIDRequest) GetPlaybackId() string {
@@ -5928,7 +6414,7 @@ type ResolveArtifactPlaybackIDResponse struct {
 
 func (x *ResolveArtifactPlaybackIDResponse) Reset() {
 	*x = ResolveArtifactPlaybackIDResponse{}
-	mi := &file_commodore_proto_msgTypes[68]
+	mi := &file_commodore_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5940,7 +6426,7 @@ func (x *ResolveArtifactPlaybackIDResponse) String() string {
 func (*ResolveArtifactPlaybackIDResponse) ProtoMessage() {}
 
 func (x *ResolveArtifactPlaybackIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[68]
+	mi := &file_commodore_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5953,7 +6439,7 @@ func (x *ResolveArtifactPlaybackIDResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ResolveArtifactPlaybackIDResponse.ProtoReflect.Descriptor instead.
 func (*ResolveArtifactPlaybackIDResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{68}
+	return file_commodore_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ResolveArtifactPlaybackIDResponse) GetFound() bool {
@@ -6050,7 +6536,7 @@ type ResolveArtifactInternalNameRequest struct {
 
 func (x *ResolveArtifactInternalNameRequest) Reset() {
 	*x = ResolveArtifactInternalNameRequest{}
-	mi := &file_commodore_proto_msgTypes[69]
+	mi := &file_commodore_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6062,7 +6548,7 @@ func (x *ResolveArtifactInternalNameRequest) String() string {
 func (*ResolveArtifactInternalNameRequest) ProtoMessage() {}
 
 func (x *ResolveArtifactInternalNameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[69]
+	mi := &file_commodore_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6075,7 +6561,7 @@ func (x *ResolveArtifactInternalNameRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ResolveArtifactInternalNameRequest.ProtoReflect.Descriptor instead.
 func (*ResolveArtifactInternalNameRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{69}
+	return file_commodore_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ResolveArtifactInternalNameRequest) GetInternalName() string {
@@ -6107,7 +6593,7 @@ type ResolveArtifactInternalNameResponse struct {
 
 func (x *ResolveArtifactInternalNameResponse) Reset() {
 	*x = ResolveArtifactInternalNameResponse{}
-	mi := &file_commodore_proto_msgTypes[70]
+	mi := &file_commodore_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6119,7 +6605,7 @@ func (x *ResolveArtifactInternalNameResponse) String() string {
 func (*ResolveArtifactInternalNameResponse) ProtoMessage() {}
 
 func (x *ResolveArtifactInternalNameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[70]
+	mi := &file_commodore_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6132,7 +6618,7 @@ func (x *ResolveArtifactInternalNameResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ResolveArtifactInternalNameResponse.ProtoReflect.Descriptor instead.
 func (*ResolveArtifactInternalNameResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{70}
+	return file_commodore_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ResolveArtifactInternalNameResponse) GetFound() bool {
@@ -6232,7 +6718,7 @@ type GetOrCreateWalletUserRequest struct {
 
 func (x *GetOrCreateWalletUserRequest) Reset() {
 	*x = GetOrCreateWalletUserRequest{}
-	mi := &file_commodore_proto_msgTypes[71]
+	mi := &file_commodore_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6244,7 +6730,7 @@ func (x *GetOrCreateWalletUserRequest) String() string {
 func (*GetOrCreateWalletUserRequest) ProtoMessage() {}
 
 func (x *GetOrCreateWalletUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[71]
+	mi := &file_commodore_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6257,7 +6743,7 @@ func (x *GetOrCreateWalletUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateWalletUserRequest.ProtoReflect.Descriptor instead.
 func (*GetOrCreateWalletUserRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{71}
+	return file_commodore_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *GetOrCreateWalletUserRequest) GetChainType() string {
@@ -6295,7 +6781,7 @@ type GetOrCreateWalletUserResponse struct {
 
 func (x *GetOrCreateWalletUserResponse) Reset() {
 	*x = GetOrCreateWalletUserResponse{}
-	mi := &file_commodore_proto_msgTypes[72]
+	mi := &file_commodore_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6307,7 +6793,7 @@ func (x *GetOrCreateWalletUserResponse) String() string {
 func (*GetOrCreateWalletUserResponse) ProtoMessage() {}
 
 func (x *GetOrCreateWalletUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[72]
+	mi := &file_commodore_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6320,7 +6806,7 @@ func (x *GetOrCreateWalletUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateWalletUserResponse.ProtoReflect.Descriptor instead.
 func (*GetOrCreateWalletUserResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{72}
+	return file_commodore_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *GetOrCreateWalletUserResponse) GetTenantId() string {
@@ -6368,7 +6854,7 @@ type GetTenantUserCountRequest struct {
 
 func (x *GetTenantUserCountRequest) Reset() {
 	*x = GetTenantUserCountRequest{}
-	mi := &file_commodore_proto_msgTypes[73]
+	mi := &file_commodore_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6380,7 +6866,7 @@ func (x *GetTenantUserCountRequest) String() string {
 func (*GetTenantUserCountRequest) ProtoMessage() {}
 
 func (x *GetTenantUserCountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[73]
+	mi := &file_commodore_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6393,7 +6879,7 @@ func (x *GetTenantUserCountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantUserCountRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantUserCountRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{73}
+	return file_commodore_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *GetTenantUserCountRequest) GetTenantId() string {
@@ -6414,7 +6900,7 @@ type GetTenantUserCountResponse struct {
 
 func (x *GetTenantUserCountResponse) Reset() {
 	*x = GetTenantUserCountResponse{}
-	mi := &file_commodore_proto_msgTypes[74]
+	mi := &file_commodore_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6426,7 +6912,7 @@ func (x *GetTenantUserCountResponse) String() string {
 func (*GetTenantUserCountResponse) ProtoMessage() {}
 
 func (x *GetTenantUserCountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[74]
+	mi := &file_commodore_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6439,7 +6925,7 @@ func (x *GetTenantUserCountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantUserCountResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantUserCountResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{74}
+	return file_commodore_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetTenantUserCountResponse) GetActiveCount() int32 {
@@ -6466,7 +6952,7 @@ type GetTenantPrimaryUserRequest struct {
 
 func (x *GetTenantPrimaryUserRequest) Reset() {
 	*x = GetTenantPrimaryUserRequest{}
-	mi := &file_commodore_proto_msgTypes[75]
+	mi := &file_commodore_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6478,7 +6964,7 @@ func (x *GetTenantPrimaryUserRequest) String() string {
 func (*GetTenantPrimaryUserRequest) ProtoMessage() {}
 
 func (x *GetTenantPrimaryUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[75]
+	mi := &file_commodore_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6491,7 +6977,7 @@ func (x *GetTenantPrimaryUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantPrimaryUserRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantPrimaryUserRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{75}
+	return file_commodore_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *GetTenantPrimaryUserRequest) GetTenantId() string {
@@ -6513,7 +6999,7 @@ type GetTenantPrimaryUserResponse struct {
 
 func (x *GetTenantPrimaryUserResponse) Reset() {
 	*x = GetTenantPrimaryUserResponse{}
-	mi := &file_commodore_proto_msgTypes[76]
+	mi := &file_commodore_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6525,7 +7011,7 @@ func (x *GetTenantPrimaryUserResponse) String() string {
 func (*GetTenantPrimaryUserResponse) ProtoMessage() {}
 
 func (x *GetTenantPrimaryUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[76]
+	mi := &file_commodore_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6538,7 +7024,7 @@ func (x *GetTenantPrimaryUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantPrimaryUserResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantPrimaryUserResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{76}
+	return file_commodore_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *GetTenantPrimaryUserResponse) GetUserId() string {
@@ -6576,7 +7062,7 @@ type CreateUserInTenantRequest struct {
 
 func (x *CreateUserInTenantRequest) Reset() {
 	*x = CreateUserInTenantRequest{}
-	mi := &file_commodore_proto_msgTypes[77]
+	mi := &file_commodore_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6588,7 +7074,7 @@ func (x *CreateUserInTenantRequest) String() string {
 func (*CreateUserInTenantRequest) ProtoMessage() {}
 
 func (x *CreateUserInTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[77]
+	mi := &file_commodore_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6601,7 +7087,7 @@ func (x *CreateUserInTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateUserInTenantRequest.ProtoReflect.Descriptor instead.
 func (*CreateUserInTenantRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{77}
+	return file_commodore_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *CreateUserInTenantRequest) GetTenantId() string {
@@ -6655,7 +7141,7 @@ type CreateUserInTenantResponse struct {
 
 func (x *CreateUserInTenantResponse) Reset() {
 	*x = CreateUserInTenantResponse{}
-	mi := &file_commodore_proto_msgTypes[78]
+	mi := &file_commodore_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6667,7 +7153,7 @@ func (x *CreateUserInTenantResponse) String() string {
 func (*CreateUserInTenantResponse) ProtoMessage() {}
 
 func (x *CreateUserInTenantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[78]
+	mi := &file_commodore_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6680,7 +7166,7 @@ func (x *CreateUserInTenantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateUserInTenantResponse.ProtoReflect.Descriptor instead.
 func (*CreateUserInTenantResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{78}
+	return file_commodore_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *CreateUserInTenantResponse) GetUser() *User {
@@ -6705,7 +7191,7 @@ type LoginRequest struct {
 
 func (x *LoginRequest) Reset() {
 	*x = LoginRequest{}
-	mi := &file_commodore_proto_msgTypes[79]
+	mi := &file_commodore_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6717,7 +7203,7 @@ func (x *LoginRequest) String() string {
 func (*LoginRequest) ProtoMessage() {}
 
 func (x *LoginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[79]
+	mi := &file_commodore_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6730,7 +7216,7 @@ func (x *LoginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoginRequest.ProtoReflect.Descriptor instead.
 func (*LoginRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{79}
+	return file_commodore_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *LoginRequest) GetEmail() string {
@@ -6788,7 +7274,7 @@ type BehaviorData struct {
 
 func (x *BehaviorData) Reset() {
 	*x = BehaviorData{}
-	mi := &file_commodore_proto_msgTypes[80]
+	mi := &file_commodore_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6800,7 +7286,7 @@ func (x *BehaviorData) String() string {
 func (*BehaviorData) ProtoMessage() {}
 
 func (x *BehaviorData) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[80]
+	mi := &file_commodore_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6813,7 +7299,7 @@ func (x *BehaviorData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BehaviorData.ProtoReflect.Descriptor instead.
 func (*BehaviorData) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{80}
+	return file_commodore_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *BehaviorData) GetFormShownAt() int64 {
@@ -6862,7 +7348,7 @@ type RegisterRequest struct {
 
 func (x *RegisterRequest) Reset() {
 	*x = RegisterRequest{}
-	mi := &file_commodore_proto_msgTypes[81]
+	mi := &file_commodore_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6874,7 +7360,7 @@ func (x *RegisterRequest) String() string {
 func (*RegisterRequest) ProtoMessage() {}
 
 func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[81]
+	mi := &file_commodore_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6887,7 +7373,7 @@ func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
 func (*RegisterRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{81}
+	return file_commodore_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *RegisterRequest) GetEmail() string {
@@ -6967,7 +7453,7 @@ type AuthResponse struct {
 
 func (x *AuthResponse) Reset() {
 	*x = AuthResponse{}
-	mi := &file_commodore_proto_msgTypes[82]
+	mi := &file_commodore_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6979,7 +7465,7 @@ func (x *AuthResponse) String() string {
 func (*AuthResponse) ProtoMessage() {}
 
 func (x *AuthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[82]
+	mi := &file_commodore_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6992,7 +7478,7 @@ func (x *AuthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthResponse.ProtoReflect.Descriptor instead.
 func (*AuthResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{82}
+	return file_commodore_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *AuthResponse) GetToken() string {
@@ -7041,7 +7527,7 @@ type RegisterResponse struct {
 
 func (x *RegisterResponse) Reset() {
 	*x = RegisterResponse{}
-	mi := &file_commodore_proto_msgTypes[83]
+	mi := &file_commodore_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7053,7 +7539,7 @@ func (x *RegisterResponse) String() string {
 func (*RegisterResponse) ProtoMessage() {}
 
 func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[83]
+	mi := &file_commodore_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7066,7 +7552,7 @@ func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
 func (*RegisterResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{83}
+	return file_commodore_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *RegisterResponse) GetSuccess() bool {
@@ -7091,7 +7577,7 @@ type GetMeRequest struct {
 
 func (x *GetMeRequest) Reset() {
 	*x = GetMeRequest{}
-	mi := &file_commodore_proto_msgTypes[84]
+	mi := &file_commodore_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7103,7 +7589,7 @@ func (x *GetMeRequest) String() string {
 func (*GetMeRequest) ProtoMessage() {}
 
 func (x *GetMeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[84]
+	mi := &file_commodore_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7116,7 +7602,7 @@ func (x *GetMeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMeRequest.ProtoReflect.Descriptor instead.
 func (*GetMeRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{84}
+	return file_commodore_proto_rawDescGZIP(), []int{89}
 }
 
 type LogoutRequest struct {
@@ -7129,7 +7615,7 @@ type LogoutRequest struct {
 
 func (x *LogoutRequest) Reset() {
 	*x = LogoutRequest{}
-	mi := &file_commodore_proto_msgTypes[85]
+	mi := &file_commodore_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7141,7 +7627,7 @@ func (x *LogoutRequest) String() string {
 func (*LogoutRequest) ProtoMessage() {}
 
 func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[85]
+	mi := &file_commodore_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7154,7 +7640,7 @@ func (x *LogoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutRequest.ProtoReflect.Descriptor instead.
 func (*LogoutRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{85}
+	return file_commodore_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *LogoutRequest) GetToken() string {
@@ -7174,7 +7660,7 @@ type LogoutResponse struct {
 
 func (x *LogoutResponse) Reset() {
 	*x = LogoutResponse{}
-	mi := &file_commodore_proto_msgTypes[86]
+	mi := &file_commodore_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7186,7 +7672,7 @@ func (x *LogoutResponse) String() string {
 func (*LogoutResponse) ProtoMessage() {}
 
 func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[86]
+	mi := &file_commodore_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7199,7 +7685,7 @@ func (x *LogoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogoutResponse.ProtoReflect.Descriptor instead.
 func (*LogoutResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{86}
+	return file_commodore_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *LogoutResponse) GetSuccess() bool {
@@ -7225,7 +7711,7 @@ type RefreshTokenRequest struct {
 
 func (x *RefreshTokenRequest) Reset() {
 	*x = RefreshTokenRequest{}
-	mi := &file_commodore_proto_msgTypes[87]
+	mi := &file_commodore_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7237,7 +7723,7 @@ func (x *RefreshTokenRequest) String() string {
 func (*RefreshTokenRequest) ProtoMessage() {}
 
 func (x *RefreshTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[87]
+	mi := &file_commodore_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7250,7 +7736,7 @@ func (x *RefreshTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshTokenRequest.ProtoReflect.Descriptor instead.
 func (*RefreshTokenRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{87}
+	return file_commodore_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *RefreshTokenRequest) GetRefreshToken() string {
@@ -7269,7 +7755,7 @@ type VerifyEmailRequest struct {
 
 func (x *VerifyEmailRequest) Reset() {
 	*x = VerifyEmailRequest{}
-	mi := &file_commodore_proto_msgTypes[88]
+	mi := &file_commodore_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7281,7 +7767,7 @@ func (x *VerifyEmailRequest) String() string {
 func (*VerifyEmailRequest) ProtoMessage() {}
 
 func (x *VerifyEmailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[88]
+	mi := &file_commodore_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7294,7 +7780,7 @@ func (x *VerifyEmailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyEmailRequest.ProtoReflect.Descriptor instead.
 func (*VerifyEmailRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{88}
+	return file_commodore_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *VerifyEmailRequest) GetToken() string {
@@ -7314,7 +7800,7 @@ type VerifyEmailResponse struct {
 
 func (x *VerifyEmailResponse) Reset() {
 	*x = VerifyEmailResponse{}
-	mi := &file_commodore_proto_msgTypes[89]
+	mi := &file_commodore_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7326,7 +7812,7 @@ func (x *VerifyEmailResponse) String() string {
 func (*VerifyEmailResponse) ProtoMessage() {}
 
 func (x *VerifyEmailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[89]
+	mi := &file_commodore_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7339,7 +7825,7 @@ func (x *VerifyEmailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyEmailResponse.ProtoReflect.Descriptor instead.
 func (*VerifyEmailResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{89}
+	return file_commodore_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *VerifyEmailResponse) GetSuccess() bool {
@@ -7366,7 +7852,7 @@ type ResendVerificationRequest struct {
 
 func (x *ResendVerificationRequest) Reset() {
 	*x = ResendVerificationRequest{}
-	mi := &file_commodore_proto_msgTypes[90]
+	mi := &file_commodore_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7378,7 +7864,7 @@ func (x *ResendVerificationRequest) String() string {
 func (*ResendVerificationRequest) ProtoMessage() {}
 
 func (x *ResendVerificationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[90]
+	mi := &file_commodore_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7391,7 +7877,7 @@ func (x *ResendVerificationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResendVerificationRequest.ProtoReflect.Descriptor instead.
 func (*ResendVerificationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{90}
+	return file_commodore_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *ResendVerificationRequest) GetEmail() string {
@@ -7418,7 +7904,7 @@ type ResendVerificationResponse struct {
 
 func (x *ResendVerificationResponse) Reset() {
 	*x = ResendVerificationResponse{}
-	mi := &file_commodore_proto_msgTypes[91]
+	mi := &file_commodore_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7430,7 +7916,7 @@ func (x *ResendVerificationResponse) String() string {
 func (*ResendVerificationResponse) ProtoMessage() {}
 
 func (x *ResendVerificationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[91]
+	mi := &file_commodore_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7443,7 +7929,7 @@ func (x *ResendVerificationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResendVerificationResponse.ProtoReflect.Descriptor instead.
 func (*ResendVerificationResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{91}
+	return file_commodore_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *ResendVerificationResponse) GetSuccess() bool {
@@ -7470,7 +7956,7 @@ type ForgotPasswordRequest struct {
 
 func (x *ForgotPasswordRequest) Reset() {
 	*x = ForgotPasswordRequest{}
-	mi := &file_commodore_proto_msgTypes[92]
+	mi := &file_commodore_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7482,7 +7968,7 @@ func (x *ForgotPasswordRequest) String() string {
 func (*ForgotPasswordRequest) ProtoMessage() {}
 
 func (x *ForgotPasswordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[92]
+	mi := &file_commodore_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7495,7 +7981,7 @@ func (x *ForgotPasswordRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgotPasswordRequest.ProtoReflect.Descriptor instead.
 func (*ForgotPasswordRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{92}
+	return file_commodore_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *ForgotPasswordRequest) GetEmail() string {
@@ -7522,7 +8008,7 @@ type ForgotPasswordResponse struct {
 
 func (x *ForgotPasswordResponse) Reset() {
 	*x = ForgotPasswordResponse{}
-	mi := &file_commodore_proto_msgTypes[93]
+	mi := &file_commodore_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7534,7 +8020,7 @@ func (x *ForgotPasswordResponse) String() string {
 func (*ForgotPasswordResponse) ProtoMessage() {}
 
 func (x *ForgotPasswordResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[93]
+	mi := &file_commodore_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7547,7 +8033,7 @@ func (x *ForgotPasswordResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgotPasswordResponse.ProtoReflect.Descriptor instead.
 func (*ForgotPasswordResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{93}
+	return file_commodore_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *ForgotPasswordResponse) GetSuccess() bool {
@@ -7574,7 +8060,7 @@ type ResetPasswordRequest struct {
 
 func (x *ResetPasswordRequest) Reset() {
 	*x = ResetPasswordRequest{}
-	mi := &file_commodore_proto_msgTypes[94]
+	mi := &file_commodore_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7586,7 +8072,7 @@ func (x *ResetPasswordRequest) String() string {
 func (*ResetPasswordRequest) ProtoMessage() {}
 
 func (x *ResetPasswordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[94]
+	mi := &file_commodore_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7599,7 +8085,7 @@ func (x *ResetPasswordRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetPasswordRequest.ProtoReflect.Descriptor instead.
 func (*ResetPasswordRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{94}
+	return file_commodore_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *ResetPasswordRequest) GetToken() string {
@@ -7626,7 +8112,7 @@ type ResetPasswordResponse struct {
 
 func (x *ResetPasswordResponse) Reset() {
 	*x = ResetPasswordResponse{}
-	mi := &file_commodore_proto_msgTypes[95]
+	mi := &file_commodore_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7638,7 +8124,7 @@ func (x *ResetPasswordResponse) String() string {
 func (*ResetPasswordResponse) ProtoMessage() {}
 
 func (x *ResetPasswordResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[95]
+	mi := &file_commodore_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7651,7 +8137,7 @@ func (x *ResetPasswordResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetPasswordResponse.ProtoReflect.Descriptor instead.
 func (*ResetPasswordResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{95}
+	return file_commodore_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *ResetPasswordResponse) GetSuccess() bool {
@@ -7679,7 +8165,7 @@ type UpdateMeRequest struct {
 
 func (x *UpdateMeRequest) Reset() {
 	*x = UpdateMeRequest{}
-	mi := &file_commodore_proto_msgTypes[96]
+	mi := &file_commodore_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7691,7 +8177,7 @@ func (x *UpdateMeRequest) String() string {
 func (*UpdateMeRequest) ProtoMessage() {}
 
 func (x *UpdateMeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[96]
+	mi := &file_commodore_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7704,7 +8190,7 @@ func (x *UpdateMeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateMeRequest.ProtoReflect.Descriptor instead.
 func (*UpdateMeRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{96}
+	return file_commodore_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *UpdateMeRequest) GetFirstName() string {
@@ -7737,7 +8223,7 @@ type UpdateNewsletterRequest struct {
 
 func (x *UpdateNewsletterRequest) Reset() {
 	*x = UpdateNewsletterRequest{}
-	mi := &file_commodore_proto_msgTypes[97]
+	mi := &file_commodore_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7749,7 +8235,7 @@ func (x *UpdateNewsletterRequest) String() string {
 func (*UpdateNewsletterRequest) ProtoMessage() {}
 
 func (x *UpdateNewsletterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[97]
+	mi := &file_commodore_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7762,7 +8248,7 @@ func (x *UpdateNewsletterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNewsletterRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNewsletterRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{97}
+	return file_commodore_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *UpdateNewsletterRequest) GetSubscribed() bool {
@@ -7782,7 +8268,7 @@ type UpdateNewsletterResponse struct {
 
 func (x *UpdateNewsletterResponse) Reset() {
 	*x = UpdateNewsletterResponse{}
-	mi := &file_commodore_proto_msgTypes[98]
+	mi := &file_commodore_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7794,7 +8280,7 @@ func (x *UpdateNewsletterResponse) String() string {
 func (*UpdateNewsletterResponse) ProtoMessage() {}
 
 func (x *UpdateNewsletterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[98]
+	mi := &file_commodore_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7807,7 +8293,7 @@ func (x *UpdateNewsletterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNewsletterResponse.ProtoReflect.Descriptor instead.
 func (*UpdateNewsletterResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{98}
+	return file_commodore_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *UpdateNewsletterResponse) GetSuccess() bool {
@@ -7832,7 +8318,7 @@ type GetNewsletterStatusRequest struct {
 
 func (x *GetNewsletterStatusRequest) Reset() {
 	*x = GetNewsletterStatusRequest{}
-	mi := &file_commodore_proto_msgTypes[99]
+	mi := &file_commodore_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7844,7 +8330,7 @@ func (x *GetNewsletterStatusRequest) String() string {
 func (*GetNewsletterStatusRequest) ProtoMessage() {}
 
 func (x *GetNewsletterStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[99]
+	mi := &file_commodore_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7857,7 +8343,7 @@ func (x *GetNewsletterStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNewsletterStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetNewsletterStatusRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{99}
+	return file_commodore_proto_rawDescGZIP(), []int{104}
 }
 
 type GetNewsletterStatusResponse struct {
@@ -7869,7 +8355,7 @@ type GetNewsletterStatusResponse struct {
 
 func (x *GetNewsletterStatusResponse) Reset() {
 	*x = GetNewsletterStatusResponse{}
-	mi := &file_commodore_proto_msgTypes[100]
+	mi := &file_commodore_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7881,7 +8367,7 @@ func (x *GetNewsletterStatusResponse) String() string {
 func (*GetNewsletterStatusResponse) ProtoMessage() {}
 
 func (x *GetNewsletterStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[100]
+	mi := &file_commodore_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7894,7 +8380,7 @@ func (x *GetNewsletterStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNewsletterStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetNewsletterStatusResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{100}
+	return file_commodore_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *GetNewsletterStatusResponse) GetSubscribed() bool {
@@ -7916,7 +8402,7 @@ type IssueWalletChallengeRequest struct {
 
 func (x *IssueWalletChallengeRequest) Reset() {
 	*x = IssueWalletChallengeRequest{}
-	mi := &file_commodore_proto_msgTypes[101]
+	mi := &file_commodore_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7928,7 +8414,7 @@ func (x *IssueWalletChallengeRequest) String() string {
 func (*IssueWalletChallengeRequest) ProtoMessage() {}
 
 func (x *IssueWalletChallengeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[101]
+	mi := &file_commodore_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7941,7 +8427,7 @@ func (x *IssueWalletChallengeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueWalletChallengeRequest.ProtoReflect.Descriptor instead.
 func (*IssueWalletChallengeRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{101}
+	return file_commodore_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *IssueWalletChallengeRequest) GetWalletAddress() string {
@@ -7968,7 +8454,7 @@ type IssueWalletChallengeResponse struct {
 
 func (x *IssueWalletChallengeResponse) Reset() {
 	*x = IssueWalletChallengeResponse{}
-	mi := &file_commodore_proto_msgTypes[102]
+	mi := &file_commodore_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7980,7 +8466,7 @@ func (x *IssueWalletChallengeResponse) String() string {
 func (*IssueWalletChallengeResponse) ProtoMessage() {}
 
 func (x *IssueWalletChallengeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[102]
+	mi := &file_commodore_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7993,7 +8479,7 @@ func (x *IssueWalletChallengeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueWalletChallengeResponse.ProtoReflect.Descriptor instead.
 func (*IssueWalletChallengeResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{102}
+	return file_commodore_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *IssueWalletChallengeResponse) GetMessage() string {
@@ -8022,7 +8508,7 @@ type WalletLoginRequest struct {
 
 func (x *WalletLoginRequest) Reset() {
 	*x = WalletLoginRequest{}
-	mi := &file_commodore_proto_msgTypes[103]
+	mi := &file_commodore_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8034,7 +8520,7 @@ func (x *WalletLoginRequest) String() string {
 func (*WalletLoginRequest) ProtoMessage() {}
 
 func (x *WalletLoginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[103]
+	mi := &file_commodore_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8047,7 +8533,7 @@ func (x *WalletLoginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WalletLoginRequest.ProtoReflect.Descriptor instead.
 func (*WalletLoginRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{103}
+	return file_commodore_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *WalletLoginRequest) GetWalletAddress() string {
@@ -8090,7 +8576,7 @@ type LinkWalletRequest struct {
 
 func (x *LinkWalletRequest) Reset() {
 	*x = LinkWalletRequest{}
-	mi := &file_commodore_proto_msgTypes[104]
+	mi := &file_commodore_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8102,7 +8588,7 @@ func (x *LinkWalletRequest) String() string {
 func (*LinkWalletRequest) ProtoMessage() {}
 
 func (x *LinkWalletRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[104]
+	mi := &file_commodore_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8115,7 +8601,7 @@ func (x *LinkWalletRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LinkWalletRequest.ProtoReflect.Descriptor instead.
 func (*LinkWalletRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{104}
+	return file_commodore_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *LinkWalletRequest) GetWalletAddress() string {
@@ -8149,7 +8635,7 @@ type UnlinkWalletRequest struct {
 
 func (x *UnlinkWalletRequest) Reset() {
 	*x = UnlinkWalletRequest{}
-	mi := &file_commodore_proto_msgTypes[105]
+	mi := &file_commodore_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8161,7 +8647,7 @@ func (x *UnlinkWalletRequest) String() string {
 func (*UnlinkWalletRequest) ProtoMessage() {}
 
 func (x *UnlinkWalletRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[105]
+	mi := &file_commodore_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8174,7 +8660,7 @@ func (x *UnlinkWalletRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlinkWalletRequest.ProtoReflect.Descriptor instead.
 func (*UnlinkWalletRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{105}
+	return file_commodore_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *UnlinkWalletRequest) GetWalletId() string {
@@ -8194,7 +8680,7 @@ type UnlinkWalletResponse struct {
 
 func (x *UnlinkWalletResponse) Reset() {
 	*x = UnlinkWalletResponse{}
-	mi := &file_commodore_proto_msgTypes[106]
+	mi := &file_commodore_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8206,7 +8692,7 @@ func (x *UnlinkWalletResponse) String() string {
 func (*UnlinkWalletResponse) ProtoMessage() {}
 
 func (x *UnlinkWalletResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[106]
+	mi := &file_commodore_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8219,7 +8705,7 @@ func (x *UnlinkWalletResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlinkWalletResponse.ProtoReflect.Descriptor instead.
 func (*UnlinkWalletResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{106}
+	return file_commodore_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *UnlinkWalletResponse) GetSuccess() bool {
@@ -8245,7 +8731,7 @@ type ListWalletsRequest struct {
 
 func (x *ListWalletsRequest) Reset() {
 	*x = ListWalletsRequest{}
-	mi := &file_commodore_proto_msgTypes[107]
+	mi := &file_commodore_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8257,7 +8743,7 @@ func (x *ListWalletsRequest) String() string {
 func (*ListWalletsRequest) ProtoMessage() {}
 
 func (x *ListWalletsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[107]
+	mi := &file_commodore_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8270,7 +8756,7 @@ func (x *ListWalletsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWalletsRequest.ProtoReflect.Descriptor instead.
 func (*ListWalletsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{107}
+	return file_commodore_proto_rawDescGZIP(), []int{112}
 }
 
 type ListWalletsResponse struct {
@@ -8282,7 +8768,7 @@ type ListWalletsResponse struct {
 
 func (x *ListWalletsResponse) Reset() {
 	*x = ListWalletsResponse{}
-	mi := &file_commodore_proto_msgTypes[108]
+	mi := &file_commodore_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8294,7 +8780,7 @@ func (x *ListWalletsResponse) String() string {
 func (*ListWalletsResponse) ProtoMessage() {}
 
 func (x *ListWalletsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[108]
+	mi := &file_commodore_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8307,7 +8793,7 @@ func (x *ListWalletsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWalletsResponse.ProtoReflect.Descriptor instead.
 func (*ListWalletsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{108}
+	return file_commodore_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ListWalletsResponse) GetWallets() []*WalletIdentity {
@@ -8330,7 +8816,7 @@ type WalletIdentity struct {
 
 func (x *WalletIdentity) Reset() {
 	*x = WalletIdentity{}
-	mi := &file_commodore_proto_msgTypes[109]
+	mi := &file_commodore_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8342,7 +8828,7 @@ func (x *WalletIdentity) String() string {
 func (*WalletIdentity) ProtoMessage() {}
 
 func (x *WalletIdentity) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[109]
+	mi := &file_commodore_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8355,7 +8841,7 @@ func (x *WalletIdentity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WalletIdentity.ProtoReflect.Descriptor instead.
 func (*WalletIdentity) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{109}
+	return file_commodore_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *WalletIdentity) GetId() string {
@@ -8397,7 +8883,7 @@ type LinkEmailRequest struct {
 
 func (x *LinkEmailRequest) Reset() {
 	*x = LinkEmailRequest{}
-	mi := &file_commodore_proto_msgTypes[110]
+	mi := &file_commodore_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8409,7 +8895,7 @@ func (x *LinkEmailRequest) String() string {
 func (*LinkEmailRequest) ProtoMessage() {}
 
 func (x *LinkEmailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[110]
+	mi := &file_commodore_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8422,7 +8908,7 @@ func (x *LinkEmailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LinkEmailRequest.ProtoReflect.Descriptor instead.
 func (*LinkEmailRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{110}
+	return file_commodore_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *LinkEmailRequest) GetEmail() string {
@@ -8450,7 +8936,7 @@ type LinkEmailResponse struct {
 
 func (x *LinkEmailResponse) Reset() {
 	*x = LinkEmailResponse{}
-	mi := &file_commodore_proto_msgTypes[111]
+	mi := &file_commodore_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8462,7 +8948,7 @@ func (x *LinkEmailResponse) String() string {
 func (*LinkEmailResponse) ProtoMessage() {}
 
 func (x *LinkEmailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[111]
+	mi := &file_commodore_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8475,7 +8961,7 @@ func (x *LinkEmailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LinkEmailResponse.ProtoReflect.Descriptor instead.
 func (*LinkEmailResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{111}
+	return file_commodore_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *LinkEmailResponse) GetSuccess() bool {
@@ -8523,7 +9009,7 @@ type User struct {
 
 func (x *User) Reset() {
 	*x = User{}
-	mi := &file_commodore_proto_msgTypes[112]
+	mi := &file_commodore_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8535,7 +9021,7 @@ func (x *User) String() string {
 func (*User) ProtoMessage() {}
 
 func (x *User) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[112]
+	mi := &file_commodore_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8548,7 +9034,7 @@ func (x *User) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use User.ProtoReflect.Descriptor instead.
 func (*User) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{112}
+	return file_commodore_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *User) GetId() string {
@@ -8668,7 +9154,7 @@ type CreateStreamRequest struct {
 
 func (x *CreateStreamRequest) Reset() {
 	*x = CreateStreamRequest{}
-	mi := &file_commodore_proto_msgTypes[113]
+	mi := &file_commodore_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8680,7 +9166,7 @@ func (x *CreateStreamRequest) String() string {
 func (*CreateStreamRequest) ProtoMessage() {}
 
 func (x *CreateStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[113]
+	mi := &file_commodore_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8693,7 +9179,7 @@ func (x *CreateStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStreamRequest.ProtoReflect.Descriptor instead.
 func (*CreateStreamRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{113}
+	return file_commodore_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *CreateStreamRequest) GetTitle() string {
@@ -8756,7 +9242,7 @@ type SourceLocationCluster struct {
 
 func (x *SourceLocationCluster) Reset() {
 	*x = SourceLocationCluster{}
-	mi := &file_commodore_proto_msgTypes[114]
+	mi := &file_commodore_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8768,7 +9254,7 @@ func (x *SourceLocationCluster) String() string {
 func (*SourceLocationCluster) ProtoMessage() {}
 
 func (x *SourceLocationCluster) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[114]
+	mi := &file_commodore_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8781,7 +9267,7 @@ func (x *SourceLocationCluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SourceLocationCluster.ProtoReflect.Descriptor instead.
 func (*SourceLocationCluster) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{114}
+	return file_commodore_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *SourceLocationCluster) GetClusterId() string {
@@ -8813,7 +9299,7 @@ type StreamSourceLocation struct {
 
 func (x *StreamSourceLocation) Reset() {
 	*x = StreamSourceLocation{}
-	mi := &file_commodore_proto_msgTypes[115]
+	mi := &file_commodore_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8825,7 +9311,7 @@ func (x *StreamSourceLocation) String() string {
 func (*StreamSourceLocation) ProtoMessage() {}
 
 func (x *StreamSourceLocation) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[115]
+	mi := &file_commodore_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8838,7 +9324,7 @@ func (x *StreamSourceLocation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamSourceLocation.ProtoReflect.Descriptor instead.
 func (*StreamSourceLocation) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{115}
+	return file_commodore_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *StreamSourceLocation) GetMode() SourceLocationMode {
@@ -8915,7 +9401,7 @@ type CreateStreamResponse struct {
 
 func (x *CreateStreamResponse) Reset() {
 	*x = CreateStreamResponse{}
-	mi := &file_commodore_proto_msgTypes[116]
+	mi := &file_commodore_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8927,7 +9413,7 @@ func (x *CreateStreamResponse) String() string {
 func (*CreateStreamResponse) ProtoMessage() {}
 
 func (x *CreateStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[116]
+	mi := &file_commodore_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8940,7 +9426,7 @@ func (x *CreateStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStreamResponse.ProtoReflect.Descriptor instead.
 func (*CreateStreamResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{116}
+	return file_commodore_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *CreateStreamResponse) GetId() string {
@@ -9134,7 +9620,7 @@ type GetStreamRequest struct {
 
 func (x *GetStreamRequest) Reset() {
 	*x = GetStreamRequest{}
-	mi := &file_commodore_proto_msgTypes[117]
+	mi := &file_commodore_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9146,7 +9632,7 @@ func (x *GetStreamRequest) String() string {
 func (*GetStreamRequest) ProtoMessage() {}
 
 func (x *GetStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[117]
+	mi := &file_commodore_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9159,7 +9645,7 @@ func (x *GetStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{117}
+	return file_commodore_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *GetStreamRequest) GetStreamId() string {
@@ -9178,7 +9664,7 @@ type GetStreamsBatchRequest struct {
 
 func (x *GetStreamsBatchRequest) Reset() {
 	*x = GetStreamsBatchRequest{}
-	mi := &file_commodore_proto_msgTypes[118]
+	mi := &file_commodore_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9190,7 +9676,7 @@ func (x *GetStreamsBatchRequest) String() string {
 func (*GetStreamsBatchRequest) ProtoMessage() {}
 
 func (x *GetStreamsBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[118]
+	mi := &file_commodore_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9203,7 +9689,7 @@ func (x *GetStreamsBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamsBatchRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamsBatchRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{118}
+	return file_commodore_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *GetStreamsBatchRequest) GetStreamIds() []string {
@@ -9222,7 +9708,7 @@ type GetStreamsBatchResponse struct {
 
 func (x *GetStreamsBatchResponse) Reset() {
 	*x = GetStreamsBatchResponse{}
-	mi := &file_commodore_proto_msgTypes[119]
+	mi := &file_commodore_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9234,7 +9720,7 @@ func (x *GetStreamsBatchResponse) String() string {
 func (*GetStreamsBatchResponse) ProtoMessage() {}
 
 func (x *GetStreamsBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[119]
+	mi := &file_commodore_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9247,7 +9733,7 @@ func (x *GetStreamsBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamsBatchResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamsBatchResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{119}
+	return file_commodore_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *GetStreamsBatchResponse) GetStreams() []*Stream {
@@ -9317,7 +9803,7 @@ type Stream struct {
 
 func (x *Stream) Reset() {
 	*x = Stream{}
-	mi := &file_commodore_proto_msgTypes[120]
+	mi := &file_commodore_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9329,7 +9815,7 @@ func (x *Stream) String() string {
 func (*Stream) ProtoMessage() {}
 
 func (x *Stream) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[120]
+	mi := &file_commodore_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9342,7 +9828,7 @@ func (x *Stream) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Stream.ProtoReflect.Descriptor instead.
 func (*Stream) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{120}
+	return file_commodore_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *Stream) GetTitle() string {
@@ -9574,7 +10060,7 @@ type PullSourceAllowedClustersInput struct {
 
 func (x *PullSourceAllowedClustersInput) Reset() {
 	*x = PullSourceAllowedClustersInput{}
-	mi := &file_commodore_proto_msgTypes[121]
+	mi := &file_commodore_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9586,7 +10072,7 @@ func (x *PullSourceAllowedClustersInput) String() string {
 func (*PullSourceAllowedClustersInput) ProtoMessage() {}
 
 func (x *PullSourceAllowedClustersInput) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[121]
+	mi := &file_commodore_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9599,7 +10085,7 @@ func (x *PullSourceAllowedClustersInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullSourceAllowedClustersInput.ProtoReflect.Descriptor instead.
 func (*PullSourceAllowedClustersInput) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{121}
+	return file_commodore_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *PullSourceAllowedClustersInput) GetClusterIds() []string {
@@ -9624,7 +10110,7 @@ type PullSourceInput struct {
 
 func (x *PullSourceInput) Reset() {
 	*x = PullSourceInput{}
-	mi := &file_commodore_proto_msgTypes[122]
+	mi := &file_commodore_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9636,7 +10122,7 @@ func (x *PullSourceInput) String() string {
 func (*PullSourceInput) ProtoMessage() {}
 
 func (x *PullSourceInput) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[122]
+	mi := &file_commodore_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9649,7 +10135,7 @@ func (x *PullSourceInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullSourceInput.ProtoReflect.Descriptor instead.
 func (*PullSourceInput) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{122}
+	return file_commodore_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *PullSourceInput) GetSourceUri() string {
@@ -9687,7 +10173,7 @@ type PullSourceView struct {
 
 func (x *PullSourceView) Reset() {
 	*x = PullSourceView{}
-	mi := &file_commodore_proto_msgTypes[123]
+	mi := &file_commodore_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9699,7 +10185,7 @@ func (x *PullSourceView) String() string {
 func (*PullSourceView) ProtoMessage() {}
 
 func (x *PullSourceView) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[123]
+	mi := &file_commodore_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9712,7 +10198,7 @@ func (x *PullSourceView) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullSourceView.ProtoReflect.Descriptor instead.
 func (*PullSourceView) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{123}
+	return file_commodore_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *PullSourceView) GetSourceUriRedacted() string {
@@ -9758,7 +10244,7 @@ type ManagedSourceView struct {
 
 func (x *ManagedSourceView) Reset() {
 	*x = ManagedSourceView{}
-	mi := &file_commodore_proto_msgTypes[124]
+	mi := &file_commodore_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9770,7 +10256,7 @@ func (x *ManagedSourceView) String() string {
 func (*ManagedSourceView) ProtoMessage() {}
 
 func (x *ManagedSourceView) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[124]
+	mi := &file_commodore_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9783,7 +10269,7 @@ func (x *ManagedSourceView) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ManagedSourceView.ProtoReflect.Descriptor instead.
 func (*ManagedSourceView) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{124}
+	return file_commodore_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *ManagedSourceView) GetSourceKind() string {
@@ -9824,7 +10310,7 @@ type ListStreamsRequest struct {
 
 func (x *ListStreamsRequest) Reset() {
 	*x = ListStreamsRequest{}
-	mi := &file_commodore_proto_msgTypes[125]
+	mi := &file_commodore_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9836,7 +10322,7 @@ func (x *ListStreamsRequest) String() string {
 func (*ListStreamsRequest) ProtoMessage() {}
 
 func (x *ListStreamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[125]
+	mi := &file_commodore_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9849,7 +10335,7 @@ func (x *ListStreamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamsRequest.ProtoReflect.Descriptor instead.
 func (*ListStreamsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{125}
+	return file_commodore_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ListStreamsRequest) GetPagination() *common.CursorPaginationRequest {
@@ -9877,7 +10363,7 @@ type ListStreamsResponse struct {
 
 func (x *ListStreamsResponse) Reset() {
 	*x = ListStreamsResponse{}
-	mi := &file_commodore_proto_msgTypes[126]
+	mi := &file_commodore_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9889,7 +10375,7 @@ func (x *ListStreamsResponse) String() string {
 func (*ListStreamsResponse) ProtoMessage() {}
 
 func (x *ListStreamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[126]
+	mi := &file_commodore_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9902,7 +10388,7 @@ func (x *ListStreamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamsResponse.ProtoReflect.Descriptor instead.
 func (*ListStreamsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{126}
+	return file_commodore_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ListStreamsResponse) GetStreams() []*Stream {
@@ -9946,7 +10432,7 @@ type UpdateStreamRequest struct {
 
 func (x *UpdateStreamRequest) Reset() {
 	*x = UpdateStreamRequest{}
-	mi := &file_commodore_proto_msgTypes[127]
+	mi := &file_commodore_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9958,7 +10444,7 @@ func (x *UpdateStreamRequest) String() string {
 func (*UpdateStreamRequest) ProtoMessage() {}
 
 func (x *UpdateStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[127]
+	mi := &file_commodore_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9971,7 +10457,7 @@ func (x *UpdateStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStreamRequest.ProtoReflect.Descriptor instead.
 func (*UpdateStreamRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{127}
+	return file_commodore_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *UpdateStreamRequest) GetStreamId() string {
@@ -10053,7 +10539,7 @@ type DeleteStreamRequest struct {
 
 func (x *DeleteStreamRequest) Reset() {
 	*x = DeleteStreamRequest{}
-	mi := &file_commodore_proto_msgTypes[128]
+	mi := &file_commodore_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10065,7 +10551,7 @@ func (x *DeleteStreamRequest) String() string {
 func (*DeleteStreamRequest) ProtoMessage() {}
 
 func (x *DeleteStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[128]
+	mi := &file_commodore_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10078,7 +10564,7 @@ func (x *DeleteStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStreamRequest.ProtoReflect.Descriptor instead.
 func (*DeleteStreamRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{128}
+	return file_commodore_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *DeleteStreamRequest) GetStreamId() string {
@@ -10105,7 +10591,7 @@ type DeleteStreamResponse struct {
 
 func (x *DeleteStreamResponse) Reset() {
 	*x = DeleteStreamResponse{}
-	mi := &file_commodore_proto_msgTypes[129]
+	mi := &file_commodore_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10117,7 +10603,7 @@ func (x *DeleteStreamResponse) String() string {
 func (*DeleteStreamResponse) ProtoMessage() {}
 
 func (x *DeleteStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[129]
+	mi := &file_commodore_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10130,7 +10616,7 @@ func (x *DeleteStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStreamResponse.ProtoReflect.Descriptor instead.
 func (*DeleteStreamResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{129}
+	return file_commodore_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *DeleteStreamResponse) GetMessage() string {
@@ -10179,7 +10665,7 @@ type CreateStreamKeyRequest struct {
 
 func (x *CreateStreamKeyRequest) Reset() {
 	*x = CreateStreamKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[130]
+	mi := &file_commodore_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10191,7 +10677,7 @@ func (x *CreateStreamKeyRequest) String() string {
 func (*CreateStreamKeyRequest) ProtoMessage() {}
 
 func (x *CreateStreamKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[130]
+	mi := &file_commodore_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10204,7 +10690,7 @@ func (x *CreateStreamKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStreamKeyRequest.ProtoReflect.Descriptor instead.
 func (*CreateStreamKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{130}
+	return file_commodore_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *CreateStreamKeyRequest) GetStreamId() string {
@@ -10240,7 +10726,7 @@ type StreamKey struct {
 
 func (x *StreamKey) Reset() {
 	*x = StreamKey{}
-	mi := &file_commodore_proto_msgTypes[131]
+	mi := &file_commodore_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10252,7 +10738,7 @@ func (x *StreamKey) String() string {
 func (*StreamKey) ProtoMessage() {}
 
 func (x *StreamKey) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[131]
+	mi := &file_commodore_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10265,7 +10751,7 @@ func (x *StreamKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamKey.ProtoReflect.Descriptor instead.
 func (*StreamKey) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{131}
+	return file_commodore_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *StreamKey) GetId() string {
@@ -10349,7 +10835,7 @@ type StreamKeyResponse struct {
 
 func (x *StreamKeyResponse) Reset() {
 	*x = StreamKeyResponse{}
-	mi := &file_commodore_proto_msgTypes[132]
+	mi := &file_commodore_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10361,7 +10847,7 @@ func (x *StreamKeyResponse) String() string {
 func (*StreamKeyResponse) ProtoMessage() {}
 
 func (x *StreamKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[132]
+	mi := &file_commodore_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10374,7 +10860,7 @@ func (x *StreamKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamKeyResponse.ProtoReflect.Descriptor instead.
 func (*StreamKeyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{132}
+	return file_commodore_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *StreamKeyResponse) GetStreamKey() *StreamKey {
@@ -10401,7 +10887,7 @@ type ListStreamKeysRequest struct {
 
 func (x *ListStreamKeysRequest) Reset() {
 	*x = ListStreamKeysRequest{}
-	mi := &file_commodore_proto_msgTypes[133]
+	mi := &file_commodore_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10413,7 +10899,7 @@ func (x *ListStreamKeysRequest) String() string {
 func (*ListStreamKeysRequest) ProtoMessage() {}
 
 func (x *ListStreamKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[133]
+	mi := &file_commodore_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10426,7 +10912,7 @@ func (x *ListStreamKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamKeysRequest.ProtoReflect.Descriptor instead.
 func (*ListStreamKeysRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{133}
+	return file_commodore_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *ListStreamKeysRequest) GetStreamId() string {
@@ -10454,7 +10940,7 @@ type ListStreamKeysResponse struct {
 
 func (x *ListStreamKeysResponse) Reset() {
 	*x = ListStreamKeysResponse{}
-	mi := &file_commodore_proto_msgTypes[134]
+	mi := &file_commodore_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10466,7 +10952,7 @@ func (x *ListStreamKeysResponse) String() string {
 func (*ListStreamKeysResponse) ProtoMessage() {}
 
 func (x *ListStreamKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[134]
+	mi := &file_commodore_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10479,7 +10965,7 @@ func (x *ListStreamKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStreamKeysResponse.ProtoReflect.Descriptor instead.
 func (*ListStreamKeysResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{134}
+	return file_commodore_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *ListStreamKeysResponse) GetStreamKeys() []*StreamKey {
@@ -10506,7 +10992,7 @@ type DeactivateStreamKeyRequest struct {
 
 func (x *DeactivateStreamKeyRequest) Reset() {
 	*x = DeactivateStreamKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[135]
+	mi := &file_commodore_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10518,7 +11004,7 @@ func (x *DeactivateStreamKeyRequest) String() string {
 func (*DeactivateStreamKeyRequest) ProtoMessage() {}
 
 func (x *DeactivateStreamKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[135]
+	mi := &file_commodore_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10531,7 +11017,7 @@ func (x *DeactivateStreamKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeactivateStreamKeyRequest.ProtoReflect.Descriptor instead.
 func (*DeactivateStreamKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{135}
+	return file_commodore_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *DeactivateStreamKeyRequest) GetStreamId() string {
@@ -10568,7 +11054,7 @@ type PushTarget struct {
 
 func (x *PushTarget) Reset() {
 	*x = PushTarget{}
-	mi := &file_commodore_proto_msgTypes[136]
+	mi := &file_commodore_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10580,7 +11066,7 @@ func (x *PushTarget) String() string {
 func (*PushTarget) ProtoMessage() {}
 
 func (x *PushTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[136]
+	mi := &file_commodore_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10593,7 +11079,7 @@ func (x *PushTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushTarget.ProtoReflect.Descriptor instead.
 func (*PushTarget) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{136}
+	return file_commodore_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *PushTarget) GetId() string {
@@ -10692,7 +11178,7 @@ type CreatePushTargetRequest struct {
 
 func (x *CreatePushTargetRequest) Reset() {
 	*x = CreatePushTargetRequest{}
-	mi := &file_commodore_proto_msgTypes[137]
+	mi := &file_commodore_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10704,7 +11190,7 @@ func (x *CreatePushTargetRequest) String() string {
 func (*CreatePushTargetRequest) ProtoMessage() {}
 
 func (x *CreatePushTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[137]
+	mi := &file_commodore_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10717,7 +11203,7 @@ func (x *CreatePushTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePushTargetRequest.ProtoReflect.Descriptor instead.
 func (*CreatePushTargetRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{137}
+	return file_commodore_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *CreatePushTargetRequest) GetStreamId() string {
@@ -10757,7 +11243,7 @@ type ListPushTargetsRequest struct {
 
 func (x *ListPushTargetsRequest) Reset() {
 	*x = ListPushTargetsRequest{}
-	mi := &file_commodore_proto_msgTypes[138]
+	mi := &file_commodore_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10769,7 +11255,7 @@ func (x *ListPushTargetsRequest) String() string {
 func (*ListPushTargetsRequest) ProtoMessage() {}
 
 func (x *ListPushTargetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[138]
+	mi := &file_commodore_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10782,7 +11268,7 @@ func (x *ListPushTargetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPushTargetsRequest.ProtoReflect.Descriptor instead.
 func (*ListPushTargetsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{138}
+	return file_commodore_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *ListPushTargetsRequest) GetStreamId() string {
@@ -10801,7 +11287,7 @@ type ListPushTargetsResponse struct {
 
 func (x *ListPushTargetsResponse) Reset() {
 	*x = ListPushTargetsResponse{}
-	mi := &file_commodore_proto_msgTypes[139]
+	mi := &file_commodore_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10813,7 +11299,7 @@ func (x *ListPushTargetsResponse) String() string {
 func (*ListPushTargetsResponse) ProtoMessage() {}
 
 func (x *ListPushTargetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[139]
+	mi := &file_commodore_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10826,7 +11312,7 @@ func (x *ListPushTargetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPushTargetsResponse.ProtoReflect.Descriptor instead.
 func (*ListPushTargetsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{139}
+	return file_commodore_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *ListPushTargetsResponse) GetPushTargets() []*PushTarget {
@@ -10848,7 +11334,7 @@ type UpdatePushTargetRequest struct {
 
 func (x *UpdatePushTargetRequest) Reset() {
 	*x = UpdatePushTargetRequest{}
-	mi := &file_commodore_proto_msgTypes[140]
+	mi := &file_commodore_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10860,7 +11346,7 @@ func (x *UpdatePushTargetRequest) String() string {
 func (*UpdatePushTargetRequest) ProtoMessage() {}
 
 func (x *UpdatePushTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[140]
+	mi := &file_commodore_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10873,7 +11359,7 @@ func (x *UpdatePushTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePushTargetRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePushTargetRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{140}
+	return file_commodore_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *UpdatePushTargetRequest) GetId() string {
@@ -10913,7 +11399,7 @@ type DeletePushTargetRequest struct {
 
 func (x *DeletePushTargetRequest) Reset() {
 	*x = DeletePushTargetRequest{}
-	mi := &file_commodore_proto_msgTypes[141]
+	mi := &file_commodore_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10925,7 +11411,7 @@ func (x *DeletePushTargetRequest) String() string {
 func (*DeletePushTargetRequest) ProtoMessage() {}
 
 func (x *DeletePushTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[141]
+	mi := &file_commodore_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10938,7 +11424,7 @@ func (x *DeletePushTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePushTargetRequest.ProtoReflect.Descriptor instead.
 func (*DeletePushTargetRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{141}
+	return file_commodore_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *DeletePushTargetRequest) GetId() string {
@@ -10959,7 +11445,7 @@ type DeletePushTargetResponse struct {
 
 func (x *DeletePushTargetResponse) Reset() {
 	*x = DeletePushTargetResponse{}
-	mi := &file_commodore_proto_msgTypes[142]
+	mi := &file_commodore_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10971,7 +11457,7 @@ func (x *DeletePushTargetResponse) String() string {
 func (*DeletePushTargetResponse) ProtoMessage() {}
 
 func (x *DeletePushTargetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[142]
+	mi := &file_commodore_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10984,7 +11470,7 @@ func (x *DeletePushTargetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePushTargetResponse.ProtoReflect.Descriptor instead.
 func (*DeletePushTargetResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{142}
+	return file_commodore_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *DeletePushTargetResponse) GetMessage() string {
@@ -11019,7 +11505,7 @@ type GetStreamPushTargetsRequest struct {
 
 func (x *GetStreamPushTargetsRequest) Reset() {
 	*x = GetStreamPushTargetsRequest{}
-	mi := &file_commodore_proto_msgTypes[143]
+	mi := &file_commodore_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11031,7 +11517,7 @@ func (x *GetStreamPushTargetsRequest) String() string {
 func (*GetStreamPushTargetsRequest) ProtoMessage() {}
 
 func (x *GetStreamPushTargetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[143]
+	mi := &file_commodore_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11044,7 +11530,7 @@ func (x *GetStreamPushTargetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamPushTargetsRequest.ProtoReflect.Descriptor instead.
 func (*GetStreamPushTargetsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{143}
+	return file_commodore_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *GetStreamPushTargetsRequest) GetStreamId() string {
@@ -11071,7 +11557,7 @@ type GetStreamPushTargetsResponse struct {
 
 func (x *GetStreamPushTargetsResponse) Reset() {
 	*x = GetStreamPushTargetsResponse{}
-	mi := &file_commodore_proto_msgTypes[144]
+	mi := &file_commodore_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11083,7 +11569,7 @@ func (x *GetStreamPushTargetsResponse) String() string {
 func (*GetStreamPushTargetsResponse) ProtoMessage() {}
 
 func (x *GetStreamPushTargetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[144]
+	mi := &file_commodore_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11096,7 +11582,7 @@ func (x *GetStreamPushTargetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStreamPushTargetsResponse.ProtoReflect.Descriptor instead.
 func (*GetStreamPushTargetsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{144}
+	return file_commodore_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *GetStreamPushTargetsResponse) GetPushTargets() []*PushTargetInternal {
@@ -11126,7 +11612,7 @@ type PushTargetInternal struct {
 
 func (x *PushTargetInternal) Reset() {
 	*x = PushTargetInternal{}
-	mi := &file_commodore_proto_msgTypes[145]
+	mi := &file_commodore_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11138,7 +11624,7 @@ func (x *PushTargetInternal) String() string {
 func (*PushTargetInternal) ProtoMessage() {}
 
 func (x *PushTargetInternal) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[145]
+	mi := &file_commodore_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11151,7 +11637,7 @@ func (x *PushTargetInternal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushTargetInternal.ProtoReflect.Descriptor instead.
 func (*PushTargetInternal) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{145}
+	return file_commodore_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *PushTargetInternal) GetId() string {
@@ -11196,7 +11682,7 @@ type UpdatePushTargetStatusRequest struct {
 
 func (x *UpdatePushTargetStatusRequest) Reset() {
 	*x = UpdatePushTargetStatusRequest{}
-	mi := &file_commodore_proto_msgTypes[146]
+	mi := &file_commodore_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11208,7 +11694,7 @@ func (x *UpdatePushTargetStatusRequest) String() string {
 func (*UpdatePushTargetStatusRequest) ProtoMessage() {}
 
 func (x *UpdatePushTargetStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[146]
+	mi := &file_commodore_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11221,7 +11707,7 @@ func (x *UpdatePushTargetStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePushTargetStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePushTargetStatusRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{146}
+	return file_commodore_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *UpdatePushTargetStatusRequest) GetId() string {
@@ -11271,7 +11757,7 @@ type CreateAPITokenRequest struct {
 
 func (x *CreateAPITokenRequest) Reset() {
 	*x = CreateAPITokenRequest{}
-	mi := &file_commodore_proto_msgTypes[147]
+	mi := &file_commodore_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11283,7 +11769,7 @@ func (x *CreateAPITokenRequest) String() string {
 func (*CreateAPITokenRequest) ProtoMessage() {}
 
 func (x *CreateAPITokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[147]
+	mi := &file_commodore_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11296,7 +11782,7 @@ func (x *CreateAPITokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAPITokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateAPITokenRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{147}
+	return file_commodore_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *CreateAPITokenRequest) GetTokenName() string {
@@ -11336,7 +11822,7 @@ type CreateAPITokenResponse struct {
 
 func (x *CreateAPITokenResponse) Reset() {
 	*x = CreateAPITokenResponse{}
-	mi := &file_commodore_proto_msgTypes[148]
+	mi := &file_commodore_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11348,7 +11834,7 @@ func (x *CreateAPITokenResponse) String() string {
 func (*CreateAPITokenResponse) ProtoMessage() {}
 
 func (x *CreateAPITokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[148]
+	mi := &file_commodore_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11361,7 +11847,7 @@ func (x *CreateAPITokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAPITokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateAPITokenResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{148}
+	return file_commodore_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *CreateAPITokenResponse) GetId() string {
@@ -11422,7 +11908,7 @@ type ListAPITokensRequest struct {
 
 func (x *ListAPITokensRequest) Reset() {
 	*x = ListAPITokensRequest{}
-	mi := &file_commodore_proto_msgTypes[149]
+	mi := &file_commodore_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11434,7 +11920,7 @@ func (x *ListAPITokensRequest) String() string {
 func (*ListAPITokensRequest) ProtoMessage() {}
 
 func (x *ListAPITokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[149]
+	mi := &file_commodore_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11447,7 +11933,7 @@ func (x *ListAPITokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAPITokensRequest.ProtoReflect.Descriptor instead.
 func (*ListAPITokensRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{149}
+	return file_commodore_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *ListAPITokensRequest) GetPagination() *common.CursorPaginationRequest {
@@ -11475,7 +11961,7 @@ type APITokenInfo struct {
 
 func (x *APITokenInfo) Reset() {
 	*x = APITokenInfo{}
-	mi := &file_commodore_proto_msgTypes[150]
+	mi := &file_commodore_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11487,7 +11973,7 @@ func (x *APITokenInfo) String() string {
 func (*APITokenInfo) ProtoMessage() {}
 
 func (x *APITokenInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[150]
+	mi := &file_commodore_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11500,7 +11986,7 @@ func (x *APITokenInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APITokenInfo.ProtoReflect.Descriptor instead.
 func (*APITokenInfo) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{150}
+	return file_commodore_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *APITokenInfo) GetId() string {
@@ -11570,7 +12056,7 @@ type ListAPITokensResponse struct {
 
 func (x *ListAPITokensResponse) Reset() {
 	*x = ListAPITokensResponse{}
-	mi := &file_commodore_proto_msgTypes[151]
+	mi := &file_commodore_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11582,7 +12068,7 @@ func (x *ListAPITokensResponse) String() string {
 func (*ListAPITokensResponse) ProtoMessage() {}
 
 func (x *ListAPITokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[151]
+	mi := &file_commodore_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11595,7 +12081,7 @@ func (x *ListAPITokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAPITokensResponse.ProtoReflect.Descriptor instead.
 func (*ListAPITokensResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{151}
+	return file_commodore_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *ListAPITokensResponse) GetTokens() []*APITokenInfo {
@@ -11621,7 +12107,7 @@ type RevokeAPITokenRequest struct {
 
 func (x *RevokeAPITokenRequest) Reset() {
 	*x = RevokeAPITokenRequest{}
-	mi := &file_commodore_proto_msgTypes[152]
+	mi := &file_commodore_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11633,7 +12119,7 @@ func (x *RevokeAPITokenRequest) String() string {
 func (*RevokeAPITokenRequest) ProtoMessage() {}
 
 func (x *RevokeAPITokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[152]
+	mi := &file_commodore_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11646,7 +12132,7 @@ func (x *RevokeAPITokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeAPITokenRequest.ProtoReflect.Descriptor instead.
 func (*RevokeAPITokenRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{152}
+	return file_commodore_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *RevokeAPITokenRequest) GetTokenId() string {
@@ -11669,7 +12155,7 @@ type RevokeAPITokenResponse struct {
 
 func (x *RevokeAPITokenResponse) Reset() {
 	*x = RevokeAPITokenResponse{}
-	mi := &file_commodore_proto_msgTypes[153]
+	mi := &file_commodore_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11681,7 +12167,7 @@ func (x *RevokeAPITokenResponse) String() string {
 func (*RevokeAPITokenResponse) ProtoMessage() {}
 
 func (x *RevokeAPITokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[153]
+	mi := &file_commodore_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11694,7 +12180,7 @@ func (x *RevokeAPITokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeAPITokenResponse.ProtoReflect.Descriptor instead.
 func (*RevokeAPITokenResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{153}
+	return file_commodore_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *RevokeAPITokenResponse) GetMessage() string {
@@ -11734,7 +12220,7 @@ type RefreshStreamKeyRequest struct {
 
 func (x *RefreshStreamKeyRequest) Reset() {
 	*x = RefreshStreamKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[154]
+	mi := &file_commodore_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11746,7 +12232,7 @@ func (x *RefreshStreamKeyRequest) String() string {
 func (*RefreshStreamKeyRequest) ProtoMessage() {}
 
 func (x *RefreshStreamKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[154]
+	mi := &file_commodore_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11759,7 +12245,7 @@ func (x *RefreshStreamKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshStreamKeyRequest.ProtoReflect.Descriptor instead.
 func (*RefreshStreamKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{154}
+	return file_commodore_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *RefreshStreamKeyRequest) GetStreamId() string {
@@ -11783,7 +12269,7 @@ type RefreshStreamKeyResponse struct {
 
 func (x *RefreshStreamKeyResponse) Reset() {
 	*x = RefreshStreamKeyResponse{}
-	mi := &file_commodore_proto_msgTypes[155]
+	mi := &file_commodore_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11795,7 +12281,7 @@ func (x *RefreshStreamKeyResponse) String() string {
 func (*RefreshStreamKeyResponse) ProtoMessage() {}
 
 func (x *RefreshStreamKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[155]
+	mi := &file_commodore_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11808,7 +12294,7 @@ func (x *RefreshStreamKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RefreshStreamKeyResponse.ProtoReflect.Descriptor instead.
 func (*RefreshStreamKeyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{155}
+	return file_commodore_proto_rawDescGZIP(), []int{160}
 }
 
 func (x *RefreshStreamKeyResponse) GetMessage() string {
@@ -11863,7 +12349,7 @@ type SigningKey struct {
 
 func (x *SigningKey) Reset() {
 	*x = SigningKey{}
-	mi := &file_commodore_proto_msgTypes[156]
+	mi := &file_commodore_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11875,7 +12361,7 @@ func (x *SigningKey) String() string {
 func (*SigningKey) ProtoMessage() {}
 
 func (x *SigningKey) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[156]
+	mi := &file_commodore_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11888,7 +12374,7 @@ func (x *SigningKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SigningKey.ProtoReflect.Descriptor instead.
 func (*SigningKey) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{156}
+	return file_commodore_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *SigningKey) GetId() string {
@@ -11963,7 +12449,7 @@ type CreateSigningKeyRequest struct {
 
 func (x *CreateSigningKeyRequest) Reset() {
 	*x = CreateSigningKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[157]
+	mi := &file_commodore_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11975,7 +12461,7 @@ func (x *CreateSigningKeyRequest) String() string {
 func (*CreateSigningKeyRequest) ProtoMessage() {}
 
 func (x *CreateSigningKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[157]
+	mi := &file_commodore_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11988,7 +12474,7 @@ func (x *CreateSigningKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSigningKeyRequest.ProtoReflect.Descriptor instead.
 func (*CreateSigningKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{157}
+	return file_commodore_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *CreateSigningKeyRequest) GetName() string {
@@ -12008,7 +12494,7 @@ type CreateSigningKeyResponse struct {
 
 func (x *CreateSigningKeyResponse) Reset() {
 	*x = CreateSigningKeyResponse{}
-	mi := &file_commodore_proto_msgTypes[158]
+	mi := &file_commodore_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12020,7 +12506,7 @@ func (x *CreateSigningKeyResponse) String() string {
 func (*CreateSigningKeyResponse) ProtoMessage() {}
 
 func (x *CreateSigningKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[158]
+	mi := &file_commodore_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12033,7 +12519,7 @@ func (x *CreateSigningKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSigningKeyResponse.ProtoReflect.Descriptor instead.
 func (*CreateSigningKeyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{158}
+	return file_commodore_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *CreateSigningKeyResponse) GetSigningKey() *SigningKey {
@@ -12059,7 +12545,7 @@ type GetSigningKeyRequest struct {
 
 func (x *GetSigningKeyRequest) Reset() {
 	*x = GetSigningKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[159]
+	mi := &file_commodore_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12071,7 +12557,7 @@ func (x *GetSigningKeyRequest) String() string {
 func (*GetSigningKeyRequest) ProtoMessage() {}
 
 func (x *GetSigningKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[159]
+	mi := &file_commodore_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12084,7 +12570,7 @@ func (x *GetSigningKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSigningKeyRequest.ProtoReflect.Descriptor instead.
 func (*GetSigningKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{159}
+	return file_commodore_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *GetSigningKeyRequest) GetId() string {
@@ -12105,7 +12591,7 @@ type ListSigningKeysRequest struct {
 
 func (x *ListSigningKeysRequest) Reset() {
 	*x = ListSigningKeysRequest{}
-	mi := &file_commodore_proto_msgTypes[160]
+	mi := &file_commodore_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12117,7 +12603,7 @@ func (x *ListSigningKeysRequest) String() string {
 func (*ListSigningKeysRequest) ProtoMessage() {}
 
 func (x *ListSigningKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[160]
+	mi := &file_commodore_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12130,7 +12616,7 @@ func (x *ListSigningKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSigningKeysRequest.ProtoReflect.Descriptor instead.
 func (*ListSigningKeysRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{160}
+	return file_commodore_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *ListSigningKeysRequest) GetStatusFilter() string {
@@ -12164,7 +12650,7 @@ type ListSigningKeysResponse struct {
 
 func (x *ListSigningKeysResponse) Reset() {
 	*x = ListSigningKeysResponse{}
-	mi := &file_commodore_proto_msgTypes[161]
+	mi := &file_commodore_proto_msgTypes[166]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12176,7 +12662,7 @@ func (x *ListSigningKeysResponse) String() string {
 func (*ListSigningKeysResponse) ProtoMessage() {}
 
 func (x *ListSigningKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[161]
+	mi := &file_commodore_proto_msgTypes[166]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12189,7 +12675,7 @@ func (x *ListSigningKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSigningKeysResponse.ProtoReflect.Descriptor instead.
 func (*ListSigningKeysResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{161}
+	return file_commodore_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *ListSigningKeysResponse) GetSigningKeys() []*SigningKey {
@@ -12215,7 +12701,7 @@ type RevokeSigningKeyRequest struct {
 
 func (x *RevokeSigningKeyRequest) Reset() {
 	*x = RevokeSigningKeyRequest{}
-	mi := &file_commodore_proto_msgTypes[162]
+	mi := &file_commodore_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12227,7 +12713,7 @@ func (x *RevokeSigningKeyRequest) String() string {
 func (*RevokeSigningKeyRequest) ProtoMessage() {}
 
 func (x *RevokeSigningKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[162]
+	mi := &file_commodore_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12240,7 +12726,7 @@ func (x *RevokeSigningKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeSigningKeyRequest.ProtoReflect.Descriptor instead.
 func (*RevokeSigningKeyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{162}
+	return file_commodore_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *RevokeSigningKeyRequest) GetId() string {
@@ -12269,7 +12755,7 @@ type SetPlaybackPolicyRequest struct {
 
 func (x *SetPlaybackPolicyRequest) Reset() {
 	*x = SetPlaybackPolicyRequest{}
-	mi := &file_commodore_proto_msgTypes[163]
+	mi := &file_commodore_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12281,7 +12767,7 @@ func (x *SetPlaybackPolicyRequest) String() string {
 func (*SetPlaybackPolicyRequest) ProtoMessage() {}
 
 func (x *SetPlaybackPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[163]
+	mi := &file_commodore_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12294,7 +12780,7 @@ func (x *SetPlaybackPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlaybackPolicyRequest.ProtoReflect.Descriptor instead.
 func (*SetPlaybackPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{163}
+	return file_commodore_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *SetPlaybackPolicyRequest) GetStreamId() string {
@@ -12352,7 +12838,7 @@ type SetPlaybackPolicyResponse struct {
 
 func (x *SetPlaybackPolicyResponse) Reset() {
 	*x = SetPlaybackPolicyResponse{}
-	mi := &file_commodore_proto_msgTypes[164]
+	mi := &file_commodore_proto_msgTypes[169]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12364,7 +12850,7 @@ func (x *SetPlaybackPolicyResponse) String() string {
 func (*SetPlaybackPolicyResponse) ProtoMessage() {}
 
 func (x *SetPlaybackPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[164]
+	mi := &file_commodore_proto_msgTypes[169]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12377,7 +12863,7 @@ func (x *SetPlaybackPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPlaybackPolicyResponse.ProtoReflect.Descriptor instead.
 func (*SetPlaybackPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{164}
+	return file_commodore_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *SetPlaybackPolicyResponse) GetStreamId() string {
@@ -12422,7 +12908,7 @@ type RecordPullSourceEventRequest struct {
 
 func (x *RecordPullSourceEventRequest) Reset() {
 	*x = RecordPullSourceEventRequest{}
-	mi := &file_commodore_proto_msgTypes[165]
+	mi := &file_commodore_proto_msgTypes[170]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12434,7 +12920,7 @@ func (x *RecordPullSourceEventRequest) String() string {
 func (*RecordPullSourceEventRequest) ProtoMessage() {}
 
 func (x *RecordPullSourceEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[165]
+	mi := &file_commodore_proto_msgTypes[170]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12447,7 +12933,7 @@ func (x *RecordPullSourceEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordPullSourceEventRequest.ProtoReflect.Descriptor instead.
 func (*RecordPullSourceEventRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{165}
+	return file_commodore_proto_rawDescGZIP(), []int{170}
 }
 
 func (x *RecordPullSourceEventRequest) GetTenantId() string {
@@ -12496,7 +12982,7 @@ type ListPullSourceEventsRequest struct {
 
 func (x *ListPullSourceEventsRequest) Reset() {
 	*x = ListPullSourceEventsRequest{}
-	mi := &file_commodore_proto_msgTypes[166]
+	mi := &file_commodore_proto_msgTypes[171]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12508,7 +12994,7 @@ func (x *ListPullSourceEventsRequest) String() string {
 func (*ListPullSourceEventsRequest) ProtoMessage() {}
 
 func (x *ListPullSourceEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[166]
+	mi := &file_commodore_proto_msgTypes[171]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12521,7 +13007,7 @@ func (x *ListPullSourceEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPullSourceEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListPullSourceEventsRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{166}
+	return file_commodore_proto_rawDescGZIP(), []int{171}
 }
 
 func (x *ListPullSourceEventsRequest) GetStreamId() string {
@@ -12559,7 +13045,7 @@ type PullSourceEvent struct {
 
 func (x *PullSourceEvent) Reset() {
 	*x = PullSourceEvent{}
-	mi := &file_commodore_proto_msgTypes[167]
+	mi := &file_commodore_proto_msgTypes[172]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12571,7 +13057,7 @@ func (x *PullSourceEvent) String() string {
 func (*PullSourceEvent) ProtoMessage() {}
 
 func (x *PullSourceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[167]
+	mi := &file_commodore_proto_msgTypes[172]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12584,7 +13070,7 @@ func (x *PullSourceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullSourceEvent.ProtoReflect.Descriptor instead.
 func (*PullSourceEvent) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{167}
+	return file_commodore_proto_rawDescGZIP(), []int{172}
 }
 
 func (x *PullSourceEvent) GetId() string {
@@ -12638,7 +13124,7 @@ type ListPullSourceEventsResponse struct {
 
 func (x *ListPullSourceEventsResponse) Reset() {
 	*x = ListPullSourceEventsResponse{}
-	mi := &file_commodore_proto_msgTypes[168]
+	mi := &file_commodore_proto_msgTypes[173]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12650,7 +13136,7 @@ func (x *ListPullSourceEventsResponse) String() string {
 func (*ListPullSourceEventsResponse) ProtoMessage() {}
 
 func (x *ListPullSourceEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[168]
+	mi := &file_commodore_proto_msgTypes[173]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12663,7 +13149,7 @@ func (x *ListPullSourceEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPullSourceEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListPullSourceEventsResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{168}
+	return file_commodore_proto_rawDescGZIP(), []int{173}
 }
 
 func (x *ListPullSourceEventsResponse) GetEvents() []*PullSourceEvent {
@@ -12685,7 +13171,7 @@ type MediaRetentionBounds struct {
 
 func (x *MediaRetentionBounds) Reset() {
 	*x = MediaRetentionBounds{}
-	mi := &file_commodore_proto_msgTypes[169]
+	mi := &file_commodore_proto_msgTypes[174]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12697,7 +13183,7 @@ func (x *MediaRetentionBounds) String() string {
 func (*MediaRetentionBounds) ProtoMessage() {}
 
 func (x *MediaRetentionBounds) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[169]
+	mi := &file_commodore_proto_msgTypes[174]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12710,7 +13196,7 @@ func (x *MediaRetentionBounds) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MediaRetentionBounds.ProtoReflect.Descriptor instead.
 func (*MediaRetentionBounds) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{169}
+	return file_commodore_proto_rawDescGZIP(), []int{174}
 }
 
 func (x *MediaRetentionBounds) GetMaxRecordingRetentionDays() int32 {
@@ -12729,7 +13215,7 @@ type GetMediaRetentionPolicyRequest struct {
 
 func (x *GetMediaRetentionPolicyRequest) Reset() {
 	*x = GetMediaRetentionPolicyRequest{}
-	mi := &file_commodore_proto_msgTypes[170]
+	mi := &file_commodore_proto_msgTypes[175]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12741,7 +13227,7 @@ func (x *GetMediaRetentionPolicyRequest) String() string {
 func (*GetMediaRetentionPolicyRequest) ProtoMessage() {}
 
 func (x *GetMediaRetentionPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[170]
+	mi := &file_commodore_proto_msgTypes[175]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12754,7 +13240,7 @@ func (x *GetMediaRetentionPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMediaRetentionPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetMediaRetentionPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{170}
+	return file_commodore_proto_rawDescGZIP(), []int{175}
 }
 
 func (x *GetMediaRetentionPolicyRequest) GetTenantId() string {
@@ -12787,7 +13273,7 @@ type GetMediaRetentionPolicyResponse struct {
 
 func (x *GetMediaRetentionPolicyResponse) Reset() {
 	*x = GetMediaRetentionPolicyResponse{}
-	mi := &file_commodore_proto_msgTypes[171]
+	mi := &file_commodore_proto_msgTypes[176]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12799,7 +13285,7 @@ func (x *GetMediaRetentionPolicyResponse) String() string {
 func (*GetMediaRetentionPolicyResponse) ProtoMessage() {}
 
 func (x *GetMediaRetentionPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[171]
+	mi := &file_commodore_proto_msgTypes[176]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12812,7 +13298,7 @@ func (x *GetMediaRetentionPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMediaRetentionPolicyResponse.ProtoReflect.Descriptor instead.
 func (*GetMediaRetentionPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{171}
+	return file_commodore_proto_rawDescGZIP(), []int{176}
 }
 
 func (x *GetMediaRetentionPolicyResponse) GetDefaultVodRetentionDays() int32 {
@@ -12898,7 +13384,7 @@ type SetMediaRetentionPolicyRequest struct {
 
 func (x *SetMediaRetentionPolicyRequest) Reset() {
 	*x = SetMediaRetentionPolicyRequest{}
-	mi := &file_commodore_proto_msgTypes[172]
+	mi := &file_commodore_proto_msgTypes[177]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12910,7 +13396,7 @@ func (x *SetMediaRetentionPolicyRequest) String() string {
 func (*SetMediaRetentionPolicyRequest) ProtoMessage() {}
 
 func (x *SetMediaRetentionPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[172]
+	mi := &file_commodore_proto_msgTypes[177]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12923,7 +13409,7 @@ func (x *SetMediaRetentionPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMediaRetentionPolicyRequest.ProtoReflect.Descriptor instead.
 func (*SetMediaRetentionPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{172}
+	return file_commodore_proto_rawDescGZIP(), []int{177}
 }
 
 func (x *SetMediaRetentionPolicyRequest) GetTenantId() string {
@@ -12970,7 +13456,7 @@ type SetMediaRetentionPolicyResponse struct {
 
 func (x *SetMediaRetentionPolicyResponse) Reset() {
 	*x = SetMediaRetentionPolicyResponse{}
-	mi := &file_commodore_proto_msgTypes[173]
+	mi := &file_commodore_proto_msgTypes[178]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12982,7 +13468,7 @@ func (x *SetMediaRetentionPolicyResponse) String() string {
 func (*SetMediaRetentionPolicyResponse) ProtoMessage() {}
 
 func (x *SetMediaRetentionPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[173]
+	mi := &file_commodore_proto_msgTypes[178]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12995,7 +13481,7 @@ func (x *SetMediaRetentionPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMediaRetentionPolicyResponse.ProtoReflect.Descriptor instead.
 func (*SetMediaRetentionPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{173}
+	return file_commodore_proto_rawDescGZIP(), []int{178}
 }
 
 func (x *SetMediaRetentionPolicyResponse) GetPolicy() *GetMediaRetentionPolicyResponse {
@@ -13022,7 +13508,7 @@ type UpdateAssetRetentionRequest struct {
 
 func (x *UpdateAssetRetentionRequest) Reset() {
 	*x = UpdateAssetRetentionRequest{}
-	mi := &file_commodore_proto_msgTypes[174]
+	mi := &file_commodore_proto_msgTypes[179]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13034,7 +13520,7 @@ func (x *UpdateAssetRetentionRequest) String() string {
 func (*UpdateAssetRetentionRequest) ProtoMessage() {}
 
 func (x *UpdateAssetRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[174]
+	mi := &file_commodore_proto_msgTypes[179]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13047,7 +13533,7 @@ func (x *UpdateAssetRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAssetRetentionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAssetRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{174}
+	return file_commodore_proto_rawDescGZIP(), []int{179}
 }
 
 func (x *UpdateAssetRetentionRequest) GetTenantId() string {
@@ -13096,7 +13582,7 @@ type ResetAssetRetentionRequest struct {
 
 func (x *ResetAssetRetentionRequest) Reset() {
 	*x = ResetAssetRetentionRequest{}
-	mi := &file_commodore_proto_msgTypes[175]
+	mi := &file_commodore_proto_msgTypes[180]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13108,7 +13594,7 @@ func (x *ResetAssetRetentionRequest) String() string {
 func (*ResetAssetRetentionRequest) ProtoMessage() {}
 
 func (x *ResetAssetRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[175]
+	mi := &file_commodore_proto_msgTypes[180]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13121,7 +13607,7 @@ func (x *ResetAssetRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetAssetRetentionRequest.ProtoReflect.Descriptor instead.
 func (*ResetAssetRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{175}
+	return file_commodore_proto_rawDescGZIP(), []int{180}
 }
 
 func (x *ResetAssetRetentionRequest) GetTenantId() string {
@@ -13158,7 +13644,7 @@ type UpdateAssetRetentionResponse struct {
 
 func (x *UpdateAssetRetentionResponse) Reset() {
 	*x = UpdateAssetRetentionResponse{}
-	mi := &file_commodore_proto_msgTypes[176]
+	mi := &file_commodore_proto_msgTypes[181]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13170,7 +13656,7 @@ func (x *UpdateAssetRetentionResponse) String() string {
 func (*UpdateAssetRetentionResponse) ProtoMessage() {}
 
 func (x *UpdateAssetRetentionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[176]
+	mi := &file_commodore_proto_msgTypes[181]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13183,7 +13669,7 @@ func (x *UpdateAssetRetentionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAssetRetentionResponse.ProtoReflect.Descriptor instead.
 func (*UpdateAssetRetentionResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{176}
+	return file_commodore_proto_rawDescGZIP(), []int{181}
 }
 
 func (x *UpdateAssetRetentionResponse) GetTargetId() string {
@@ -13232,7 +13718,7 @@ type SetStreamRetentionOverridesRequest struct {
 
 func (x *SetStreamRetentionOverridesRequest) Reset() {
 	*x = SetStreamRetentionOverridesRequest{}
-	mi := &file_commodore_proto_msgTypes[177]
+	mi := &file_commodore_proto_msgTypes[182]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13244,7 +13730,7 @@ func (x *SetStreamRetentionOverridesRequest) String() string {
 func (*SetStreamRetentionOverridesRequest) ProtoMessage() {}
 
 func (x *SetStreamRetentionOverridesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[177]
+	mi := &file_commodore_proto_msgTypes[182]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13257,7 +13743,7 @@ func (x *SetStreamRetentionOverridesRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use SetStreamRetentionOverridesRequest.ProtoReflect.Descriptor instead.
 func (*SetStreamRetentionOverridesRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{177}
+	return file_commodore_proto_rawDescGZIP(), []int{182}
 }
 
 func (x *SetStreamRetentionOverridesRequest) GetTenantId() string {
@@ -13320,7 +13806,7 @@ type SetStreamRetentionOverridesResponse struct {
 
 func (x *SetStreamRetentionOverridesResponse) Reset() {
 	*x = SetStreamRetentionOverridesResponse{}
-	mi := &file_commodore_proto_msgTypes[178]
+	mi := &file_commodore_proto_msgTypes[183]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13332,7 +13818,7 @@ func (x *SetStreamRetentionOverridesResponse) String() string {
 func (*SetStreamRetentionOverridesResponse) ProtoMessage() {}
 
 func (x *SetStreamRetentionOverridesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[178]
+	mi := &file_commodore_proto_msgTypes[183]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13345,7 +13831,7 @@ func (x *SetStreamRetentionOverridesResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use SetStreamRetentionOverridesResponse.ProtoReflect.Descriptor instead.
 func (*SetStreamRetentionOverridesResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{178}
+	return file_commodore_proto_rawDescGZIP(), []int{183}
 }
 
 func (x *SetStreamRetentionOverridesResponse) GetStreamId() string {
@@ -13388,7 +13874,7 @@ type CompleteAuthorizationRequest struct {
 
 func (x *CompleteAuthorizationRequest) Reset() {
 	*x = CompleteAuthorizationRequest{}
-	mi := &file_commodore_proto_msgTypes[179]
+	mi := &file_commodore_proto_msgTypes[184]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13400,7 +13886,7 @@ func (x *CompleteAuthorizationRequest) String() string {
 func (*CompleteAuthorizationRequest) ProtoMessage() {}
 
 func (x *CompleteAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[179]
+	mi := &file_commodore_proto_msgTypes[184]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13413,7 +13899,7 @@ func (x *CompleteAuthorizationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*CompleteAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{179}
+	return file_commodore_proto_rawDescGZIP(), []int{184}
 }
 
 func (x *CompleteAuthorizationRequest) GetUserId() string {
@@ -13482,7 +13968,7 @@ type CompleteAuthorizationResponse struct {
 
 func (x *CompleteAuthorizationResponse) Reset() {
 	*x = CompleteAuthorizationResponse{}
-	mi := &file_commodore_proto_msgTypes[180]
+	mi := &file_commodore_proto_msgTypes[185]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13494,7 +13980,7 @@ func (x *CompleteAuthorizationResponse) String() string {
 func (*CompleteAuthorizationResponse) ProtoMessage() {}
 
 func (x *CompleteAuthorizationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[180]
+	mi := &file_commodore_proto_msgTypes[185]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13507,7 +13993,7 @@ func (x *CompleteAuthorizationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAuthorizationResponse.ProtoReflect.Descriptor instead.
 func (*CompleteAuthorizationResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{180}
+	return file_commodore_proto_rawDescGZIP(), []int{185}
 }
 
 func (x *CompleteAuthorizationResponse) GetCode() string {
@@ -13540,7 +14026,7 @@ type ExchangeAuthorizationCodeRequest struct {
 
 func (x *ExchangeAuthorizationCodeRequest) Reset() {
 	*x = ExchangeAuthorizationCodeRequest{}
-	mi := &file_commodore_proto_msgTypes[181]
+	mi := &file_commodore_proto_msgTypes[186]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13552,7 +14038,7 @@ func (x *ExchangeAuthorizationCodeRequest) String() string {
 func (*ExchangeAuthorizationCodeRequest) ProtoMessage() {}
 
 func (x *ExchangeAuthorizationCodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[181]
+	mi := &file_commodore_proto_msgTypes[186]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13565,7 +14051,7 @@ func (x *ExchangeAuthorizationCodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExchangeAuthorizationCodeRequest.ProtoReflect.Descriptor instead.
 func (*ExchangeAuthorizationCodeRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{181}
+	return file_commodore_proto_rawDescGZIP(), []int{186}
 }
 
 func (x *ExchangeAuthorizationCodeRequest) GetCode() string {
@@ -13609,7 +14095,7 @@ type StartDeviceAuthorizationRequest struct {
 
 func (x *StartDeviceAuthorizationRequest) Reset() {
 	*x = StartDeviceAuthorizationRequest{}
-	mi := &file_commodore_proto_msgTypes[182]
+	mi := &file_commodore_proto_msgTypes[187]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13621,7 +14107,7 @@ func (x *StartDeviceAuthorizationRequest) String() string {
 func (*StartDeviceAuthorizationRequest) ProtoMessage() {}
 
 func (x *StartDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[182]
+	mi := &file_commodore_proto_msgTypes[187]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13634,7 +14120,7 @@ func (x *StartDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeviceAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*StartDeviceAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{182}
+	return file_commodore_proto_rawDescGZIP(), []int{187}
 }
 
 func (x *StartDeviceAuthorizationRequest) GetClientId() string {
@@ -13665,7 +14151,7 @@ type StartDeviceAuthorizationResponse struct {
 
 func (x *StartDeviceAuthorizationResponse) Reset() {
 	*x = StartDeviceAuthorizationResponse{}
-	mi := &file_commodore_proto_msgTypes[183]
+	mi := &file_commodore_proto_msgTypes[188]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13677,7 +14163,7 @@ func (x *StartDeviceAuthorizationResponse) String() string {
 func (*StartDeviceAuthorizationResponse) ProtoMessage() {}
 
 func (x *StartDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[183]
+	mi := &file_commodore_proto_msgTypes[188]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13690,7 +14176,7 @@ func (x *StartDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeviceAuthorizationResponse.ProtoReflect.Descriptor instead.
 func (*StartDeviceAuthorizationResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{183}
+	return file_commodore_proto_rawDescGZIP(), []int{188}
 }
 
 func (x *StartDeviceAuthorizationResponse) GetDeviceCode() string {
@@ -13749,7 +14235,7 @@ type PollDeviceAuthorizationRequest struct {
 
 func (x *PollDeviceAuthorizationRequest) Reset() {
 	*x = PollDeviceAuthorizationRequest{}
-	mi := &file_commodore_proto_msgTypes[184]
+	mi := &file_commodore_proto_msgTypes[189]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13761,7 +14247,7 @@ func (x *PollDeviceAuthorizationRequest) String() string {
 func (*PollDeviceAuthorizationRequest) ProtoMessage() {}
 
 func (x *PollDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[184]
+	mi := &file_commodore_proto_msgTypes[189]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13774,7 +14260,7 @@ func (x *PollDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollDeviceAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*PollDeviceAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{184}
+	return file_commodore_proto_rawDescGZIP(), []int{189}
 }
 
 func (x *PollDeviceAuthorizationRequest) GetDeviceCode() string {
@@ -13803,7 +14289,7 @@ type LookupDeviceAuthorizationRequest struct {
 
 func (x *LookupDeviceAuthorizationRequest) Reset() {
 	*x = LookupDeviceAuthorizationRequest{}
-	mi := &file_commodore_proto_msgTypes[185]
+	mi := &file_commodore_proto_msgTypes[190]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13815,7 +14301,7 @@ func (x *LookupDeviceAuthorizationRequest) String() string {
 func (*LookupDeviceAuthorizationRequest) ProtoMessage() {}
 
 func (x *LookupDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[185]
+	mi := &file_commodore_proto_msgTypes[190]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13828,7 +14314,7 @@ func (x *LookupDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LookupDeviceAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*LookupDeviceAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{185}
+	return file_commodore_proto_rawDescGZIP(), []int{190}
 }
 
 func (x *LookupDeviceAuthorizationRequest) GetUserCode() string {
@@ -13849,7 +14335,7 @@ type LookupDeviceAuthorizationResponse struct {
 
 func (x *LookupDeviceAuthorizationResponse) Reset() {
 	*x = LookupDeviceAuthorizationResponse{}
-	mi := &file_commodore_proto_msgTypes[186]
+	mi := &file_commodore_proto_msgTypes[191]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13861,7 +14347,7 @@ func (x *LookupDeviceAuthorizationResponse) String() string {
 func (*LookupDeviceAuthorizationResponse) ProtoMessage() {}
 
 func (x *LookupDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[186]
+	mi := &file_commodore_proto_msgTypes[191]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13874,7 +14360,7 @@ func (x *LookupDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use LookupDeviceAuthorizationResponse.ProtoReflect.Descriptor instead.
 func (*LookupDeviceAuthorizationResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{186}
+	return file_commodore_proto_rawDescGZIP(), []int{191}
 }
 
 func (x *LookupDeviceAuthorizationResponse) GetClientId() string {
@@ -13911,7 +14397,7 @@ type ApproveDeviceAuthorizationRequest struct {
 
 func (x *ApproveDeviceAuthorizationRequest) Reset() {
 	*x = ApproveDeviceAuthorizationRequest{}
-	mi := &file_commodore_proto_msgTypes[187]
+	mi := &file_commodore_proto_msgTypes[192]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13923,7 +14409,7 @@ func (x *ApproveDeviceAuthorizationRequest) String() string {
 func (*ApproveDeviceAuthorizationRequest) ProtoMessage() {}
 
 func (x *ApproveDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[187]
+	mi := &file_commodore_proto_msgTypes[192]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13936,7 +14422,7 @@ func (x *ApproveDeviceAuthorizationRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ApproveDeviceAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*ApproveDeviceAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{187}
+	return file_commodore_proto_rawDescGZIP(), []int{192}
 }
 
 func (x *ApproveDeviceAuthorizationRequest) GetUserId() string {
@@ -13970,7 +14456,7 @@ type ApproveDeviceAuthorizationResponse struct {
 
 func (x *ApproveDeviceAuthorizationResponse) Reset() {
 	*x = ApproveDeviceAuthorizationResponse{}
-	mi := &file_commodore_proto_msgTypes[188]
+	mi := &file_commodore_proto_msgTypes[193]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13982,7 +14468,7 @@ func (x *ApproveDeviceAuthorizationResponse) String() string {
 func (*ApproveDeviceAuthorizationResponse) ProtoMessage() {}
 
 func (x *ApproveDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_commodore_proto_msgTypes[188]
+	mi := &file_commodore_proto_msgTypes[193]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13995,7 +14481,7 @@ func (x *ApproveDeviceAuthorizationResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ApproveDeviceAuthorizationResponse.ProtoReflect.Descriptor instead.
 func (*ApproveDeviceAuthorizationResponse) Descriptor() ([]byte, []int) {
-	return file_commodore_proto_rawDescGZIP(), []int{188}
+	return file_commodore_proto_rawDescGZIP(), []int{193}
 }
 
 func (x *ApproveDeviceAuthorizationResponse) GetSuccess() bool {
@@ -14023,11 +14509,53 @@ const file_commodore_proto_rawDesc = "" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\"B\n" +
 	"$RequestMediaAuthorityRefreshResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted\"L\n" +
+	"\baccepted\x18\x01 \x01(\bR\baccepted\"\xbd\x03\n" +
 	"\"RequestMediaAuthorityReplayRequest\x12&\n" +
-	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\"L\n" +
+	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\x12\x1d\n" +
+	"\n" +
+	"held_count\x18\x02 \x01(\x03R\theldCount\x12\x1f\n" +
+	"\vheld_digest\x18\x03 \x01(\fR\n" +
+	"heldDigest\x12/\n" +
+	"\x05as_of\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x04asOf\x12%\n" +
+	"\x0einventory_page\x18\x05 \x01(\bR\rinventoryPage\x121\n" +
+	"\x04held\x18\x06 \x03(\v2\x1d.commodore.HeldMediaAuthorityR\x04held\x12\x1d\n" +
+	"\n" +
+	"after_kind\x18\a \x01(\tR\tafterKind\x12\x19\n" +
+	"\bafter_id\x18\b \x01(\tR\aafterId\x12\x1d\n" +
+	"\n" +
+	"final_page\x18\t \x01(\bR\tfinalPage\x12K\n" +
+	"\x13acknowledged_before\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\x12acknowledgedBefore\"\x8b\x01\n" +
+	"\x12HeldMediaAuthority\x12%\n" +
+	"\x0eauthority_kind\x18\x01 \x01(\tR\rauthorityKind\x12!\n" +
+	"\fauthority_id\x18\x02 \x01(\tR\vauthorityId\x12+\n" +
+	"\x11authority_version\x18\x03 \x01(\x03R\x10authorityVersion\"\xee\x02\n" +
 	"#RequestMediaAuthorityReplayResponse\x12%\n" +
-	"\x0erequeued_count\x18\x01 \x01(\x03R\rrequeuedCount\"y\n" +
+	"\x0erequeued_count\x18\x01 \x01(\x03R\rrequeuedCount\x12'\n" +
+	"\x0fsummary_checked\x18\x02 \x01(\bR\x0esummaryChecked\x12!\n" +
+	"\fheld_matches\x18\x03 \x01(\bR\vheldMatches\x12+\n" +
+	"\x11recovery_protocol\x18\x04 \x01(\rR\x10recoveryProtocol\x12-\n" +
+	"\x12inventory_required\x18\x05 \x01(\bR\x11inventoryRequired\x12;\n" +
+	"\tconfirmed\x18\x06 \x03(\v2\x1d.commodore.HeldMediaAuthorityR\tconfirmed\x12;\n" +
+	"\vobserved_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"\xdc\x01\n" +
+	"\x1aFetchMediaAuthorityRequest\x12&\n" +
+	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\x12#\n" +
+	"\fauthority_id\x18\x02 \x01(\tH\x00R\vauthorityId\x12!\n" +
+	"\vplayback_id\x18\x03 \x01(\tH\x00R\n" +
+	"playbackId\x12%\n" +
+	"\rinternal_name\x18\x04 \x01(\tH\x00R\finternalName\x12\x1d\n" +
+	"\ttenant_id\x18\x05 \x01(\tH\x00R\btenantIdB\b\n" +
+	"\x06lookup\"L\n" +
+	"\x1bFetchMediaAuthorityResponse\x12-\n" +
+	"\x12signed_authorities\x18\x01 \x03(\fR\x11signedAuthorities\"z\n" +
+	"\x11MediaAuthorityUse\x12%\n" +
+	"\x0eauthority_kind\x18\x01 \x01(\tR\rauthorityKind\x12!\n" +
+	"\fauthority_id\x18\x02 \x01(\tR\vauthorityId\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"z\n" +
+	"\x1eReportMediaAuthorityUseRequest\x12&\n" +
+	"\x0fcontrol_cell_id\x18\x01 \x01(\tR\rcontrolCellId\x120\n" +
+	"\x04uses\x18\x02 \x03(\v2\x1c.commodore.MediaAuthorityUseR\x04uses\"y\n" +
 	"\x18ValidateStreamKeyRequest\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +
@@ -15381,7 +15909,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\"MEDIA_RETENTION_TARGET_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMEDIA_RETENTION_TARGET_DVR\x10\x01\x12\x1f\n" +
 	"\x1bMEDIA_RETENTION_TARGET_CLIP\x10\x02\x12\x1e\n" +
-	"\x1aMEDIA_RETENTION_TARGET_VOD\x10\x032\x86.\n" +
+	"\x1aMEDIA_RETENTION_TARGET_VOD\x10\x032\xca/\n" +
 	"\x0fInternalService\x12^\n" +
 	"\x11ValidateStreamKey\x12#.commodore.ValidateStreamKeyRequest\x1a$.commodore.ValidateStreamKeyResponse\x12[\n" +
 	"\x0eCheckStreamKey\x12#.commodore.ValidateStreamKeyRequest\x1a$.commodore.ValidateStreamKeyResponse\x12g\n" +
@@ -15438,7 +15966,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x15RecordPullSourceEvent\x12'.commodore.RecordPullSourceEventRequest\x1a\x16.google.protobuf.Empty\x12g\n" +
 	"\x14ListPullSourceEvents\x12&.commodore.ListPullSourceEventsRequest\x1a'.commodore.ListPullSourceEventsResponse\x12\x7f\n" +
 	"\x1cRequestMediaAuthorityRefresh\x12..commodore.RequestMediaAuthorityRefreshRequest\x1a/.commodore.RequestMediaAuthorityRefreshResponse\x12|\n" +
-	"\x1bRequestMediaAuthorityReplay\x12-.commodore.RequestMediaAuthorityReplayRequest\x1a..commodore.RequestMediaAuthorityReplayResponse2\x94\x10\n" +
+	"\x1bRequestMediaAuthorityReplay\x12-.commodore.RequestMediaAuthorityReplayRequest\x1a..commodore.RequestMediaAuthorityReplayResponse\x12d\n" +
+	"\x13FetchMediaAuthority\x12%.commodore.FetchMediaAuthorityRequest\x1a&.commodore.FetchMediaAuthorityResponse\x12\\\n" +
+	"\x17ReportMediaAuthorityUse\x12).commodore.ReportMediaAuthorityUseRequest\x1a\x16.google.protobuf.Empty2\x94\x10\n" +
 	"\vUserService\x129\n" +
 	"\x05Login\x12\x17.commodore.LoginRequest\x1a\x17.commodore.AuthResponse\x12C\n" +
 	"\bRegister\x12\x1a.commodore.RegisterRequest\x1a\x1b.commodore.RegisterResponse\x12=\n" +
@@ -15531,7 +16061,7 @@ func file_commodore_proto_rawDescGZIP() []byte {
 }
 
 var file_commodore_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_commodore_proto_msgTypes = make([]protoimpl.MessageInfo, 191)
+var file_commodore_proto_msgTypes = make([]protoimpl.MessageInfo, 196)
 var file_commodore_proto_goTypes = []any{
 	(StreamKeyRejectionReason)(0),                      // 0: commodore.StreamKeyRejectionReason
 	(MonitoringToggle)(0),                              // 1: commodore.MonitoringToggle
@@ -15542,625 +16072,640 @@ var file_commodore_proto_goTypes = []any{
 	(*RequestMediaAuthorityRefreshRequest)(nil),        // 6: commodore.RequestMediaAuthorityRefreshRequest
 	(*RequestMediaAuthorityRefreshResponse)(nil),       // 7: commodore.RequestMediaAuthorityRefreshResponse
 	(*RequestMediaAuthorityReplayRequest)(nil),         // 8: commodore.RequestMediaAuthorityReplayRequest
-	(*RequestMediaAuthorityReplayResponse)(nil),        // 9: commodore.RequestMediaAuthorityReplayResponse
-	(*ValidateStreamKeyRequest)(nil),                   // 10: commodore.ValidateStreamKeyRequest
-	(*ValidateStreamKeyResponse)(nil),                  // 11: commodore.ValidateStreamKeyResponse
-	(*ResolveStreamContextRequest)(nil),                // 12: commodore.ResolveStreamContextRequest
-	(*ResolveStreamContextResponse)(nil),               // 13: commodore.ResolveStreamContextResponse
-	(*ListManagedStreamsRequest)(nil),                  // 14: commodore.ListManagedStreamsRequest
-	(*ManagedStreamRow)(nil),                           // 15: commodore.ManagedStreamRow
-	(*ListManagedStreamsResponse)(nil),                 // 16: commodore.ListManagedStreamsResponse
-	(*ListStreamMonitoringRequest)(nil),                // 17: commodore.ListStreamMonitoringRequest
-	(*StreamMonitoringRow)(nil),                        // 18: commodore.StreamMonitoringRow
-	(*ListStreamMonitoringResponse)(nil),               // 19: commodore.ListStreamMonitoringResponse
-	(*RecordStreamActiveClusterRequest)(nil),           // 20: commodore.RecordStreamActiveClusterRequest
-	(*RecordStreamActiveClusterResponse)(nil),          // 21: commodore.RecordStreamActiveClusterResponse
-	(*RegisterStreamThumbnailServingCellRequest)(nil),  // 22: commodore.RegisterStreamThumbnailServingCellRequest
-	(*RegisterStreamThumbnailServingCellResponse)(nil), // 23: commodore.RegisterStreamThumbnailServingCellResponse
-	(*ClearStreamActiveClusterRequest)(nil),            // 24: commodore.ClearStreamActiveClusterRequest
-	(*ClearStreamActiveClusterResponse)(nil),           // 25: commodore.ClearStreamActiveClusterResponse
-	(*ActiveIngestStream)(nil),                         // 26: commodore.ActiveIngestStream
-	(*SyncActiveIngestPlacementRequest)(nil),           // 27: commodore.SyncActiveIngestPlacementRequest
-	(*SyncActiveIngestPlacementResponse)(nil),          // 28: commodore.SyncActiveIngestPlacementResponse
-	(*ResolvePlaybackIDRequest)(nil),                   // 29: commodore.ResolvePlaybackIDRequest
-	(*ResolvePlaybackIDResponse)(nil),                  // 30: commodore.ResolvePlaybackIDResponse
-	(*ResolvePullSourceByInternalNameRequest)(nil),     // 31: commodore.ResolvePullSourceByInternalNameRequest
-	(*ResolvePullSourceByInternalNameResponse)(nil),    // 32: commodore.ResolvePullSourceByInternalNameResponse
-	(*ResolvePlaybackPolicyRequest)(nil),               // 33: commodore.ResolvePlaybackPolicyRequest
-	(*RecordSigningKeyUseRequest)(nil),                 // 34: commodore.RecordSigningKeyUseRequest
-	(*PlaybackSigningKey)(nil),                         // 35: commodore.PlaybackSigningKey
-	(*PlaybackJwtPolicy)(nil),                          // 36: commodore.PlaybackJwtPolicy
-	(*PlaybackWebhookPolicy)(nil),                      // 37: commodore.PlaybackWebhookPolicy
-	(*ResolvePlaybackPolicyResponse)(nil),              // 38: commodore.ResolvePlaybackPolicyResponse
-	(*ResolveInternalNameRequest)(nil),                 // 39: commodore.ResolveInternalNameRequest
-	(*ResolveInternalNameResponse)(nil),                // 40: commodore.ResolveInternalNameResponse
-	(*ValidateAPITokenRequest)(nil),                    // 41: commodore.ValidateAPITokenRequest
-	(*ValidateAPITokenResponse)(nil),                   // 42: commodore.ValidateAPITokenResponse
-	(*MintMistAdminSessionRequest)(nil),                // 43: commodore.MintMistAdminSessionRequest
-	(*MintMistAdminSessionResponse)(nil),               // 44: commodore.MintMistAdminSessionResponse
-	(*ValidateMistAdminSessionRequest)(nil),            // 45: commodore.ValidateMistAdminSessionRequest
-	(*ValidateMistAdminSessionResponse)(nil),           // 46: commodore.ValidateMistAdminSessionResponse
-	(*RegisterDVRRequest)(nil),                         // 47: commodore.RegisterDVRRequest
-	(*RegisterDVRResponse)(nil),                        // 48: commodore.RegisterDVRResponse
-	(*UpdateDVRRetentionRequest)(nil),                  // 49: commodore.UpdateDVRRetentionRequest
-	(*UpdateDVRRetentionResponse)(nil),                 // 50: commodore.UpdateDVRRetentionResponse
-	(*MediaTrack)(nil),                                 // 51: commodore.MediaTrack
-	(*UpdateArtifactCatalogSnapshotRequest)(nil),       // 52: commodore.UpdateArtifactCatalogSnapshotRequest
-	(*UpdateArtifactCatalogSnapshotResponse)(nil),      // 53: commodore.UpdateArtifactCatalogSnapshotResponse
-	(*ResolveClipHashRequest)(nil),                     // 54: commodore.ResolveClipHashRequest
-	(*ResolveClipHashResponse)(nil),                    // 55: commodore.ResolveClipHashResponse
-	(*ResolveDVRHashRequest)(nil),                      // 56: commodore.ResolveDVRHashRequest
-	(*ResolveDVRHashResponse)(nil),                     // 57: commodore.ResolveDVRHashResponse
-	(*ResolveIdentifierRequest)(nil),                   // 58: commodore.ResolveIdentifierRequest
-	(*ResolveIdentifierResponse)(nil),                  // 59: commodore.ResolveIdentifierResponse
-	(*ResolveVodHashRequest)(nil),                      // 60: commodore.ResolveVodHashRequest
-	(*ResolveVodHashResponse)(nil),                     // 61: commodore.ResolveVodHashResponse
-	(*ResolveVodIDRequest)(nil),                        // 62: commodore.ResolveVodIDRequest
-	(*ResolveVodIDResponse)(nil),                       // 63: commodore.ResolveVodIDResponse
-	(*MintChapterPlaybackIDRequest)(nil),               // 64: commodore.MintChapterPlaybackIDRequest
-	(*MintChapterPlaybackIDResponse)(nil),              // 65: commodore.MintChapterPlaybackIDResponse
-	(*ResolveChapterPlaybackIDRequest)(nil),            // 66: commodore.ResolveChapterPlaybackIDRequest
-	(*ResolveChapterPlaybackIDResponse)(nil),           // 67: commodore.ResolveChapterPlaybackIDResponse
-	(*GetTenantProcessesJSONRequest)(nil),              // 68: commodore.GetTenantProcessesJSONRequest
-	(*GetTenantProcessesJSONResponse)(nil),             // 69: commodore.GetTenantProcessesJSONResponse
-	(*ListStorageArtifactsRequest)(nil),                // 70: commodore.ListStorageArtifactsRequest
-	(*StorageArtifactInfo)(nil),                        // 71: commodore.StorageArtifactInfo
-	(*ListStorageArtifactsResponse)(nil),               // 72: commodore.ListStorageArtifactsResponse
-	(*ResolveArtifactPlaybackIDRequest)(nil),           // 73: commodore.ResolveArtifactPlaybackIDRequest
-	(*ResolveArtifactPlaybackIDResponse)(nil),          // 74: commodore.ResolveArtifactPlaybackIDResponse
-	(*ResolveArtifactInternalNameRequest)(nil),         // 75: commodore.ResolveArtifactInternalNameRequest
-	(*ResolveArtifactInternalNameResponse)(nil),        // 76: commodore.ResolveArtifactInternalNameResponse
-	(*GetOrCreateWalletUserRequest)(nil),               // 77: commodore.GetOrCreateWalletUserRequest
-	(*GetOrCreateWalletUserResponse)(nil),              // 78: commodore.GetOrCreateWalletUserResponse
-	(*GetTenantUserCountRequest)(nil),                  // 79: commodore.GetTenantUserCountRequest
-	(*GetTenantUserCountResponse)(nil),                 // 80: commodore.GetTenantUserCountResponse
-	(*GetTenantPrimaryUserRequest)(nil),                // 81: commodore.GetTenantPrimaryUserRequest
-	(*GetTenantPrimaryUserResponse)(nil),               // 82: commodore.GetTenantPrimaryUserResponse
-	(*CreateUserInTenantRequest)(nil),                  // 83: commodore.CreateUserInTenantRequest
-	(*CreateUserInTenantResponse)(nil),                 // 84: commodore.CreateUserInTenantResponse
-	(*LoginRequest)(nil),                               // 85: commodore.LoginRequest
-	(*BehaviorData)(nil),                               // 86: commodore.BehaviorData
-	(*RegisterRequest)(nil),                            // 87: commodore.RegisterRequest
-	(*AuthResponse)(nil),                               // 88: commodore.AuthResponse
-	(*RegisterResponse)(nil),                           // 89: commodore.RegisterResponse
-	(*GetMeRequest)(nil),                               // 90: commodore.GetMeRequest
-	(*LogoutRequest)(nil),                              // 91: commodore.LogoutRequest
-	(*LogoutResponse)(nil),                             // 92: commodore.LogoutResponse
-	(*RefreshTokenRequest)(nil),                        // 93: commodore.RefreshTokenRequest
-	(*VerifyEmailRequest)(nil),                         // 94: commodore.VerifyEmailRequest
-	(*VerifyEmailResponse)(nil),                        // 95: commodore.VerifyEmailResponse
-	(*ResendVerificationRequest)(nil),                  // 96: commodore.ResendVerificationRequest
-	(*ResendVerificationResponse)(nil),                 // 97: commodore.ResendVerificationResponse
-	(*ForgotPasswordRequest)(nil),                      // 98: commodore.ForgotPasswordRequest
-	(*ForgotPasswordResponse)(nil),                     // 99: commodore.ForgotPasswordResponse
-	(*ResetPasswordRequest)(nil),                       // 100: commodore.ResetPasswordRequest
-	(*ResetPasswordResponse)(nil),                      // 101: commodore.ResetPasswordResponse
-	(*UpdateMeRequest)(nil),                            // 102: commodore.UpdateMeRequest
-	(*UpdateNewsletterRequest)(nil),                    // 103: commodore.UpdateNewsletterRequest
-	(*UpdateNewsletterResponse)(nil),                   // 104: commodore.UpdateNewsletterResponse
-	(*GetNewsletterStatusRequest)(nil),                 // 105: commodore.GetNewsletterStatusRequest
-	(*GetNewsletterStatusResponse)(nil),                // 106: commodore.GetNewsletterStatusResponse
-	(*IssueWalletChallengeRequest)(nil),                // 107: commodore.IssueWalletChallengeRequest
-	(*IssueWalletChallengeResponse)(nil),               // 108: commodore.IssueWalletChallengeResponse
-	(*WalletLoginRequest)(nil),                         // 109: commodore.WalletLoginRequest
-	(*LinkWalletRequest)(nil),                          // 110: commodore.LinkWalletRequest
-	(*UnlinkWalletRequest)(nil),                        // 111: commodore.UnlinkWalletRequest
-	(*UnlinkWalletResponse)(nil),                       // 112: commodore.UnlinkWalletResponse
-	(*ListWalletsRequest)(nil),                         // 113: commodore.ListWalletsRequest
-	(*ListWalletsResponse)(nil),                        // 114: commodore.ListWalletsResponse
-	(*WalletIdentity)(nil),                             // 115: commodore.WalletIdentity
-	(*LinkEmailRequest)(nil),                           // 116: commodore.LinkEmailRequest
-	(*LinkEmailResponse)(nil),                          // 117: commodore.LinkEmailResponse
-	(*User)(nil),                                       // 118: commodore.User
-	(*CreateStreamRequest)(nil),                        // 119: commodore.CreateStreamRequest
-	(*SourceLocationCluster)(nil),                      // 120: commodore.SourceLocationCluster
-	(*StreamSourceLocation)(nil),                       // 121: commodore.StreamSourceLocation
-	(*CreateStreamResponse)(nil),                       // 122: commodore.CreateStreamResponse
-	(*GetStreamRequest)(nil),                           // 123: commodore.GetStreamRequest
-	(*GetStreamsBatchRequest)(nil),                     // 124: commodore.GetStreamsBatchRequest
-	(*GetStreamsBatchResponse)(nil),                    // 125: commodore.GetStreamsBatchResponse
-	(*Stream)(nil),                                     // 126: commodore.Stream
-	(*PullSourceAllowedClustersInput)(nil),             // 127: commodore.PullSourceAllowedClustersInput
-	(*PullSourceInput)(nil),                            // 128: commodore.PullSourceInput
-	(*PullSourceView)(nil),                             // 129: commodore.PullSourceView
-	(*ManagedSourceView)(nil),                          // 130: commodore.ManagedSourceView
-	(*ListStreamsRequest)(nil),                         // 131: commodore.ListStreamsRequest
-	(*ListStreamsResponse)(nil),                        // 132: commodore.ListStreamsResponse
-	(*UpdateStreamRequest)(nil),                        // 133: commodore.UpdateStreamRequest
-	(*DeleteStreamRequest)(nil),                        // 134: commodore.DeleteStreamRequest
-	(*DeleteStreamResponse)(nil),                       // 135: commodore.DeleteStreamResponse
-	(*CreateStreamKeyRequest)(nil),                     // 136: commodore.CreateStreamKeyRequest
-	(*StreamKey)(nil),                                  // 137: commodore.StreamKey
-	(*StreamKeyResponse)(nil),                          // 138: commodore.StreamKeyResponse
-	(*ListStreamKeysRequest)(nil),                      // 139: commodore.ListStreamKeysRequest
-	(*ListStreamKeysResponse)(nil),                     // 140: commodore.ListStreamKeysResponse
-	(*DeactivateStreamKeyRequest)(nil),                 // 141: commodore.DeactivateStreamKeyRequest
-	(*PushTarget)(nil),                                 // 142: commodore.PushTarget
-	(*CreatePushTargetRequest)(nil),                    // 143: commodore.CreatePushTargetRequest
-	(*ListPushTargetsRequest)(nil),                     // 144: commodore.ListPushTargetsRequest
-	(*ListPushTargetsResponse)(nil),                    // 145: commodore.ListPushTargetsResponse
-	(*UpdatePushTargetRequest)(nil),                    // 146: commodore.UpdatePushTargetRequest
-	(*DeletePushTargetRequest)(nil),                    // 147: commodore.DeletePushTargetRequest
-	(*DeletePushTargetResponse)(nil),                   // 148: commodore.DeletePushTargetResponse
-	(*GetStreamPushTargetsRequest)(nil),                // 149: commodore.GetStreamPushTargetsRequest
-	(*GetStreamPushTargetsResponse)(nil),               // 150: commodore.GetStreamPushTargetsResponse
-	(*PushTargetInternal)(nil),                         // 151: commodore.PushTargetInternal
-	(*UpdatePushTargetStatusRequest)(nil),              // 152: commodore.UpdatePushTargetStatusRequest
-	(*CreateAPITokenRequest)(nil),                      // 153: commodore.CreateAPITokenRequest
-	(*CreateAPITokenResponse)(nil),                     // 154: commodore.CreateAPITokenResponse
-	(*ListAPITokensRequest)(nil),                       // 155: commodore.ListAPITokensRequest
-	(*APITokenInfo)(nil),                               // 156: commodore.APITokenInfo
-	(*ListAPITokensResponse)(nil),                      // 157: commodore.ListAPITokensResponse
-	(*RevokeAPITokenRequest)(nil),                      // 158: commodore.RevokeAPITokenRequest
-	(*RevokeAPITokenResponse)(nil),                     // 159: commodore.RevokeAPITokenResponse
-	(*RefreshStreamKeyRequest)(nil),                    // 160: commodore.RefreshStreamKeyRequest
-	(*RefreshStreamKeyResponse)(nil),                   // 161: commodore.RefreshStreamKeyResponse
-	(*SigningKey)(nil),                                 // 162: commodore.SigningKey
-	(*CreateSigningKeyRequest)(nil),                    // 163: commodore.CreateSigningKeyRequest
-	(*CreateSigningKeyResponse)(nil),                   // 164: commodore.CreateSigningKeyResponse
-	(*GetSigningKeyRequest)(nil),                       // 165: commodore.GetSigningKeyRequest
-	(*ListSigningKeysRequest)(nil),                     // 166: commodore.ListSigningKeysRequest
-	(*ListSigningKeysResponse)(nil),                    // 167: commodore.ListSigningKeysResponse
-	(*RevokeSigningKeyRequest)(nil),                    // 168: commodore.RevokeSigningKeyRequest
-	(*SetPlaybackPolicyRequest)(nil),                   // 169: commodore.SetPlaybackPolicyRequest
-	(*SetPlaybackPolicyResponse)(nil),                  // 170: commodore.SetPlaybackPolicyResponse
-	(*RecordPullSourceEventRequest)(nil),               // 171: commodore.RecordPullSourceEventRequest
-	(*ListPullSourceEventsRequest)(nil),                // 172: commodore.ListPullSourceEventsRequest
-	(*PullSourceEvent)(nil),                            // 173: commodore.PullSourceEvent
-	(*ListPullSourceEventsResponse)(nil),               // 174: commodore.ListPullSourceEventsResponse
-	(*MediaRetentionBounds)(nil),                       // 175: commodore.MediaRetentionBounds
-	(*GetMediaRetentionPolicyRequest)(nil),             // 176: commodore.GetMediaRetentionPolicyRequest
-	(*GetMediaRetentionPolicyResponse)(nil),            // 177: commodore.GetMediaRetentionPolicyResponse
-	(*SetMediaRetentionPolicyRequest)(nil),             // 178: commodore.SetMediaRetentionPolicyRequest
-	(*SetMediaRetentionPolicyResponse)(nil),            // 179: commodore.SetMediaRetentionPolicyResponse
-	(*UpdateAssetRetentionRequest)(nil),                // 180: commodore.UpdateAssetRetentionRequest
-	(*ResetAssetRetentionRequest)(nil),                 // 181: commodore.ResetAssetRetentionRequest
-	(*UpdateAssetRetentionResponse)(nil),               // 182: commodore.UpdateAssetRetentionResponse
-	(*SetStreamRetentionOverridesRequest)(nil),         // 183: commodore.SetStreamRetentionOverridesRequest
-	(*SetStreamRetentionOverridesResponse)(nil),        // 184: commodore.SetStreamRetentionOverridesResponse
-	(*CompleteAuthorizationRequest)(nil),               // 185: commodore.CompleteAuthorizationRequest
-	(*CompleteAuthorizationResponse)(nil),              // 186: commodore.CompleteAuthorizationResponse
-	(*ExchangeAuthorizationCodeRequest)(nil),           // 187: commodore.ExchangeAuthorizationCodeRequest
-	(*StartDeviceAuthorizationRequest)(nil),            // 188: commodore.StartDeviceAuthorizationRequest
-	(*StartDeviceAuthorizationResponse)(nil),           // 189: commodore.StartDeviceAuthorizationResponse
-	(*PollDeviceAuthorizationRequest)(nil),             // 190: commodore.PollDeviceAuthorizationRequest
-	(*LookupDeviceAuthorizationRequest)(nil),           // 191: commodore.LookupDeviceAuthorizationRequest
-	(*LookupDeviceAuthorizationResponse)(nil),          // 192: commodore.LookupDeviceAuthorizationResponse
-	(*ApproveDeviceAuthorizationRequest)(nil),          // 193: commodore.ApproveDeviceAuthorizationRequest
-	(*ApproveDeviceAuthorizationResponse)(nil),         // 194: commodore.ApproveDeviceAuthorizationResponse
-	nil,                                      // 195: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	nil,                                      // 196: commodore.ListStorageArtifactsResponse.KindCountsEntry
-	(*cluster_peer.TenantClusterPeer)(nil),   // 197: cluster_peer.TenantClusterPeer
-	(*shared.DVRPolicy)(nil),                 // 198: shared.DVRPolicy
-	(*metering_contract.MeterAllowance)(nil), // 199: metering.MeterAllowance
-	(*tenant_limits.TenantResourceLimits)(nil),             // 200: tenant_limits.TenantResourceLimits
-	(*timestamppb.Timestamp)(nil),                          // 201: google.protobuf.Timestamp
-	(*shared.ThumbnailAssets)(nil),                         // 202: shared.ThumbnailAssets
-	(*common.SignupAttribution)(nil),                       // 203: common.SignupAttribution
-	(*media_placement.Warning)(nil),                        // 204: media_placement.Warning
-	(*common.CursorPaginationRequest)(nil),                 // 205: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),                // 206: common.CursorPaginationResponse
-	(*shared.StartDVRRequest)(nil),                         // 207: shared.StartDVRRequest
-	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 208: foghorn_control.RetrieveDVRChapterRequest
-	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 209: foghorn_control.ListDVRChaptersRequest
-	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 210: foghorn_control.TerminateTenantStreamsRequest
-	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 211: foghorn_control.InvalidateTenantCacheRequest
-	(*media_placement.GetPolicyRequest)(nil),               // 212: media_placement.GetPolicyRequest
-	(*media_placement.GetOptionsRequest)(nil),              // 213: media_placement.GetOptionsRequest
-	(*media_placement.PreviewRequest)(nil),                 // 214: media_placement.PreviewRequest
-	(*media_placement.ReviewChangeRequest)(nil),            // 215: media_placement.ReviewChangeRequest
-	(*media_placement.ApplyChangeRequest)(nil),             // 216: media_placement.ApplyChangeRequest
-	(*media_placement.GetChangeRequest)(nil),               // 217: media_placement.GetChangeRequest
-	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 218: foghorn_control.TestPlaybackAccessRequest
-	(*shared.CreateClipRequest)(nil),                       // 219: shared.CreateClipRequest
-	(*shared.GetClipRequest)(nil),                          // 220: shared.GetClipRequest
-	(*shared.DeleteClipRequest)(nil),                       // 221: shared.DeleteClipRequest
-	(*shared.StopDVRRequest)(nil),                          // 222: shared.StopDVRRequest
-	(*shared.DeleteDVRRequest)(nil),                        // 223: shared.DeleteDVRRequest
-	(*shared.ViewerEndpointRequest)(nil),                   // 224: shared.ViewerEndpointRequest
-	(*shared.IngestEndpointRequest)(nil),                   // 225: shared.IngestEndpointRequest
-	(*shared.CreateVodUploadRequest)(nil),                  // 226: shared.CreateVodUploadRequest
-	(*shared.CompleteVodUploadRequest)(nil),                // 227: shared.CompleteVodUploadRequest
-	(*shared.AbortVodUploadRequest)(nil),                   // 228: shared.AbortVodUploadRequest
-	(*shared.GetVodUploadStatusRequest)(nil),               // 229: shared.GetVodUploadStatusRequest
-	(*shared.DeleteVodAssetRequest)(nil),                   // 230: shared.DeleteVodAssetRequest
-	(*foghorn_control.SetNodeModeRequest)(nil),             // 231: foghorn_control.SetNodeModeRequest
-	(*foghorn_control.GetNodeHealthRequest)(nil),           // 232: foghorn_control.GetNodeHealthRequest
-	(*emptypb.Empty)(nil),                                  // 233: google.protobuf.Empty
-	(*shared.StartDVRResponse)(nil),                        // 234: shared.StartDVRResponse
-	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 235: foghorn_control.RetrieveDVRChapterResponse
-	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 236: foghorn_control.ListDVRChaptersResponse
-	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 237: foghorn_control.TerminateTenantStreamsResponse
-	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 238: foghorn_control.InvalidateTenantCacheResponse
-	(*media_placement.PolicyState)(nil),                    // 239: media_placement.PolicyState
-	(*media_placement.Options)(nil),                        // 240: media_placement.Options
-	(*media_placement.Preview)(nil),                        // 241: media_placement.Preview
-	(*media_placement.Review)(nil),                         // 242: media_placement.Review
-	(*media_placement.Change)(nil),                         // 243: media_placement.Change
-	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 244: foghorn_control.TestPlaybackAccessResponse
-	(*shared.CreateClipResponse)(nil),                      // 245: shared.CreateClipResponse
-	(*shared.ClipInfo)(nil),                                // 246: shared.ClipInfo
-	(*shared.DeleteClipResponse)(nil),                      // 247: shared.DeleteClipResponse
-	(*shared.StopDVRResponse)(nil),                         // 248: shared.StopDVRResponse
-	(*shared.DeleteDVRResponse)(nil),                       // 249: shared.DeleteDVRResponse
-	(*shared.ViewerEndpointResponse)(nil),                  // 250: shared.ViewerEndpointResponse
-	(*shared.IngestEndpointResponse)(nil),                  // 251: shared.IngestEndpointResponse
-	(*shared.CreateVodUploadResponse)(nil),                 // 252: shared.CreateVodUploadResponse
-	(*shared.CompleteVodUploadResponse)(nil),               // 253: shared.CompleteVodUploadResponse
-	(*shared.AbortVodUploadResponse)(nil),                  // 254: shared.AbortVodUploadResponse
-	(*shared.GetVodUploadStatusResponse)(nil),              // 255: shared.GetVodUploadStatusResponse
-	(*shared.DeleteVodAssetResponse)(nil),                  // 256: shared.DeleteVodAssetResponse
-	(*foghorn_control.SetNodeModeResponse)(nil),            // 257: foghorn_control.SetNodeModeResponse
-	(*foghorn_control.GetNodeHealthResponse)(nil),          // 258: foghorn_control.GetNodeHealthResponse
+	(*HeldMediaAuthority)(nil),                         // 9: commodore.HeldMediaAuthority
+	(*RequestMediaAuthorityReplayResponse)(nil),        // 10: commodore.RequestMediaAuthorityReplayResponse
+	(*FetchMediaAuthorityRequest)(nil),                 // 11: commodore.FetchMediaAuthorityRequest
+	(*FetchMediaAuthorityResponse)(nil),                // 12: commodore.FetchMediaAuthorityResponse
+	(*MediaAuthorityUse)(nil),                          // 13: commodore.MediaAuthorityUse
+	(*ReportMediaAuthorityUseRequest)(nil),             // 14: commodore.ReportMediaAuthorityUseRequest
+	(*ValidateStreamKeyRequest)(nil),                   // 15: commodore.ValidateStreamKeyRequest
+	(*ValidateStreamKeyResponse)(nil),                  // 16: commodore.ValidateStreamKeyResponse
+	(*ResolveStreamContextRequest)(nil),                // 17: commodore.ResolveStreamContextRequest
+	(*ResolveStreamContextResponse)(nil),               // 18: commodore.ResolveStreamContextResponse
+	(*ListManagedStreamsRequest)(nil),                  // 19: commodore.ListManagedStreamsRequest
+	(*ManagedStreamRow)(nil),                           // 20: commodore.ManagedStreamRow
+	(*ListManagedStreamsResponse)(nil),                 // 21: commodore.ListManagedStreamsResponse
+	(*ListStreamMonitoringRequest)(nil),                // 22: commodore.ListStreamMonitoringRequest
+	(*StreamMonitoringRow)(nil),                        // 23: commodore.StreamMonitoringRow
+	(*ListStreamMonitoringResponse)(nil),               // 24: commodore.ListStreamMonitoringResponse
+	(*RecordStreamActiveClusterRequest)(nil),           // 25: commodore.RecordStreamActiveClusterRequest
+	(*RecordStreamActiveClusterResponse)(nil),          // 26: commodore.RecordStreamActiveClusterResponse
+	(*RegisterStreamThumbnailServingCellRequest)(nil),  // 27: commodore.RegisterStreamThumbnailServingCellRequest
+	(*RegisterStreamThumbnailServingCellResponse)(nil), // 28: commodore.RegisterStreamThumbnailServingCellResponse
+	(*ClearStreamActiveClusterRequest)(nil),            // 29: commodore.ClearStreamActiveClusterRequest
+	(*ClearStreamActiveClusterResponse)(nil),           // 30: commodore.ClearStreamActiveClusterResponse
+	(*ActiveIngestStream)(nil),                         // 31: commodore.ActiveIngestStream
+	(*SyncActiveIngestPlacementRequest)(nil),           // 32: commodore.SyncActiveIngestPlacementRequest
+	(*SyncActiveIngestPlacementResponse)(nil),          // 33: commodore.SyncActiveIngestPlacementResponse
+	(*ResolvePlaybackIDRequest)(nil),                   // 34: commodore.ResolvePlaybackIDRequest
+	(*ResolvePlaybackIDResponse)(nil),                  // 35: commodore.ResolvePlaybackIDResponse
+	(*ResolvePullSourceByInternalNameRequest)(nil),     // 36: commodore.ResolvePullSourceByInternalNameRequest
+	(*ResolvePullSourceByInternalNameResponse)(nil),    // 37: commodore.ResolvePullSourceByInternalNameResponse
+	(*ResolvePlaybackPolicyRequest)(nil),               // 38: commodore.ResolvePlaybackPolicyRequest
+	(*RecordSigningKeyUseRequest)(nil),                 // 39: commodore.RecordSigningKeyUseRequest
+	(*PlaybackSigningKey)(nil),                         // 40: commodore.PlaybackSigningKey
+	(*PlaybackJwtPolicy)(nil),                          // 41: commodore.PlaybackJwtPolicy
+	(*PlaybackWebhookPolicy)(nil),                      // 42: commodore.PlaybackWebhookPolicy
+	(*ResolvePlaybackPolicyResponse)(nil),              // 43: commodore.ResolvePlaybackPolicyResponse
+	(*ResolveInternalNameRequest)(nil),                 // 44: commodore.ResolveInternalNameRequest
+	(*ResolveInternalNameResponse)(nil),                // 45: commodore.ResolveInternalNameResponse
+	(*ValidateAPITokenRequest)(nil),                    // 46: commodore.ValidateAPITokenRequest
+	(*ValidateAPITokenResponse)(nil),                   // 47: commodore.ValidateAPITokenResponse
+	(*MintMistAdminSessionRequest)(nil),                // 48: commodore.MintMistAdminSessionRequest
+	(*MintMistAdminSessionResponse)(nil),               // 49: commodore.MintMistAdminSessionResponse
+	(*ValidateMistAdminSessionRequest)(nil),            // 50: commodore.ValidateMistAdminSessionRequest
+	(*ValidateMistAdminSessionResponse)(nil),           // 51: commodore.ValidateMistAdminSessionResponse
+	(*RegisterDVRRequest)(nil),                         // 52: commodore.RegisterDVRRequest
+	(*RegisterDVRResponse)(nil),                        // 53: commodore.RegisterDVRResponse
+	(*UpdateDVRRetentionRequest)(nil),                  // 54: commodore.UpdateDVRRetentionRequest
+	(*UpdateDVRRetentionResponse)(nil),                 // 55: commodore.UpdateDVRRetentionResponse
+	(*MediaTrack)(nil),                                 // 56: commodore.MediaTrack
+	(*UpdateArtifactCatalogSnapshotRequest)(nil),       // 57: commodore.UpdateArtifactCatalogSnapshotRequest
+	(*UpdateArtifactCatalogSnapshotResponse)(nil),      // 58: commodore.UpdateArtifactCatalogSnapshotResponse
+	(*ResolveClipHashRequest)(nil),                     // 59: commodore.ResolveClipHashRequest
+	(*ResolveClipHashResponse)(nil),                    // 60: commodore.ResolveClipHashResponse
+	(*ResolveDVRHashRequest)(nil),                      // 61: commodore.ResolveDVRHashRequest
+	(*ResolveDVRHashResponse)(nil),                     // 62: commodore.ResolveDVRHashResponse
+	(*ResolveIdentifierRequest)(nil),                   // 63: commodore.ResolveIdentifierRequest
+	(*ResolveIdentifierResponse)(nil),                  // 64: commodore.ResolveIdentifierResponse
+	(*ResolveVodHashRequest)(nil),                      // 65: commodore.ResolveVodHashRequest
+	(*ResolveVodHashResponse)(nil),                     // 66: commodore.ResolveVodHashResponse
+	(*ResolveVodIDRequest)(nil),                        // 67: commodore.ResolveVodIDRequest
+	(*ResolveVodIDResponse)(nil),                       // 68: commodore.ResolveVodIDResponse
+	(*MintChapterPlaybackIDRequest)(nil),               // 69: commodore.MintChapterPlaybackIDRequest
+	(*MintChapterPlaybackIDResponse)(nil),              // 70: commodore.MintChapterPlaybackIDResponse
+	(*ResolveChapterPlaybackIDRequest)(nil),            // 71: commodore.ResolveChapterPlaybackIDRequest
+	(*ResolveChapterPlaybackIDResponse)(nil),           // 72: commodore.ResolveChapterPlaybackIDResponse
+	(*GetTenantProcessesJSONRequest)(nil),              // 73: commodore.GetTenantProcessesJSONRequest
+	(*GetTenantProcessesJSONResponse)(nil),             // 74: commodore.GetTenantProcessesJSONResponse
+	(*ListStorageArtifactsRequest)(nil),                // 75: commodore.ListStorageArtifactsRequest
+	(*StorageArtifactInfo)(nil),                        // 76: commodore.StorageArtifactInfo
+	(*ListStorageArtifactsResponse)(nil),               // 77: commodore.ListStorageArtifactsResponse
+	(*ResolveArtifactPlaybackIDRequest)(nil),           // 78: commodore.ResolveArtifactPlaybackIDRequest
+	(*ResolveArtifactPlaybackIDResponse)(nil),          // 79: commodore.ResolveArtifactPlaybackIDResponse
+	(*ResolveArtifactInternalNameRequest)(nil),         // 80: commodore.ResolveArtifactInternalNameRequest
+	(*ResolveArtifactInternalNameResponse)(nil),        // 81: commodore.ResolveArtifactInternalNameResponse
+	(*GetOrCreateWalletUserRequest)(nil),               // 82: commodore.GetOrCreateWalletUserRequest
+	(*GetOrCreateWalletUserResponse)(nil),              // 83: commodore.GetOrCreateWalletUserResponse
+	(*GetTenantUserCountRequest)(nil),                  // 84: commodore.GetTenantUserCountRequest
+	(*GetTenantUserCountResponse)(nil),                 // 85: commodore.GetTenantUserCountResponse
+	(*GetTenantPrimaryUserRequest)(nil),                // 86: commodore.GetTenantPrimaryUserRequest
+	(*GetTenantPrimaryUserResponse)(nil),               // 87: commodore.GetTenantPrimaryUserResponse
+	(*CreateUserInTenantRequest)(nil),                  // 88: commodore.CreateUserInTenantRequest
+	(*CreateUserInTenantResponse)(nil),                 // 89: commodore.CreateUserInTenantResponse
+	(*LoginRequest)(nil),                               // 90: commodore.LoginRequest
+	(*BehaviorData)(nil),                               // 91: commodore.BehaviorData
+	(*RegisterRequest)(nil),                            // 92: commodore.RegisterRequest
+	(*AuthResponse)(nil),                               // 93: commodore.AuthResponse
+	(*RegisterResponse)(nil),                           // 94: commodore.RegisterResponse
+	(*GetMeRequest)(nil),                               // 95: commodore.GetMeRequest
+	(*LogoutRequest)(nil),                              // 96: commodore.LogoutRequest
+	(*LogoutResponse)(nil),                             // 97: commodore.LogoutResponse
+	(*RefreshTokenRequest)(nil),                        // 98: commodore.RefreshTokenRequest
+	(*VerifyEmailRequest)(nil),                         // 99: commodore.VerifyEmailRequest
+	(*VerifyEmailResponse)(nil),                        // 100: commodore.VerifyEmailResponse
+	(*ResendVerificationRequest)(nil),                  // 101: commodore.ResendVerificationRequest
+	(*ResendVerificationResponse)(nil),                 // 102: commodore.ResendVerificationResponse
+	(*ForgotPasswordRequest)(nil),                      // 103: commodore.ForgotPasswordRequest
+	(*ForgotPasswordResponse)(nil),                     // 104: commodore.ForgotPasswordResponse
+	(*ResetPasswordRequest)(nil),                       // 105: commodore.ResetPasswordRequest
+	(*ResetPasswordResponse)(nil),                      // 106: commodore.ResetPasswordResponse
+	(*UpdateMeRequest)(nil),                            // 107: commodore.UpdateMeRequest
+	(*UpdateNewsletterRequest)(nil),                    // 108: commodore.UpdateNewsletterRequest
+	(*UpdateNewsletterResponse)(nil),                   // 109: commodore.UpdateNewsletterResponse
+	(*GetNewsletterStatusRequest)(nil),                 // 110: commodore.GetNewsletterStatusRequest
+	(*GetNewsletterStatusResponse)(nil),                // 111: commodore.GetNewsletterStatusResponse
+	(*IssueWalletChallengeRequest)(nil),                // 112: commodore.IssueWalletChallengeRequest
+	(*IssueWalletChallengeResponse)(nil),               // 113: commodore.IssueWalletChallengeResponse
+	(*WalletLoginRequest)(nil),                         // 114: commodore.WalletLoginRequest
+	(*LinkWalletRequest)(nil),                          // 115: commodore.LinkWalletRequest
+	(*UnlinkWalletRequest)(nil),                        // 116: commodore.UnlinkWalletRequest
+	(*UnlinkWalletResponse)(nil),                       // 117: commodore.UnlinkWalletResponse
+	(*ListWalletsRequest)(nil),                         // 118: commodore.ListWalletsRequest
+	(*ListWalletsResponse)(nil),                        // 119: commodore.ListWalletsResponse
+	(*WalletIdentity)(nil),                             // 120: commodore.WalletIdentity
+	(*LinkEmailRequest)(nil),                           // 121: commodore.LinkEmailRequest
+	(*LinkEmailResponse)(nil),                          // 122: commodore.LinkEmailResponse
+	(*User)(nil),                                       // 123: commodore.User
+	(*CreateStreamRequest)(nil),                        // 124: commodore.CreateStreamRequest
+	(*SourceLocationCluster)(nil),                      // 125: commodore.SourceLocationCluster
+	(*StreamSourceLocation)(nil),                       // 126: commodore.StreamSourceLocation
+	(*CreateStreamResponse)(nil),                       // 127: commodore.CreateStreamResponse
+	(*GetStreamRequest)(nil),                           // 128: commodore.GetStreamRequest
+	(*GetStreamsBatchRequest)(nil),                     // 129: commodore.GetStreamsBatchRequest
+	(*GetStreamsBatchResponse)(nil),                    // 130: commodore.GetStreamsBatchResponse
+	(*Stream)(nil),                                     // 131: commodore.Stream
+	(*PullSourceAllowedClustersInput)(nil),             // 132: commodore.PullSourceAllowedClustersInput
+	(*PullSourceInput)(nil),                            // 133: commodore.PullSourceInput
+	(*PullSourceView)(nil),                             // 134: commodore.PullSourceView
+	(*ManagedSourceView)(nil),                          // 135: commodore.ManagedSourceView
+	(*ListStreamsRequest)(nil),                         // 136: commodore.ListStreamsRequest
+	(*ListStreamsResponse)(nil),                        // 137: commodore.ListStreamsResponse
+	(*UpdateStreamRequest)(nil),                        // 138: commodore.UpdateStreamRequest
+	(*DeleteStreamRequest)(nil),                        // 139: commodore.DeleteStreamRequest
+	(*DeleteStreamResponse)(nil),                       // 140: commodore.DeleteStreamResponse
+	(*CreateStreamKeyRequest)(nil),                     // 141: commodore.CreateStreamKeyRequest
+	(*StreamKey)(nil),                                  // 142: commodore.StreamKey
+	(*StreamKeyResponse)(nil),                          // 143: commodore.StreamKeyResponse
+	(*ListStreamKeysRequest)(nil),                      // 144: commodore.ListStreamKeysRequest
+	(*ListStreamKeysResponse)(nil),                     // 145: commodore.ListStreamKeysResponse
+	(*DeactivateStreamKeyRequest)(nil),                 // 146: commodore.DeactivateStreamKeyRequest
+	(*PushTarget)(nil),                                 // 147: commodore.PushTarget
+	(*CreatePushTargetRequest)(nil),                    // 148: commodore.CreatePushTargetRequest
+	(*ListPushTargetsRequest)(nil),                     // 149: commodore.ListPushTargetsRequest
+	(*ListPushTargetsResponse)(nil),                    // 150: commodore.ListPushTargetsResponse
+	(*UpdatePushTargetRequest)(nil),                    // 151: commodore.UpdatePushTargetRequest
+	(*DeletePushTargetRequest)(nil),                    // 152: commodore.DeletePushTargetRequest
+	(*DeletePushTargetResponse)(nil),                   // 153: commodore.DeletePushTargetResponse
+	(*GetStreamPushTargetsRequest)(nil),                // 154: commodore.GetStreamPushTargetsRequest
+	(*GetStreamPushTargetsResponse)(nil),               // 155: commodore.GetStreamPushTargetsResponse
+	(*PushTargetInternal)(nil),                         // 156: commodore.PushTargetInternal
+	(*UpdatePushTargetStatusRequest)(nil),              // 157: commodore.UpdatePushTargetStatusRequest
+	(*CreateAPITokenRequest)(nil),                      // 158: commodore.CreateAPITokenRequest
+	(*CreateAPITokenResponse)(nil),                     // 159: commodore.CreateAPITokenResponse
+	(*ListAPITokensRequest)(nil),                       // 160: commodore.ListAPITokensRequest
+	(*APITokenInfo)(nil),                               // 161: commodore.APITokenInfo
+	(*ListAPITokensResponse)(nil),                      // 162: commodore.ListAPITokensResponse
+	(*RevokeAPITokenRequest)(nil),                      // 163: commodore.RevokeAPITokenRequest
+	(*RevokeAPITokenResponse)(nil),                     // 164: commodore.RevokeAPITokenResponse
+	(*RefreshStreamKeyRequest)(nil),                    // 165: commodore.RefreshStreamKeyRequest
+	(*RefreshStreamKeyResponse)(nil),                   // 166: commodore.RefreshStreamKeyResponse
+	(*SigningKey)(nil),                                 // 167: commodore.SigningKey
+	(*CreateSigningKeyRequest)(nil),                    // 168: commodore.CreateSigningKeyRequest
+	(*CreateSigningKeyResponse)(nil),                   // 169: commodore.CreateSigningKeyResponse
+	(*GetSigningKeyRequest)(nil),                       // 170: commodore.GetSigningKeyRequest
+	(*ListSigningKeysRequest)(nil),                     // 171: commodore.ListSigningKeysRequest
+	(*ListSigningKeysResponse)(nil),                    // 172: commodore.ListSigningKeysResponse
+	(*RevokeSigningKeyRequest)(nil),                    // 173: commodore.RevokeSigningKeyRequest
+	(*SetPlaybackPolicyRequest)(nil),                   // 174: commodore.SetPlaybackPolicyRequest
+	(*SetPlaybackPolicyResponse)(nil),                  // 175: commodore.SetPlaybackPolicyResponse
+	(*RecordPullSourceEventRequest)(nil),               // 176: commodore.RecordPullSourceEventRequest
+	(*ListPullSourceEventsRequest)(nil),                // 177: commodore.ListPullSourceEventsRequest
+	(*PullSourceEvent)(nil),                            // 178: commodore.PullSourceEvent
+	(*ListPullSourceEventsResponse)(nil),               // 179: commodore.ListPullSourceEventsResponse
+	(*MediaRetentionBounds)(nil),                       // 180: commodore.MediaRetentionBounds
+	(*GetMediaRetentionPolicyRequest)(nil),             // 181: commodore.GetMediaRetentionPolicyRequest
+	(*GetMediaRetentionPolicyResponse)(nil),            // 182: commodore.GetMediaRetentionPolicyResponse
+	(*SetMediaRetentionPolicyRequest)(nil),             // 183: commodore.SetMediaRetentionPolicyRequest
+	(*SetMediaRetentionPolicyResponse)(nil),            // 184: commodore.SetMediaRetentionPolicyResponse
+	(*UpdateAssetRetentionRequest)(nil),                // 185: commodore.UpdateAssetRetentionRequest
+	(*ResetAssetRetentionRequest)(nil),                 // 186: commodore.ResetAssetRetentionRequest
+	(*UpdateAssetRetentionResponse)(nil),               // 187: commodore.UpdateAssetRetentionResponse
+	(*SetStreamRetentionOverridesRequest)(nil),         // 188: commodore.SetStreamRetentionOverridesRequest
+	(*SetStreamRetentionOverridesResponse)(nil),        // 189: commodore.SetStreamRetentionOverridesResponse
+	(*CompleteAuthorizationRequest)(nil),               // 190: commodore.CompleteAuthorizationRequest
+	(*CompleteAuthorizationResponse)(nil),              // 191: commodore.CompleteAuthorizationResponse
+	(*ExchangeAuthorizationCodeRequest)(nil),           // 192: commodore.ExchangeAuthorizationCodeRequest
+	(*StartDeviceAuthorizationRequest)(nil),            // 193: commodore.StartDeviceAuthorizationRequest
+	(*StartDeviceAuthorizationResponse)(nil),           // 194: commodore.StartDeviceAuthorizationResponse
+	(*PollDeviceAuthorizationRequest)(nil),             // 195: commodore.PollDeviceAuthorizationRequest
+	(*LookupDeviceAuthorizationRequest)(nil),           // 196: commodore.LookupDeviceAuthorizationRequest
+	(*LookupDeviceAuthorizationResponse)(nil),          // 197: commodore.LookupDeviceAuthorizationResponse
+	(*ApproveDeviceAuthorizationRequest)(nil),          // 198: commodore.ApproveDeviceAuthorizationRequest
+	(*ApproveDeviceAuthorizationResponse)(nil),         // 199: commodore.ApproveDeviceAuthorizationResponse
+	nil,                                      // 200: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	nil,                                      // 201: commodore.ListStorageArtifactsResponse.KindCountsEntry
+	(*timestamppb.Timestamp)(nil),            // 202: google.protobuf.Timestamp
+	(*cluster_peer.TenantClusterPeer)(nil),   // 203: cluster_peer.TenantClusterPeer
+	(*shared.DVRPolicy)(nil),                 // 204: shared.DVRPolicy
+	(*metering_contract.MeterAllowance)(nil), // 205: metering.MeterAllowance
+	(*tenant_limits.TenantResourceLimits)(nil),             // 206: tenant_limits.TenantResourceLimits
+	(*shared.ThumbnailAssets)(nil),                         // 207: shared.ThumbnailAssets
+	(*common.SignupAttribution)(nil),                       // 208: common.SignupAttribution
+	(*media_placement.Warning)(nil),                        // 209: media_placement.Warning
+	(*common.CursorPaginationRequest)(nil),                 // 210: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),                // 211: common.CursorPaginationResponse
+	(*shared.StartDVRRequest)(nil),                         // 212: shared.StartDVRRequest
+	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 213: foghorn_control.RetrieveDVRChapterRequest
+	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 214: foghorn_control.ListDVRChaptersRequest
+	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 215: foghorn_control.TerminateTenantStreamsRequest
+	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 216: foghorn_control.InvalidateTenantCacheRequest
+	(*media_placement.GetPolicyRequest)(nil),               // 217: media_placement.GetPolicyRequest
+	(*media_placement.GetOptionsRequest)(nil),              // 218: media_placement.GetOptionsRequest
+	(*media_placement.PreviewRequest)(nil),                 // 219: media_placement.PreviewRequest
+	(*media_placement.ReviewChangeRequest)(nil),            // 220: media_placement.ReviewChangeRequest
+	(*media_placement.ApplyChangeRequest)(nil),             // 221: media_placement.ApplyChangeRequest
+	(*media_placement.GetChangeRequest)(nil),               // 222: media_placement.GetChangeRequest
+	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 223: foghorn_control.TestPlaybackAccessRequest
+	(*shared.CreateClipRequest)(nil),                       // 224: shared.CreateClipRequest
+	(*shared.GetClipRequest)(nil),                          // 225: shared.GetClipRequest
+	(*shared.DeleteClipRequest)(nil),                       // 226: shared.DeleteClipRequest
+	(*shared.StopDVRRequest)(nil),                          // 227: shared.StopDVRRequest
+	(*shared.DeleteDVRRequest)(nil),                        // 228: shared.DeleteDVRRequest
+	(*shared.ViewerEndpointRequest)(nil),                   // 229: shared.ViewerEndpointRequest
+	(*shared.IngestEndpointRequest)(nil),                   // 230: shared.IngestEndpointRequest
+	(*shared.CreateVodUploadRequest)(nil),                  // 231: shared.CreateVodUploadRequest
+	(*shared.CompleteVodUploadRequest)(nil),                // 232: shared.CompleteVodUploadRequest
+	(*shared.AbortVodUploadRequest)(nil),                   // 233: shared.AbortVodUploadRequest
+	(*shared.GetVodUploadStatusRequest)(nil),               // 234: shared.GetVodUploadStatusRequest
+	(*shared.DeleteVodAssetRequest)(nil),                   // 235: shared.DeleteVodAssetRequest
+	(*foghorn_control.SetNodeModeRequest)(nil),             // 236: foghorn_control.SetNodeModeRequest
+	(*foghorn_control.GetNodeHealthRequest)(nil),           // 237: foghorn_control.GetNodeHealthRequest
+	(*emptypb.Empty)(nil),                                  // 238: google.protobuf.Empty
+	(*shared.StartDVRResponse)(nil),                        // 239: shared.StartDVRResponse
+	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 240: foghorn_control.RetrieveDVRChapterResponse
+	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 241: foghorn_control.ListDVRChaptersResponse
+	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 242: foghorn_control.TerminateTenantStreamsResponse
+	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 243: foghorn_control.InvalidateTenantCacheResponse
+	(*media_placement.PolicyState)(nil),                    // 244: media_placement.PolicyState
+	(*media_placement.Options)(nil),                        // 245: media_placement.Options
+	(*media_placement.Preview)(nil),                        // 246: media_placement.Preview
+	(*media_placement.Review)(nil),                         // 247: media_placement.Review
+	(*media_placement.Change)(nil),                         // 248: media_placement.Change
+	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 249: foghorn_control.TestPlaybackAccessResponse
+	(*shared.CreateClipResponse)(nil),                      // 250: shared.CreateClipResponse
+	(*shared.ClipInfo)(nil),                                // 251: shared.ClipInfo
+	(*shared.DeleteClipResponse)(nil),                      // 252: shared.DeleteClipResponse
+	(*shared.StopDVRResponse)(nil),                         // 253: shared.StopDVRResponse
+	(*shared.DeleteDVRResponse)(nil),                       // 254: shared.DeleteDVRResponse
+	(*shared.ViewerEndpointResponse)(nil),                  // 255: shared.ViewerEndpointResponse
+	(*shared.IngestEndpointResponse)(nil),                  // 256: shared.IngestEndpointResponse
+	(*shared.CreateVodUploadResponse)(nil),                 // 257: shared.CreateVodUploadResponse
+	(*shared.CompleteVodUploadResponse)(nil),               // 258: shared.CompleteVodUploadResponse
+	(*shared.AbortVodUploadResponse)(nil),                  // 259: shared.AbortVodUploadResponse
+	(*shared.GetVodUploadStatusResponse)(nil),              // 260: shared.GetVodUploadStatusResponse
+	(*shared.DeleteVodAssetResponse)(nil),                  // 261: shared.DeleteVodAssetResponse
+	(*foghorn_control.SetNodeModeResponse)(nil),            // 262: foghorn_control.SetNodeModeResponse
+	(*foghorn_control.GetNodeHealthResponse)(nil),          // 263: foghorn_control.GetNodeHealthResponse
 }
 var file_commodore_proto_depIdxs = []int32{
-	0,   // 0: commodore.ValidateStreamKeyResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	197, // 1: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	151, // 2: commodore.ValidateStreamKeyResponse.push_targets:type_name -> commodore.PushTargetInternal
-	198, // 3: commodore.ValidateStreamKeyResponse.dvr_policy:type_name -> shared.DVRPolicy
-	199, // 4: commodore.ValidateStreamKeyResponse.allowances:type_name -> metering.MeterAllowance
-	200, // 5: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	197, // 6: commodore.ValidateStreamKeyResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	0,   // 7: commodore.ResolveStreamContextResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	197, // 8: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	198, // 9: commodore.ResolveStreamContextResponse.dvr_policy:type_name -> shared.DVRPolicy
-	199, // 10: commodore.ResolveStreamContextResponse.allowances:type_name -> metering.MeterAllowance
-	200, // 11: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	197, // 12: commodore.ResolveStreamContextResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	15,  // 13: commodore.ListManagedStreamsResponse.streams:type_name -> commodore.ManagedStreamRow
-	1,   // 14: commodore.StreamMonitoringRow.monitoring_toggle:type_name -> commodore.MonitoringToggle
-	18,  // 15: commodore.ListStreamMonitoringResponse.streams:type_name -> commodore.StreamMonitoringRow
-	26,  // 16: commodore.SyncActiveIngestPlacementRequest.renew:type_name -> commodore.ActiveIngestStream
-	26,  // 17: commodore.SyncActiveIngestPlacementRequest.release:type_name -> commodore.ActiveIngestStream
-	26,  // 18: commodore.SyncActiveIngestPlacementResponse.renew_refused:type_name -> commodore.ActiveIngestStream
-	26,  // 19: commodore.SyncActiveIngestPlacementResponse.release_refused:type_name -> commodore.ActiveIngestStream
-	197, // 20: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	197, // 21: commodore.ResolvePlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	195, // 22: commodore.PlaybackJwtPolicy.required_claims_json:type_name -> commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	35,  // 23: commodore.PlaybackJwtPolicy.active_keys:type_name -> commodore.PlaybackSigningKey
-	36,  // 24: commodore.ResolvePlaybackPolicyResponse.jwt_policy:type_name -> commodore.PlaybackJwtPolicy
-	37,  // 25: commodore.ResolvePlaybackPolicyResponse.webhook_policy:type_name -> commodore.PlaybackWebhookPolicy
-	197, // 26: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	201, // 27: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
-	201, // 28: commodore.UpdateDVRRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
-	2,   // 29: commodore.UpdateArtifactCatalogSnapshotRequest.asset_type:type_name -> commodore.ArtifactAssetType
-	51,  // 30: commodore.UpdateArtifactCatalogSnapshotRequest.tracks:type_name -> commodore.MediaTrack
-	197, // 31: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	197, // 32: commodore.ResolveVodHashResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	201, // 33: commodore.StorageArtifactInfo.created_at:type_name -> google.protobuf.Timestamp
-	201, // 34: commodore.StorageArtifactInfo.updated_at:type_name -> google.protobuf.Timestamp
-	201, // 35: commodore.StorageArtifactInfo.expires_at:type_name -> google.protobuf.Timestamp
-	202, // 36: commodore.StorageArtifactInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	51,  // 37: commodore.StorageArtifactInfo.tracks:type_name -> commodore.MediaTrack
-	71,  // 38: commodore.ListStorageArtifactsResponse.artifacts:type_name -> commodore.StorageArtifactInfo
-	196, // 39: commodore.ListStorageArtifactsResponse.kind_counts:type_name -> commodore.ListStorageArtifactsResponse.KindCountsEntry
-	197, // 40: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	197, // 41: commodore.ResolveArtifactPlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	197, // 42: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	197, // 43: commodore.ResolveArtifactInternalNameResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	203, // 44: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
-	118, // 45: commodore.CreateUserInTenantResponse.user:type_name -> commodore.User
-	86,  // 46: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
-	86,  // 47: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
-	203, // 48: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
-	118, // 49: commodore.AuthResponse.user:type_name -> commodore.User
-	201, // 50: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
-	201, // 51: commodore.IssueWalletChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
-	203, // 52: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
-	115, // 53: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
-	201, // 54: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
-	201, // 55: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
-	201, // 56: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
-	201, // 57: commodore.User.created_at:type_name -> google.protobuf.Timestamp
-	201, // 58: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
-	115, // 59: commodore.User.wallets:type_name -> commodore.WalletIdentity
-	128, // 60: commodore.CreateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
-	121, // 61: commodore.CreateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
-	3,   // 62: commodore.StreamSourceLocation.mode:type_name -> commodore.SourceLocationMode
-	120, // 63: commodore.StreamSourceLocation.clusters:type_name -> commodore.SourceLocationCluster
-	129, // 64: commodore.CreateStreamResponse.pull_source:type_name -> commodore.PullSourceView
-	121, // 65: commodore.CreateStreamResponse.source_location:type_name -> commodore.StreamSourceLocation
-	204, // 66: commodore.CreateStreamResponse.source_location_warnings:type_name -> media_placement.Warning
-	126, // 67: commodore.GetStreamsBatchResponse.streams:type_name -> commodore.Stream
-	201, // 68: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
-	201, // 69: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
-	201, // 70: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
-	201, // 71: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
-	129, // 72: commodore.Stream.pull_source:type_name -> commodore.PullSourceView
-	202, // 73: commodore.Stream.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	1,   // 74: commodore.Stream.monitoring:type_name -> commodore.MonitoringToggle
-	130, // 75: commodore.Stream.managed_source:type_name -> commodore.ManagedSourceView
-	121, // 76: commodore.Stream.source_location:type_name -> commodore.StreamSourceLocation
-	204, // 77: commodore.Stream.source_location_warnings:type_name -> media_placement.Warning
-	127, // 78: commodore.PullSourceInput.allowed_clusters:type_name -> commodore.PullSourceAllowedClustersInput
-	205, // 79: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
-	126, // 80: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
-	206, // 81: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
-	128, // 82: commodore.UpdateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
-	1,   // 83: commodore.UpdateStreamRequest.monitoring:type_name -> commodore.MonitoringToggle
-	121, // 84: commodore.UpdateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
-	201, // 85: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
-	201, // 86: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
-	201, // 87: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
-	201, // 88: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
-	137, // 89: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
-	205, // 90: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
-	137, // 91: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
-	206, // 92: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
-	201, // 93: commodore.PushTarget.last_pushed_at:type_name -> google.protobuf.Timestamp
-	201, // 94: commodore.PushTarget.created_at:type_name -> google.protobuf.Timestamp
-	201, // 95: commodore.PushTarget.updated_at:type_name -> google.protobuf.Timestamp
-	142, // 96: commodore.ListPushTargetsResponse.push_targets:type_name -> commodore.PushTarget
-	201, // 97: commodore.DeletePushTargetResponse.deleted_at:type_name -> google.protobuf.Timestamp
-	151, // 98: commodore.GetStreamPushTargetsResponse.push_targets:type_name -> commodore.PushTargetInternal
-	4,   // 99: commodore.UpdatePushTargetStatusRequest.reason:type_name -> commodore.PushTargetStatusReason
-	201, // 100: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
-	201, // 101: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	201, // 102: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
-	205, // 103: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	201, // 104: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	201, // 105: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	201, // 106: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
-	156, // 107: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
-	206, // 108: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	201, // 109: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
-	162, // 110: commodore.CreateSigningKeyResponse.signing_key:type_name -> commodore.SigningKey
-	162, // 111: commodore.ListSigningKeysResponse.signing_keys:type_name -> commodore.SigningKey
-	36,  // 112: commodore.SetPlaybackPolicyRequest.jwt:type_name -> commodore.PlaybackJwtPolicy
-	37,  // 113: commodore.SetPlaybackPolicyRequest.webhook:type_name -> commodore.PlaybackWebhookPolicy
-	201, // 114: commodore.PullSourceEvent.created_at:type_name -> google.protobuf.Timestamp
-	173, // 115: commodore.ListPullSourceEventsResponse.events:type_name -> commodore.PullSourceEvent
-	175, // 116: commodore.GetMediaRetentionPolicyResponse.bounds:type_name -> commodore.MediaRetentionBounds
-	201, // 117: commodore.GetMediaRetentionPolicyResponse.updated_at:type_name -> google.protobuf.Timestamp
-	5,   // 118: commodore.SetMediaRetentionPolicyRequest.target_type:type_name -> commodore.MediaRetentionTarget
-	177, // 119: commodore.SetMediaRetentionPolicyResponse.policy:type_name -> commodore.GetMediaRetentionPolicyResponse
-	5,   // 120: commodore.UpdateAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
-	201, // 121: commodore.UpdateAssetRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
-	5,   // 122: commodore.ResetAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
-	201, // 123: commodore.UpdateAssetRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
-	201, // 124: commodore.CompleteAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
-	201, // 125: commodore.LookupDeviceAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
-	10,  // 126: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	10,  // 127: commodore.InternalService.CheckStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	12,  // 128: commodore.InternalService.ResolveStreamContext:input_type -> commodore.ResolveStreamContextRequest
-	14,  // 129: commodore.InternalService.ListManagedStreams:input_type -> commodore.ListManagedStreamsRequest
-	17,  // 130: commodore.InternalService.ListStreamMonitoring:input_type -> commodore.ListStreamMonitoringRequest
-	20,  // 131: commodore.InternalService.RecordStreamActiveCluster:input_type -> commodore.RecordStreamActiveClusterRequest
-	22,  // 132: commodore.InternalService.RegisterStreamThumbnailServingCell:input_type -> commodore.RegisterStreamThumbnailServingCellRequest
-	24,  // 133: commodore.InternalService.ClearStreamActiveCluster:input_type -> commodore.ClearStreamActiveClusterRequest
-	27,  // 134: commodore.InternalService.SyncActiveIngestPlacement:input_type -> commodore.SyncActiveIngestPlacementRequest
-	29,  // 135: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
-	31,  // 136: commodore.InternalService.ResolvePullSourceByInternalName:input_type -> commodore.ResolvePullSourceByInternalNameRequest
-	33,  // 137: commodore.InternalService.ResolvePlaybackPolicy:input_type -> commodore.ResolvePlaybackPolicyRequest
-	34,  // 138: commodore.InternalService.RecordSigningKeyUse:input_type -> commodore.RecordSigningKeyUseRequest
-	39,  // 139: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
-	41,  // 140: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
-	43,  // 141: commodore.InternalService.MintMistAdminSession:input_type -> commodore.MintMistAdminSessionRequest
-	45,  // 142: commodore.InternalService.ValidateMistAdminSession:input_type -> commodore.ValidateMistAdminSessionRequest
-	207, // 143: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
-	208, // 144: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
-	209, // 145: commodore.InternalService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
-	47,  // 146: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
-	49,  // 147: commodore.InternalService.UpdateDVRRetention:input_type -> commodore.UpdateDVRRetentionRequest
-	52,  // 148: commodore.InternalService.UpdateArtifactCatalogSnapshot:input_type -> commodore.UpdateArtifactCatalogSnapshotRequest
-	54,  // 149: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
-	56,  // 150: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
-	73,  // 151: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
-	75,  // 152: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
-	58,  // 153: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
-	60,  // 154: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
-	62,  // 155: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
-	64,  // 156: commodore.InternalService.MintChapterPlaybackID:input_type -> commodore.MintChapterPlaybackIDRequest
-	66,  // 157: commodore.InternalService.ResolveChapterPlaybackID:input_type -> commodore.ResolveChapterPlaybackIDRequest
-	68,  // 158: commodore.InternalService.GetTenantProcessesJSON:input_type -> commodore.GetTenantProcessesJSONRequest
-	70,  // 159: commodore.InternalService.ListStorageArtifacts:input_type -> commodore.ListStorageArtifactsRequest
-	77,  // 160: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
-	210, // 161: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
-	211, // 162: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
-	79,  // 163: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
-	81,  // 164: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
-	83,  // 165: commodore.InternalService.CreateUserInTenant:input_type -> commodore.CreateUserInTenantRequest
-	176, // 166: commodore.InternalService.GetMediaRetentionPolicy:input_type -> commodore.GetMediaRetentionPolicyRequest
-	178, // 167: commodore.InternalService.SetMediaRetentionPolicy:input_type -> commodore.SetMediaRetentionPolicyRequest
-	180, // 168: commodore.InternalService.UpdateAssetRetention:input_type -> commodore.UpdateAssetRetentionRequest
-	181, // 169: commodore.InternalService.ResetAssetRetention:input_type -> commodore.ResetAssetRetentionRequest
-	183, // 170: commodore.InternalService.SetStreamRetentionOverrides:input_type -> commodore.SetStreamRetentionOverridesRequest
-	212, // 171: commodore.InternalService.GetMediaPlacementPolicy:input_type -> media_placement.GetPolicyRequest
-	213, // 172: commodore.InternalService.GetMediaPlacementOptions:input_type -> media_placement.GetOptionsRequest
-	214, // 173: commodore.InternalService.PreviewMediaPlacement:input_type -> media_placement.PreviewRequest
-	215, // 174: commodore.InternalService.ReviewMediaPlacementChange:input_type -> media_placement.ReviewChangeRequest
-	216, // 175: commodore.InternalService.ApplyMediaPlacementChange:input_type -> media_placement.ApplyChangeRequest
-	217, // 176: commodore.InternalService.GetMediaPlacementChange:input_type -> media_placement.GetChangeRequest
-	218, // 177: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
-	171, // 178: commodore.InternalService.RecordPullSourceEvent:input_type -> commodore.RecordPullSourceEventRequest
-	172, // 179: commodore.InternalService.ListPullSourceEvents:input_type -> commodore.ListPullSourceEventsRequest
-	6,   // 180: commodore.InternalService.RequestMediaAuthorityRefresh:input_type -> commodore.RequestMediaAuthorityRefreshRequest
-	8,   // 181: commodore.InternalService.RequestMediaAuthorityReplay:input_type -> commodore.RequestMediaAuthorityReplayRequest
-	85,  // 182: commodore.UserService.Login:input_type -> commodore.LoginRequest
-	87,  // 183: commodore.UserService.Register:input_type -> commodore.RegisterRequest
-	91,  // 184: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
-	93,  // 185: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
-	94,  // 186: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
-	96,  // 187: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
-	98,  // 188: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
-	100, // 189: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
-	90,  // 190: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
-	102, // 191: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
-	103, // 192: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
-	105, // 193: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
-	107, // 194: commodore.UserService.IssueWalletChallenge:input_type -> commodore.IssueWalletChallengeRequest
-	109, // 195: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
-	110, // 196: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
-	111, // 197: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
-	113, // 198: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
-	116, // 199: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
-	185, // 200: commodore.UserService.CompleteAuthorization:input_type -> commodore.CompleteAuthorizationRequest
-	187, // 201: commodore.UserService.ExchangeAuthorizationCode:input_type -> commodore.ExchangeAuthorizationCodeRequest
-	188, // 202: commodore.UserService.StartDeviceAuthorization:input_type -> commodore.StartDeviceAuthorizationRequest
-	190, // 203: commodore.UserService.PollDeviceAuthorization:input_type -> commodore.PollDeviceAuthorizationRequest
-	191, // 204: commodore.UserService.LookupDeviceAuthorization:input_type -> commodore.LookupDeviceAuthorizationRequest
-	193, // 205: commodore.UserService.ApproveDeviceAuthorization:input_type -> commodore.ApproveDeviceAuthorizationRequest
-	119, // 206: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
-	123, // 207: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
-	124, // 208: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
-	131, // 209: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
-	133, // 210: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
-	134, // 211: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
-	160, // 212: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
-	136, // 213: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
-	139, // 214: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
-	141, // 215: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
-	143, // 216: commodore.PushTargetService.CreatePushTarget:input_type -> commodore.CreatePushTargetRequest
-	144, // 217: commodore.PushTargetService.ListPushTargets:input_type -> commodore.ListPushTargetsRequest
-	146, // 218: commodore.PushTargetService.UpdatePushTarget:input_type -> commodore.UpdatePushTargetRequest
-	147, // 219: commodore.PushTargetService.DeletePushTarget:input_type -> commodore.DeletePushTargetRequest
-	149, // 220: commodore.PushTargetService.GetStreamPushTargets:input_type -> commodore.GetStreamPushTargetsRequest
-	152, // 221: commodore.PushTargetService.UpdatePushTargetStatus:input_type -> commodore.UpdatePushTargetStatusRequest
-	153, // 222: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
-	155, // 223: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
-	158, // 224: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
-	219, // 225: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
-	220, // 226: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
-	221, // 227: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
-	222, // 228: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
-	223, // 229: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	224, // 230: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	225, // 231: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	226, // 232: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	227, // 233: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	228, // 234: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	229, // 235: commodore.VodService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
-	230, // 236: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	231, // 237: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
-	232, // 238: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
-	163, // 239: commodore.PlaybackAccessControlService.CreateSigningKey:input_type -> commodore.CreateSigningKeyRequest
-	165, // 240: commodore.PlaybackAccessControlService.GetSigningKey:input_type -> commodore.GetSigningKeyRequest
-	166, // 241: commodore.PlaybackAccessControlService.ListSigningKeys:input_type -> commodore.ListSigningKeysRequest
-	168, // 242: commodore.PlaybackAccessControlService.RevokeSigningKey:input_type -> commodore.RevokeSigningKeyRequest
-	169, // 243: commodore.PlaybackAccessControlService.SetPlaybackPolicy:input_type -> commodore.SetPlaybackPolicyRequest
-	11,  // 244: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	11,  // 245: commodore.InternalService.CheckStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	13,  // 246: commodore.InternalService.ResolveStreamContext:output_type -> commodore.ResolveStreamContextResponse
-	16,  // 247: commodore.InternalService.ListManagedStreams:output_type -> commodore.ListManagedStreamsResponse
-	19,  // 248: commodore.InternalService.ListStreamMonitoring:output_type -> commodore.ListStreamMonitoringResponse
-	21,  // 249: commodore.InternalService.RecordStreamActiveCluster:output_type -> commodore.RecordStreamActiveClusterResponse
-	23,  // 250: commodore.InternalService.RegisterStreamThumbnailServingCell:output_type -> commodore.RegisterStreamThumbnailServingCellResponse
-	25,  // 251: commodore.InternalService.ClearStreamActiveCluster:output_type -> commodore.ClearStreamActiveClusterResponse
-	28,  // 252: commodore.InternalService.SyncActiveIngestPlacement:output_type -> commodore.SyncActiveIngestPlacementResponse
-	30,  // 253: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
-	32,  // 254: commodore.InternalService.ResolvePullSourceByInternalName:output_type -> commodore.ResolvePullSourceByInternalNameResponse
-	38,  // 255: commodore.InternalService.ResolvePlaybackPolicy:output_type -> commodore.ResolvePlaybackPolicyResponse
-	233, // 256: commodore.InternalService.RecordSigningKeyUse:output_type -> google.protobuf.Empty
-	40,  // 257: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
-	42,  // 258: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
-	44,  // 259: commodore.InternalService.MintMistAdminSession:output_type -> commodore.MintMistAdminSessionResponse
-	46,  // 260: commodore.InternalService.ValidateMistAdminSession:output_type -> commodore.ValidateMistAdminSessionResponse
-	234, // 261: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
-	235, // 262: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
-	236, // 263: commodore.InternalService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
-	48,  // 264: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
-	50,  // 265: commodore.InternalService.UpdateDVRRetention:output_type -> commodore.UpdateDVRRetentionResponse
-	53,  // 266: commodore.InternalService.UpdateArtifactCatalogSnapshot:output_type -> commodore.UpdateArtifactCatalogSnapshotResponse
-	55,  // 267: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
-	57,  // 268: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
-	74,  // 269: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
-	76,  // 270: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
-	59,  // 271: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
-	61,  // 272: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
-	63,  // 273: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
-	65,  // 274: commodore.InternalService.MintChapterPlaybackID:output_type -> commodore.MintChapterPlaybackIDResponse
-	67,  // 275: commodore.InternalService.ResolveChapterPlaybackID:output_type -> commodore.ResolveChapterPlaybackIDResponse
-	69,  // 276: commodore.InternalService.GetTenantProcessesJSON:output_type -> commodore.GetTenantProcessesJSONResponse
-	72,  // 277: commodore.InternalService.ListStorageArtifacts:output_type -> commodore.ListStorageArtifactsResponse
-	78,  // 278: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
-	237, // 279: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
-	238, // 280: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
-	80,  // 281: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
-	82,  // 282: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
-	84,  // 283: commodore.InternalService.CreateUserInTenant:output_type -> commodore.CreateUserInTenantResponse
-	177, // 284: commodore.InternalService.GetMediaRetentionPolicy:output_type -> commodore.GetMediaRetentionPolicyResponse
-	179, // 285: commodore.InternalService.SetMediaRetentionPolicy:output_type -> commodore.SetMediaRetentionPolicyResponse
-	182, // 286: commodore.InternalService.UpdateAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
-	182, // 287: commodore.InternalService.ResetAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
-	184, // 288: commodore.InternalService.SetStreamRetentionOverrides:output_type -> commodore.SetStreamRetentionOverridesResponse
-	239, // 289: commodore.InternalService.GetMediaPlacementPolicy:output_type -> media_placement.PolicyState
-	240, // 290: commodore.InternalService.GetMediaPlacementOptions:output_type -> media_placement.Options
-	241, // 291: commodore.InternalService.PreviewMediaPlacement:output_type -> media_placement.Preview
-	242, // 292: commodore.InternalService.ReviewMediaPlacementChange:output_type -> media_placement.Review
-	243, // 293: commodore.InternalService.ApplyMediaPlacementChange:output_type -> media_placement.Change
-	243, // 294: commodore.InternalService.GetMediaPlacementChange:output_type -> media_placement.Change
-	244, // 295: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
-	233, // 296: commodore.InternalService.RecordPullSourceEvent:output_type -> google.protobuf.Empty
-	174, // 297: commodore.InternalService.ListPullSourceEvents:output_type -> commodore.ListPullSourceEventsResponse
-	7,   // 298: commodore.InternalService.RequestMediaAuthorityRefresh:output_type -> commodore.RequestMediaAuthorityRefreshResponse
-	9,   // 299: commodore.InternalService.RequestMediaAuthorityReplay:output_type -> commodore.RequestMediaAuthorityReplayResponse
-	88,  // 300: commodore.UserService.Login:output_type -> commodore.AuthResponse
-	89,  // 301: commodore.UserService.Register:output_type -> commodore.RegisterResponse
-	92,  // 302: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
-	88,  // 303: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
-	95,  // 304: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
-	97,  // 305: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
-	99,  // 306: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
-	101, // 307: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
-	118, // 308: commodore.UserService.GetMe:output_type -> commodore.User
-	118, // 309: commodore.UserService.UpdateMe:output_type -> commodore.User
-	104, // 310: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
-	106, // 311: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
-	108, // 312: commodore.UserService.IssueWalletChallenge:output_type -> commodore.IssueWalletChallengeResponse
-	88,  // 313: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
-	115, // 314: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
-	112, // 315: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
-	114, // 316: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
-	117, // 317: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
-	186, // 318: commodore.UserService.CompleteAuthorization:output_type -> commodore.CompleteAuthorizationResponse
-	88,  // 319: commodore.UserService.ExchangeAuthorizationCode:output_type -> commodore.AuthResponse
-	189, // 320: commodore.UserService.StartDeviceAuthorization:output_type -> commodore.StartDeviceAuthorizationResponse
-	88,  // 321: commodore.UserService.PollDeviceAuthorization:output_type -> commodore.AuthResponse
-	192, // 322: commodore.UserService.LookupDeviceAuthorization:output_type -> commodore.LookupDeviceAuthorizationResponse
-	194, // 323: commodore.UserService.ApproveDeviceAuthorization:output_type -> commodore.ApproveDeviceAuthorizationResponse
-	122, // 324: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
-	126, // 325: commodore.StreamService.GetStream:output_type -> commodore.Stream
-	125, // 326: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
-	132, // 327: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
-	126, // 328: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
-	135, // 329: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
-	161, // 330: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
-	138, // 331: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
-	140, // 332: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
-	233, // 333: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
-	142, // 334: commodore.PushTargetService.CreatePushTarget:output_type -> commodore.PushTarget
-	145, // 335: commodore.PushTargetService.ListPushTargets:output_type -> commodore.ListPushTargetsResponse
-	142, // 336: commodore.PushTargetService.UpdatePushTarget:output_type -> commodore.PushTarget
-	148, // 337: commodore.PushTargetService.DeletePushTarget:output_type -> commodore.DeletePushTargetResponse
-	150, // 338: commodore.PushTargetService.GetStreamPushTargets:output_type -> commodore.GetStreamPushTargetsResponse
-	142, // 339: commodore.PushTargetService.UpdatePushTargetStatus:output_type -> commodore.PushTarget
-	154, // 340: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
-	157, // 341: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
-	159, // 342: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
-	245, // 343: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
-	246, // 344: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
-	247, // 345: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
-	248, // 346: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
-	249, // 347: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	250, // 348: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	251, // 349: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	252, // 350: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	253, // 351: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	254, // 352: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	255, // 353: commodore.VodService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
-	256, // 354: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	257, // 355: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
-	258, // 356: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
-	164, // 357: commodore.PlaybackAccessControlService.CreateSigningKey:output_type -> commodore.CreateSigningKeyResponse
-	162, // 358: commodore.PlaybackAccessControlService.GetSigningKey:output_type -> commodore.SigningKey
-	167, // 359: commodore.PlaybackAccessControlService.ListSigningKeys:output_type -> commodore.ListSigningKeysResponse
-	162, // 360: commodore.PlaybackAccessControlService.RevokeSigningKey:output_type -> commodore.SigningKey
-	170, // 361: commodore.PlaybackAccessControlService.SetPlaybackPolicy:output_type -> commodore.SetPlaybackPolicyResponse
-	244, // [244:362] is the sub-list for method output_type
-	126, // [126:244] is the sub-list for method input_type
-	126, // [126:126] is the sub-list for extension type_name
-	126, // [126:126] is the sub-list for extension extendee
-	0,   // [0:126] is the sub-list for field type_name
+	202, // 0: commodore.RequestMediaAuthorityReplayRequest.as_of:type_name -> google.protobuf.Timestamp
+	9,   // 1: commodore.RequestMediaAuthorityReplayRequest.held:type_name -> commodore.HeldMediaAuthority
+	202, // 2: commodore.RequestMediaAuthorityReplayRequest.acknowledged_before:type_name -> google.protobuf.Timestamp
+	9,   // 3: commodore.RequestMediaAuthorityReplayResponse.confirmed:type_name -> commodore.HeldMediaAuthority
+	202, // 4: commodore.RequestMediaAuthorityReplayResponse.observed_at:type_name -> google.protobuf.Timestamp
+	13,  // 5: commodore.ReportMediaAuthorityUseRequest.uses:type_name -> commodore.MediaAuthorityUse
+	0,   // 6: commodore.ValidateStreamKeyResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
+	203, // 7: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	156, // 8: commodore.ValidateStreamKeyResponse.push_targets:type_name -> commodore.PushTargetInternal
+	204, // 9: commodore.ValidateStreamKeyResponse.dvr_policy:type_name -> shared.DVRPolicy
+	205, // 10: commodore.ValidateStreamKeyResponse.allowances:type_name -> metering.MeterAllowance
+	206, // 11: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	203, // 12: commodore.ValidateStreamKeyResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	0,   // 13: commodore.ResolveStreamContextResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
+	203, // 14: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	204, // 15: commodore.ResolveStreamContextResponse.dvr_policy:type_name -> shared.DVRPolicy
+	205, // 16: commodore.ResolveStreamContextResponse.allowances:type_name -> metering.MeterAllowance
+	206, // 17: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	203, // 18: commodore.ResolveStreamContextResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	20,  // 19: commodore.ListManagedStreamsResponse.streams:type_name -> commodore.ManagedStreamRow
+	1,   // 20: commodore.StreamMonitoringRow.monitoring_toggle:type_name -> commodore.MonitoringToggle
+	23,  // 21: commodore.ListStreamMonitoringResponse.streams:type_name -> commodore.StreamMonitoringRow
+	31,  // 22: commodore.SyncActiveIngestPlacementRequest.renew:type_name -> commodore.ActiveIngestStream
+	31,  // 23: commodore.SyncActiveIngestPlacementRequest.release:type_name -> commodore.ActiveIngestStream
+	31,  // 24: commodore.SyncActiveIngestPlacementResponse.renew_refused:type_name -> commodore.ActiveIngestStream
+	31,  // 25: commodore.SyncActiveIngestPlacementResponse.release_refused:type_name -> commodore.ActiveIngestStream
+	203, // 26: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	203, // 27: commodore.ResolvePlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	200, // 28: commodore.PlaybackJwtPolicy.required_claims_json:type_name -> commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	40,  // 29: commodore.PlaybackJwtPolicy.active_keys:type_name -> commodore.PlaybackSigningKey
+	41,  // 30: commodore.ResolvePlaybackPolicyResponse.jwt_policy:type_name -> commodore.PlaybackJwtPolicy
+	42,  // 31: commodore.ResolvePlaybackPolicyResponse.webhook_policy:type_name -> commodore.PlaybackWebhookPolicy
+	203, // 32: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	202, // 33: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
+	202, // 34: commodore.UpdateDVRRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	2,   // 35: commodore.UpdateArtifactCatalogSnapshotRequest.asset_type:type_name -> commodore.ArtifactAssetType
+	56,  // 36: commodore.UpdateArtifactCatalogSnapshotRequest.tracks:type_name -> commodore.MediaTrack
+	203, // 37: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	203, // 38: commodore.ResolveVodHashResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	202, // 39: commodore.StorageArtifactInfo.created_at:type_name -> google.protobuf.Timestamp
+	202, // 40: commodore.StorageArtifactInfo.updated_at:type_name -> google.protobuf.Timestamp
+	202, // 41: commodore.StorageArtifactInfo.expires_at:type_name -> google.protobuf.Timestamp
+	207, // 42: commodore.StorageArtifactInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	56,  // 43: commodore.StorageArtifactInfo.tracks:type_name -> commodore.MediaTrack
+	76,  // 44: commodore.ListStorageArtifactsResponse.artifacts:type_name -> commodore.StorageArtifactInfo
+	201, // 45: commodore.ListStorageArtifactsResponse.kind_counts:type_name -> commodore.ListStorageArtifactsResponse.KindCountsEntry
+	203, // 46: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	203, // 47: commodore.ResolveArtifactPlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	203, // 48: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	203, // 49: commodore.ResolveArtifactInternalNameResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	208, // 50: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
+	123, // 51: commodore.CreateUserInTenantResponse.user:type_name -> commodore.User
+	91,  // 52: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
+	91,  // 53: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
+	208, // 54: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
+	123, // 55: commodore.AuthResponse.user:type_name -> commodore.User
+	202, // 56: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
+	202, // 57: commodore.IssueWalletChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	208, // 58: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
+	120, // 59: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
+	202, // 60: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
+	202, // 61: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
+	202, // 62: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
+	202, // 63: commodore.User.created_at:type_name -> google.protobuf.Timestamp
+	202, // 64: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
+	120, // 65: commodore.User.wallets:type_name -> commodore.WalletIdentity
+	133, // 66: commodore.CreateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
+	126, // 67: commodore.CreateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
+	3,   // 68: commodore.StreamSourceLocation.mode:type_name -> commodore.SourceLocationMode
+	125, // 69: commodore.StreamSourceLocation.clusters:type_name -> commodore.SourceLocationCluster
+	134, // 70: commodore.CreateStreamResponse.pull_source:type_name -> commodore.PullSourceView
+	126, // 71: commodore.CreateStreamResponse.source_location:type_name -> commodore.StreamSourceLocation
+	209, // 72: commodore.CreateStreamResponse.source_location_warnings:type_name -> media_placement.Warning
+	131, // 73: commodore.GetStreamsBatchResponse.streams:type_name -> commodore.Stream
+	202, // 74: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
+	202, // 75: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
+	202, // 76: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
+	202, // 77: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
+	134, // 78: commodore.Stream.pull_source:type_name -> commodore.PullSourceView
+	207, // 79: commodore.Stream.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	1,   // 80: commodore.Stream.monitoring:type_name -> commodore.MonitoringToggle
+	135, // 81: commodore.Stream.managed_source:type_name -> commodore.ManagedSourceView
+	126, // 82: commodore.Stream.source_location:type_name -> commodore.StreamSourceLocation
+	209, // 83: commodore.Stream.source_location_warnings:type_name -> media_placement.Warning
+	132, // 84: commodore.PullSourceInput.allowed_clusters:type_name -> commodore.PullSourceAllowedClustersInput
+	210, // 85: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 86: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
+	211, // 87: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
+	133, // 88: commodore.UpdateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
+	1,   // 89: commodore.UpdateStreamRequest.monitoring:type_name -> commodore.MonitoringToggle
+	126, // 90: commodore.UpdateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
+	202, // 91: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	202, // 92: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
+	202, // 93: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
+	202, // 94: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
+	142, // 95: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
+	210, // 96: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
+	142, // 97: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
+	211, // 98: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
+	202, // 99: commodore.PushTarget.last_pushed_at:type_name -> google.protobuf.Timestamp
+	202, // 100: commodore.PushTarget.created_at:type_name -> google.protobuf.Timestamp
+	202, // 101: commodore.PushTarget.updated_at:type_name -> google.protobuf.Timestamp
+	147, // 102: commodore.ListPushTargetsResponse.push_targets:type_name -> commodore.PushTarget
+	202, // 103: commodore.DeletePushTargetResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	156, // 104: commodore.GetStreamPushTargetsResponse.push_targets:type_name -> commodore.PushTargetInternal
+	4,   // 105: commodore.UpdatePushTargetStatusRequest.reason:type_name -> commodore.PushTargetStatusReason
+	202, // 106: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
+	202, // 107: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	202, // 108: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
+	210, // 109: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	202, // 110: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	202, // 111: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	202, // 112: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	161, // 113: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
+	211, // 114: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	202, // 115: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
+	167, // 116: commodore.CreateSigningKeyResponse.signing_key:type_name -> commodore.SigningKey
+	167, // 117: commodore.ListSigningKeysResponse.signing_keys:type_name -> commodore.SigningKey
+	41,  // 118: commodore.SetPlaybackPolicyRequest.jwt:type_name -> commodore.PlaybackJwtPolicy
+	42,  // 119: commodore.SetPlaybackPolicyRequest.webhook:type_name -> commodore.PlaybackWebhookPolicy
+	202, // 120: commodore.PullSourceEvent.created_at:type_name -> google.protobuf.Timestamp
+	178, // 121: commodore.ListPullSourceEventsResponse.events:type_name -> commodore.PullSourceEvent
+	180, // 122: commodore.GetMediaRetentionPolicyResponse.bounds:type_name -> commodore.MediaRetentionBounds
+	202, // 123: commodore.GetMediaRetentionPolicyResponse.updated_at:type_name -> google.protobuf.Timestamp
+	5,   // 124: commodore.SetMediaRetentionPolicyRequest.target_type:type_name -> commodore.MediaRetentionTarget
+	182, // 125: commodore.SetMediaRetentionPolicyResponse.policy:type_name -> commodore.GetMediaRetentionPolicyResponse
+	5,   // 126: commodore.UpdateAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
+	202, // 127: commodore.UpdateAssetRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	5,   // 128: commodore.ResetAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
+	202, // 129: commodore.UpdateAssetRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
+	202, // 130: commodore.CompleteAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
+	202, // 131: commodore.LookupDeviceAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
+	15,  // 132: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	15,  // 133: commodore.InternalService.CheckStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	17,  // 134: commodore.InternalService.ResolveStreamContext:input_type -> commodore.ResolveStreamContextRequest
+	19,  // 135: commodore.InternalService.ListManagedStreams:input_type -> commodore.ListManagedStreamsRequest
+	22,  // 136: commodore.InternalService.ListStreamMonitoring:input_type -> commodore.ListStreamMonitoringRequest
+	25,  // 137: commodore.InternalService.RecordStreamActiveCluster:input_type -> commodore.RecordStreamActiveClusterRequest
+	27,  // 138: commodore.InternalService.RegisterStreamThumbnailServingCell:input_type -> commodore.RegisterStreamThumbnailServingCellRequest
+	29,  // 139: commodore.InternalService.ClearStreamActiveCluster:input_type -> commodore.ClearStreamActiveClusterRequest
+	32,  // 140: commodore.InternalService.SyncActiveIngestPlacement:input_type -> commodore.SyncActiveIngestPlacementRequest
+	34,  // 141: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
+	36,  // 142: commodore.InternalService.ResolvePullSourceByInternalName:input_type -> commodore.ResolvePullSourceByInternalNameRequest
+	38,  // 143: commodore.InternalService.ResolvePlaybackPolicy:input_type -> commodore.ResolvePlaybackPolicyRequest
+	39,  // 144: commodore.InternalService.RecordSigningKeyUse:input_type -> commodore.RecordSigningKeyUseRequest
+	44,  // 145: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
+	46,  // 146: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
+	48,  // 147: commodore.InternalService.MintMistAdminSession:input_type -> commodore.MintMistAdminSessionRequest
+	50,  // 148: commodore.InternalService.ValidateMistAdminSession:input_type -> commodore.ValidateMistAdminSessionRequest
+	212, // 149: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
+	213, // 150: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
+	214, // 151: commodore.InternalService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
+	52,  // 152: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
+	54,  // 153: commodore.InternalService.UpdateDVRRetention:input_type -> commodore.UpdateDVRRetentionRequest
+	57,  // 154: commodore.InternalService.UpdateArtifactCatalogSnapshot:input_type -> commodore.UpdateArtifactCatalogSnapshotRequest
+	59,  // 155: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
+	61,  // 156: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
+	78,  // 157: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
+	80,  // 158: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
+	63,  // 159: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
+	65,  // 160: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
+	67,  // 161: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
+	69,  // 162: commodore.InternalService.MintChapterPlaybackID:input_type -> commodore.MintChapterPlaybackIDRequest
+	71,  // 163: commodore.InternalService.ResolveChapterPlaybackID:input_type -> commodore.ResolveChapterPlaybackIDRequest
+	73,  // 164: commodore.InternalService.GetTenantProcessesJSON:input_type -> commodore.GetTenantProcessesJSONRequest
+	75,  // 165: commodore.InternalService.ListStorageArtifacts:input_type -> commodore.ListStorageArtifactsRequest
+	82,  // 166: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
+	215, // 167: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
+	216, // 168: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
+	84,  // 169: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
+	86,  // 170: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
+	88,  // 171: commodore.InternalService.CreateUserInTenant:input_type -> commodore.CreateUserInTenantRequest
+	181, // 172: commodore.InternalService.GetMediaRetentionPolicy:input_type -> commodore.GetMediaRetentionPolicyRequest
+	183, // 173: commodore.InternalService.SetMediaRetentionPolicy:input_type -> commodore.SetMediaRetentionPolicyRequest
+	185, // 174: commodore.InternalService.UpdateAssetRetention:input_type -> commodore.UpdateAssetRetentionRequest
+	186, // 175: commodore.InternalService.ResetAssetRetention:input_type -> commodore.ResetAssetRetentionRequest
+	188, // 176: commodore.InternalService.SetStreamRetentionOverrides:input_type -> commodore.SetStreamRetentionOverridesRequest
+	217, // 177: commodore.InternalService.GetMediaPlacementPolicy:input_type -> media_placement.GetPolicyRequest
+	218, // 178: commodore.InternalService.GetMediaPlacementOptions:input_type -> media_placement.GetOptionsRequest
+	219, // 179: commodore.InternalService.PreviewMediaPlacement:input_type -> media_placement.PreviewRequest
+	220, // 180: commodore.InternalService.ReviewMediaPlacementChange:input_type -> media_placement.ReviewChangeRequest
+	221, // 181: commodore.InternalService.ApplyMediaPlacementChange:input_type -> media_placement.ApplyChangeRequest
+	222, // 182: commodore.InternalService.GetMediaPlacementChange:input_type -> media_placement.GetChangeRequest
+	223, // 183: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
+	176, // 184: commodore.InternalService.RecordPullSourceEvent:input_type -> commodore.RecordPullSourceEventRequest
+	177, // 185: commodore.InternalService.ListPullSourceEvents:input_type -> commodore.ListPullSourceEventsRequest
+	6,   // 186: commodore.InternalService.RequestMediaAuthorityRefresh:input_type -> commodore.RequestMediaAuthorityRefreshRequest
+	8,   // 187: commodore.InternalService.RequestMediaAuthorityReplay:input_type -> commodore.RequestMediaAuthorityReplayRequest
+	11,  // 188: commodore.InternalService.FetchMediaAuthority:input_type -> commodore.FetchMediaAuthorityRequest
+	14,  // 189: commodore.InternalService.ReportMediaAuthorityUse:input_type -> commodore.ReportMediaAuthorityUseRequest
+	90,  // 190: commodore.UserService.Login:input_type -> commodore.LoginRequest
+	92,  // 191: commodore.UserService.Register:input_type -> commodore.RegisterRequest
+	96,  // 192: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
+	98,  // 193: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
+	99,  // 194: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
+	101, // 195: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
+	103, // 196: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
+	105, // 197: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
+	95,  // 198: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
+	107, // 199: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
+	108, // 200: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
+	110, // 201: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
+	112, // 202: commodore.UserService.IssueWalletChallenge:input_type -> commodore.IssueWalletChallengeRequest
+	114, // 203: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
+	115, // 204: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
+	116, // 205: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
+	118, // 206: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
+	121, // 207: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
+	190, // 208: commodore.UserService.CompleteAuthorization:input_type -> commodore.CompleteAuthorizationRequest
+	192, // 209: commodore.UserService.ExchangeAuthorizationCode:input_type -> commodore.ExchangeAuthorizationCodeRequest
+	193, // 210: commodore.UserService.StartDeviceAuthorization:input_type -> commodore.StartDeviceAuthorizationRequest
+	195, // 211: commodore.UserService.PollDeviceAuthorization:input_type -> commodore.PollDeviceAuthorizationRequest
+	196, // 212: commodore.UserService.LookupDeviceAuthorization:input_type -> commodore.LookupDeviceAuthorizationRequest
+	198, // 213: commodore.UserService.ApproveDeviceAuthorization:input_type -> commodore.ApproveDeviceAuthorizationRequest
+	124, // 214: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
+	128, // 215: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
+	129, // 216: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
+	136, // 217: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
+	138, // 218: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
+	139, // 219: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
+	165, // 220: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
+	141, // 221: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
+	144, // 222: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
+	146, // 223: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
+	148, // 224: commodore.PushTargetService.CreatePushTarget:input_type -> commodore.CreatePushTargetRequest
+	149, // 225: commodore.PushTargetService.ListPushTargets:input_type -> commodore.ListPushTargetsRequest
+	151, // 226: commodore.PushTargetService.UpdatePushTarget:input_type -> commodore.UpdatePushTargetRequest
+	152, // 227: commodore.PushTargetService.DeletePushTarget:input_type -> commodore.DeletePushTargetRequest
+	154, // 228: commodore.PushTargetService.GetStreamPushTargets:input_type -> commodore.GetStreamPushTargetsRequest
+	157, // 229: commodore.PushTargetService.UpdatePushTargetStatus:input_type -> commodore.UpdatePushTargetStatusRequest
+	158, // 230: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
+	160, // 231: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
+	163, // 232: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
+	224, // 233: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
+	225, // 234: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
+	226, // 235: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
+	227, // 236: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
+	228, // 237: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	229, // 238: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	230, // 239: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	231, // 240: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	232, // 241: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	233, // 242: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	234, // 243: commodore.VodService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
+	235, // 244: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	236, // 245: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
+	237, // 246: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
+	168, // 247: commodore.PlaybackAccessControlService.CreateSigningKey:input_type -> commodore.CreateSigningKeyRequest
+	170, // 248: commodore.PlaybackAccessControlService.GetSigningKey:input_type -> commodore.GetSigningKeyRequest
+	171, // 249: commodore.PlaybackAccessControlService.ListSigningKeys:input_type -> commodore.ListSigningKeysRequest
+	173, // 250: commodore.PlaybackAccessControlService.RevokeSigningKey:input_type -> commodore.RevokeSigningKeyRequest
+	174, // 251: commodore.PlaybackAccessControlService.SetPlaybackPolicy:input_type -> commodore.SetPlaybackPolicyRequest
+	16,  // 252: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	16,  // 253: commodore.InternalService.CheckStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	18,  // 254: commodore.InternalService.ResolveStreamContext:output_type -> commodore.ResolveStreamContextResponse
+	21,  // 255: commodore.InternalService.ListManagedStreams:output_type -> commodore.ListManagedStreamsResponse
+	24,  // 256: commodore.InternalService.ListStreamMonitoring:output_type -> commodore.ListStreamMonitoringResponse
+	26,  // 257: commodore.InternalService.RecordStreamActiveCluster:output_type -> commodore.RecordStreamActiveClusterResponse
+	28,  // 258: commodore.InternalService.RegisterStreamThumbnailServingCell:output_type -> commodore.RegisterStreamThumbnailServingCellResponse
+	30,  // 259: commodore.InternalService.ClearStreamActiveCluster:output_type -> commodore.ClearStreamActiveClusterResponse
+	33,  // 260: commodore.InternalService.SyncActiveIngestPlacement:output_type -> commodore.SyncActiveIngestPlacementResponse
+	35,  // 261: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
+	37,  // 262: commodore.InternalService.ResolvePullSourceByInternalName:output_type -> commodore.ResolvePullSourceByInternalNameResponse
+	43,  // 263: commodore.InternalService.ResolvePlaybackPolicy:output_type -> commodore.ResolvePlaybackPolicyResponse
+	238, // 264: commodore.InternalService.RecordSigningKeyUse:output_type -> google.protobuf.Empty
+	45,  // 265: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
+	47,  // 266: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
+	49,  // 267: commodore.InternalService.MintMistAdminSession:output_type -> commodore.MintMistAdminSessionResponse
+	51,  // 268: commodore.InternalService.ValidateMistAdminSession:output_type -> commodore.ValidateMistAdminSessionResponse
+	239, // 269: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
+	240, // 270: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
+	241, // 271: commodore.InternalService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
+	53,  // 272: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
+	55,  // 273: commodore.InternalService.UpdateDVRRetention:output_type -> commodore.UpdateDVRRetentionResponse
+	58,  // 274: commodore.InternalService.UpdateArtifactCatalogSnapshot:output_type -> commodore.UpdateArtifactCatalogSnapshotResponse
+	60,  // 275: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
+	62,  // 276: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
+	79,  // 277: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
+	81,  // 278: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
+	64,  // 279: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
+	66,  // 280: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
+	68,  // 281: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
+	70,  // 282: commodore.InternalService.MintChapterPlaybackID:output_type -> commodore.MintChapterPlaybackIDResponse
+	72,  // 283: commodore.InternalService.ResolveChapterPlaybackID:output_type -> commodore.ResolveChapterPlaybackIDResponse
+	74,  // 284: commodore.InternalService.GetTenantProcessesJSON:output_type -> commodore.GetTenantProcessesJSONResponse
+	77,  // 285: commodore.InternalService.ListStorageArtifacts:output_type -> commodore.ListStorageArtifactsResponse
+	83,  // 286: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
+	242, // 287: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
+	243, // 288: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
+	85,  // 289: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
+	87,  // 290: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
+	89,  // 291: commodore.InternalService.CreateUserInTenant:output_type -> commodore.CreateUserInTenantResponse
+	182, // 292: commodore.InternalService.GetMediaRetentionPolicy:output_type -> commodore.GetMediaRetentionPolicyResponse
+	184, // 293: commodore.InternalService.SetMediaRetentionPolicy:output_type -> commodore.SetMediaRetentionPolicyResponse
+	187, // 294: commodore.InternalService.UpdateAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
+	187, // 295: commodore.InternalService.ResetAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
+	189, // 296: commodore.InternalService.SetStreamRetentionOverrides:output_type -> commodore.SetStreamRetentionOverridesResponse
+	244, // 297: commodore.InternalService.GetMediaPlacementPolicy:output_type -> media_placement.PolicyState
+	245, // 298: commodore.InternalService.GetMediaPlacementOptions:output_type -> media_placement.Options
+	246, // 299: commodore.InternalService.PreviewMediaPlacement:output_type -> media_placement.Preview
+	247, // 300: commodore.InternalService.ReviewMediaPlacementChange:output_type -> media_placement.Review
+	248, // 301: commodore.InternalService.ApplyMediaPlacementChange:output_type -> media_placement.Change
+	248, // 302: commodore.InternalService.GetMediaPlacementChange:output_type -> media_placement.Change
+	249, // 303: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
+	238, // 304: commodore.InternalService.RecordPullSourceEvent:output_type -> google.protobuf.Empty
+	179, // 305: commodore.InternalService.ListPullSourceEvents:output_type -> commodore.ListPullSourceEventsResponse
+	7,   // 306: commodore.InternalService.RequestMediaAuthorityRefresh:output_type -> commodore.RequestMediaAuthorityRefreshResponse
+	10,  // 307: commodore.InternalService.RequestMediaAuthorityReplay:output_type -> commodore.RequestMediaAuthorityReplayResponse
+	12,  // 308: commodore.InternalService.FetchMediaAuthority:output_type -> commodore.FetchMediaAuthorityResponse
+	238, // 309: commodore.InternalService.ReportMediaAuthorityUse:output_type -> google.protobuf.Empty
+	93,  // 310: commodore.UserService.Login:output_type -> commodore.AuthResponse
+	94,  // 311: commodore.UserService.Register:output_type -> commodore.RegisterResponse
+	97,  // 312: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
+	93,  // 313: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
+	100, // 314: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
+	102, // 315: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
+	104, // 316: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
+	106, // 317: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
+	123, // 318: commodore.UserService.GetMe:output_type -> commodore.User
+	123, // 319: commodore.UserService.UpdateMe:output_type -> commodore.User
+	109, // 320: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
+	111, // 321: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
+	113, // 322: commodore.UserService.IssueWalletChallenge:output_type -> commodore.IssueWalletChallengeResponse
+	93,  // 323: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
+	120, // 324: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
+	117, // 325: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
+	119, // 326: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
+	122, // 327: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
+	191, // 328: commodore.UserService.CompleteAuthorization:output_type -> commodore.CompleteAuthorizationResponse
+	93,  // 329: commodore.UserService.ExchangeAuthorizationCode:output_type -> commodore.AuthResponse
+	194, // 330: commodore.UserService.StartDeviceAuthorization:output_type -> commodore.StartDeviceAuthorizationResponse
+	93,  // 331: commodore.UserService.PollDeviceAuthorization:output_type -> commodore.AuthResponse
+	197, // 332: commodore.UserService.LookupDeviceAuthorization:output_type -> commodore.LookupDeviceAuthorizationResponse
+	199, // 333: commodore.UserService.ApproveDeviceAuthorization:output_type -> commodore.ApproveDeviceAuthorizationResponse
+	127, // 334: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
+	131, // 335: commodore.StreamService.GetStream:output_type -> commodore.Stream
+	130, // 336: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
+	137, // 337: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
+	131, // 338: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
+	140, // 339: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
+	166, // 340: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
+	143, // 341: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
+	145, // 342: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
+	238, // 343: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
+	147, // 344: commodore.PushTargetService.CreatePushTarget:output_type -> commodore.PushTarget
+	150, // 345: commodore.PushTargetService.ListPushTargets:output_type -> commodore.ListPushTargetsResponse
+	147, // 346: commodore.PushTargetService.UpdatePushTarget:output_type -> commodore.PushTarget
+	153, // 347: commodore.PushTargetService.DeletePushTarget:output_type -> commodore.DeletePushTargetResponse
+	155, // 348: commodore.PushTargetService.GetStreamPushTargets:output_type -> commodore.GetStreamPushTargetsResponse
+	147, // 349: commodore.PushTargetService.UpdatePushTargetStatus:output_type -> commodore.PushTarget
+	159, // 350: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
+	162, // 351: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
+	164, // 352: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
+	250, // 353: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
+	251, // 354: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
+	252, // 355: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
+	253, // 356: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
+	254, // 357: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	255, // 358: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	256, // 359: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	257, // 360: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	258, // 361: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	259, // 362: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	260, // 363: commodore.VodService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
+	261, // 364: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	262, // 365: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
+	263, // 366: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
+	169, // 367: commodore.PlaybackAccessControlService.CreateSigningKey:output_type -> commodore.CreateSigningKeyResponse
+	167, // 368: commodore.PlaybackAccessControlService.GetSigningKey:output_type -> commodore.SigningKey
+	172, // 369: commodore.PlaybackAccessControlService.ListSigningKeys:output_type -> commodore.ListSigningKeysResponse
+	167, // 370: commodore.PlaybackAccessControlService.RevokeSigningKey:output_type -> commodore.SigningKey
+	175, // 371: commodore.PlaybackAccessControlService.SetPlaybackPolicy:output_type -> commodore.SetPlaybackPolicyResponse
+	252, // [252:372] is the sub-list for method output_type
+	132, // [132:252] is the sub-list for method input_type
+	132, // [132:132] is the sub-list for extension type_name
+	132, // [132:132] is the sub-list for extension extendee
+	0,   // [0:132] is the sub-list for field type_name
 }
 
 func init() { file_commodore_proto_init() }
@@ -16168,51 +16713,57 @@ func file_commodore_proto_init() {
 	if File_commodore_proto != nil {
 		return
 	}
-	file_commodore_proto_msgTypes[5].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[6].OneofWrappers = []any{
+	file_commodore_proto_msgTypes[5].OneofWrappers = []any{
+		(*FetchMediaAuthorityRequest_AuthorityId)(nil),
+		(*FetchMediaAuthorityRequest_PlaybackId)(nil),
+		(*FetchMediaAuthorityRequest_InternalName)(nil),
+		(*FetchMediaAuthorityRequest_TenantId)(nil),
+	}
+	file_commodore_proto_msgTypes[10].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[11].OneofWrappers = []any{
 		(*ResolveStreamContextRequest_StreamId)(nil),
 		(*ResolveStreamContextRequest_PlaybackId)(nil),
 		(*ResolveStreamContextRequest_InternalName)(nil),
 		(*ResolveStreamContextRequest_StreamKey)(nil),
 	}
-	file_commodore_proto_msgTypes[7].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[24].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[34].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[41].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[43].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[45].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[12].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[29].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[39].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[46].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[47].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[58].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[64].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[65].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[96].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[109].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[112].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[116].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[120].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[122].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[48].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[50].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[51].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[52].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[63].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[69].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[70].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[101].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[114].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[117].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[121].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[125].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[127].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[131].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[132].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[136].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[140].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[144].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[146].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[147].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[148].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[150].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[171].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[174].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[141].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[145].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[149].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[151].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[152].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[153].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[155].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[176].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[177].OneofWrappers = []any{}
-	file_commodore_proto_msgTypes[178].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[179].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[181].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[182].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[183].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_commodore_proto_rawDesc), len(file_commodore_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   191,
+			NumMessages:   196,
 			NumExtensions: 0,
 			NumServices:   12,
 		},

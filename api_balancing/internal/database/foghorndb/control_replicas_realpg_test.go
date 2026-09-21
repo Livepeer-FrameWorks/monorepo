@@ -50,6 +50,25 @@ func verifyControlReplicaCapabilityLedger(t *testing.T, db *sql.DB) {
 	if row := read(); row.LiveReplicas != 2 || !row.AllEnforced {
 		t.Fatalf("fully enforcing ledger withheld attestation: %+v", row)
 	}
+
+	// The authority feature level is the minimum over live replicas. A replica
+	// on an older release never writes the column, so it holds the cell at 0:
+	// Commodore must not send a 30-day authority that replica would reject.
+	if row := read(); row.MinAuthorityFeatureLevel != 0 {
+		t.Fatalf("replicas that never reported a feature level attested %d", row.MinAuthorityFeatureLevel)
+	}
+	if err := q.UpsertControlReplicaHeartbeat(ctx, UpsertControlReplicaHeartbeatParams{ReplicaID: "replica-a", ReleaseVersion: "v0.3.11", PlacementSchemaVersion: 2, PlacementEnforced: true, AuthorityFeatureLevel: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if row := read(); row.MinAuthorityFeatureLevel != 0 {
+		t.Fatalf("one upgraded replica of two attested level %d", row.MinAuthorityFeatureLevel)
+	}
+	if err := q.UpsertControlReplicaHeartbeat(ctx, UpsertControlReplicaHeartbeatParams{ReplicaID: "replica-b", ReleaseVersion: "v0.3.11", PlacementSchemaVersion: 2, PlacementEnforced: true, AuthorityFeatureLevel: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if row := read(); row.MinAuthorityFeatureLevel != 1 {
+		t.Fatalf("fully upgraded cell attested level %d, want 1", row.MinAuthorityFeatureLevel)
+	}
 	if _, err := db.ExecContext(ctx, "UPDATE foghorn.control_replicas SET last_seen_at = NOW() - INTERVAL '2 hours', placement_enforced = FALSE WHERE replica_id = 'replica-b'"); err != nil {
 		t.Fatal(err)
 	}

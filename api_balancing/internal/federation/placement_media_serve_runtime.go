@@ -212,7 +212,7 @@ func (runtime *MediaServePreparationRuntime) classify(ctx context.Context, req *
 	if err := placement.ValidatePreparationDeadline(req, runtime.now()); err != nil || req.GetQuery().GetVerb() != placementpb.Verb_VERB_SERVE {
 		return balancer.PlacementAuthority{}, localauthority.PlacementPair{}, false, status.Error(codes.InvalidArgument, "media preparation requires a valid serving request")
 	}
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	q := req.Query
 	pair, err := runtime.Authority.Placement(readCtx, q.TenantId, q.ObjectId, q.InternalName)

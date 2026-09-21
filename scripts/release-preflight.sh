@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]] || [[ ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Usage: $0 vX.Y.Z" >&2
+if [[ $# -ne 1 ]] || [[ ! $1 =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc(0|[1-9][0-9]*))?$ ]]; then
+  echo "Usage: $0 vX.Y.Z[-rcN] (lowercase rc)" >&2
   exit 2
 fi
 
 release_version=$1
+release_base=${release_version%%-rc*}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 catalog_path=cli/internal/releases/catalog.yaml
@@ -32,7 +33,7 @@ catalog_version=$(awk '
   in_releases && /^[[:space:]]*-[[:space:]]+version:[[:space:]]+/ { version = $3 }
   END { print version }
 ' "$catalog_path")
-if [[ "$catalog_version" != "$release_version" ]]; then
+if [[ "$catalog_version" != "$release_base" ]]; then
   echo "release-preflight: target $release_version does not match latest catalog release ${catalog_version:-<none>}" >&2
   exit 1
 fi

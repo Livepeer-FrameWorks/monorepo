@@ -81,7 +81,7 @@ func TestMediaPlacementSystemApply_RealPG(t *testing.T) {
 		t.Fatalf("stored source location: %+v", got)
 	}
 	var refreshes int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_inbox WHERE tenant_id=$1 AND reason=$2`, tenantID, "media_object:live_stream:"+streamID+":media_placement_changed").Scan(&refreshes); err != nil || refreshes != 1 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_obligations WHERE tenant_id=$1 AND last_reason=$2`, tenantID, "media_object:live_stream:"+streamID+":media_placement_changed").Scan(&refreshes); err != nil || refreshes != 1 {
 		t.Fatalf("authority refresh obligation = %d, err %v", refreshes, err)
 	}
 

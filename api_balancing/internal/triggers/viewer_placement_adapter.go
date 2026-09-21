@@ -50,7 +50,7 @@ func (adapter *ViewerPlacementAdapter) AdmitViewer(ctx context.Context, connecti
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return federation.PlacementAdmissionDecision{}, ctxErr
 	}
-	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	pair, err := adapter.Authority.PlacementForInternalName(readCtx, connection.TenantID, connection.InternalName)
 	if err == nil {
 		err = readCtx.Err()

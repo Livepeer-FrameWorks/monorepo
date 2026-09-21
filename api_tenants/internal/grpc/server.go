@@ -5158,7 +5158,7 @@ func validateRolloutPlanJSON(raw string) error {
 func normalizeReleaseTargetChannel(channel string) (string, error) {
 	channel = strings.ToLower(strings.TrimSpace(channel))
 	switch channel {
-	case "stable", "rc":
+	case "stable", "candidate", "rc":
 		return channel, nil
 	default:
 		return "", status.Errorf(codes.InvalidArgument, "unsupported release channel %q", channel)
@@ -10616,6 +10616,11 @@ type ServerMetrics struct {
 	// ControlCellReassignments counts tenant-private clusters by reassignment
 	// state (switching, failed).
 	ControlCellReassignments *prometheus.GaugeVec
+	// Media-authority refresh outbox: unfinished obligations, the age of the
+	// oldest one, and delivery failures by stage.
+	MediaAuthorityRefreshPending  *prometheus.GaugeVec
+	MediaAuthorityRefreshOldest   *prometheus.GaugeVec
+	MediaAuthorityRefreshFailures *prometheus.CounterVec
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster

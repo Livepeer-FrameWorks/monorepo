@@ -189,9 +189,8 @@ func commitChange(ctx context.Context, q *commodoredb.Queries, input ApplyInput,
 	if input.Scope.Kind == "stream" {
 		reason = "media_object:live_stream:" + input.Scope.ID + ":media_placement_changed"
 	}
-	if _, err = q.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-		SourceService: "commodore", SourceEventID: fmt.Sprintf("placement:%s:%s:%d", input.Scope.Kind, input.Scope.ID, receipt.Revision), TenantID: input.Scope.TenantID, Reason: reason,
-	}); err != nil {
+	if err = q.EnqueueMediaAuthorityEvent(ctx, commodoredb.MediaAuthorityTargetForReason(input.Scope.TenantID, reason), input.Scope.TenantID, reason,
+		"commodore", fmt.Sprintf("placement:%s:%s:%d", input.Scope.Kind, input.Scope.ID, receipt.Revision)); err != nil {
 		return commodoredb.CommodoreMediaPlacementChange{}, err
 	}
 	return receipt, nil

@@ -401,8 +401,16 @@ type MediaCellPlacementCapability struct {
 	LiveReplicas            uint32   `protobuf:"varint,3,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
 	// Every live replica of the cell reads schema-3 authorities (node selectors).
 	NodePlacementReady bool `protobuf:"varint,4,opt,name=node_placement_ready,json=nodePlacementReady,proto3" json:"node_placement_ready,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Every live replica accepts media-object authorities valid for up to 30
+	// days. Commodore issues the longer validity only when every target cell
+	// attests it, because an older replica rejects the envelope as malformed.
+	LongValidityReady bool `protobuf:"varint,5,opt,name=long_validity_ready,json=longValidityReady,proto3" json:"long_validity_ready,omitempty"`
+	// Every live replica reports which authorities it decides on. Commodore stops
+	// renewing an unused object only when every cell it is delivered to reports
+	// use; a cell that does not would let an object in use go cold.
+	UseReportsReady bool `protobuf:"varint,6,opt,name=use_reports_ready,json=useReportsReady,proto3" json:"use_reports_ready,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *MediaCellPlacementCapability) Reset() {
@@ -459,6 +467,20 @@ func (x *MediaCellPlacementCapability) GetLiveReplicas() uint32 {
 func (x *MediaCellPlacementCapability) GetNodePlacementReady() bool {
 	if x != nil {
 		return x.NodePlacementReady
+	}
+	return false
+}
+
+func (x *MediaCellPlacementCapability) GetLongValidityReady() bool {
+	if x != nil {
+		return x.LongValidityReady
+	}
+	return false
+}
+
+func (x *MediaCellPlacementCapability) GetUseReportsReady() bool {
+	if x != nil {
+		return x.UseReportsReady
 	}
 	return false
 }
@@ -806,12 +828,14 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x11authority_version\x18\x04 \x01(\x04R\x10authorityVersion\x12\x1f\n" +
 	"\vrefresh_due\x18\x05 \x01(\bR\n" +
 	"refreshDue\x12X\n" +
-	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xde\x01\n" +
+	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xba\x02\n" +
 	"\x1cMediaCellPlacementCapability\x12:\n" +
 	"\x19supported_schema_versions\x18\x01 \x03(\rR\x17supportedSchemaVersions\x12+\n" +
 	"\x11enforcement_ready\x18\x02 \x01(\bR\x10enforcementReady\x12#\n" +
 	"\rlive_replicas\x18\x03 \x01(\rR\fliveReplicas\x120\n" +
-	"\x14node_placement_ready\x18\x04 \x01(\bR\x12nodePlacementReady\"\xc6\x01\n" +
+	"\x14node_placement_ready\x18\x04 \x01(\bR\x12nodePlacementReady\x12.\n" +
+	"\x13long_validity_ready\x18\x05 \x01(\bR\x11longValidityReady\x12*\n" +
+	"\x11use_reports_ready\x18\x06 \x01(\bR\x0fuseReportsReady\"\xc6\x01\n" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +

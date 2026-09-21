@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -45,7 +46,7 @@ func (reader *ArtifactPlacementPaths) describe(ctx context.Context, authority ba
 		authority.TenantAuthorityVersion <= 0 || authority.ObjectAuthorityVersion <= 0 {
 		return control.MediaSourceDescriptor{}, errors.New("artifact source authority is not stored media")
 	}
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	pair, err := reader.Authority.Placement(readCtx, authority.TenantID, authority.ObjectID, authority.InternalName)
 	if err != nil {

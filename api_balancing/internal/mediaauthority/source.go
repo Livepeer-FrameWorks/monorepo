@@ -30,7 +30,7 @@ func (s *Store) PullSource(ctx context.Context, internalName string) (SourceSnap
 	if object.Authority == nil || object.Authority.GetLiveStream() == nil || object.Authority.GetLiveStream().GetIngestMode() != "pull" {
 		return result, true, errors.New("local source authority is not a pull stream")
 	}
-	tenant, err := s.TenantSource(ctx, object.Authority.GetTenantId())
+	tenant, err := s.TenantSourceForObject(ctx, object)
 	if err != nil {
 		return result, true, fmt.Errorf("read local source tenant: %w", err)
 	}
@@ -64,7 +64,7 @@ func (s *Store) ArtifactSource(ctx context.Context, internalName string) (Source
 	if object.Authority == nil || object.Authority.GetArtifact() == nil {
 		return result, true, errors.New("local source authority is not an artifact")
 	}
-	tenant, err := s.TenantSource(ctx, object.Authority.GetTenantId())
+	tenant, err := s.TenantSourceForObject(ctx, object)
 	if err != nil {
 		return result, true, fmt.Errorf("read local artifact source tenant: %w", err)
 	}

@@ -43,6 +43,7 @@ type Querier interface {
 	BackfillOriginCluster(ctx context.Context, arg BackfillOriginClusterParams) (int64, error)
 	BackoffCatalogProjection(ctx context.Context, arg BackoffCatalogProjectionParams) error
 	BackoffThumbnailRecovery(ctx context.Context, arg BackoffThumbnailRecoveryParams) error
+	BeginMediaAuthorityConfirmation(ctx context.Context) (time.Time, error)
 	BindAdmissionPushTargetMistID(ctx context.Context, arg BindAdmissionPushTargetMistIDParams) (int64, error)
 	BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, arg BindAdmissionPushTargetMistIDIfAbsentParams) (int64, error)
 	BindDVRDispatchOwner(ctx context.Context, arg BindDVRDispatchOwnerParams) (int64, error)
@@ -87,6 +88,9 @@ type Querier interface {
 	CompleteIncrementalDtshSync(ctx context.Context, arg CompleteIncrementalDtshSyncParams) (int64, error)
 	CompleteMainArtifactSync(ctx context.Context, arg CompleteMainArtifactSyncParams) (int64, error)
 	CompleteProcessingJob(ctx context.Context, arg CompleteProcessingJobParams) error
+	// Only a fetch begun after a trust barrier can confirm the held version.
+	ConfirmMediaAuthority(ctx context.Context, arg ConfirmMediaAuthorityParams) error
+	ConfirmRecoveredMediaAuthority(ctx context.Context, arg ConfirmRecoveredMediaAuthorityParams) (int64, error)
 	ConfirmSourceProjection(ctx context.Context, arg ConfirmSourceProjectionParams) (int64, error)
 	ConsumeNodeAdmissionProofNonce(ctx context.Context, arg ConsumeNodeAdmissionProofNonceParams) (int64, error)
 	ConsumeTerminalArtifactCreationCommand(ctx context.Context, arg ConsumeTerminalArtifactCreationCommandParams) error
@@ -107,6 +111,11 @@ type Querier interface {
 	DeleteArtifactNode(ctx context.Context, arg DeleteArtifactNodeParams) error
 	DeleteArtifactNodeIfNotNewer(ctx context.Context, arg DeleteArtifactNodeIfNotNewerParams) (string, error)
 	DeleteClipCatalog(ctx context.Context, arg DeleteClipCatalogParams) (int64, error)
+	// Fenced on the version that was found collectable and on its still being past
+	// its validity: an apply that advanced the authority in between keeps it.
+	DeleteCollectedMediaAuthority(ctx context.Context, arg DeleteCollectedMediaAuthorityParams) (int64, error)
+	DeleteCollectedMediaObjectAuthorityProjection(ctx context.Context, arg DeleteCollectedMediaObjectAuthorityProjectionParams) error
+	DeleteCollectedTenantAuthorityProjection(ctx context.Context, arg DeleteCollectedTenantAuthorityProjectionParams) error
 	DeleteConflictingNodeAdmissions(ctx context.Context, arg DeleteConflictingNodeAdmissionsParams) (int64, error)
 	DeleteConsumedCreationCommands(ctx context.Context, arg DeleteConsumedCreationCommandsParams) (int64, error)
 	DeleteDVRChapter(ctx context.Context, chapterID string) error
@@ -259,6 +268,8 @@ type Querier interface {
 	GetLocalTenantAuthority(ctx context.Context, tenantID string) (GetLocalTenantAuthorityRow, error)
 	GetLocalTenantSourceAuthority(ctx context.Context, tenantID string) (GetLocalTenantSourceAuthorityRow, error)
 	GetMediaAuthorityForUpdate(ctx context.Context, arg GetMediaAuthorityForUpdateParams) (GetMediaAuthorityForUpdateRow, error)
+	// When the fence was raised; the zero instant when there is none.
+	GetMediaAuthorityRestoreFence(ctx context.Context) (time.Time, error)
 	GetMediaObjectAuthorityByInternalName(ctx context.Context, internalName string) (FoghornMediaObjectAuthorityProjection, error)
 	GetMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (FoghornMediaObjectAuthorityProjection, error)
 	GetNextDVRSegmentSequence(ctx context.Context, artifactHash string) (int64, error)
@@ -292,6 +303,7 @@ type Querier interface {
 	GetVodUploadStatusRow(ctx context.Context, arg GetVodUploadStatusRowParams) (GetVodUploadStatusRowRow, error)
 	HasActiveIngestSession(ctx context.Context, arg HasActiveIngestSessionParams) (bool, error)
 	HasActiveStreamIngestSession(ctx context.Context, arg HasActiveStreamIngestSessionParams) (bool, error)
+	HasMediaAuthorityConfirmationRequired(ctx context.Context, asOf time.Time) (bool, error)
 	HealLostDVRSegment(ctx context.Context, arg HealLostDVRSegmentParams) error
 	IngestCloseTombstoneExists(ctx context.Context, arg IngestCloseTombstoneExistsParams) (bool, error)
 	IngestGenerationEnded(ctx context.Context, arg IngestGenerationEndedParams) (bool, error)
@@ -342,6 +354,11 @@ type Querier interface {
 	ListAssetThumbnailObjectKeys(ctx context.Context, arg ListAssetThumbnailObjectKeysParams) ([]ListAssetThumbnailObjectKeysRow, error)
 	ListCapacityPendingPushTargetEffectsForRearm(ctx context.Context) ([]ListCapacityPendingPushTargetEffectsForRearmRow, error)
 	ListColdStorageUsage(ctx context.Context) ([]ListColdStorageUsageRow, error)
+	// Authorities this cell can forget: past their validity, and issued so long ago
+	// that no older signed version of them can still verify, so forgetting the
+	// version fence cannot let one back in. A tombstone is never forgotten: it is
+	// what refuses the object's return.
+	ListCollectableMediaAuthorities(ctx context.Context, arg ListCollectableMediaAuthoritiesParams) ([]ListCollectableMediaAuthoritiesRow, error)
 	ListCooledDownRuntimePushTargetEffectsForRearm(ctx context.Context) ([]ListCooledDownRuntimePushTargetEffectsForRearmRow, error)
 	ListDVRChaptersForArtifact(ctx context.Context, arg ListDVRChaptersForArtifactParams) ([]ListDVRChaptersForArtifactRow, error)
 	ListDVRChaptersNeedingFinalization(ctx context.Context, arg ListDVRChaptersNeedingFinalizationParams) ([]ListDVRChaptersNeedingFinalizationRow, error)
@@ -361,6 +378,10 @@ type Querier interface {
 	ListFailedArtifactsForFreezeRetry(ctx context.Context, limit int32) ([]ListFailedArtifactsForFreezeRetryRow, error)
 	ListFederatedTenantArtifacts(ctx context.Context, tenantID string) ([]ListFederatedTenantArtifactsRow, error)
 	ListFinalizedChaptersMissingDTSH(ctx context.Context) ([]ListFinalizedChaptersMissingDTSHRow, error)
+	ListHeldMediaAuthorityPage(ctx context.Context, arg ListHeldMediaAuthorityPageParams) ([]ListHeldMediaAuthorityPageRow, error)
+	// What this cell holds as valid at as_of, to tell the control plane whether it
+	// has anything to repeat.
+	ListHeldMediaAuthorityVersions(ctx context.Context, asOf time.Time) ([]ListHeldMediaAuthorityVersionsRow, error)
 	ListLegacyAdmissionPushTargetsForEncryption(ctx context.Context, rowLimit int32) ([]ListLegacyAdmissionPushTargetsForEncryptionRow, error)
 	ListLocalManagedStreamAuthorities(ctx context.Context) ([]ListLocalManagedStreamAuthoritiesRow, error)
 	ListNeverProjectedIngestSessions(ctx context.Context, olderThanMs int64) ([]ListNeverProjectedIngestSessionsRow, error)
@@ -432,6 +453,9 @@ type Querier interface {
 	LockThumbnailParentTerminal(ctx context.Context, artifactHash string) (bool, error)
 	LockUnemittedArtifactNode(ctx context.Context, arg LockUnemittedArtifactNodeParams) (LockUnemittedArtifactNodeRow, error)
 	LookupDVRSegmentsByName(ctx context.Context, arg LookupDVRSegmentsByNameParams) ([]FoghornDvrSegment, error)
+	// Fenced on the instant the caller confirmed against, so a fence raised again
+	// after that confirmation stays up.
+	LowerMediaAuthorityRestoreFence(ctx context.Context, confirmedAt time.Time) (int64, error)
 	MarkAbortingVODDeleted(ctx context.Context, arg MarkAbortingVODDeletedParams) (int64, error)
 	MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) (int64, error)
 	MarkAdmissionDrainDone(ctx context.Context, arg MarkAdmissionDrainDoneParams) error
@@ -472,6 +496,7 @@ type Querier interface {
 	MarkThumbnailProjected(ctx context.Context, arg MarkThumbnailProjectedParams) (int64, error)
 	MarkThumbnailPublished(ctx context.Context, attemptID string) (int64, error)
 	MarkThumbnailSuperseded(ctx context.Context, attemptID string) error
+	MediaAuthorityConfirmationRequired(ctx context.Context, arg MediaAuthorityConfirmationRequiredParams) (bool, error)
 	// The database counter includes tenant_id because that is the durable ownership domain.
 	// Commodore guarantees stream_internal_name is globally unique, which is why the corresponding
 	// Redis source projection can remain keyed by internal name alone.
@@ -495,6 +520,8 @@ type Querier interface {
 	PurgeTerminalOfflineEffects(ctx context.Context, olderThanMs int64) (int64, error)
 	QuarantineCatalogProjection(ctx context.Context, arg QuarantineCatalogProjectionParams) error
 	QuarantineInvalidConfigSeedApplyAck(ctx context.Context, arg QuarantineInvalidConfigSeedApplyAckParams) (int64, error)
+	// A new restore invalidates confirmations begun before this raise.
+	RaiseMediaAuthorityRestoreFence(ctx context.Context) error
 	ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmissionLegsLockedParams) (ReadAdmissionLegsLockedRow, error)
 	ReadArtifactCreationCommandIdentity(ctx context.Context, arg ReadArtifactCreationCommandIdentityParams) (ReadArtifactCreationCommandIdentityRow, error)
 	ReadControlCellPlacementCapability(ctx context.Context, livenessSeconds int32) (ReadControlCellPlacementCapabilityRow, error)
@@ -617,6 +644,9 @@ type Querier interface {
 	UpsertTenantAuthorityProjection(ctx context.Context, arg UpsertTenantAuthorityProjectionParams) error
 	VODNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	VerifyThumbnailObject(ctx context.Context, arg VerifyThumbnailObjectParams) (int64, error)
+	// A revived tenant withholds objects not confirmed by a fetch begun after its
+	// barrier. A fetched parent and its objects share one confirmation instant.
+	WithholdTenantObjectsAppliedBefore(ctx context.Context, arg WithholdTenantObjectsAppliedBeforeParams) error
 }
 
 var _ Querier = (*Queries)(nil)

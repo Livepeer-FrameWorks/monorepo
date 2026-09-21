@@ -195,6 +195,31 @@ check_name_status_stream() {
 
 latest_tag_commit=$(git rev-parse "$latest_tag^{commit}")
 
+# RCs keep the base release pending, but their applied SQL already has ledger
+# checksums. New files may be appended for the next RC; existing ones are frozen.
+if [ -n "$pending_version" ]; then
+  while IFS= read -r rc_tag; do
+    if [[ ! "$rc_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]] ||
+      [ "${rc_tag%%-rc*}" != "$pending_version" ]; then
+      continue
+    fi
+    rc_diff=(git diff --no-renames --name-only -z --diff-filter=MD)
+    if [ -n "$diff_base" ]; then
+      rc_diff+=("$rc_tag" HEAD)
+    elif [ "$worktree" = true ]; then
+      rc_diff+=("$rc_tag")
+    else
+      rc_diff+=(--cached "$rc_tag")
+    fi
+    while IFS= read -r -d '' file; do
+      if [[ "$file" =~ $migration_re ]]; then
+        violations+=("  $file  (changes migration bytes already shipped in $rc_tag; append a new migration instead)")
+      fi
+    done < <("${rc_diff[@]}" -- "${path_args[@]}")
+    break
+  done < <(git tag --merged HEAD --sort=-v:refname)
+fi
+
 if [ -n "$diff_base" ]; then
   if ! git cat-file -e "$diff_base^{commit}" 2>/dev/null; then
     echo "WARNING: release-state diff base is not available: $diff_base; shipped migrations are compared against $latest_tag" >&2

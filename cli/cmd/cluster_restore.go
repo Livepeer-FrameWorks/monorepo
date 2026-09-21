@@ -80,7 +80,7 @@ func runRestore(cmd *cobra.Command, manifest *inventory.Manifest, component, bac
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Starting restore...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 	defer cancel()
 
 	// Create SSH pool
@@ -105,8 +105,18 @@ func runRestore(cmd *cobra.Command, manifest *inventory.Manifest, component, bac
 
 // restorePostgres restores PostgreSQL from backup
 func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, backupPath string, skipValidation bool, pool *ssh.Pool) error {
-	if !manifest.Infrastructure.Postgres.Enabled {
+	if manifest.Infrastructure.Postgres == nil || !manifest.Infrastructure.Postgres.Enabled {
 		return fmt.Errorf("postgres not enabled in manifest")
+	}
+	if manifest.Infrastructure.Postgres.IsYugabyte() {
+		return fmt.Errorf("use cluster restore-fence prepare, the Yugabyte-native restore, then cluster restore-fence complete")
+	}
+	if manifest.Infrastructure.Postgres.Mode != "docker" {
+		return fmt.Errorf("native PostgreSQL restore requires cluster restore-fence prepare, the native database restore, then cluster restore-fence complete")
+	}
+	replicas, err := authorityRestoreReplicas(manifest)
+	if err != nil {
+		return err
 	}
 
 	host, found := manifest.GetHost(manifest.Infrastructure.Postgres.Host)
@@ -121,6 +131,9 @@ func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventor
 	if err != nil {
 		return err
 	}
+	if stopErr := operateAuthorityRestoreReplicas(ctx, replicas, pool, "stop"); stopErr != nil {
+		return stopErr
+	}
 
 	// Stop Postgres
 	stopCmd := "cd /opt/frameworks/postgres && docker compose stop"
@@ -133,10 +146,11 @@ func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventor
 
 	// Restore from backup
 	restoreCmd := fmt.Sprintf(`
+set -euo pipefail
 cd /opt/frameworks/postgres
 docker compose up -d
 sleep 5
-cat %s | docker compose exec -T postgres psql -U postgres
+docker compose exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 < %s
 `, ssh.ShellQuote(backupPath))
 
 	result, err := runner.Run(ctx, restoreCmd)
@@ -149,6 +163,19 @@ cat %s | docker compose exec -T postgres psql -U postgres
 	}
 
 	ux.Success(cmd.OutOrStdout(), "Data restored")
+
+	// A restored Foghorn database can hold media authority its cell had already
+	// replaced. The restore fence withholds it until the control plane confirms
+	// what the cell holds; failing to raise it fails the restore.
+	if result, errRun := runner.Run(ctx, raiseMediaAuthorityRestoreFenceCommand()); errRun != nil {
+		return fmt.Errorf("raise media authority restore fence: %w", errRun)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("raise media authority restore fence: %s", result.Stderr)
+	}
+	ux.Success(cmd.OutOrStdout(), "Media authority restore fence raised")
+	if err := operateAuthorityRestoreReplicas(ctx, replicas, pool, "start"); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Starting Postgres...\n")
 	// Already started above
@@ -324,4 +351,31 @@ func restoreConfig(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	ux.Success(cmd.OutOrStdout(), "Config restore complete")
 	fmt.Fprintln(cmd.OutOrStdout(), "ℹ  Restart services to apply configuration changes")
 	return nil
+}
+
+// mediaAuthorityRestoreFenceSQL raises the restore fence in a database that has
+// one, and does nothing in any other: a dump restores every service database,
+// and the Foghorn ones are named per cell.
+const mediaAuthorityRestoreFenceSQL = `DO $$
+BEGIN
+    IF to_regclass('foghorn.media_authority_restore_fence') IS NOT NULL THEN
+        INSERT INTO foghorn.media_authority_restore_fence (singleton, fenced_at)
+        VALUES (TRUE, NOW())
+        ON CONFLICT (singleton) DO UPDATE SET fenced_at = NOW();
+    END IF;
+END
+$$;`
+
+// raiseMediaAuthorityRestoreFenceCommand runs mediaAuthorityRestoreFenceSQL in
+// every database the restore brought back.
+func raiseMediaAuthorityRestoreFenceCommand() string {
+	return fmt.Sprintf(`
+set -e
+cd /opt/frameworks/postgres
+databases=$(docker compose exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 -At -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
+test -n "$databases"
+for db in $databases; do
+  docker compose exec -T postgres psql -U postgres -d "$db" -v ON_ERROR_STOP=1 -c %s
+done
+`, ssh.ShellQuote(mediaAuthorityRestoreFenceSQL))
 }

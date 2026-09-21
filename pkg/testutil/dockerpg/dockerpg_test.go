@@ -1,9 +1,26 @@
 package dockerpg
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
+
+func TestRunDockerPreservesDeadlineError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, err := runDocker(context.Background(), 50*time.Millisecond, "inspect", "fixture")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("docker timeout = %v, want context deadline evidence", err)
+	}
+}
 
 func TestWithEphemeralPostgresData(t *testing.T) {
 	tests := []struct {

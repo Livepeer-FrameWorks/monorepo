@@ -26,8 +26,16 @@ func (s *Store) SetRefreshRequester(request func(context.Context) error) {
 	s.refresh.mu.Unlock()
 }
 
-func (s *Store) observeFreshness(freshness Freshness) {
+// observeFreshness acts on a read that found an authority past refresh_after.
+// Renewal reaches a cell well before that, so the renewal of this one authority
+// is overdue, and this one authority is asked for. Asking the control plane to
+// replay everything the cell holds is kept only for a control plane that cannot
+// be asked for one authority.
+func (s *Store) observeFreshness(freshness Freshness, lookup AuthorityLookup) {
 	if s == nil || s.refresh == nil || freshness != FreshnessSoftExpired {
+		return
+	}
+	if s.refreshAsync(lookup) {
 		return
 	}
 	now := s.now().UTC()

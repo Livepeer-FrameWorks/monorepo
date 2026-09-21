@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
@@ -64,7 +65,7 @@ func (gate *PlacementPolicyGate) Admit(ctx context.Context, input PlacementAdmis
 	if err := ctx.Err(); err != nil {
 		return PlacementAdmissionDecision{}, status.FromContextError(err).Err()
 	}
-	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	pair, err := gate.Authority.Placement(readCtx, input.TenantID, input.ObjectID, input.InternalName)
 	readErr := readCtx.Err()
 	stopRead()

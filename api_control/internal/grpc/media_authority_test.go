@@ -1,10 +1,12 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc/codes"
@@ -334,15 +337,21 @@ func TestPersistMediaObjectAuthorityAllowsHistoryWithoutServingTarget(t *testing
 		}},
 	}
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT cell_id\s+FROM commodore\.media_authority_targets`).
+	// A live object's change goes to the cells that may still hold a valid copy,
+	// not to every cell that ever held it.
+	mock.ExpectExec("RetireMediaAuthorityTargets").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("LockMediaAuthorityTargetHorizons").WillReturnRows(sqlmock.NewRows([]string{"cell_id", "correction_until"}))
+	mock.ExpectQuery("ListMediaAuthorityHoldingCells").
 		WithArgs("media_object", "live_stream:stream-1").
 		WillReturnRows(sqlmock.NewRows([]string{"cell_id"}))
+	expectNoCurrentMediaAuthorityPublication(mock, "media_object", "live_stream:stream-1")
 	mock.ExpectQuery(`(?s)INSERT INTO commodore\.media_authority_counters.*RETURNING last_version`).
 		WithArgs("media_object", "live_stream:stream-1").
 		WillReturnRows(sqlmock.NewRows([]string{"last_version"}).AddRow(int64(1)))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_versions`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_current`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE commodore\.media_authority_deliveries`).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMediaAuthorityRenewalScheduled(mock, "object_deadline", "media_object:live_stream:stream-1", 1)
 	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, mediaAuthorityKeyID: "signer-1", mediaAuthorityPrivateKey: privateKey}
@@ -357,6 +366,38 @@ func TestPersistMediaObjectAuthorityAllowsHistoryWithoutServingTarget(t *testing
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// expectTenantPublicationFollowUps scripts what every tenant publication does
+// after its deliveries are queued: objects waiting for this tenant's authority
+// are re-armed, and the cells' features decide whether objects are still capped
+// by the tenant's validity.
+func expectTenantPublicationFollowUps(mock sqlmock.Sqlmock, tenantID string, cells ...string) {
+	mock.ExpectExec("RearmMediaAuthorityObligationsAwaitingTenant").WithArgs(tenantID).WillReturnResult(sqlmock.NewResult(0, 0))
+	if len(cells) == 0 {
+		return
+	}
+	features := sqlmock.NewRows([]string{"cell_id", "long_validity_ready", "use_reports_ready"})
+	for _, cell := range cells {
+		features.AddRow(cell, true, true)
+	}
+	mock.ExpectQuery("ListMediaCellAuthorityFeatures").WillReturnRows(features)
+}
+
+// expectNoCurrentMediaAuthorityPublication scripts the publication decision for
+// an authority that has never been published, which always publishes.
+func expectNoCurrentMediaAuthorityPublication(mock sqlmock.Sqlmock, authorityKind, authorityID string) {
+	mock.ExpectQuery(`(?s)SELECT versions\.authority_version, versions\.content_digest`).
+		WithArgs(authorityKind, authorityID).
+		WillReturnRows(sqlmock.NewRows([]string{"authority_version", "content_digest", "dependents_digest", "issued_at", "refresh_after", "valid_until"}))
+}
+
+// expectMediaAuthorityRenewalScheduled asserts that publication schedules the
+// renewal of exactly the version it published, in the lane for its kind.
+func expectMediaAuthorityRenewalScheduled(mock sqlmock.Sqlmock, lane, targetKey string, version int64) {
+	mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+		WithArgs(lane, targetKey, sqlmock.AnyArg(), sqlmock.AnyArg(), "renewal", "commodore", "renewal:"+targetKey, sqlmock.AnyArg(), version).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 func TestTenantWithoutServingRecipientsCompilesObjectsAsInactive(t *testing.T) {
@@ -424,9 +465,12 @@ func TestCompileDeletedTenantAuthorityDeliversTombstoneToPriorCells(t *testing.T
 		WithArgs("tenant", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(previous, time.Now().UTC().Add(time.Hour)))
 	mock.ExpectBegin()
+	mock.ExpectExec("RetireMediaAuthorityTargets").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("LockMediaAuthorityTargetHorizons").WillReturnRows(sqlmock.NewRows([]string{"cell_id", "correction_until"}))
 	mock.ExpectQuery(`SELECT cell_id\s+FROM commodore\.media_authority_targets`).
 		WithArgs("tenant", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("cell-a"))
+	expectNoCurrentMediaAuthorityPublication(mock, "tenant", tenantID)
 	mock.ExpectQuery(`(?s)INSERT INTO commodore\.media_authority_counters.*RETURNING last_version`).
 		WithArgs("tenant", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"last_version"}).AddRow(int64(2)))
@@ -437,6 +481,13 @@ func TestCompileDeletedTenantAuthorityDeliversTombstoneToPriorCells(t *testing.T
 	mock.ExpectExec(`UPDATE commodore\.media_authority_deliveries`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_targets`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_deliveries`).WillReturnResult(sqlmock.NewResult(0, 1))
+	// A tombstone is terminal: it schedules no renewal, but its objects are
+	// refreshed so they stop deriving from the deleted tenant.
+	expectTenantPublicationFollowUps(mock, tenantID, "cell-a")
+	mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+		WithArgs("event", "tenant_media_objects:"+tenantID, "tenant_media_objects", tenantID,
+			"tenant_media_objects:tenant_authority_changed", "commodore", "tenant-version:2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, mediaAuthorityKeyID: "signer-1", mediaAuthorityPrivateKey: privateKey}
@@ -638,7 +689,7 @@ func TestBuildTenantAuthorityUsesGrantProvenanceBeforeTier(t *testing.T) {
 	}
 }
 
-func TestRequestMediaAuthorityRefreshRequiresServiceAndIsIdempotent(t *testing.T) {
+func TestRequestMediaAuthorityRefreshRequiresServiceAndFoldsIntoTheTargetObligation(t *testing.T) {
 	db, mock, dbErr := sqlmock.New()
 	if dbErr != nil {
 		t.Fatal(dbErr)
@@ -651,28 +702,74 @@ func TestRequestMediaAuthorityRefreshRequiresServiceAndIsIdempotent(t *testing.T
 		t.Fatalf("unauthenticated code = %s, want PermissionDenied", status.Code(err))
 	}
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
-	mock.ExpectExec("INSERT INTO commodore.media_authority_refresh_inbox").WithArgs("purser", "event-1", "tenant-1", "billing_gate_changed").WillReturnResult(sqlmock.NewResult(0, 1))
-	resp, err := s.RequestMediaAuthorityRefresh(ctx, req)
-	if err != nil {
+	// A redelivered owner event is the same obligation, so it is accepted again
+	// rather than reported as a duplicate the owner would have to interpret.
+	for range 2 {
+		mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+			WithArgs("event", "tenant:tenant-1", "tenant", "tenant-1", "billing_gate_changed", "purser", "event-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		resp, err := s.RequestMediaAuthorityRefresh(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.GetAccepted() {
+			t.Fatal("durably recorded source event was not accepted")
+		}
+	}
+
+	// A stream's process configuration is read from the tenant's tier, which the
+	// tenant authority does not carry. A tier change therefore refreshes the
+	// tenant's objects directly; a metering change must not.
+	for _, tier := range []string{"subscription_authority_changed", "billing_tier_authority_changed"} {
+		mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+			WithArgs("event", "tenant:tenant-1", "tenant", "tenant-1", tier, "purser", "event-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+			WithArgs("event", "tenant_media_objects:tenant-1", "tenant_media_objects", "tenant-1", "tenant_media_objects:"+tier, "purser", "event-2", sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		if _, err := s.RequestMediaAuthorityRefresh(ctx, &commodorepb.RequestMediaAuthorityRefreshRequest{SourceService: "purser", SourceEventId: "event-2", TenantId: "tenant-1", Reason: tier}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mock.ExpectExec("SELECT commodore.enqueue_media_authority_obligation").
+		WithArgs("event", "tenant:tenant-1", "tenant", "tenant-1", "allowance_usage_changed", "purser", "event-3", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if _, err := s.RequestMediaAuthorityRefresh(ctx, &commodorepb.RequestMediaAuthorityRefreshRequest{SourceService: "purser", SourceEventId: "event-3", TenantId: "tenant-1", Reason: "allowance_usage_changed"}); err != nil {
 		t.Fatal(err)
-	}
-	if !resp.GetAccepted() {
-		t.Fatal("first source event was not accepted")
-	}
-	mock.ExpectExec("INSERT INTO commodore.media_authority_refresh_inbox").WithArgs("purser", "event-1", "tenant-1", "billing_gate_changed").WillReturnResult(sqlmock.NewResult(0, 0))
-	resp, err = s.RequestMediaAuthorityRefresh(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.GetAccepted() {
-		t.Fatal("duplicate source event reported newly accepted")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestRequestMediaAuthorityReplayRequiresServiceAndRequeuesCurrentSet(t *testing.T) {
+func TestMediaAuthorityTargetForReasonSharesOneTargetPerAuthority(t *testing.T) {
+	const tenantID = "10000000-0000-0000-0000-000000000001"
+	for _, tc := range []struct {
+		reason string
+		want   commodoredb.MediaAuthorityTarget
+	}{
+		{"billing_gate_changed", commodoredb.MediaAuthorityTarget{Key: "tenant:" + tenantID, Kind: "tenant"}},
+		{"tenant_media_objects:signing_key_changed", commodoredb.MediaAuthorityTarget{Key: "tenant_media_objects:" + tenantID, Kind: "tenant_media_objects"}},
+		{"media_object:live_stream:stream-1:stream_changed", commodoredb.MediaAuthorityTarget{Key: "media_object:live_stream:stream-1", Kind: "live_stream"}},
+		// A chapter and the VOD row backing it are one authority: both reasons
+		// must land on the same obligation.
+		{"media_object:vod:asset-1:artifact_changed", commodoredb.MediaAuthorityTarget{Key: "media_object:artifact:asset-1", Kind: "artifact"}},
+		{"media_object:chapter:asset-1:tenant_authority_changed", commodoredb.MediaAuthorityTarget{Key: "media_object:artifact:asset-1", Kind: "artifact"}},
+	} {
+		got := commodoredb.MediaAuthorityTargetForReason(tenantID, tc.reason)
+		if got != tc.want {
+			t.Fatalf("target for %q = %+v, want %+v", tc.reason, got, tc.want)
+		}
+		if tc.want.Kind == "live_stream" && got.ObjectID() != "stream-1" {
+			t.Fatalf("live stream object id = %q", got.ObjectID())
+		}
+		if tc.want.Kind == "artifact" && got.ObjectID() != "asset-1" {
+			t.Fatalf("artifact object id = %q", got.ObjectID())
+		}
+	}
+}
+
+func TestRequestMediaAuthorityReplayRequiresServiceAndValidClock(t *testing.T) {
 	db, mock, dbErr := sqlmock.New()
 	if dbErr != nil {
 		t.Fatal(dbErr)
@@ -685,82 +782,125 @@ func TestRequestMediaAuthorityReplayRequiresServiceAndRequeuesCurrentSet(t *test
 		t.Fatalf("unauthenticated code = %s, want PermissionDenied", status.Code(err))
 	}
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
-	mock.ExpectQuery("WITH requeued AS").WithArgs("cell-a").WillReturnRows(sqlmock.NewRows([]string{"requeued_count"}).AddRow(7))
-	resp, err := s.RequestMediaAuthorityReplay(ctx, req)
+	if _, err := s.RequestMediaAuthorityReplay(ctx, req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing timestamp: %v", err)
+	}
+	for _, skew := range []time.Duration{-time.Hour, time.Hour} {
+		req.AsOf = timestamppb.New(time.Now().Add(skew))
+		if _, err := s.RequestMediaAuthorityReplay(ctx, req); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("skew %s: %v", skew, err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The fanout is one statement, so it cannot be half applied and needs no
+// transaction. Which objects it selects and which lane they land in is SQL, and
+// is asserted against a real database in TestMediaAuthorityFollowsUse_RealPG.
+func TestTenantMediaObjectFanoutIsOneStatement(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	const tenantID = "10000000-0000-0000-0000-000000000001"
+	mock.ExpectQuery("EnqueueTenantMediaObjectRefreshes").
+		WithArgs("tenant_media_objects:fanout", "tenant-fanout:"+tenantID, tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"enqueued"}).AddRow(int64(2)))
+	if err := s.enqueueTenantMediaObjectRefreshes(context.Background(), tenantID); err != nil {
+		t.Fatalf("enqueueTenantMediaObjectRefreshes: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Media objects are re-signed only when a tenant field they derive from moves.
+// Metering moves allowances, limits, and decision text on every usage report;
+// if those reached the dependents digest, metering would become
+// O(objects x cells) signing work.
+func TestTenantDependentsDigestIgnoresMeteringOnlyFields(t *testing.T) {
+	base := &mediaauthoritypb.TenantAuthority{
+		SchemaVersion: sharedauthority.SchemaVersion, TenantId: "10000000-0000-0000-0000-000000000001",
+		Lifecycle:         mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+		BillingDecision:   mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+		OfficialClusterId: "media-eu-1", PreferredClusterId: "media-eu-1",
+		EffectiveClusterGrants: []*mediaauthoritypb.TenantClusterGrant{{ClusterId: "media-eu-1", ControlCellId: "media-eu-1"}},
+	}
+	digest := func(tenant *mediaauthoritypb.TenantAuthority) string {
+		sum, err := sharedauthority.TenantDependentsDigest(tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(sum)
+	}
+	want := digest(base)
+
+	metered := proto.CloneOf(base)
+	metered.DecisionReason = "allowance nearly exhausted"
+	metered.Allowances = []*meteringpb.MeterAllowance{{}}
+	if digest(metered) != want {
+		t.Fatal("a metering-only tenant change would fan out to every media object")
+	}
+	for name, mutate := range map[string]func(*mediaauthoritypb.TenantAuthority){
+		"billing decision": func(t *mediaauthoritypb.TenantAuthority) {
+			t.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED
+		},
+		"lifecycle": func(t *mediaauthoritypb.TenantAuthority) {
+			t.Lifecycle = mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE
+		},
+		"preferred cluster": func(t *mediaauthoritypb.TenantAuthority) { t.PreferredClusterId = "media-us-1" },
+		"grants":            func(t *mediaauthoritypb.TenantAuthority) { t.EffectiveClusterGrants[0].ControlCellId = "media-us-1" },
+	} {
+		changed := proto.CloneOf(base)
+		mutate(changed)
+		if digest(changed) == want {
+			t.Fatalf("%s change did not move the dependents digest, so objects would keep stale authority", name)
+		}
+	}
+}
+
+// Sealing draws fresh key material per compile. Two compiles of identical state
+// must still digest equal, or every live stream would publish on every compile;
+// a changed secret or recipient must digest differently, or a rotated secret
+// would never reach the cell.
+func TestMediaObjectContentDigestIsStableAcrossResealsAndMovesWithTheSecret(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.GetRequeuedCount() != 7 {
-		t.Fatalf("requeued count = %d, want 7", resp.GetRequeuedCount())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCompleteTenantAuthorityRefreshFansOutObjectsBeforeAcknowledgement(t *testing.T) {
-	s, mock, done := newMockServer(t)
-	defer done()
-	row := commodoredb.ClaimMediaAuthorityRefreshInboxRow{
-		SourceService: "purser", SourceEventID: "billing-1", TenantID: "10000000-0000-0000-0000-000000000001",
-	}
-	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT id::text AS stream_id, tenant_id::text AS tenant_id").
-		WithArgs(row.TenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"stream_id", "tenant_id"}).AddRow("20000000-0000-0000-0000-000000000001", row.TenantID))
-	mock.ExpectExec("INSERT INTO commodore.media_authority_refresh_inbox").
-		WithArgs("commodore", sqlmock.AnyArg(), row.TenantID, "media_object:live_stream:20000000-0000-0000-0000-000000000001:tenant_authority_changed").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT id::text AS authority_id, tenant_id::text AS tenant_id").
-		WithArgs(row.TenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"authority_id", "tenant_id", "artifact_kind"}).AddRow("30000000-0000-0000-0000-000000000001", row.TenantID, "dvr"))
-	mock.ExpectExec("INSERT INTO commodore.media_authority_refresh_inbox").
-		WithArgs("commodore", sqlmock.AnyArg(), row.TenantID, "media_object:dvr:30000000-0000-0000-0000-000000000001:tenant_authority_changed").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE commodore.media_authority_refresh_inbox").
-		WithArgs("purser", "billing-1").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	if err := s.completeTenantAuthorityRefresh(context.Background(), row); err != nil {
-		t.Fatalf("completeTenantAuthorityRefresh: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCompleteTenantAuthorityRefreshSkipsObjectFanoutForMeteringOnlyChange(t *testing.T) {
-	s, mock, done := newMockServer(t)
-	defer done()
-	row := commodoredb.ClaimMediaAuthorityRefreshInboxRow{
-		SourceService: "purser", SourceEventID: "usage-1", TenantID: "10000000-0000-0000-0000-000000000001",
-		Reason: "allowance_usage_changed",
-	}
-	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE commodore.media_authority_refresh_inbox").
-		WithArgs("purser", "usage-1").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	if err := s.completeTenantAuthorityRefresh(context.Background(), row); err != nil {
-		t.Fatalf("completeTenantAuthorityRefresh: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestTenantRefreshRequiresObjectFanout(t *testing.T) {
-	for _, test := range []struct {
-		source, reason string
-		want           bool
-	}{
-		{"purser", "allowance_usage_changed", false},
-		{"purser", "prepaid_admission_gate_changed", false},
-		{"purser", "billing_tier_authority_changed", true},
-		{"quartermaster", "cluster_access_changed", true},
-		{"commodore", "tenant_media_objects:signing_key_changed", true},
-	} {
-		if got := tenantRefreshRequiresObjectFanout(test.source, test.reason); got != test.want {
-			t.Errorf("tenantRefreshRequiresObjectFanout(%q, %q) = %v, want %v", test.source, test.reason, got, test.want)
+	const authorityID = "live_stream:20000000-0000-0000-0000-000000000001"
+	payload := func(box string) *mediaauthoritypb.MediaObjectAuthority {
+		return &mediaauthoritypb.MediaObjectAuthority{
+			SchemaVersion: sharedauthority.SchemaVersion, TenantId: "tenant-1", InternalName: "stream",
+			Object: &mediaauthoritypb.MediaObjectAuthority_LiveStream{LiveStream: &mediaauthoritypb.LiveStreamAuthority{
+				StreamId:          "20000000-0000-0000-0000-000000000001",
+				SealedCellSecrets: []*mediaauthoritypb.SealedCellSecret{{AudienceCellId: "cell-a", Ciphertext: []byte(box)}},
+			}},
 		}
+	}
+	digest := func(box string, plaintext string, recipients ...string) []byte {
+		commitment, commitErr := sharedauthority.SecretCommitment(privateKey, authorityID, []byte(plaintext), recipients)
+		if commitErr != nil {
+			t.Fatal(commitErr)
+		}
+		sum, ok, digestErr := sharedauthority.MediaObjectContentDigest(payload(box), "signer-1", [][]byte{commitment})
+		if digestErr != nil || !ok {
+			t.Fatalf("digest ok=%v err=%v", ok, digestErr)
+		}
+		return sum
+	}
+	first := digest("sealed-with-nonce-1", "rtmp://target/key", "cell-a\x00key-a")
+	if resealed := digest("sealed-with-nonce-2", "rtmp://target/key", "cell-a\x00key-a"); !bytes.Equal(first, resealed) {
+		t.Fatal("resealing identical secret state changed the content digest")
+	}
+	if rotated := digest("sealed-with-nonce-1", "rtmp://target/rotated", "cell-a\x00key-a"); bytes.Equal(first, rotated) {
+		t.Fatal("a changed secret kept the same content digest")
+	}
+	if recipients := digest("sealed-with-nonce-1", "rtmp://target/key", "cell-a\x00key-b"); bytes.Equal(first, recipients) {
+		t.Fatal("a changed recipient key kept the same content digest")
+	}
+	if _, ok, _ := sharedauthority.MediaObjectContentDigest(payload("sealed"), "signer-1", nil); ok {
+		t.Fatal("sealed content without a commitment must have no stable digest")
 	}
 }
 
@@ -793,16 +933,22 @@ func TestMediaAuthorityTenantCompileUsesFenceWithoutPinnedConnection(t *testing.
 	}
 }
 
-func TestMediaAuthorityCompileScopeSeparatesTenantObjects(t *testing.T) {
-	tenantID := "10000000-0000-0000-0000-000000000001"
-	first := mediaAuthorityCompileScope(tenantID, "dvr", "30000000-0000-0000-0000-000000000001", true)
-	second := mediaAuthorityCompileScope(tenantID, "chapter", "30000000-0000-0000-0000-000000000002", true)
-	if first == second || first != "media_object:artifact:30000000-0000-0000-0000-000000000001" ||
-		second != "media_object:artifact:30000000-0000-0000-0000-000000000002" {
-		t.Fatalf("object compile scopes collapsed: first=%q second=%q", first, second)
+// An obligation's target key is also its compile-fence scope, so it must equal
+// the scope the publishing transaction locks ("media_object:" + authority ID).
+func TestMediaAuthorityTargetKeyEqualsThePublishFenceScope(t *testing.T) {
+	stream := commodoredb.LiveStreamMediaAuthorityTarget("20000000-0000-0000-0000-000000000001")
+	if want := "media_object:" + sharedauthority.LiveStreamAuthorityID("20000000-0000-0000-0000-000000000001"); stream.Key != want {
+		t.Fatalf("live-stream target key = %q, want %q", stream.Key, want)
 	}
-	if got := mediaAuthorityCompileScope(tenantID, "", "", false); got != "tenant:"+tenantID {
-		t.Fatalf("tenant compile scope = %q", got)
+	artifact := commodoredb.ArtifactMediaAuthorityTarget("30000000-0000-0000-0000-000000000001")
+	if want := "media_object:" + sharedauthority.ArtifactAuthorityID("30000000-0000-0000-0000-000000000001"); artifact.Key != want {
+		t.Fatalf("artifact target key = %q, want %q", artifact.Key, want)
+	}
+	if got := mediaObjectAuthorityTarget(sharedauthority.LiveStreamAuthorityID("20000000-0000-0000-0000-000000000001")); got != stream {
+		t.Fatalf("authority ID mapped to %+v, want %+v", got, stream)
+	}
+	if got := mediaObjectAuthorityTarget(sharedauthority.ArtifactAuthorityID("30000000-0000-0000-0000-000000000001")); got != artifact {
+		t.Fatalf("authority ID mapped to %+v, want %+v", got, artifact)
 	}
 }
 
@@ -832,11 +978,35 @@ func TestMediaAuthorityTenantCompileRejectsSupersededGeneration(t *testing.T) {
 	})
 	mock.ExpectQuery("SELECT generation").WithArgs(scopeKey).
 		WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(int64(8)))
-	if err := lockMediaAuthorityCompileFence(ctx, commodoredb.New(db), scopeKey); err == nil {
+	fenceErr := lockMediaAuthorityCompileFence(ctx, commodoredb.New(db), scopeKey)
+	if fenceErr == nil {
 		t.Fatal("superseded compile generation was accepted")
+	}
+	// Losing the fence is not a failure: the newer compile covers this one, so
+	// the obligation completes instead of burning an attempt and backing off.
+	if class, _ := classifyAuthorityCompileError(fmt.Errorf("persist: %w", fenceErr)); class != authorityCompileSuperseded {
+		t.Fatalf("fence loss classified as %v, want superseded", class)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAuthorityCompileErrorClassification(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err   error
+		class authorityCompileClass
+		code  string
+	}{
+		"rpc failure retries":         {errors.New("load tenant billing authority: unavailable"), authorityCompileTransient, "transient"},
+		"missing seal recipient":      {fmt.Errorf("compile: %w", parkAuthorityCompile("seal_recipient_missing", errors.New("no recipient"))), authorityCompilePark, "seal_recipient_missing"},
+		"malformed envelope":          {fmt.Errorf("publish: %w", sharedauthority.ErrMalformed), authorityCompilePark, "malformed_authority"},
+		"object before tenant":        {fmt.Errorf("load: %w", errTenantAuthorityMissing), authorityCompileAwaitTenant, "awaiting_tenant_authority"},
+		"superseded by newer compile": {fmt.Errorf("lock: %w", errMediaAuthorityCompileSuperseded), authorityCompileSuperseded, "superseded"},
+	} {
+		if class, code := classifyAuthorityCompileError(tc.err); class != tc.class || code != tc.code {
+			t.Errorf("%s: classified (%v, %q), want (%v, %q)", name, class, code, tc.class, tc.code)
+		}
 	}
 }
 

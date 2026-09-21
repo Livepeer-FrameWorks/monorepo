@@ -12,6 +12,10 @@ const (
 	auditRetention      = 30 * 24 * time.Hour
 	auditRetentionBatch = 1000
 	auditPruneInterval  = 6 * time.Hour
+	// One tick drains up to auditRetentionPasses batches. A single batch per
+	// tick caps deletion at 4,000 rows a day, below the apply rate of even a
+	// small cell, so the ledger would never converge on its retention window.
+	auditRetentionPasses = 16
 )
 
 // RunAuditRetention bounds the local verification/apply diagnostic ledger.
@@ -47,7 +51,19 @@ func (s *Store) RunAuditRetention(ctx context.Context, logger logging.Logger) {
 }
 
 func (s *Store) pruneApplyAudit(ctx context.Context) (int64, error) {
-	return foghorndb.New(s.db).PruneMediaAuthorityApplyAudit(ctx, foghorndb.PruneMediaAuthorityApplyAuditParams{
-		RetentionSeconds: int64(auditRetention / time.Second), BatchSize: auditRetentionBatch,
-	})
+	queries := foghorndb.New(s.db)
+	var total int64
+	for pass := 0; pass < auditRetentionPasses; pass++ {
+		rows, err := queries.PruneMediaAuthorityApplyAudit(ctx, foghorndb.PruneMediaAuthorityApplyAuditParams{
+			RetentionSeconds: int64(auditRetention / time.Second), BatchSize: auditRetentionBatch,
+		})
+		total += rows
+		if err != nil {
+			return total, err
+		}
+		if rows < auditRetentionBatch {
+			break
+		}
+	}
+	return total, nil
 }

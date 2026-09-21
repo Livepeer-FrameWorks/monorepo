@@ -9,6 +9,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 )
 
@@ -17,7 +18,33 @@ type localViewerAuthority struct {
 	tenant localauthority.TenantSnapshot
 }
 
+var errLocalViewerAuthorityExpired = errors.New("local media authority hard-expired")
+
+// resolveLocalViewerContent decides from the authority this cell holds. A cell
+// holds only what is in use: an object it holds nothing for, or holds past its
+// validity, is asked for once and read again. When that cannot be done the read
+// stands, so an expired authority is still refused while the control plane is
+// unreachable, and a denial or tombstone is never fetched around.
 func (s *FoghornGRPCServer) resolveLocalViewerContent(ctx context.Context, contentID string) (*control.ContentResolution, localViewerAuthority, bool, error) {
+	// The content resolver handles runtime namespaces through its internal-name
+	// index; they can never match this playback-ID index.
+	if mist.ExtractInternalName(contentID) != contentID {
+		return nil, localViewerAuthority{}, false, nil
+	}
+	resolution, local, handled, err := s.readLocalViewerContent(ctx, contentID)
+	absent := err == nil && !handled && local.object.AuthorityID == ""
+	if (absent || errors.Is(err, errLocalViewerAuthorityExpired)) && s.mediaAuthorityStore != nil {
+		if applied, _ := s.mediaAuthorityStore.Fetch(ctx, localauthority.AuthorityLookup{PlaybackID: contentID}); applied { //nolint:errcheck // a fetch that cannot be made leaves the read as it was
+			resolution, local, handled, err = s.readLocalViewerContent(ctx, contentID)
+		}
+	}
+	if err == nil && handled && resolution != nil {
+		s.mediaAuthorityStore.NoteMediaObjectUse(local.object)
+	}
+	return resolution, local, handled, err
+}
+
+func (s *FoghornGRPCServer) readLocalViewerContent(ctx context.Context, contentID string) (*control.ContentResolution, localViewerAuthority, bool, error) {
 	if s.mediaAuthorityStore == nil {
 		return nil, localViewerAuthority{}, false, nil
 	}
@@ -29,16 +56,19 @@ func (s *FoghornGRPCServer) resolveLocalViewerContent(ctx context.Context, conte
 		return nil, localViewerAuthority{}, false, fmt.Errorf("read local media-object authority: %w", err)
 	}
 	local := localViewerAuthority{object: object}
+	if object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE {
+		return nil, local, true, sql.ErrNoRows
+	}
 	if !object.Ready {
 		return nil, local, false, nil
 	}
 	if object.Freshness == localauthority.FreshnessHardExpired {
-		return nil, local, true, errors.New("local media-object authority hard-expired")
+		return nil, local, true, fmt.Errorf("media object: %w", errLocalViewerAuthorityExpired)
 	}
 	if object.Authority == nil || object.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
 		return nil, local, true, sql.ErrNoRows
 	}
-	tenant, err := s.mediaAuthorityStore.Tenant(ctx, object.Authority.GetTenantId())
+	tenant, err := s.mediaAuthorityStore.TenantForObject(ctx, object)
 	if err != nil {
 		return nil, local, false, fmt.Errorf("read local tenant authority: %w", err)
 	}
@@ -47,7 +77,7 @@ func (s *FoghornGRPCServer) resolveLocalViewerContent(ctx context.Context, conte
 		return nil, local, false, nil
 	}
 	if tenant.Freshness == localauthority.FreshnessHardExpired {
-		return nil, local, true, errors.New("local tenant authority hard-expired")
+		return nil, local, true, fmt.Errorf("tenant: %w", errLocalViewerAuthorityExpired)
 	}
 	if tenant.Authority == nil || tenant.Authority.GetTenantId() != object.Authority.GetTenantId() {
 		return nil, local, false, errors.New("local media and tenant authority identity mismatch")

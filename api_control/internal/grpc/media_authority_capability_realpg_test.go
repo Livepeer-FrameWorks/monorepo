@@ -49,7 +49,7 @@ func TestMediaPlacementCellAttestation_RealPG(t *testing.T) {
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 	inbox := func() []string {
 		t.Helper()
-		rows, err := db.QueryContext(ctx, "SELECT tenant_id::text FROM commodore.media_authority_refresh_inbox WHERE reason = $1 ORDER BY tenant_id", cellPlacementCapabilityRefreshReason)
+		rows, err := db.QueryContext(ctx, "SELECT tenant_id::text FROM commodore.media_authority_refresh_obligations WHERE last_reason = $1 ORDER BY tenant_id", cellPlacementCapabilityRefreshReason)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,12 +79,37 @@ func TestMediaPlacementCellAttestation_RealPG(t *testing.T) {
 	if rows := inbox(); len(rows) != 1 || rows[0] != legacyTenant {
 		t.Fatalf("ready attestation queued the wrong tenants: %v", rows)
 	}
+	if _, err := db.ExecContext(ctx, "UPDATE commodore.media_authority_refresh_obligations SET status='parked', park_reason='test' WHERE tenant_id=$1", legacyTenant); err != nil {
+		t.Fatal(err)
+	}
 	if err := server.recordCellPlacementCapability(ctx, "cell-a", readyCellAttestation()); err != nil {
 		t.Fatal(err)
 	}
 	if rows := inbox(); len(rows) != 1 {
 		t.Fatalf("repeated attestation duplicated activation work: %v", rows)
 	}
+	assertObligation := func(wantRevision int64, wantStatus string) {
+		t.Helper()
+		var revision int64
+		var state string
+		if err := db.QueryRowContext(ctx, "SELECT revision, status FROM commodore.media_authority_refresh_obligations WHERE tenant_id=$1 AND lane='event'", legacyTenant).Scan(&revision, &state); err != nil {
+			t.Fatal(err)
+		}
+		if revision != wantRevision || state != wantStatus {
+			t.Fatalf("activation obligation revision=%d status=%s, want %d/%s", revision, state, wantRevision, wantStatus)
+		}
+	}
+	assertObligation(1, "parked")
+	nodeReady := readyCellAttestation()
+	nodeReady.NodePlacementReady = true
+	if err := server.recordCellPlacementCapability(ctx, "cell-a", nodeReady); err != nil {
+		t.Fatal(err)
+	}
+	assertObligation(2, "pending")
+	if err := server.recordCellPlacementCapability(ctx, "cell-a", nodeReady); err != nil {
+		t.Fatal(err)
+	}
+	assertObligation(2, "pending")
 	if ready, err := placementCellsReady(ctx, q, []string{"cell-a"}); err != nil || !ready {
 		t.Fatalf("ready attestation not readable: %t %v", ready, err)
 	}
@@ -94,6 +119,10 @@ func TestMediaPlacementCellAttestation_RealPG(t *testing.T) {
 	if ready, err := placementCellsReady(ctx, q, []string{"cell-a"}); err != nil || ready {
 		t.Fatalf("withdrawn attestation stayed ready: %t %v", ready, err)
 	}
+	if err := server.recordCellPlacementCapability(ctx, "cell-a", nodeReady); err != nil {
+		t.Fatal(err)
+	}
+	assertObligation(3, "pending")
 }
 
 func TestMediaPlacementFirstIssuance_RealPG(t *testing.T) {
@@ -151,7 +180,7 @@ func TestMediaPlacementFirstIssuance_RealPG(t *testing.T) {
 		t.Fatalf("first issuance lost policy, region or consent: version=%d %v", version, payload)
 	}
 	var pendingActivation int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM commodore.media_authority_refresh_inbox WHERE reason = $1 AND tenant_id = $2", cellPlacementCapabilityRefreshReason, tenant.TenantId).Scan(&pendingActivation); err != nil || pendingActivation != 1 {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM commodore.media_authority_refresh_obligations WHERE last_reason = $1 AND tenant_id = $2", cellPlacementCapabilityRefreshReason, tenant.TenantId).Scan(&pendingActivation); err != nil || pendingActivation != 1 {
 		t.Fatalf("attestation did not queue the legacy tenant exactly once: %d %v", pendingActivation, err)
 	}
 	// A later grant on an unattested cell is refused at publication, never rolled back.

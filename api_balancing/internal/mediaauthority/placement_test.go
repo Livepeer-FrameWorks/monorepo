@@ -99,7 +99,7 @@ func TestStoreRejectsLegacySchemaEvenWithNewerAuthorityVersion(t *testing.T) {
 	expectMediaAuthorityLockTimeout(mock)
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(")).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority_version, payload_sha256, payload")).WillReturnRows(
-		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload"}).AddRow(int64(6), testPayloadDigest(previousBytes), previousBytes),
+		sqlmock.NewRows([]string{"authority_version", "payload_sha256", "payload", "valid_until"}).AddRow(int64(6), testPayloadDigest(previousBytes), previousBytes, storeFixtureNow.AddDate(0, 0, 1)),
 	)
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.media_authority_apply_audit")).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "rollback_rejected", ErrRollback.Error()).WillReturnResult(sqlmock.NewResult(1, 1))

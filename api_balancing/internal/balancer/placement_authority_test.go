@@ -196,6 +196,13 @@ func TestPlacementAuthorityRejectsUnsafeJoinsAndReadiness(t *testing.T) {
 		{"legacy_object", func(p *localauthority.PlacementPair, _ time.Time) { p.Object.Authority.SchemaVersion = 1 }, ErrPlacementAuthorityNotReady},
 		{"exact_expiry", func(p *localauthority.PlacementPair, now time.Time) { p.Tenant.ValidUntil = now }, ErrPlacementAuthorityNotReady},
 		{"missing_expiry", func(p *localauthority.PlacementPair, _ time.Time) { p.Object.ValidUntil = time.Time{} }, ErrPlacementAuthorityNotReady},
+		// The cell's restore fence withholds a pair whose signed validity still runs.
+		{"object_withheld", func(p *localauthority.PlacementPair, _ time.Time) {
+			p.Object.Freshness = localauthority.FreshnessHardExpired
+		}, ErrPlacementAuthorityNotReady},
+		{"tenant_withheld", func(p *localauthority.PlacementPair, _ time.Time) {
+			p.Tenant.Freshness = localauthority.FreshnessHardExpired
+		}, ErrPlacementAuthorityNotReady},
 		{"tenant_mismatch", func(p *localauthority.PlacementPair, _ time.Time) { p.Object.Authority.TenantId = "another" }, ErrPlacementAuthorityInvalid},
 		{"parent_skew", func(p *localauthority.PlacementPair, _ time.Time) { p.Object.Authority.PlacementTenantRevision++ }, ErrPlacementAuthorityInvalid},
 		{"missing_intent", func(p *localauthority.PlacementPair, _ time.Time) { p.Tenant.Authority.MediaPlacement = nil }, ErrPlacementAuthorityInvalid},

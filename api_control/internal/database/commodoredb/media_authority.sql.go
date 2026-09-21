@@ -14,6 +14,62 @@ import (
 	"github.com/lib/pq"
 )
 
+const adoptLegacyMediaAuthorityRefreshInbox = `-- name: AdoptLegacyMediaAuthorityRefreshInbox :many
+WITH legacy AS (
+    SELECT source_service, source_event_id
+    FROM commodore.media_authority_refresh_inbox
+    WHERE status <> 'completed'
+      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+    ORDER BY created_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE commodore.media_authority_refresh_inbox AS inbox
+SET status = 'completed', completed_at = NOW(), lease_expires_at = NULL, updated_at = NOW()
+FROM legacy
+WHERE inbox.source_service = legacy.source_service
+  AND inbox.source_event_id = legacy.source_event_id
+RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id, inbox.reason
+`
+
+type AdoptLegacyMediaAuthorityRefreshInboxRow struct {
+	SourceService string `db:"source_service" json:"source_service"`
+	SourceEventID string `db:"source_event_id" json:"source_event_id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	Reason        string `db:"reason" json:"reason"`
+}
+
+// Settles unfinished rows of the pre-obligation inbox so their targets can be
+// folded into obligations. Leased rows belong to a replica still draining the
+// inbox and are left alone.
+func (q *Queries) AdoptLegacyMediaAuthorityRefreshInbox(ctx context.Context, batchSize int32) ([]AdoptLegacyMediaAuthorityRefreshInboxRow, error) {
+	rows, err := q.db.QueryContext(ctx, adoptLegacyMediaAuthorityRefreshInbox, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdoptLegacyMediaAuthorityRefreshInboxRow{}
+	for rows.Next() {
+		var i AdoptLegacyMediaAuthorityRefreshInboxRow
+		if err := rows.Scan(
+			&i.SourceService,
+			&i.SourceEventID,
+			&i.TenantID,
+			&i.Reason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const allocateMediaAuthorityVersion = `-- name: AllocateMediaAuthorityVersion :one
 INSERT INTO commodore.media_authority_counters (
     authority_kind, authority_id, last_version, updated_at
@@ -60,25 +116,20 @@ WITH heads AS (
            queued.authority_kind, queued.authority_id, queued.authority_version,
            queued.cell_id, queued.next_attempt_at, queued.created_at
     FROM commodore.media_authority_deliveries AS queued
-    JOIN commodore.media_authority_versions AS version
-      ON version.authority_kind = queued.authority_kind
-     AND version.authority_id = queued.authority_id
-     AND version.authority_version = queued.authority_version
-    WHERE queued.status IN ('pending', 'delivering')
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = queued.authority_kind
+     AND current.authority_id = queued.authority_id
+     AND current.authority_version = queued.authority_version
+    WHERE queued.short_lease
+      AND (queued.correction_until IS NULL OR queued.correction_until > NOW())
+      AND queued.status IN ('pending', 'delivering')
       AND queued.next_attempt_at <= NOW()
       AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
-      AND version.payload_schema_version = 2
-      AND version.valid_until <= version.issued_at + INTERVAL '1 minute'
       AND NOT EXISTS (
           SELECT 1 FROM commodore.media_authority_deliveries AS inflight
-          JOIN commodore.media_authority_versions AS active_version
-            ON active_version.authority_kind = inflight.authority_kind
-           AND active_version.authority_id = inflight.authority_id
-           AND active_version.authority_version = inflight.authority_version
-          WHERE inflight.cell_id = queued.cell_id
+          WHERE inflight.short_lease
+            AND inflight.cell_id = queued.cell_id
             AND inflight.status = 'delivering' AND inflight.lease_expires_at > NOW()
-            AND active_version.payload_schema_version = 2
-            AND active_version.valid_until <= active_version.issued_at + INTERVAL '1 minute'
       )
     ORDER BY queued.cell_id, queued.next_attempt_at, queued.created_at,
              queued.authority_kind, queued.authority_id, queued.authority_version
@@ -123,6 +174,10 @@ type ClaimMediaAuthorityDeadlineDeliveryRow struct {
 	Attempts         int32  `db:"attempts" json:"attempts"`
 }
 
+// short_lease is recorded on the delivery when it is enqueued. Deriving it here
+// from the version's validity would join the queue to the whole version
+// history on an expression no index can serve, and this claim runs every
+// second inside a one-second budget.
 func (q *Queries) ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg ClaimMediaAuthorityDeadlineDeliveryParams) ([]ClaimMediaAuthorityDeadlineDeliveryRow, error) {
 	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeadlineDelivery, arg.LeaseMs, arg.BatchSize)
 	if err != nil {
@@ -153,91 +208,36 @@ func (q *Queries) ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg C
 	return items, nil
 }
 
-const claimMediaAuthorityDeadlineRefresh = `-- name: ClaimMediaAuthorityDeadlineRefresh :many
-WITH candidates AS (
-    SELECT source_service, source_event_id
-    FROM commodore.media_authority_refresh_inbox
-    WHERE status <> 'completed'
-      AND source_service = 'commodore'
-      AND source_event_id LIKE 'authority-deadline:%'
-      AND reason <> 'tenant_authority:deadline_refresh'
-      AND next_attempt_at <= NOW()
-      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-    ORDER BY next_attempt_at, created_at
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
-)
-UPDATE commodore.media_authority_refresh_inbox AS inbox
-SET status = 'processing', attempts = inbox.attempts + 1,
-    lease_expires_at = NOW() + $1::bigint * INTERVAL '1 millisecond',
-    updated_at = NOW()
-FROM candidates
-WHERE inbox.source_service = candidates.source_service
-  AND inbox.source_event_id = candidates.source_event_id
-RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
-          inbox.reason, inbox.attempts
-`
-
-type ClaimMediaAuthorityDeadlineRefreshParams struct {
-	LeaseMs   int64 `db:"lease_ms" json:"lease_ms"`
-	BatchSize int32 `db:"batch_size" json:"batch_size"`
-}
-
-type ClaimMediaAuthorityDeadlineRefreshRow struct {
-	SourceService string `db:"source_service" json:"source_service"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-	Reason        string `db:"reason" json:"reason"`
-	Attempts      int32  `db:"attempts" json:"attempts"`
-}
-
-func (q *Queries) ClaimMediaAuthorityDeadlineRefresh(ctx context.Context, arg ClaimMediaAuthorityDeadlineRefreshParams) ([]ClaimMediaAuthorityDeadlineRefreshRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeadlineRefresh, arg.LeaseMs, arg.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ClaimMediaAuthorityDeadlineRefreshRow{}
-	for rows.Next() {
-		var i ClaimMediaAuthorityDeadlineRefreshRow
-		if err := rows.Scan(
-			&i.SourceService,
-			&i.SourceEventID,
-			&i.TenantID,
-			&i.Reason,
-			&i.Attempts,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const claimMediaAuthorityDeliveries = `-- name: ClaimMediaAuthorityDeliveries :many
 WITH candidates AS (
-    SELECT authority_kind, authority_id, authority_version, cell_id
+    SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
     FROM commodore.media_authority_deliveries AS queued
-    WHERE status IN ('pending', 'delivering')
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = queued.authority_kind
+     AND current.authority_id = queued.authority_id
+     AND current.authority_version = queued.authority_version
+    JOIN commodore.media_authority_versions AS versions
+      ON versions.authority_kind = queued.authority_kind
+     AND versions.authority_id = queued.authority_id
+     AND versions.authority_version = queued.authority_version
+    WHERE queued.cell_id = $2
+      AND LEAST(versions.valid_until, queued.correction_until) > NOW()
+      AND queued.status IN ('pending', 'delivering')
+      AND NOT queued.short_lease
+      AND queued.next_attempt_at <= NOW()
+      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
       AND NOT EXISTS (
-          SELECT 1 FROM commodore.media_authority_versions AS version
-          WHERE version.authority_kind = queued.authority_kind
-            AND version.authority_id = queued.authority_id
-            AND version.authority_version = queued.authority_version
-            AND version.payload_schema_version = 2
-            AND version.valid_until <= version.issued_at + INTERVAL '1 minute'
+          SELECT 1
+          FROM commodore.media_authority_deliveries AS inflight
+          WHERE inflight.authority_kind = queued.authority_kind
+            AND inflight.authority_id = queued.authority_id
+            AND inflight.cell_id = queued.cell_id
+            AND inflight.status = 'delivering'
+            AND inflight.lease_expires_at > NOW()
       )
-      AND next_attempt_at <= NOW()
-      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-    ORDER BY next_attempt_at, created_at
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
+    ORDER BY queued.replay, queued.next_attempt_at, queued.created_at
+    LIMIT $3
+    FOR UPDATE OF queued SKIP LOCKED
 )
 UPDATE commodore.media_authority_deliveries AS delivery
 SET status = 'delivering',
@@ -254,8 +254,9 @@ RETURNING delivery.authority_kind, delivery.authority_id, delivery.authority_ver
 `
 
 type ClaimMediaAuthorityDeliveriesParams struct {
-	LeaseMs   int64 `db:"lease_ms" json:"lease_ms"`
-	BatchSize int32 `db:"batch_size" json:"batch_size"`
+	LeaseMs   int64  `db:"lease_ms" json:"lease_ms"`
+	CellID    string `db:"cell_id" json:"cell_id"`
+	BatchSize int32  `db:"batch_size" json:"batch_size"`
 }
 
 type ClaimMediaAuthorityDeliveriesRow struct {
@@ -267,8 +268,14 @@ type ClaimMediaAuthorityDeliveriesRow struct {
 	Attempts         int32  `db:"attempts" json:"attempts"`
 }
 
+// Deliveries are claimed one cell at a time, each cell with its own workers, so
+// a cell that is slow or down cannot take the workers another cell needs. Within
+// a cell, a delivery the cell asked to have repeated waits behind fresh ones: a
+// cell catching up after losing its database must not hold back a change or a
+// revocation. A version past its validity is never sent; the cell would refuse
+// it, and it has nothing left to say.
 func (q *Queries) ClaimMediaAuthorityDeliveries(ctx context.Context, arg ClaimMediaAuthorityDeliveriesParams) ([]ClaimMediaAuthorityDeliveriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeliveries, arg.LeaseMs, arg.BatchSize)
+	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeliveries, arg.LeaseMs, arg.CellID, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -297,57 +304,106 @@ func (q *Queries) ClaimMediaAuthorityDeliveries(ctx context.Context, arg ClaimMe
 	return items, nil
 }
 
-const claimMediaAuthorityRefreshInbox = `-- name: ClaimMediaAuthorityRefreshInbox :many
+const claimMediaAuthorityObligations = `-- name: ClaimMediaAuthorityObligations :many
 WITH candidates AS (
-    SELECT source_service, source_event_id
-    FROM commodore.media_authority_refresh_inbox
-    WHERE status <> 'completed'
-      AND NOT (source_service = 'commodore' AND source_event_id LIKE 'authority-deadline:%')
-      AND next_attempt_at <= NOW()
-      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-    ORDER BY next_attempt_at, created_at
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
+    SELECT queued.target_key, queued.lane, gen_random_uuid() AS claim_token
+    FROM commodore.media_authority_refresh_obligations AS queued
+    WHERE queued.lane = $2
+      AND queued.status IN ('pending', 'processing')
+      AND queued.next_attempt_at <= NOW()
+      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+      AND NOT EXISTS (
+          SELECT 1 FROM commodore.media_authority_refresh_obligations AS inflight
+          -- A live lease is what marks a compile in flight. Status is not: an
+          -- event that folds in mid-compile flips the row to pending and keeps
+          -- the lease.
+          WHERE inflight.target_key = queued.target_key
+            AND inflight.lane <> queued.lane
+            AND inflight.lease_expires_at > NOW()
+      )
+    ORDER BY queued.next_attempt_at, queued.pending_since
+    LIMIT $3
+    FOR UPDATE OF queued SKIP LOCKED
+),
+won AS (
+    INSERT INTO commodore.media_authority_target_claims AS claim (target_key, lane, lease_expires_at, claim_token)
+    SELECT candidates.target_key, candidates.lane,
+           NOW() + $1::bigint * INTERVAL '1 millisecond', candidates.claim_token
+    FROM candidates
+    -- A fixed order, so two claims that want several of the same targets take
+    -- their claim rows in the same order.
+    ORDER BY candidates.target_key
+    ON CONFLICT (target_key) DO UPDATE
+    SET lane = EXCLUDED.lane, lease_expires_at = EXCLUDED.lease_expires_at, claim_token = EXCLUDED.claim_token
+    WHERE claim.lane = EXCLUDED.lane OR claim.lease_expires_at <= NOW()
+    RETURNING claim.target_key, claim.lane, claim.claim_token
 )
-UPDATE commodore.media_authority_refresh_inbox AS inbox
-SET status = 'processing', attempts = inbox.attempts + 1,
+UPDATE commodore.media_authority_refresh_obligations AS obligation
+SET status = 'processing', attempts = obligation.attempts + 1,
     lease_expires_at = NOW() + $1::bigint * INTERVAL '1 millisecond',
+    claim_token = won.claim_token,
     updated_at = NOW()
-FROM candidates
-WHERE inbox.source_service = candidates.source_service
-  AND inbox.source_event_id = candidates.source_event_id
-RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
-          inbox.reason, inbox.attempts
+FROM won
+WHERE obligation.target_key = won.target_key
+  AND obligation.lane = won.lane
+RETURNING obligation.target_key, obligation.lane, obligation.tenant_id::text AS tenant_id,
+          obligation.target_kind, obligation.revision, obligation.bound_version,
+          obligation.attempts, obligation.last_reason, won.claim_token::text AS claim_token
 `
 
-type ClaimMediaAuthorityRefreshInboxParams struct {
-	LeaseMs   int64 `db:"lease_ms" json:"lease_ms"`
-	BatchSize int32 `db:"batch_size" json:"batch_size"`
+type ClaimMediaAuthorityObligationsParams struct {
+	LeaseMs   int64  `db:"lease_ms" json:"lease_ms"`
+	Lane      string `db:"lane" json:"lane"`
+	BatchSize int32  `db:"batch_size" json:"batch_size"`
 }
 
-type ClaimMediaAuthorityRefreshInboxRow struct {
-	SourceService string `db:"source_service" json:"source_service"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-	Reason        string `db:"reason" json:"reason"`
-	Attempts      int32  `db:"attempts" json:"attempts"`
+type ClaimMediaAuthorityObligationsRow struct {
+	TargetKey    string        `db:"target_key" json:"target_key"`
+	Lane         string        `db:"lane" json:"lane"`
+	TenantID     string        `db:"tenant_id" json:"tenant_id"`
+	TargetKind   string        `db:"target_kind" json:"target_kind"`
+	Revision     int64         `db:"revision" json:"revision"`
+	BoundVersion sql.NullInt64 `db:"bound_version" json:"bound_version"`
+	Attempts     int32         `db:"attempts" json:"attempts"`
+	LastReason   string        `db:"last_reason" json:"last_reason"`
+	ClaimToken   string        `db:"claim_token" json:"claim_token"`
 }
 
-func (q *Queries) ClaimMediaAuthorityRefreshInbox(ctx context.Context, arg ClaimMediaAuthorityRefreshInboxParams) ([]ClaimMediaAuthorityRefreshInboxRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityRefreshInbox, arg.LeaseMs, arg.BatchSize)
+// A target is never compiled by two lanes at once: an event compile and a
+// renewal of the same authority would otherwise both run, and the compile fence
+// would discard one after its source reads and signing were already paid for.
+//
+// The lease check below only filters: it reads a snapshot, and two lanes can
+// both pass it before either commits. What serializes them is the target's claim
+// row, which every claim has to write. A second lane claiming the same target
+// waits on the first lane's write and then finds a live claim held by another
+// lane, and skips the target (under snapshot isolation it fails instead, and the
+// next pass sees the claim). Settlement deletes the claim row; an abandoned one
+// lapses with the lease it carries.
+//
+// Each claim carries a fresh token on the obligation and on the claim row.
+// Settlement and release require it: a worker whose lease lapsed and whose
+// target was claimed again cannot settle or release the attempt that replaced
+// it, even at the same revision.
+func (q *Queries) ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimMediaAuthorityObligationsParams) ([]ClaimMediaAuthorityObligationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityObligations, arg.LeaseMs, arg.Lane, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ClaimMediaAuthorityRefreshInboxRow{}
+	items := []ClaimMediaAuthorityObligationsRow{}
 	for rows.Next() {
-		var i ClaimMediaAuthorityRefreshInboxRow
+		var i ClaimMediaAuthorityObligationsRow
 		if err := rows.Scan(
-			&i.SourceService,
-			&i.SourceEventID,
+			&i.TargetKey,
+			&i.Lane,
 			&i.TenantID,
-			&i.Reason,
+			&i.TargetKind,
+			&i.Revision,
+			&i.BoundVersion,
 			&i.Attempts,
+			&i.LastReason,
+			&i.ClaimToken,
 		); err != nil {
 			return nil, err
 		}
@@ -362,89 +418,30 @@ func (q *Queries) ClaimMediaAuthorityRefreshInbox(ctx context.Context, arg Claim
 	return items, nil
 }
 
-const claimTenantMediaAuthorityDeadlineRefresh = `-- name: ClaimTenantMediaAuthorityDeadlineRefresh :many
-WITH candidates AS (
-    SELECT source_service, source_event_id
-    FROM commodore.media_authority_refresh_inbox
-    WHERE status <> 'completed'
-      AND source_service = 'commodore'
-      AND source_event_id LIKE 'authority-deadline:%'
-      AND reason = 'tenant_authority:deadline_refresh'
-      AND next_attempt_at <= NOW()
-      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-    ORDER BY next_attempt_at, created_at
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
-)
-UPDATE commodore.media_authority_refresh_inbox AS inbox
-SET status = 'processing', attempts = inbox.attempts + 1,
-    lease_expires_at = NOW() + $1::bigint * INTERVAL '1 millisecond',
-    updated_at = NOW()
-FROM candidates
-WHERE inbox.source_service = candidates.source_service
-  AND inbox.source_event_id = candidates.source_event_id
-RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
-          inbox.reason, inbox.attempts
-`
-
-type ClaimTenantMediaAuthorityDeadlineRefreshParams struct {
-	LeaseMs   int64 `db:"lease_ms" json:"lease_ms"`
-	BatchSize int32 `db:"batch_size" json:"batch_size"`
-}
-
-type ClaimTenantMediaAuthorityDeadlineRefreshRow struct {
-	SourceService string `db:"source_service" json:"source_service"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-	Reason        string `db:"reason" json:"reason"`
-	Attempts      int32  `db:"attempts" json:"attempts"`
-}
-
-func (q *Queries) ClaimTenantMediaAuthorityDeadlineRefresh(ctx context.Context, arg ClaimTenantMediaAuthorityDeadlineRefreshParams) ([]ClaimTenantMediaAuthorityDeadlineRefreshRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimTenantMediaAuthorityDeadlineRefresh, arg.LeaseMs, arg.BatchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ClaimTenantMediaAuthorityDeadlineRefreshRow{}
-	for rows.Next() {
-		var i ClaimTenantMediaAuthorityDeadlineRefreshRow
-		if err := rows.Scan(
-			&i.SourceService,
-			&i.SourceEventID,
-			&i.TenantID,
-			&i.Reason,
-			&i.Attempts,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const completeMediaAuthorityRefreshInbox = `-- name: CompleteMediaAuthorityRefreshInbox :execrows
-UPDATE commodore.media_authority_refresh_inbox
-SET status = 'completed', completed_at = NOW(), lease_expires_at = NULL,
-    last_error = NULL, updated_at = NOW()
-WHERE source_service = $1
-  AND source_event_id = $2
+const completeMediaAuthorityObligation = `-- name: CompleteMediaAuthorityObligation :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'completed', lease_expires_at = NULL, claim_token = NULL, last_error = NULL, updated_at = NOW()
+WHERE target_key = $1
+  AND lane = $2
+  AND revision = $3
+  AND claim_token::text = $4::text
   AND status = 'processing'
 `
 
-type CompleteMediaAuthorityRefreshInboxParams struct {
-	SourceService string `db:"source_service" json:"source_service"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
+type CompleteMediaAuthorityObligationParams struct {
+	TargetKey  string `db:"target_key" json:"target_key"`
+	Lane       string `db:"lane" json:"lane"`
+	Revision   int64  `db:"revision" json:"revision"`
+	ClaimToken string `db:"claim_token" json:"claim_token"`
 }
 
-func (q *Queries) CompleteMediaAuthorityRefreshInbox(ctx context.Context, arg CompleteMediaAuthorityRefreshInboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeMediaAuthorityRefreshInbox, arg.SourceService, arg.SourceEventID)
+func (q *Queries) CompleteMediaAuthorityObligation(ctx context.Context, arg CompleteMediaAuthorityObligationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeMediaAuthorityObligation,
+		arg.TargetKey,
+		arg.Lane,
+		arg.Revision,
+		arg.ClaimToken,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -499,7 +496,7 @@ USING candidates
 WHERE delivery.authority_kind = candidates.authority_kind
   AND delivery.authority_id = candidates.authority_id
   AND delivery.authority_version = candidates.authority_version
-  AND delivery.status IN ('acknowledged', 'superseded')
+  AND delivery.status IN ('acknowledged', 'superseded', 'rejected')
 `
 
 type DeleteExpiredMediaAuthorityDeliveriesParams struct {
@@ -556,22 +553,94 @@ func (q *Queries) DeleteOrphanedMediaAuthorityVersions(ctx context.Context, arg 
 	return result.RowsAffected()
 }
 
+const deleteRetiredMediaAuthorityTargets = `-- name: DeleteRetiredMediaAuthorityTargets :execrows
+WITH candidates AS MATERIALIZED (
+    SELECT retired.authority_kind, retired.authority_id, retired.cell_id
+    FROM commodore.media_authority_targets AS retired
+    WHERE retired.correction_until <= $1
+    ORDER BY retired.correction_until, retired.authority_kind, retired.authority_id, retired.cell_id
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+DELETE FROM commodore.media_authority_targets AS target
+USING candidates
+WHERE target.authority_kind = candidates.authority_kind
+  AND target.authority_id = candidates.authority_id
+  AND target.cell_id = candidates.cell_id
+`
+
+type DeleteRetiredMediaAuthorityTargetsParams struct {
+	ExpiredBefore sql.NullTime `db:"expired_before" json:"expired_before"`
+	BatchSize     int32        `db:"batch_size" json:"batch_size"`
+}
+
+func (q *Queries) DeleteRetiredMediaAuthorityTargets(ctx context.Context, arg DeleteRetiredMediaAuthorityTargetsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteRetiredMediaAuthorityTargets, arg.ExpiredBefore, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const enqueueMediaAuthorityCorrectionsForCell = `-- name: EnqueueMediaAuthorityCorrectionsForCell :one
+SELECT COUNT(commodore.enqueue_media_authority_obligation(
+    'bulk', renewal.target_key, renewal.target_kind, renewal.tenant_id,
+    'cell_holds_unacknowledged', 'commodore', 'cell-reset:' || $1::text, NULL, NULL
+))::bigint AS enqueued
+FROM commodore.media_authority_targets AS target
+JOIN commodore.media_authority_refresh_obligations AS renewal
+  ON renewal.target_key = target.authority_kind || ':' || target.authority_id
+ AND renewal.lane IN ('object_deadline', 'tenant_deadline')
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = target.authority_kind
+ AND current.authority_id = target.authority_id
+JOIN commodore.media_authority_versions AS current_version
+  ON current_version.authority_kind = current.authority_kind
+ AND current_version.authority_id = current.authority_id
+ AND current_version.authority_version = current.authority_version
+WHERE target.cell_id = $1::text
+  AND (target.correction_until IS NULL OR target.correction_until > NOW())
+  AND current_version.valid_until <= NOW()
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_versions AS held
+      WHERE held.authority_kind = target.authority_kind
+        AND held.authority_id = target.authority_id
+        AND held.authority_version <= target.highest_targeted_version
+        AND held.valid_until > NOW()
+  )
+`
+
+// For a cell that does not hold what it acknowledged: every authority whose
+// current version has run out while the cell may still hold a valid older one.
+// Replay cannot resend an expired version, so these are compiled again, which
+// re-issues them (see decideMediaAuthorityPublication, correcting). Current
+// versions still valid are replayed as they are. The renewal rows index every
+// published authority; their status does not matter.
+func (q *Queries) EnqueueMediaAuthorityCorrectionsForCell(ctx context.Context, cellID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, enqueueMediaAuthorityCorrectionsForCell, cellID)
+	var enqueued int64
+	err := row.Scan(&enqueued)
+	return enqueued, err
+}
+
 const enqueueMediaAuthorityDelivery = `-- name: EnqueueMediaAuthorityDelivery :execrows
 INSERT INTO commodore.media_authority_deliveries (
-    authority_kind, authority_id, authority_version, cell_id, signed_envelope
+    authority_kind, authority_id, authority_version, cell_id, signed_envelope, short_lease, correction_until
 ) VALUES (
     $1, $2, $3,
-    $4, $5
+    $4, $5, $6, $7
 )
 ON CONFLICT (authority_kind, authority_id, authority_version, cell_id) DO NOTHING
 `
 
 type EnqueueMediaAuthorityDeliveryParams struct {
-	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
-	AuthorityID      string `db:"authority_id" json:"authority_id"`
-	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
-	CellID           string `db:"cell_id" json:"cell_id"`
-	SignedEnvelope   []byte `db:"signed_envelope" json:"signed_envelope"`
+	AuthorityKind    string       `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string       `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64        `db:"authority_version" json:"authority_version"`
+	CellID           string       `db:"cell_id" json:"cell_id"`
+	SignedEnvelope   []byte       `db:"signed_envelope" json:"signed_envelope"`
+	ShortLease       bool         `db:"short_lease" json:"short_lease"`
+	CorrectionUntil  sql.NullTime `db:"correction_until" json:"correction_until"`
 }
 
 func (q *Queries) EnqueueMediaAuthorityDelivery(ctx context.Context, arg EnqueueMediaAuthorityDeliveryParams) (int64, error) {
@@ -581,6 +650,8 @@ func (q *Queries) EnqueueMediaAuthorityDelivery(ctx context.Context, arg Enqueue
 		arg.AuthorityVersion,
 		arg.CellID,
 		arg.SignedEnvelope,
+		arg.ShortLease,
+		arg.CorrectionUntil,
 	)
 	if err != nil {
 		return 0, err
@@ -588,28 +659,172 @@ func (q *Queries) EnqueueMediaAuthorityDelivery(ctx context.Context, arg Enqueue
 	return result.RowsAffected()
 }
 
-const failMediaAuthorityRefreshInbox = `-- name: FailMediaAuthorityRefreshInbox :execrows
-UPDATE commodore.media_authority_refresh_inbox
+const enqueueMediaAuthorityObligation = `-- name: EnqueueMediaAuthorityObligation :exec
+SELECT commodore.enqueue_media_authority_obligation(
+    $1::text, $2::text, $3::text,
+    $4::uuid, $5::text, $6::text,
+    $7::text, $8::timestamptz,
+    $9::bigint
+)
+`
+
+type EnqueueMediaAuthorityObligationParams struct {
+	Lane          string        `db:"lane" json:"lane"`
+	TargetKey     string        `db:"target_key" json:"target_key"`
+	TargetKind    string        `db:"target_kind" json:"target_kind"`
+	TenantID      string        `db:"tenant_id" json:"tenant_id"`
+	Reason        string        `db:"reason" json:"reason"`
+	SourceService string        `db:"source_service" json:"source_service"`
+	SourceEventID string        `db:"source_event_id" json:"source_event_id"`
+	NextAttemptAt sql.NullTime  `db:"next_attempt_at" json:"next_attempt_at"`
+	BoundVersion  sql.NullInt64 `db:"bound_version" json:"bound_version"`
+}
+
+// A NULL next_attempt_at means due now by the database clock, which is the
+// clock the claim compares against. An event stamped with the caller's clock
+// would not be claimable until any skew between the two had passed.
+func (q *Queries) EnqueueMediaAuthorityObligation(ctx context.Context, arg EnqueueMediaAuthorityObligationParams) error {
+	_, err := q.db.ExecContext(ctx, enqueueMediaAuthorityObligation,
+		arg.Lane,
+		arg.TargetKey,
+		arg.TargetKind,
+		arg.TenantID,
+		arg.Reason,
+		arg.SourceService,
+		arg.SourceEventID,
+		arg.NextAttemptAt,
+		arg.BoundVersion,
+	)
+	return err
+}
+
+const enqueueTenantMediaObjectRefreshes = `-- name: EnqueueTenantMediaObjectRefreshes :one
+SELECT COUNT(commodore.enqueue_media_authority_obligation(
+    'bulk', renewal.target_key, renewal.target_kind, renewal.tenant_id,
+    $1::text, 'commodore', $2::text, NULL, NULL
+))::bigint AS enqueued
+FROM commodore.media_authority_refresh_obligations AS renewal
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = split_part(renewal.target_key, ':', 1)
+ AND current.authority_id = substr(renewal.target_key, strpos(renewal.target_key, ':') + 1)
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE renewal.tenant_id = $3::uuid
+  AND renewal.lane = 'object_deadline'
+  AND NOT versions.tombstone
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_versions AS held
+      WHERE held.authority_kind = current.authority_kind
+        AND held.authority_id = current.authority_id
+        AND held.valid_until > NOW()
+  )
+`
+
+type EnqueueTenantMediaObjectRefreshesParams struct {
+	Reason        string `db:"reason" json:"reason"`
+	SourceEventID string `db:"source_event_id" json:"source_event_id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Refreshes the tenant's objects that some cell may still hold a valid copy of:
+// any version of the object is valid, and the current one is not a tombstone.
+// The current version alone does not decide it: a shorter-lived replacement can
+// run out while a cell that never received it still holds the longer original.
+// An object with no valid copy anywhere has nothing to correct and is compiled
+// when it is next used. The renewal rows are the tenant's index into its
+// published objects; their status does not matter.
+func (q *Queries) EnqueueTenantMediaObjectRefreshes(ctx context.Context, arg EnqueueTenantMediaObjectRefreshesParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, enqueueTenantMediaObjectRefreshes, arg.Reason, arg.SourceEventID, arg.TenantID)
+	var enqueued int64
+	err := row.Scan(&enqueued)
+	return enqueued, err
+}
+
+const ensureMediaAuthorityRenewal = `-- name: EnsureMediaAuthorityRenewal :exec
+INSERT INTO commodore.media_authority_refresh_obligations AS obligation (
+    target_key, lane, tenant_id, target_kind, bound_version, next_attempt_at, expires_at,
+    last_reason, last_source_service, last_source_event_id
+) VALUES (
+    $1::text, $2, $3::uuid, $4,
+    $5, $6, $7, 'renewal', 'commodore',
+    'renewal:' || $1::text
+)
+ON CONFLICT (target_key, lane) DO UPDATE SET
+    revision = obligation.revision + 1,
+    status = 'pending',
+    attempts = 0,
+    bound_version = EXCLUDED.bound_version,
+    next_attempt_at = EXCLUDED.next_attempt_at,
+    expires_at = EXCLUDED.expires_at,
+    pending_since = NOW(),
+    lease_expires_at = NULL,
+    park_reason = NULL,
+    last_error = NULL,
+    updated_at = NOW()
+WHERE obligation.status = 'completed'
+   OR (obligation.status = 'dormant' AND $8::boolean)
+`
+
+type EnsureMediaAuthorityRenewalParams struct {
+	TargetKey     string        `db:"target_key" json:"target_key"`
+	Lane          string        `db:"lane" json:"lane"`
+	TenantID      string        `db:"tenant_id" json:"tenant_id"`
+	TargetKind    string        `db:"target_kind" json:"target_kind"`
+	BoundVersion  sql.NullInt64 `db:"bound_version" json:"bound_version"`
+	NextAttemptAt time.Time     `db:"next_attempt_at" json:"next_attempt_at"`
+	ExpiresAt     sql.NullTime  `db:"expires_at" json:"expires_at"`
+	ReviveDormant bool          `db:"revive_dormant" json:"revive_dormant"`
+}
+
+// Gives a live authority a renewal obligation when it has none or only a
+// settled one. A pending, processing, or parked renewal is left exactly as it
+// is: this is the recovery path, not a way to move a schedule. A dormant
+// renewal belongs to an object nobody uses; it is revived only when the caller
+// found the object in use again.
+func (q *Queries) EnsureMediaAuthorityRenewal(ctx context.Context, arg EnsureMediaAuthorityRenewalParams) error {
+	_, err := q.db.ExecContext(ctx, ensureMediaAuthorityRenewal,
+		arg.TargetKey,
+		arg.Lane,
+		arg.TenantID,
+		arg.TargetKind,
+		arg.BoundVersion,
+		arg.NextAttemptAt,
+		arg.ExpiresAt,
+		arg.ReviveDormant,
+	)
+	return err
+}
+
+const failMediaAuthorityObligation = `-- name: FailMediaAuthorityObligation :execrows
+UPDATE commodore.media_authority_refresh_obligations
 SET status = 'pending', next_attempt_at = $1,
-    lease_expires_at = NULL, last_error = $2, updated_at = NOW()
-WHERE source_service = $3
-  AND source_event_id = $4
+    lease_expires_at = NULL, claim_token = NULL, last_error = $2, updated_at = NOW()
+WHERE target_key = $3
+  AND lane = $4
+  AND revision = $5
+  AND claim_token::text = $6::text
   AND status = 'processing'
 `
 
-type FailMediaAuthorityRefreshInboxParams struct {
+type FailMediaAuthorityObligationParams struct {
 	NextAttemptAt time.Time      `db:"next_attempt_at" json:"next_attempt_at"`
 	LastError     sql.NullString `db:"last_error" json:"last_error"`
-	SourceService string         `db:"source_service" json:"source_service"`
-	SourceEventID string         `db:"source_event_id" json:"source_event_id"`
+	TargetKey     string         `db:"target_key" json:"target_key"`
+	Lane          string         `db:"lane" json:"lane"`
+	Revision      int64          `db:"revision" json:"revision"`
+	ClaimToken    string         `db:"claim_token" json:"claim_token"`
 }
 
-func (q *Queries) FailMediaAuthorityRefreshInbox(ctx context.Context, arg FailMediaAuthorityRefreshInboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failMediaAuthorityRefreshInbox,
+func (q *Queries) FailMediaAuthorityObligation(ctx context.Context, arg FailMediaAuthorityObligationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failMediaAuthorityObligation,
 		arg.NextAttemptAt,
 		arg.LastError,
-		arg.SourceService,
-		arg.SourceEventID,
+		arg.TargetKey,
+		arg.Lane,
+		arg.Revision,
+		arg.ClaimToken,
 	)
 	if err != nil {
 		return 0, err
@@ -624,7 +839,8 @@ SELECT c.id::text AS authority_id, 'clip'::text AS artifact_kind, c.clip_hash AS
        COALESCE(c.origin_cluster_id, '')::text AS origin_cluster_id,
        c.requires_auth, COALESCE(c.playback_policy::text, '')::text AS playback_policy,
        COALESCE(c.playback_webhook_secret_enc, '')::text AS playback_webhook_secret_enc,
-       TRUE AS parent_stream_exists, COALESCE(parent.internal_name, '')::text AS parent_stream_internal_name
+       TRUE AS parent_stream_exists, COALESCE(parent.internal_name, '')::text AS parent_stream_internal_name,
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - c.created_at)), 1e12)::bigint AS age_seconds
 FROM commodore.clips AS c
 LEFT JOIN commodore.streams AS parent ON parent.id = c.stream_id
 WHERE c.id = $1::uuid
@@ -636,7 +852,8 @@ SELECT d.id::text, 'dvr'::text, d.dvr_hash, d.tenant_id::text, d.user_id::text,
        COALESCE((CASE WHEN d.playback_authority_ready THEN d.playback_policy ELSE parent.playback_policy END)::text, '')::text,
        COALESCE(CASE WHEN d.playback_authority_ready THEN d.playback_webhook_secret_enc ELSE parent.playback_webhook_secret_enc END, '')::text,
        EXISTS (SELECT 1 FROM commodore.streams AS parent WHERE parent.id = d.stream_id) AS parent_stream_exists,
-       COALESCE(d.stream_internal_name, '')::text AS parent_stream_internal_name
+       COALESCE(d.stream_internal_name, '')::text AS parent_stream_internal_name,
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - d.created_at)), 1e12)::bigint
 FROM commodore.dvr_recordings AS d
 LEFT JOIN commodore.streams AS parent ON parent.id = d.stream_id AND parent.tenant_id = d.tenant_id
 WHERE d.id = $1::uuid
@@ -648,7 +865,8 @@ SELECT v.id::text,
        v.requires_auth, COALESCE(v.playback_policy::text, '')::text,
        COALESCE(v.playback_webhook_secret_enc, '')::text,
        TRUE AS parent_stream_exists,
-       COALESCE(parent_dvr.stream_internal_name, parent_stream.internal_name, '')::text AS parent_stream_internal_name
+       COALESCE(parent_dvr.stream_internal_name, parent_stream.internal_name, '')::text AS parent_stream_internal_name,
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - v.created_at)), 1e12)::bigint
 FROM commodore.vod_assets AS v
 LEFT JOIN commodore.dvr_chapter_playback AS chapter
   ON chapter.tenant_id = v.tenant_id AND chapter.artifact_hash = v.vod_hash
@@ -673,6 +891,7 @@ type GetArtifactMediaAuthoritySourceRow struct {
 	PlaybackWebhookSecretEnc string `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
 	ParentStreamExists       bool   `db:"parent_stream_exists" json:"parent_stream_exists"`
 	ParentStreamInternalName string `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
+	AgeSeconds               int64  `db:"age_seconds" json:"age_seconds"`
 }
 
 func (q *Queries) GetArtifactMediaAuthoritySource(ctx context.Context, authorityID string) (GetArtifactMediaAuthoritySourceRow, error) {
@@ -693,6 +912,7 @@ func (q *Queries) GetArtifactMediaAuthoritySource(ctx context.Context, authority
 		&i.PlaybackWebhookSecretEnc,
 		&i.ParentStreamExists,
 		&i.ParentStreamInternalName,
+		&i.AgeSeconds,
 	)
 	return i, err
 }
@@ -725,6 +945,63 @@ func (q *Queries) GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCu
 	return i, err
 }
 
+const getCurrentMediaAuthorityPlaybackSourceRevision = `-- name: GetCurrentMediaAuthorityPlaybackSourceRevision :one
+SELECT COALESCE((SELECT item->>'revision'
+    FROM jsonb_array_elements(versions.source_revisions) AS item
+    WHERE item->>'service' = 'commodore-playback-access' LIMIT 1), '')::text AS revision
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions USING (authority_kind, authority_id, authority_version)
+WHERE current.authority_kind = 'media_object'
+  AND current.authority_id = $1
+`
+
+func (q *Queries) GetCurrentMediaAuthorityPlaybackSourceRevision(ctx context.Context, authorityID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentMediaAuthorityPlaybackSourceRevision, authorityID)
+	var revision string
+	err := row.Scan(&revision)
+	return revision, err
+}
+
+const getCurrentMediaAuthorityPublication = `-- name: GetCurrentMediaAuthorityPublication :one
+SELECT versions.authority_version, versions.content_digest, versions.dependents_digest,
+       versions.issued_at, versions.refresh_after, versions.valid_until
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE current.authority_kind = $1
+  AND current.authority_id = $2
+`
+
+type GetCurrentMediaAuthorityPublicationParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+type GetCurrentMediaAuthorityPublicationRow struct {
+	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
+	ContentDigest    []byte    `db:"content_digest" json:"content_digest"`
+	DependentsDigest []byte    `db:"dependents_digest" json:"dependents_digest"`
+	IssuedAt         time.Time `db:"issued_at" json:"issued_at"`
+	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
+}
+
+func (q *Queries) GetCurrentMediaAuthorityPublication(ctx context.Context, arg GetCurrentMediaAuthorityPublicationParams) (GetCurrentMediaAuthorityPublicationRow, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentMediaAuthorityPublication, arg.AuthorityKind, arg.AuthorityID)
+	var i GetCurrentMediaAuthorityPublicationRow
+	err := row.Scan(
+		&i.AuthorityVersion,
+		&i.ContentDigest,
+		&i.DependentsDigest,
+		&i.IssuedAt,
+		&i.RefreshAfter,
+		&i.ValidUntil,
+	)
+	return i, err
+}
+
 const getLiveStreamMediaAuthoritySource = `-- name: GetLiveStreamMediaAuthoritySource :one
 SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS user_id,
        internal_name, playback_id::text AS playback_id, stream_key::text AS stream_key,
@@ -732,7 +1009,10 @@ SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS use
        COALESCE(playback_policy::text, '')::text AS playback_policy,
        COALESCE(playback_webhook_secret_enc, '')::text AS playback_webhook_secret_enc,
        COALESCE(active_ingest_cluster_id, '')::text AS active_ingest_cluster_id,
-       deleted_at
+       deleted_at,
+       -- Ages are taken on the database clock, in the column's own time zone.
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - created_at)), 1e12)::bigint AS age_seconds,
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - active_ingest_cluster_updated_at)), 1e12)::bigint AS ingest_lease_age_seconds
 FROM commodore.streams
 WHERE id = $1::uuid
 `
@@ -751,6 +1031,8 @@ type GetLiveStreamMediaAuthoritySourceRow struct {
 	PlaybackWebhookSecretEnc string       `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
 	ActiveIngestClusterID    string       `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
 	DeletedAt                sql.NullTime `db:"deleted_at" json:"deleted_at"`
+	AgeSeconds               int64        `db:"age_seconds" json:"age_seconds"`
+	IngestLeaseAgeSeconds    int64        `db:"ingest_lease_age_seconds" json:"ingest_lease_age_seconds"`
 }
 
 func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamID string) (GetLiveStreamMediaAuthoritySourceRow, error) {
@@ -770,8 +1052,89 @@ func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamI
 		&i.PlaybackWebhookSecretEnc,
 		&i.ActiveIngestClusterID,
 		&i.DeletedAt,
+		&i.AgeSeconds,
+		&i.IngestLeaseAgeSeconds,
 	)
 	return i, err
+}
+
+const getMediaAuthorityCompilerFingerprint = `-- name: GetMediaAuthorityCompilerFingerprint :one
+SELECT fingerprint FROM commodore.media_authority_compiler_state
+`
+
+func (q *Queries) GetMediaAuthorityCompilerFingerprint(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityCompilerFingerprint)
+	var fingerprint string
+	err := row.Scan(&fingerprint)
+	return fingerprint, err
+}
+
+const getMediaAuthorityLastUse = `-- name: GetMediaAuthorityLastUse :one
+SELECT COALESCE(used.last_used_at, epoch.started_at)::timestamptz AS last_used_at
+FROM commodore.media_authority_use_epoch AS epoch
+LEFT JOIN commodore.media_authority_use AS used
+  ON used.authority_kind = $1
+ AND used.authority_id = $2
+`
+
+type GetMediaAuthorityLastUseParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+// An authority with no use row counts as used when use started being recorded.
+func (q *Queries) GetMediaAuthorityLastUse(ctx context.Context, arg GetMediaAuthorityLastUseParams) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityLastUse, arg.AuthorityKind, arg.AuthorityID)
+	var last_used_at time.Time
+	err := row.Scan(&last_used_at)
+	return last_used_at, err
+}
+
+const getMediaAuthorityValidHorizon = `-- name: GetMediaAuthorityValidHorizon :one
+SELECT COALESCE(MAX(copies.valid_until), 'epoch'::timestamptz)::timestamptz AS valid_until
+FROM (
+    SELECT versions.valid_until
+    FROM commodore.media_authority_current AS current
+    JOIN commodore.media_authority_versions AS versions USING (authority_kind, authority_id, authority_version)
+    WHERE current.authority_kind = $1
+      AND current.authority_id = $2
+    UNION ALL
+    SELECT LEAST(versions.valid_until, delivery.correction_until)
+    FROM commodore.media_authority_targets AS target
+    JOIN commodore.media_authority_deliveries AS delivery USING (authority_kind, authority_id, cell_id)
+    JOIN commodore.media_authority_versions AS versions USING (authority_kind, authority_id, authority_version)
+    LEFT JOIN commodore.media_authority_distribution AS distribution
+      ON distribution.authority_kind = target.authority_kind
+     AND distribution.authority_id = target.authority_id
+     AND distribution.cell_id = target.cell_id
+    LEFT JOIN commodore.media_authority_cell_ack_resets AS reset ON reset.cell_id = target.cell_id
+    WHERE target.authority_kind = $1
+      AND target.authority_id = $2
+      AND delivery.authority_version <= target.highest_targeted_version
+      AND delivery.authority_version >= CASE
+          WHEN distribution.last_acknowledged_at > COALESCE(reset.reset_at, '-infinity'::timestamptz)
+          THEN distribution.highest_acknowledged_version ELSE 0 END
+) AS copies
+`
+
+type GetMediaAuthorityValidHorizonParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+// The latest instant a copy some cell may hold is valid until. A replacement can
+// be shorter-lived than what it replaced, and a cell that never received the
+// replacement still holds the longer one, so the current version alone does
+// not decide it. A cell holds at least the version it last acknowledged (its
+// fence refuses anything older) and at most the last one it was sent, so only
+// those versions count; once every cell has acknowledged the current version,
+// the horizon is the current version's own validity. Versions are kept well
+// past their validity, so none that matters is missing.
+func (q *Queries) GetMediaAuthorityValidHorizon(ctx context.Context, arg GetMediaAuthorityValidHorizonParams) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityValidHorizon, arg.AuthorityKind, arg.AuthorityID)
+	var valid_until time.Time
+	err := row.Scan(&valid_until)
+	return valid_until, err
 }
 
 const getMediaCellPlacementCapability = `-- name: GetMediaCellPlacementCapability :one
@@ -852,80 +1215,16 @@ func (q *Queries) GetPullMediaAuthoritySecret(ctx context.Context, streamID stri
 	return i, err
 }
 
-const getScheduledMediaAuthorityVersion = `-- name: GetScheduledMediaAuthorityVersion :one
-WITH scoped AS (
-    SELECT 'tenant'::text AS kind, $3::text AS id
-    UNION ALL
-    SELECT 'media_object', 'live_stream:' || id::text FROM commodore.streams
-    WHERE tenant_id = $3::uuid
-    UNION ALL
-    SELECT 'media_object', 'artifact:' || id::text FROM commodore.clips
-    WHERE tenant_id = $3::uuid
-    UNION ALL
-    SELECT 'media_object', 'artifact:' || id::text FROM commodore.dvr_recordings
-    WHERE tenant_id = $3::uuid
-    UNION ALL
-    SELECT 'media_object', 'artifact:' || id::text FROM commodore.vod_assets
-    WHERE tenant_id = $3::uuid
-)
-SELECT current.authority_version
-FROM commodore.media_authority_current AS current
-JOIN scoped ON scoped.kind = current.authority_kind AND scoped.id = current.authority_id
-WHERE current.authority_kind = $1
-  AND current.authority_id = $2
-`
-
-type GetScheduledMediaAuthorityVersionParams struct {
-	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
-	AuthorityID   string `db:"authority_id" json:"authority_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-}
-
-func (q *Queries) GetScheduledMediaAuthorityVersion(ctx context.Context, arg GetScheduledMediaAuthorityVersionParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getScheduledMediaAuthorityVersion, arg.AuthorityKind, arg.AuthorityID, arg.TenantID)
-	var authority_version int64
-	err := row.Scan(&authority_version)
-	return authority_version, err
-}
-
-const insertMediaAuthorityRefreshInbox = `-- name: InsertMediaAuthorityRefreshInbox :execrows
-INSERT INTO commodore.media_authority_refresh_inbox (
-    source_service, source_event_id, tenant_id, reason
-) VALUES (
-    $1, $2, $3::uuid,
-    $4
-)
-ON CONFLICT (source_service, source_event_id) DO NOTHING
-`
-
-type InsertMediaAuthorityRefreshInboxParams struct {
-	SourceService string `db:"source_service" json:"source_service"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
-	Reason        string `db:"reason" json:"reason"`
-}
-
-func (q *Queries) InsertMediaAuthorityRefreshInbox(ctx context.Context, arg InsertMediaAuthorityRefreshInboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertMediaAuthorityRefreshInbox,
-		arg.SourceService,
-		arg.SourceEventID,
-		arg.TenantID,
-		arg.Reason,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const insertMediaAuthorityVersion = `-- name: InsertMediaAuthorityVersion :exec
 INSERT INTO commodore.media_authority_versions (
     authority_kind, authority_id, authority_version, payload_schema_version,
-    payload, payload_sha256, source_revisions, issued_at, refresh_after, valid_until
+    payload, payload_sha256, content_digest, dependents_digest, tombstone, source_revisions,
+    issued_at, refresh_after, valid_until
 ) VALUES (
     $1, $2, $3,
     $4, $5, $6,
-    $7, $8, $9, $10
+    $7, $8, $9,
+    $10, $11, $12, $13
 )
 `
 
@@ -936,6 +1235,9 @@ type InsertMediaAuthorityVersionParams struct {
 	PayloadSchemaVersion int32           `db:"payload_schema_version" json:"payload_schema_version"`
 	Payload              []byte          `db:"payload" json:"payload"`
 	PayloadSha256        []byte          `db:"payload_sha256" json:"payload_sha256"`
+	ContentDigest        []byte          `db:"content_digest" json:"content_digest"`
+	DependentsDigest     []byte          `db:"dependents_digest" json:"dependents_digest"`
+	Tombstone            bool            `db:"tombstone" json:"tombstone"`
 	SourceRevisions      json.RawMessage `db:"source_revisions" json:"source_revisions"`
 	IssuedAt             time.Time       `db:"issued_at" json:"issued_at"`
 	RefreshAfter         time.Time       `db:"refresh_after" json:"refresh_after"`
@@ -950,12 +1252,116 @@ func (q *Queries) InsertMediaAuthorityVersion(ctx context.Context, arg InsertMed
 		arg.PayloadSchemaVersion,
 		arg.Payload,
 		arg.PayloadSha256,
+		arg.ContentDigest,
+		arg.DependentsDigest,
+		arg.Tombstone,
 		arg.SourceRevisions,
 		arg.IssuedAt,
 		arg.RefreshAfter,
 		arg.ValidUntil,
 	)
 	return err
+}
+
+const listAcknowledgedMediaAuthoritiesForCell = `-- name: ListAcknowledgedMediaAuthoritiesForCell :many
+SELECT distribution.authority_kind, distribution.authority_id,
+       distribution.highest_acknowledged_version AS authority_version
+FROM commodore.media_authority_distribution AS distribution
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = distribution.authority_kind
+ AND versions.authority_id = distribution.authority_id
+ AND versions.authority_version = distribution.highest_acknowledged_version
+JOIN commodore.media_authority_deliveries AS delivery
+  ON delivery.authority_kind = distribution.authority_kind
+ AND delivery.authority_id = distribution.authority_id
+ AND delivery.authority_version = distribution.highest_acknowledged_version
+ AND delivery.cell_id = distribution.cell_id
+WHERE distribution.cell_id = $1
+  AND LEAST(versions.valid_until, delivery.correction_until) > $2::timestamptz
+  AND (distribution.authority_kind COLLATE "C", distribution.authority_id COLLATE "C") >
+      ($3::text COLLATE "C", $4::text COLLATE "C")
+ORDER BY distribution.authority_kind COLLATE "C", distribution.authority_id COLLATE "C"
+LIMIT $5
+`
+
+type ListAcknowledgedMediaAuthoritiesForCellParams struct {
+	CellID    string    `db:"cell_id" json:"cell_id"`
+	AsOf      time.Time `db:"as_of" json:"as_of"`
+	AfterKind string    `db:"after_kind" json:"after_kind"`
+	AfterID   string    `db:"after_id" json:"after_id"`
+	PageSize  int32     `db:"page_size" json:"page_size"`
+}
+
+type ListAcknowledgedMediaAuthoritiesForCellRow struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+// Publishing a successor does not change what a cell acknowledged holding.
+func (q *Queries) ListAcknowledgedMediaAuthoritiesForCell(ctx context.Context, arg ListAcknowledgedMediaAuthoritiesForCellParams) ([]ListAcknowledgedMediaAuthoritiesForCellRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAcknowledgedMediaAuthoritiesForCell,
+		arg.CellID,
+		arg.AsOf,
+		arg.AfterKind,
+		arg.AfterID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAcknowledgedMediaAuthoritiesForCellRow{}
+	for rows.Next() {
+		var i ListAcknowledgedMediaAuthoritiesForCellRow
+		if err := rows.Scan(&i.AuthorityKind, &i.AuthorityID, &i.AuthorityVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveMediaAuthorityCells = `-- name: ListActiveMediaAuthorityCells :many
+SELECT cell_id FROM commodore.media_authority_targets
+WHERE authority_kind = $1
+  AND authority_id = $2
+  AND correction_until IS NULL
+ORDER BY cell_id
+`
+
+type ListActiveMediaAuthorityCellsParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+func (q *Queries) ListActiveMediaAuthorityCells(ctx context.Context, arg ListActiveMediaAuthorityCellsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveMediaAuthorityCells, arg.AuthorityKind, arg.AuthorityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var cell_id string
+		if err := rows.Scan(&cell_id); err != nil {
+			return nil, err
+		}
+		items = append(items, cell_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listArtifactMediaAuthoritySources = `-- name: ListArtifactMediaAuthoritySources :many
@@ -1075,6 +1481,71 @@ func (q *Queries) ListAuthoritiesAwaitingActivation(ctx context.Context, arg Lis
 	return items, nil
 }
 
+const listCurrentMediaAuthoritiesWithoutRenewal = `-- name: ListCurrentMediaAuthoritiesWithoutRenewal :many
+SELECT current.authority_kind, current.authority_id, current.authority_version,
+       versions.payload, versions.issued_at, versions.refresh_after, versions.valid_until
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE NOT versions.tombstone
+  AND NOT EXISTS (
+    SELECT 1 FROM commodore.media_authority_refresh_obligations AS obligation
+    WHERE obligation.lane IN ('object_deadline', 'tenant_deadline')
+      AND obligation.target_key = current.authority_kind || ':' || current.authority_id
+      AND obligation.status IN ('pending', 'processing', 'parked', 'dormant')
+)
+ORDER BY versions.valid_until DESC
+LIMIT $1
+`
+
+type ListCurrentMediaAuthoritiesWithoutRenewalRow struct {
+	AuthorityKind    string    `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string    `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64     `db:"authority_version" json:"authority_version"`
+	Payload          []byte    `db:"payload" json:"payload"`
+	IssuedAt         time.Time `db:"issued_at" json:"issued_at"`
+	RefreshAfter     time.Time `db:"refresh_after" json:"refresh_after"`
+	ValidUntil       time.Time `db:"valid_until" json:"valid_until"`
+}
+
+// Current live authorities with no live renewal obligation. A settled row does
+// not count: only a tombstone may rest on one. Versions published before the
+// tombstone column existed all read as live, so the caller still decodes the
+// payload; newest validity first keeps those aging tombstones from crowding
+// live authorities out of a batch.
+func (q *Queries) ListCurrentMediaAuthoritiesWithoutRenewal(ctx context.Context, batchSize int32) ([]ListCurrentMediaAuthoritiesWithoutRenewalRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentMediaAuthoritiesWithoutRenewal, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCurrentMediaAuthoritiesWithoutRenewalRow{}
+	for rows.Next() {
+		var i ListCurrentMediaAuthoritiesWithoutRenewalRow
+		if err := rows.Scan(
+			&i.AuthorityKind,
+			&i.AuthorityID,
+			&i.AuthorityVersion,
+			&i.Payload,
+			&i.IssuedAt,
+			&i.RefreshAfter,
+			&i.ValidUntil,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCurrentMediaAuthorityDeliveryCells = `-- name: ListCurrentMediaAuthorityDeliveryCells :many
 SELECT delivery.cell_id
 FROM commodore.media_authority_current AS current
@@ -1105,6 +1576,67 @@ func (q *Queries) ListCurrentMediaAuthorityDeliveryCells(ctx context.Context, ar
 			return nil, err
 		}
 		items = append(items, cell_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentMediaAuthorityEnvelopesForCell = `-- name: ListCurrentMediaAuthorityEnvelopesForCell :many
+SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.signed_envelope
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+JOIN commodore.media_authority_deliveries AS delivery
+  ON delivery.authority_kind = current.authority_kind
+ AND delivery.authority_id = current.authority_id
+ AND delivery.authority_version = current.authority_version
+WHERE delivery.cell_id = $1
+  AND LEAST(versions.valid_until, delivery.correction_until) > NOW()
+  AND ((current.authority_kind = 'tenant' AND current.authority_id = $2::text)
+    OR (current.authority_kind = 'media_object' AND current.authority_id = $3::text))
+ORDER BY CASE current.authority_kind WHEN 'tenant' THEN 0 ELSE 1 END
+`
+
+type ListCurrentMediaAuthorityEnvelopesForCellParams struct {
+	CellID            string `db:"cell_id" json:"cell_id"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	ObjectAuthorityID string `db:"object_authority_id" json:"object_authority_id"`
+}
+
+type ListCurrentMediaAuthorityEnvelopesForCellRow struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+	SignedEnvelope   []byte `db:"signed_envelope" json:"signed_envelope"`
+}
+
+// The signed envelope of an authority's current version for one cell, tenant
+// before object. An expired version is never handed out.
+func (q *Queries) ListCurrentMediaAuthorityEnvelopesForCell(ctx context.Context, arg ListCurrentMediaAuthorityEnvelopesForCellParams) ([]ListCurrentMediaAuthorityEnvelopesForCellRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentMediaAuthorityEnvelopesForCell, arg.CellID, arg.TenantID, arg.ObjectAuthorityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCurrentMediaAuthorityEnvelopesForCellRow{}
+	for rows.Next() {
+		var i ListCurrentMediaAuthorityEnvelopesForCellRow
+		if err := rows.Scan(
+			&i.AuthorityKind,
+			&i.AuthorityID,
+			&i.AuthorityVersion,
+			&i.SignedEnvelope,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1217,6 +1749,64 @@ func (q *Queries) ListCurrentTenantAuthorityIDs(ctx context.Context) ([]string, 
 	return items, nil
 }
 
+const listExpiredWarmMediaAuthorityCounts = `-- name: ListExpiredWarmMediaAuthorityCounts :many
+SELECT expired.lane, COUNT(*)::bigint AS expired_count
+FROM (
+    SELECT obligation.lane
+    FROM commodore.media_authority_refresh_obligations AS obligation
+    WHERE obligation.lane IN ('object_deadline', 'tenant_deadline')
+      AND obligation.status IN ('pending', 'processing', 'parked')
+      AND obligation.expires_at < NOW()
+    UNION ALL
+    SELECT obligation.lane
+    FROM commodore.media_authority_use AS used
+    JOIN commodore.media_authority_refresh_obligations AS obligation
+      ON obligation.target_key = used.authority_kind || ':' || used.authority_id
+     AND obligation.lane IN ('object_deadline', 'tenant_deadline')
+    WHERE used.last_used_at > NOW() - INTERVAL '30 days'
+      AND obligation.status = 'dormant'
+      AND obligation.expires_at < NOW()
+) AS expired
+GROUP BY expired.lane
+ORDER BY expired.lane
+`
+
+type ListExpiredWarmMediaAuthorityCountsRow struct {
+	Lane         string `db:"lane" json:"lane"`
+	ExpiredCount int64  `db:"expired_count" json:"expired_count"`
+}
+
+// Authorities still being renewed whose bound version has run out: renewal did
+// not reach them in time, and cells are refusing them or asking for them on
+// every decision. A dormant renewal is an authority nobody uses and is expected
+// to run out, unless it was used within the use window after all: that is a
+// renewal whose revival was lost, and it is counted too.
+// Each branch is driven by its own index so neither reads the cold catalog: live
+// renewals through the expiry index, dormant ones from the recently used set
+// through its last_used_at index and the obligation key.
+func (q *Queries) ListExpiredWarmMediaAuthorityCounts(ctx context.Context) ([]ListExpiredWarmMediaAuthorityCountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredWarmMediaAuthorityCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExpiredWarmMediaAuthorityCountsRow{}
+	for rows.Next() {
+		var i ListExpiredWarmMediaAuthorityCountsRow
+		if err := rows.Scan(&i.Lane, &i.ExpiredCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLegacySchemaTenantsTargetingCell = `-- name: ListLegacySchemaTenantsTargetingCell :many
 SELECT DISTINCT target.authority_id AS tenant_id
 FROM commodore.media_authority_targets AS target
@@ -1295,22 +1885,66 @@ func (q *Queries) ListLiveStreamMediaAuthoritySources(ctx context.Context) ([]Li
 	return items, nil
 }
 
+const listMediaAuthorityDeliveryCells = `-- name: ListMediaAuthorityDeliveryCells :many
+WITH RECURSIVE cells AS (
+    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+     WHERE NOT queued.short_lease AND queued.status IN ('pending', 'delivering')
+     ORDER BY queued.cell_id LIMIT 1)
+    UNION ALL
+    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+            WHERE NOT queued.short_lease AND queued.status IN ('pending', 'delivering')
+              AND queued.cell_id > cells.cell_id
+            ORDER BY queued.cell_id LIMIT 1)
+    FROM cells WHERE cells.cell_id IS NOT NULL
+)
+SELECT cell_id::text AS cell_id FROM cells WHERE cell_id IS NOT NULL
+`
+
+// The cells that have an ordinary delivery waiting, found by stepping through
+// the per-cell index from one cell to the next instead of reading the queue.
+func (q *Queries) ListMediaAuthorityDeliveryCells(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaAuthorityDeliveryCells)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var cell_id string
+		if err := rows.Scan(&cell_id); err != nil {
+			return nil, err
+		}
+		items = append(items, cell_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMediaAuthorityDeliveryStats = `-- name: ListMediaAuthorityDeliveryStats :many
 WITH current_deliveries AS MATERIALIZED (
     SELECT current.authority_kind, current.authority_id, current.authority_version,
            delivery.cell_id, delivery.status, delivery.created_at
-    FROM commodore.media_authority_current AS current
-    JOIN LATERAL (
-        SELECT cell_id, status, created_at
-        FROM commodore.media_authority_deliveries
-        WHERE authority_kind = current.authority_kind
-          AND authority_id = current.authority_id
-          AND authority_version = current.authority_version
-        OFFSET 0
-    ) AS delivery ON TRUE
+    FROM commodore.media_authority_deliveries AS delivery
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = delivery.authority_kind
+     AND current.authority_id = delivery.authority_id
+     AND current.authority_version = delivery.authority_version
+    WHERE delivery.status IN ('pending', 'delivering', 'rejected')
+      AND (delivery.status <> 'rejected' OR EXISTS (
+          SELECT 1 FROM commodore.media_authority_actionable_rejections AS actionable
+          WHERE actionable.authority_kind = delivery.authority_kind
+            AND actionable.authority_id = delivery.authority_id
+            AND actionable.authority_version = delivery.authority_version
+            AND actionable.cell_id = delivery.cell_id))
 )
 SELECT current.authority_kind,
        COUNT(*) FILTER (WHERE current.status IN ('pending', 'delivering'))::bigint AS pending_count,
+       COUNT(*) FILTER (WHERE current.status = 'rejected')::bigint AS rejected_count,
        COALESCE(MAX(
            current.authority_version - COALESCE(distribution.highest_acknowledged_version, 0)
        ), 0)::bigint AS max_version_lag,
@@ -1331,10 +1965,14 @@ ORDER BY current.authority_kind
 type ListMediaAuthorityDeliveryStatsRow struct {
 	AuthorityKind        string  `db:"authority_kind" json:"authority_kind"`
 	PendingCount         int64   `db:"pending_count" json:"pending_count"`
+	RejectedCount        int64   `db:"rejected_count" json:"rejected_count"`
 	MaxVersionLag        int64   `db:"max_version_lag" json:"max_version_lag"`
 	OldestPendingSeconds float64 `db:"oldest_pending_seconds" json:"oldest_pending_seconds"`
 }
 
+// Reads the deliveries that are not settled, through their partial indexes, and
+// nothing else: a delivery that was acknowledged has no backlog, no age, and no
+// version lag to report, and those are nearly all of them.
 func (q *Queries) ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMediaAuthorityDeliveryStatsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listMediaAuthorityDeliveryStats)
 	if err != nil {
@@ -1347,9 +1985,114 @@ func (q *Queries) ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMe
 		if err := rows.Scan(
 			&i.AuthorityKind,
 			&i.PendingCount,
+			&i.RejectedCount,
 			&i.MaxVersionLag,
 			&i.OldestPendingSeconds,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaAuthorityHoldingCells = `-- name: ListMediaAuthorityHoldingCells :many
+SELECT target.cell_id
+FROM commodore.media_authority_targets AS target
+LEFT JOIN commodore.media_authority_distribution AS distribution
+  ON distribution.authority_kind = target.authority_kind
+ AND distribution.authority_id = target.authority_id
+ AND distribution.cell_id = target.cell_id
+LEFT JOIN commodore.media_authority_cell_ack_resets AS reset
+  ON reset.cell_id = target.cell_id
+WHERE target.authority_kind = $1
+  AND target.authority_id = $2
+  AND (target.correction_until IS NULL OR target.correction_until > NOW())
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_deliveries AS delivery
+      JOIN commodore.media_authority_versions AS versions
+        USING (authority_kind, authority_id, authority_version)
+      WHERE delivery.authority_kind = target.authority_kind
+        AND delivery.authority_id = target.authority_id
+        AND delivery.cell_id = target.cell_id
+        AND delivery.authority_version <= target.highest_targeted_version
+        AND delivery.authority_version >= CASE
+            WHEN distribution.last_acknowledged_at > COALESCE(reset.reset_at, '-infinity'::timestamptz)
+            THEN distribution.highest_acknowledged_version ELSE 0 END
+        AND LEAST(versions.valid_until, delivery.correction_until) > NOW()
+  )
+ORDER BY target.cell_id
+`
+
+type ListMediaAuthorityHoldingCellsParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+// Cells that may still hold a valid copy: some version between the last one
+// they acknowledged and the last one they were sent has not expired (see
+// GetMediaAuthorityValidHorizon). A change must reach them even when they are
+// no longer targets, and a cell whose every copy has expired has nothing left
+// to correct.
+func (q *Queries) ListMediaAuthorityHoldingCells(ctx context.Context, arg ListMediaAuthorityHoldingCellsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaAuthorityHoldingCells, arg.AuthorityKind, arg.AuthorityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var cell_id string
+		if err := rows.Scan(&cell_id); err != nil {
+			return nil, err
+		}
+		items = append(items, cell_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaAuthorityObligationStats = `-- name: ListMediaAuthorityObligationStats :many
+SELECT lane,
+       COUNT(*)::bigint AS due_count,
+       COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - GREATEST(pending_since, next_attempt_at)))), 0)::double precision AS oldest_due_seconds
+FROM commodore.media_authority_refresh_obligations
+WHERE status IN ('pending', 'processing')
+  AND lane IN ('event', 'bulk', 'object_deadline', 'tenant_deadline')
+  AND next_attempt_at <= NOW()
+GROUP BY lane
+ORDER BY lane
+`
+
+type ListMediaAuthorityObligationStatsRow struct {
+	Lane             string  `db:"lane" json:"lane"`
+	DueCount         int64   `db:"due_count" json:"due_count"`
+	OldestDueSeconds float64 `db:"oldest_due_seconds" json:"oldest_due_seconds"`
+}
+
+// Reads only what is due, through the due index. The table holds a renewal row
+// for every published authority, nearly all of them scheduled for later.
+func (q *Queries) ListMediaAuthorityObligationStats(ctx context.Context) ([]ListMediaAuthorityObligationStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaAuthorityObligationStats)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMediaAuthorityObligationStatsRow{}
+	for rows.Next() {
+		var i ListMediaAuthorityObligationStatsRow
+		if err := rows.Scan(&i.Lane, &i.DueCount, &i.OldestDueSeconds); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1368,6 +2111,7 @@ SELECT cell_id
 FROM commodore.media_authority_targets
 WHERE authority_kind = $1
   AND authority_id = $2
+  AND (correction_until IS NULL OR correction_until > NOW())
 ORDER BY cell_id
 `
 
@@ -1389,6 +2133,44 @@ func (q *Queries) ListMediaAuthorityPriorCells(ctx context.Context, arg ListMedi
 			return nil, err
 		}
 		items = append(items, cell_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaCellAuthorityFeatures = `-- name: ListMediaCellAuthorityFeatures :many
+SELECT cell_id, long_validity_ready, use_reports_ready
+FROM commodore.media_cell_placement_capabilities
+WHERE cell_id = ANY($1::text[])
+ORDER BY cell_id
+`
+
+type ListMediaCellAuthorityFeaturesRow struct {
+	CellID            string `db:"cell_id" json:"cell_id"`
+	LongValidityReady bool   `db:"long_validity_ready" json:"long_validity_ready"`
+	UseReportsReady   bool   `db:"use_reports_ready" json:"use_reports_ready"`
+}
+
+// What each cell's replicas do with media authority, independent of placement.
+// A cell with no row has attested nothing.
+func (q *Queries) ListMediaCellAuthorityFeatures(ctx context.Context, cellIds []string) ([]ListMediaCellAuthorityFeaturesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaCellAuthorityFeatures, pq.Array(cellIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMediaCellAuthorityFeaturesRow{}
+	for rows.Next() {
+		var i ListMediaCellAuthorityFeaturesRow
+		if err := rows.Scan(&i.CellID, &i.LongValidityReady, &i.UseReportsReady); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1430,6 +2212,42 @@ func (q *Queries) ListMediaCellPlacementCapabilities(ctx context.Context, cellId
 			&i.LiveReplicas,
 			&i.AttestedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listParkedMediaAuthorityObligationCounts = `-- name: ListParkedMediaAuthorityObligationCounts :many
+SELECT target_kind, COUNT(*)::bigint AS parked_count
+FROM commodore.media_authority_refresh_obligations
+WHERE status = 'parked'
+GROUP BY target_kind
+ORDER BY target_kind
+`
+
+type ListParkedMediaAuthorityObligationCountsRow struct {
+	TargetKind  string `db:"target_kind" json:"target_kind"`
+	ParkedCount int64  `db:"parked_count" json:"parked_count"`
+}
+
+func (q *Queries) ListParkedMediaAuthorityObligationCounts(ctx context.Context) ([]ListParkedMediaAuthorityObligationCountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listParkedMediaAuthorityObligationCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListParkedMediaAuthorityObligationCountsRow{}
+	for rows.Next() {
+		var i ListParkedMediaAuthorityObligationCountsRow
+		if err := rows.Scan(&i.TargetKind, &i.ParkedCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1520,6 +2338,38 @@ func (q *Queries) ListTenantLiveStreamMediaAuthoritySources(ctx context.Context,
 	return items, nil
 }
 
+const listWarmTenantIDs = `-- name: ListWarmTenantIDs :many
+SELECT tenant_id::text AS tenant_id
+FROM commodore.media_authority_refresh_obligations
+WHERE lane = 'tenant_deadline' AND status IN ('pending', 'processing', 'parked')
+ORDER BY tenant_id
+`
+
+// Tenants whose authority is still being renewed. Reconciliation covers these;
+// a tenant nobody uses is compiled when it is next used.
+func (q *Queries) ListWarmTenantIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWarmTenantIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockCurrentTenantMediaAuthority = `-- name: LockCurrentTenantMediaAuthority :one
 SELECT versions.payload, versions.valid_until
 FROM commodore.media_authority_current AS current
@@ -1583,6 +2433,63 @@ func (q *Queries) LockMediaAuthorityCompile(ctx context.Context, scopeKey string
 	return generation, err
 }
 
+const lockMediaAuthorityTargetHorizons = `-- name: LockMediaAuthorityTargetHorizons :many
+SELECT cell_id, correction_until
+FROM commodore.media_authority_targets
+WHERE authority_kind = $1
+  AND authority_id = $2
+ORDER BY cell_id
+FOR UPDATE
+`
+
+type LockMediaAuthorityTargetHorizonsParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+type LockMediaAuthorityTargetHorizonsRow struct {
+	CellID          string       `db:"cell_id" json:"cell_id"`
+	CorrectionUntil sql.NullTime `db:"correction_until" json:"correction_until"`
+}
+
+// Publication keeps these rows locked through enqueue. The pruning sweep skips
+// them, so a correction recipient cannot disappear and be reinserted as active.
+func (q *Queries) LockMediaAuthorityTargetHorizons(ctx context.Context, arg LockMediaAuthorityTargetHorizonsParams) ([]LockMediaAuthorityTargetHorizonsRow, error) {
+	rows, err := q.db.QueryContext(ctx, lockMediaAuthorityTargetHorizons, arg.AuthorityKind, arg.AuthorityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LockMediaAuthorityTargetHorizonsRow{}
+	for rows.Next() {
+		var i LockMediaAuthorityTargetHorizonsRow
+		if err := rows.Scan(&i.CellID, &i.CorrectionUntil); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markMediaAuthorityCellAcknowledgementsUntrusted = `-- name: MarkMediaAuthorityCellAcknowledgementsUntrusted :exec
+INSERT INTO commodore.media_authority_cell_ack_resets (cell_id, reset_at)
+VALUES ($1, NOW())
+ON CONFLICT (cell_id) DO UPDATE SET reset_at = NOW()
+`
+
+// A cell reported holding something other than what it acknowledged. Until it
+// acknowledges again, it may hold any version it was ever sent.
+func (q *Queries) MarkMediaAuthorityCellAcknowledgementsUntrusted(ctx context.Context, cellID string) error {
+	_, err := q.db.ExecContext(ctx, markMediaAuthorityCellAcknowledgementsUntrusted, cellID)
+	return err
+}
+
 const markMediaAuthorityDeliveryAcknowledged = `-- name: MarkMediaAuthorityDeliveryAcknowledged :execrows
 UPDATE commodore.media_authority_deliveries
 SET status = 'acknowledged', acknowledged_at = NOW(), lease_expires_at = NULL,
@@ -1614,18 +2521,306 @@ func (q *Queries) MarkMediaAuthorityDeliveryAcknowledged(ctx context.Context, ar
 	return result.RowsAffected()
 }
 
+const markMediaAuthorityVersionTombstone = `-- name: MarkMediaAuthorityVersionTombstone :execrows
+UPDATE commodore.media_authority_versions
+SET tombstone = TRUE
+WHERE authority_kind = $1
+  AND authority_id = $2
+  AND authority_version = $3
+  AND NOT tombstone
+`
+
+type MarkMediaAuthorityVersionTombstoneParams struct {
+	AuthorityKind    string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID      string `db:"authority_id" json:"authority_id"`
+	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
+}
+
+func (q *Queries) MarkMediaAuthorityVersionTombstone(ctx context.Context, arg MarkMediaAuthorityVersionTombstoneParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markMediaAuthorityVersionTombstone, arg.AuthorityKind, arg.AuthorityID, arg.AuthorityVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markMediaCellPlacementActivated = `-- name: MarkMediaCellPlacementActivated :exec
+UPDATE commodore.media_cell_placement_capabilities
+SET activation_schema_version = $1
+WHERE cell_id = $2
+`
+
+type MarkMediaCellPlacementActivatedParams struct {
+	SchemaVersion int32  `db:"schema_version" json:"schema_version"`
+	CellID        string `db:"cell_id" json:"cell_id"`
+}
+
+func (q *Queries) MarkMediaCellPlacementActivated(ctx context.Context, arg MarkMediaCellPlacementActivatedParams) error {
+	_, err := q.db.ExecContext(ctx, markMediaCellPlacementActivated, arg.SchemaVersion, arg.CellID)
+	return err
+}
+
+const mediaAuthorityRecoveryTime = `-- name: MediaAuthorityRecoveryTime :one
+SELECT clock_timestamp()::timestamptz AS observed_at
+`
+
+func (q *Queries) MediaAuthorityRecoveryTime(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, mediaAuthorityRecoveryTime)
+	var observed_at time.Time
+	err := row.Scan(&observed_at)
+	return observed_at, err
+}
+
+const parkMediaAuthorityObligation = `-- name: ParkMediaAuthorityObligation :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'parked', park_reason = $1, lease_expires_at = NULL, claim_token = NULL,
+    last_error = $2, updated_at = NOW()
+WHERE target_key = $3
+  AND lane = $4
+  AND revision = $5
+  AND claim_token::text = $6::text
+  AND status = 'processing'
+`
+
+type ParkMediaAuthorityObligationParams struct {
+	ParkReason sql.NullString `db:"park_reason" json:"park_reason"`
+	LastError  sql.NullString `db:"last_error" json:"last_error"`
+	TargetKey  string         `db:"target_key" json:"target_key"`
+	Lane       string         `db:"lane" json:"lane"`
+	Revision   int64          `db:"revision" json:"revision"`
+	ClaimToken string         `db:"claim_token" json:"claim_token"`
+}
+
+func (q *Queries) ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, parkMediaAuthorityObligation,
+		arg.ParkReason,
+		arg.LastError,
+		arg.TargetKey,
+		arg.Lane,
+		arg.Revision,
+		arg.ClaimToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rearmMediaAuthorityObligationsAwaitingTenant = `-- name: RearmMediaAuthorityObligationsAwaitingTenant :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'pending', park_reason = NULL, attempts = 0, revision = revision + 1,
+    next_attempt_at = NOW(), pending_since = NOW(), updated_at = NOW()
+WHERE tenant_id = $1::uuid
+  AND status = 'parked'
+  AND park_reason = 'awaiting_tenant_authority'
+`
+
+func (q *Queries) RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmMediaAuthorityObligationsAwaitingTenant, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rearmParkedMediaAuthorityObligations = `-- name: RearmParkedMediaAuthorityObligations :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'pending', park_reason = NULL, attempts = 0, revision = revision + 1,
+    next_attempt_at = NOW(), pending_since = NOW(), updated_at = NOW()
+WHERE status = 'parked'
+`
+
+func (q *Queries) RearmParkedMediaAuthorityObligations(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmParkedMediaAuthorityObligations)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const reconcileMediaAuthorityPage = `-- name: ReconcileMediaAuthorityPage :many
+WITH held AS MATERIALIZED (
+    SELECT (item.value->>'authority_kind')::text AS authority_kind,
+           (item.value->>'authority_id')::text AS authority_id,
+           (item.value->>'authority_version')::bigint AS authority_version
+    FROM jsonb_array_elements($1::jsonb) AS item(value)
+), expected AS MATERIALIZED (
+    SELECT distribution.authority_kind, distribution.authority_id,
+           distribution.highest_acknowledged_version AS authority_version,
+           distribution.last_acknowledged_at,
+           distribution.last_acknowledged_at > COALESCE(reset.reset_at, '-infinity'::timestamptz) AS acknowledgement_trusted
+    FROM commodore.media_authority_distribution AS distribution
+    LEFT JOIN commodore.media_authority_cell_ack_resets AS reset ON reset.cell_id = distribution.cell_id
+    JOIN commodore.media_authority_versions AS versions
+      ON versions.authority_kind = distribution.authority_kind
+     AND versions.authority_id = distribution.authority_id
+     AND versions.authority_version = distribution.highest_acknowledged_version
+    JOIN commodore.media_authority_deliveries AS acknowledged
+      ON acknowledged.authority_kind = distribution.authority_kind
+     AND acknowledged.authority_id = distribution.authority_id
+     AND acknowledged.authority_version = distribution.highest_acknowledged_version
+     AND acknowledged.cell_id = distribution.cell_id
+    WHERE distribution.cell_id = $2
+      AND (LEAST(versions.valid_until, acknowledged.correction_until) > $3::timestamptz OR EXISTS (
+          SELECT 1 FROM held
+          WHERE held.authority_kind = distribution.authority_kind
+            AND held.authority_id = distribution.authority_id
+      ))
+      -- A missing identity may have applied a newer, shorter-lived version
+      -- whose ACK was lost. Its expired copy is absent from live inventory.
+      -- An explicitly held older version is still evidence of regression.
+      AND (EXISTS (
+          SELECT 1 FROM held
+          WHERE held.authority_kind = distribution.authority_kind
+            AND held.authority_id = distribution.authority_id
+      ) OR NOT EXISTS (
+          SELECT 1 FROM commodore.media_authority_deliveries AS successor
+          JOIN commodore.media_authority_versions AS expired
+            ON expired.authority_kind = successor.authority_kind
+           AND expired.authority_id = successor.authority_id
+           AND expired.authority_version = successor.authority_version
+          WHERE successor.cell_id = distribution.cell_id
+            AND successor.authority_kind = distribution.authority_kind
+            AND successor.authority_id = distribution.authority_id
+            AND successor.authority_version > distribution.highest_acknowledged_version
+            AND LEAST(expired.valid_until, successor.correction_until) <= $3::timestamptz
+      ))
+      AND (distribution.authority_kind COLLATE "C", distribution.authority_id COLLATE "C") >
+          ($4::text COLLATE "C", $5::text COLLATE "C")
+      AND ($6::boolean OR
+          (distribution.authority_kind COLLATE "C", distribution.authority_id COLLATE "C") <=
+          ($7::text COLLATE "C", $8::text COLLATE "C"))
+), identities AS (
+    SELECT authority_kind, authority_id FROM held
+    UNION
+    SELECT authority_kind, authority_id FROM expected
+), compared AS (
+SELECT identity.authority_kind, identity.authority_id,
+       COALESCE(held.authority_version, 0)::bigint AS held_version,
+       COALESCE(expected.authority_version > COALESCE(held.authority_version, 0)
+           AND expected.acknowledgement_trusted
+           AND expected.last_acknowledged_at < $9::timestamptz, FALSE)::boolean AS regressed,
+       COALESCE(expected.authority_version > COALESCE(held.authority_version, 0)
+           AND (NOT expected.acknowledgement_trusted OR expected.last_acknowledged_at >= $9::timestamptz), FALSE)::boolean AS raced,
+       (held.authority_id IS NULL OR delivered.authority_id IS NOT NULL)::boolean AS known,
+       COALESCE(current.authority_version = held.authority_version
+           AND LEAST(versions.valid_until, delivered.correction_until) > NOW() AND delivered.authority_id IS NOT NULL, FALSE)::boolean AS confirmed
+FROM identities AS identity
+LEFT JOIN held USING (authority_kind, authority_id)
+LEFT JOIN expected USING (authority_kind, authority_id)
+LEFT JOIN commodore.media_authority_current AS current USING (authority_kind, authority_id)
+LEFT JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = identity.authority_kind
+ AND versions.authority_id = identity.authority_id
+ AND versions.authority_version = current.authority_version
+LEFT JOIN commodore.media_authority_deliveries AS delivered
+  ON delivered.authority_kind = identity.authority_kind
+ AND delivered.authority_id = identity.authority_id
+ AND delivered.authority_version = held.authority_version
+ AND delivered.cell_id = $2
+)
+SELECT authority_kind, authority_id, held_version, regressed, raced, known, confirmed
+FROM compared WHERE held_version > 0
+UNION ALL
+SELECT ''::text, ''::text, 0::bigint,
+       COALESCE(bool_or(regressed), FALSE)::boolean,
+       COALESCE(bool_or(raced), FALSE)::boolean,
+       TRUE::boolean, FALSE::boolean
+FROM compared WHERE held_version = 0
+`
+
+type ReconcileMediaAuthorityPageParams struct {
+	Held               json.RawMessage `db:"held" json:"held"`
+	CellID             string          `db:"cell_id" json:"cell_id"`
+	AsOf               time.Time       `db:"as_of" json:"as_of"`
+	AfterKind          string          `db:"after_kind" json:"after_kind"`
+	AfterID            string          `db:"after_id" json:"after_id"`
+	FinalPage          bool            `db:"final_page" json:"final_page"`
+	LastKind           string          `db:"last_kind" json:"last_kind"`
+	LastID             string          `db:"last_id" json:"last_id"`
+	AcknowledgedBefore time.Time       `db:"acknowledged_before" json:"acknowledged_before"`
+}
+
+type ReconcileMediaAuthorityPageRow struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+	HeldVersion   int64  `db:"held_version" json:"held_version"`
+	Regressed     bool   `db:"regressed" json:"regressed"`
+	Raced         bool   `db:"raced" json:"raced"`
+	Known         bool   `db:"known" json:"known"`
+	Confirmed     bool   `db:"confirmed" json:"confirmed"`
+}
+
+// Compare each identity with its acknowledged floor. An unrelated delivery
+// cannot hide a regression; an apply ahead of its acknowledgement is normal.
+func (q *Queries) ReconcileMediaAuthorityPage(ctx context.Context, arg ReconcileMediaAuthorityPageParams) ([]ReconcileMediaAuthorityPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, reconcileMediaAuthorityPage,
+		arg.Held,
+		arg.CellID,
+		arg.AsOf,
+		arg.AfterKind,
+		arg.AfterID,
+		arg.FinalPage,
+		arg.LastKind,
+		arg.LastID,
+		arg.AcknowledgedBefore,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReconcileMediaAuthorityPageRow{}
+	for rows.Next() {
+		var i ReconcileMediaAuthorityPageRow
+		if err := rows.Scan(
+			&i.AuthorityKind,
+			&i.AuthorityID,
+			&i.HeldVersion,
+			&i.Regressed,
+			&i.Raced,
+			&i.Known,
+			&i.Confirmed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordMediaAuthorityDeliveryFailure = `-- name: RecordMediaAuthorityDeliveryFailure :execrows
-UPDATE commodore.media_authority_deliveries
-SET status = 'pending', next_attempt_at = $1,
-    lease_expires_at = NULL, last_error = $2, updated_at = NOW()
-WHERE authority_kind = $3
-  AND authority_id = $4
-  AND authority_version = $5
-  AND cell_id = $6
-  AND status = 'delivering'
+UPDATE commodore.media_authority_deliveries AS delivery
+SET status = CASE
+        WHEN delivery.authority_version < current.authority_version THEN 'superseded'
+        WHEN $1::boolean THEN 'rejected'
+        ELSE 'pending'
+    END,
+    next_attempt_at = $2,
+    lease_expires_at = NULL,
+    last_error = CASE
+        WHEN delivery.authority_version < current.authority_version
+        THEN 'superseded by a newer authority version after delivery failure'
+        ELSE $3
+    END,
+    updated_at = NOW()
+FROM commodore.media_authority_current AS current
+WHERE delivery.authority_kind = $4
+  AND delivery.authority_id = $5
+  AND delivery.authority_version = $6
+  AND delivery.cell_id = $7
+  AND delivery.status = 'delivering'
+  AND current.authority_kind = delivery.authority_kind
+  AND current.authority_id = delivery.authority_id
 `
 
 type RecordMediaAuthorityDeliveryFailureParams struct {
+	Rejected         bool           `db:"rejected" json:"rejected"`
 	NextAttemptAt    time.Time      `db:"next_attempt_at" json:"next_attempt_at"`
 	LastError        sql.NullString `db:"last_error" json:"last_error"`
 	AuthorityKind    string         `db:"authority_kind" json:"authority_kind"`
@@ -1634,8 +2829,13 @@ type RecordMediaAuthorityDeliveryFailureParams struct {
 	CellID           string         `db:"cell_id" json:"cell_id"`
 }
 
+// A cell that refuses the current version on a precondition (it holds a newer
+// version, a conflicting digest, or a terminal tombstone) will refuse every
+// retry of the same envelope, so that delivery settles as rejected instead of
+// returning to the queue. Cell replay re-opens it.
 func (q *Queries) RecordMediaAuthorityDeliveryFailure(ctx context.Context, arg RecordMediaAuthorityDeliveryFailureParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recordMediaAuthorityDeliveryFailure,
+		arg.Rejected,
 		arg.NextAttemptAt,
 		arg.LastError,
 		arg.AuthorityKind,
@@ -1649,22 +2849,110 @@ func (q *Queries) RecordMediaAuthorityDeliveryFailure(ctx context.Context, arg R
 	return result.RowsAffected()
 }
 
+const recordMediaAuthorityUse = `-- name: RecordMediaAuthorityUse :execrows
+INSERT INTO commodore.media_authority_use AS used (authority_kind, authority_id, tenant_id, last_used_at)
+VALUES ($1, $2, $3::uuid, NOW())
+ON CONFLICT (authority_kind, authority_id) DO UPDATE SET
+    last_used_at = NOW(), tenant_id = EXCLUDED.tenant_id
+WHERE used.last_used_at < NOW() - INTERVAL '1 day'
+`
+
+type RecordMediaAuthorityUseParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Use is kept to the day: a row is written at most once a day per authority
+// however often it is decided on. One row means the day advanced.
+func (q *Queries) RecordMediaAuthorityUse(ctx context.Context, arg RecordMediaAuthorityUseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordMediaAuthorityUse, arg.AuthorityKind, arg.AuthorityID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const releaseMediaAuthorityTargetClaim = `-- name: ReleaseMediaAuthorityTargetClaim :exec
+DELETE FROM commodore.media_authority_target_claims
+WHERE target_key = $1
+  AND lane = $2
+  AND claim_token::text = $3::text
+`
+
+type ReleaseMediaAuthorityTargetClaimParams struct {
+	TargetKey  string `db:"target_key" json:"target_key"`
+	Lane       string `db:"lane" json:"lane"`
+	ClaimToken string `db:"claim_token" json:"claim_token"`
+}
+
+// A lane's compile of a target has settled, whatever its outcome; another lane
+// may claim the target now instead of when the lease would have lapsed. Only
+// the claim that compiled may release it.
+func (q *Queries) ReleaseMediaAuthorityTargetClaim(ctx context.Context, arg ReleaseMediaAuthorityTargetClaimParams) error {
+	_, err := q.db.ExecContext(ctx, releaseMediaAuthorityTargetClaim, arg.TargetKey, arg.Lane, arg.ClaimToken)
+	return err
+}
+
+const releaseSupersededMediaAuthorityObligation = `-- name: ReleaseSupersededMediaAuthorityObligation :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET lease_expires_at = NULL, claim_token = NULL, updated_at = NOW()
+WHERE target_key = $1
+  AND lane = $2
+  AND revision <> $3
+  AND claim_token::text = $4::text
+  AND status = 'pending'
+`
+
+type ReleaseSupersededMediaAuthorityObligationParams struct {
+	TargetKey  string `db:"target_key" json:"target_key"`
+	Lane       string `db:"lane" json:"lane"`
+	Revision   int64  `db:"revision" json:"revision"`
+	ClaimToken string `db:"claim_token" json:"claim_token"`
+}
+
+// A fold during processing already re-armed the row at a newer revision; only
+// the serialization lease the fold preserved is left to clear. The status and
+// token filters matter: once another worker has claimed the newer revision the
+// row is processing again under its token, and that lease belongs to it.
+func (q *Queries) ReleaseSupersededMediaAuthorityObligation(ctx context.Context, arg ReleaseSupersededMediaAuthorityObligationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseSupersededMediaAuthorityObligation,
+		arg.TargetKey,
+		arg.Lane,
+		arg.Revision,
+		arg.ClaimToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const requeueCurrentMediaAuthoritiesForCell = `-- name: RequeueCurrentMediaAuthoritiesForCell :one
 WITH requeued AS (
     UPDATE commodore.media_authority_deliveries AS delivery
-    SET status = 'pending', next_attempt_at = NOW(), lease_expires_at = NULL,
+    SET status = 'pending', replay = TRUE, next_attempt_at = NOW(), lease_expires_at = NULL,
         last_error = NULL, updated_at = NOW()
     FROM commodore.media_authority_current AS current
+    JOIN commodore.media_authority_versions AS versions
+      ON versions.authority_kind = current.authority_kind
+     AND versions.authority_id = current.authority_id
+     AND versions.authority_version = current.authority_version
     WHERE delivery.authority_kind = current.authority_kind
       AND delivery.authority_id = current.authority_id
       AND delivery.authority_version = current.authority_version
       AND delivery.cell_id = $1
-      AND delivery.status = 'acknowledged'
+      AND delivery.status IN ('acknowledged', 'rejected')
+      AND LEAST(versions.valid_until, delivery.correction_until) > NOW()
     RETURNING 1
 )
 SELECT COUNT(*)::bigint AS requeued_count FROM requeued
 `
 
+// Repeats what the cell was sent, for a cell whose database was restored or
+// rebuilt. The rows are marked as a replay, which the claim serves after fresh
+// deliveries, and a version past its validity is left alone: the cell would
+// refuse it.
 func (q *Queries) RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cellID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, requeueCurrentMediaAuthoritiesForCell, cellID)
 	var requeued_count int64
@@ -1672,28 +2960,249 @@ func (q *Queries) RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cel
 	return requeued_count, err
 }
 
-const scheduleMediaAuthorityRefresh = `-- name: ScheduleMediaAuthorityRefresh :execrows
-INSERT INTO commodore.media_authority_refresh_inbox
-    (source_service, source_event_id, tenant_id, reason, next_attempt_at)
-VALUES ('commodore', $1, $2::uuid,
-        $3, $4)
-ON CONFLICT (source_service, source_event_id) DO NOTHING
+const resolveMediaAuthorityIdentityByInternalName = `-- name: ResolveMediaAuthorityIdentityByInternalName :one
+SELECT 'live_stream'::text AS target_kind, s.id::text AS object_id, s.tenant_id::text AS tenant_id
+FROM commodore.streams AS s WHERE s.internal_name = $1::text
+UNION ALL
+SELECT 'artifact'::text, c.id::text, c.tenant_id::text
+FROM commodore.clips AS c WHERE c.internal_name = $1::text
+UNION ALL
+SELECT 'artifact'::text, d.id::text, d.tenant_id::text
+FROM commodore.dvr_recordings AS d WHERE d.internal_name = $1::text
+UNION ALL
+SELECT 'artifact'::text, v.id::text, v.tenant_id::text
+FROM commodore.vod_assets AS v WHERE v.internal_name = $1::text
+LIMIT 1
 `
 
-type ScheduleMediaAuthorityRefreshParams struct {
-	SourceEventID string    `db:"source_event_id" json:"source_event_id"`
-	TenantID      string    `db:"tenant_id" json:"tenant_id"`
-	Reason        string    `db:"reason" json:"reason"`
-	NextAttemptAt time.Time `db:"next_attempt_at" json:"next_attempt_at"`
+type ResolveMediaAuthorityIdentityByInternalNameRow struct {
+	TargetKind string `db:"target_kind" json:"target_kind"`
+	ObjectID   string `db:"object_id" json:"object_id"`
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) ScheduleMediaAuthorityRefresh(ctx context.Context, arg ScheduleMediaAuthorityRefreshParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, scheduleMediaAuthorityRefresh,
-		arg.SourceEventID,
-		arg.TenantID,
-		arg.Reason,
-		arg.NextAttemptAt,
+func (q *Queries) ResolveMediaAuthorityIdentityByInternalName(ctx context.Context, internalName string) (ResolveMediaAuthorityIdentityByInternalNameRow, error) {
+	row := q.db.QueryRowContext(ctx, resolveMediaAuthorityIdentityByInternalName, internalName)
+	var i ResolveMediaAuthorityIdentityByInternalNameRow
+	err := row.Scan(&i.TargetKind, &i.ObjectID, &i.TenantID)
+	return i, err
+}
+
+const resolveMediaAuthorityIdentityByPlaybackID = `-- name: ResolveMediaAuthorityIdentityByPlaybackID :one
+SELECT 'live_stream'::text AS target_kind, s.id::text AS object_id, s.tenant_id::text AS tenant_id
+FROM commodore.streams AS s WHERE lower(s.playback_id::text) = lower($1::text)
+UNION ALL
+SELECT 'artifact'::text, c.id::text, c.tenant_id::text
+FROM commodore.clips AS c WHERE lower(c.playback_id::text) = lower($1::text)
+UNION ALL
+SELECT 'artifact'::text, d.id::text, d.tenant_id::text
+FROM commodore.dvr_recordings AS d WHERE lower(d.playback_id::text) = lower($1::text)
+UNION ALL
+SELECT 'artifact'::text, v.id::text, v.tenant_id::text
+FROM commodore.vod_assets AS v WHERE lower(v.playback_id::text) = lower($1::text)
+LIMIT 1
+`
+
+type ResolveMediaAuthorityIdentityByPlaybackIDRow struct {
+	TargetKind string `db:"target_kind" json:"target_kind"`
+	ObjectID   string `db:"object_id" json:"object_id"`
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Names the authority a cell asked for by playback id. object_id is the stream
+// or artifact id the compiler takes.
+func (q *Queries) ResolveMediaAuthorityIdentityByPlaybackID(ctx context.Context, playbackID string) (ResolveMediaAuthorityIdentityByPlaybackIDRow, error) {
+	row := q.db.QueryRowContext(ctx, resolveMediaAuthorityIdentityByPlaybackID, playbackID)
+	var i ResolveMediaAuthorityIdentityByPlaybackIDRow
+	err := row.Scan(&i.TargetKind, &i.ObjectID, &i.TenantID)
+	return i, err
+}
+
+const retireMediaAuthorityTargets = `-- name: RetireMediaAuthorityTargets :execrows
+UPDATE commodore.media_authority_targets AS target
+SET correction_until = CASE WHEN target.cell_id = ANY($1::text[]) THEN NULL
+    ELSE COALESCE(target.correction_until, (
+        SELECT MAX(LEAST(versions.valid_until, delivery.correction_until))
+        FROM commodore.media_authority_deliveries AS delivery
+        JOIN commodore.media_authority_versions AS versions
+          USING (authority_kind, authority_id, authority_version)
+        WHERE delivery.authority_kind = target.authority_kind
+          AND delivery.authority_id = target.authority_id
+          AND delivery.cell_id = target.cell_id
+          AND delivery.authority_version <= target.highest_targeted_version
+    ), NOW()) END
+WHERE target.authority_kind = $2
+  AND target.authority_id = $3
+  AND ((target.correction_until IS NULL AND NOT target.cell_id = ANY($1::text[]))
+    OR (target.correction_until IS NOT NULL AND target.cell_id = ANY($1::text[])))
+`
+
+type RetireMediaAuthorityTargetsParams struct {
+	ActiveCells   []string `db:"active_cells" json:"active_cells"`
+	AuthorityKind string   `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string   `db:"authority_id" json:"authority_id"`
+}
+
+// Freeze the horizon on departure, including unacknowledged and restored
+// copies. Subsequent corrections cannot extend this cell's retention.
+func (q *Queries) RetireMediaAuthorityTargets(ctx context.Context, arg RetireMediaAuthorityTargetsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, retireMediaAuthorityTargets, pq.Array(arg.ActiveCells), arg.AuthorityKind, arg.AuthorityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const reviveDormantMediaAuthorityRenewal = `-- name: ReviveDormantMediaAuthorityRenewal :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'pending', revision = revision + 1, attempts = 0,
+    next_attempt_at = CASE WHEN status IN ('dormant', 'completed') THEN NOW() ELSE next_attempt_at END,
+    pending_since = CASE WHEN status IN ('dormant', 'completed') THEN NOW() ELSE pending_since END,
+    updated_at = NOW()
+WHERE target_key = $1
+  AND lane IN ('object_deadline', 'tenant_deadline')
+  AND lane <> $2::text
+  AND status IN ('dormant', 'processing', 'completed')
+  AND (status <> 'completed' OR EXISTS (
+      SELECT 1 FROM commodore.media_authority_current AS current
+      JOIN commodore.media_authority_versions AS versions
+        ON versions.authority_kind = current.authority_kind
+       AND versions.authority_id = current.authority_id
+       AND versions.authority_version = current.authority_version
+      WHERE current.authority_kind = split_part($1::text, ':', 1)
+        AND current.authority_id = substr($1::text, strpos($1::text, ':') + 1)
+        AND NOT versions.tombstone
+  ))
+`
+
+type ReviveDormantMediaAuthorityRenewalParams struct {
+	TargetKey     string `db:"target_key" json:"target_key"`
+	CompilingLane string `db:"compiling_lane" json:"compiling_lane"`
+}
+
+// Use puts an authority's renewal back in the queue. A dormant renewal is made
+// due now. A renewal being compiled is folded like any other change: its
+// revision moves, so the compile in flight cannot settle it dormant, and its
+// lease is kept so it is not compiled twice at once. The lane doing the compile
+// that recorded the use is left alone, or it would fold itself on every run.
+func (q *Queries) ReviveDormantMediaAuthorityRenewal(ctx context.Context, arg ReviveDormantMediaAuthorityRenewalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reviveDormantMediaAuthorityRenewal, arg.TargetKey, arg.CompilingLane)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setMediaAuthorityCompilerFingerprint = `-- name: SetMediaAuthorityCompilerFingerprint :exec
+INSERT INTO commodore.media_authority_compiler_state (singleton, fingerprint, updated_at)
+VALUES (TRUE, $1, NOW())
+ON CONFLICT (singleton) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, updated_at = NOW()
+`
+
+func (q *Queries) SetMediaAuthorityCompilerFingerprint(ctx context.Context, fingerprint string) error {
+	_, err := q.db.ExecContext(ctx, setMediaAuthorityCompilerFingerprint, fingerprint)
+	return err
+}
+
+const settleDormantMediaAuthorityObligation = `-- name: SettleDormantMediaAuthorityObligation :execrows
+UPDATE commodore.media_authority_refresh_obligations
+SET status = 'dormant', lease_expires_at = NULL, claim_token = NULL, last_error = NULL, updated_at = NOW()
+WHERE target_key = $1
+  AND lane = $2
+  AND revision = $3
+  AND claim_token::text = $4::text
+  AND status = 'processing'
+`
+
+type SettleDormantMediaAuthorityObligationParams struct {
+	TargetKey  string `db:"target_key" json:"target_key"`
+	Lane       string `db:"lane" json:"lane"`
+	Revision   int64  `db:"revision" json:"revision"`
+	ClaimToken string `db:"claim_token" json:"claim_token"`
+}
+
+// The renewal of an object nobody uses. Dormant is not claimable, is not
+// re-armed by reconciliation, and still counts as the authority's renewal, so
+// nothing schedules another one. Use or the next publication revives it.
+func (q *Queries) SettleDormantMediaAuthorityObligation(ctx context.Context, arg SettleDormantMediaAuthorityObligationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, settleDormantMediaAuthorityObligation,
+		arg.TargetKey,
+		arg.Lane,
+		arg.Revision,
+		arg.ClaimToken,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const settleExpiredMediaAuthorityDeliveries = `-- name: SettleExpiredMediaAuthorityDeliveries :execrows
+WITH candidates AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.cell_id
+    FROM commodore.media_authority_deliveries AS delivery
+    JOIN commodore.media_authority_versions AS versions
+      ON versions.authority_kind = delivery.authority_kind
+     AND versions.authority_id = delivery.authority_id
+     AND versions.authority_version = delivery.authority_version
+    WHERE delivery.status IN ('pending', 'delivering')
+      AND delivery.next_attempt_at <= NOW()
+      AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at <= NOW())
+      AND LEAST(versions.valid_until, delivery.correction_until) <= NOW()
+    ORDER BY delivery.next_attempt_at, delivery.created_at
+    LIMIT $1
+    FOR UPDATE OF delivery SKIP LOCKED
+)
+UPDATE commodore.media_authority_deliveries AS delivery
+SET status = 'superseded', lease_expires_at = NULL,
+    last_error = 'expired before it was delivered', updated_at = NOW()
+FROM candidates
+WHERE delivery.authority_kind = candidates.authority_kind
+  AND delivery.authority_id = candidates.authority_id
+  AND delivery.authority_version = candidates.authority_version
+  AND delivery.cell_id = candidates.cell_id
+`
+
+// A delivery whose version ran out before it could be made has nothing left to
+// say and would only be refused. It leaves the queue.
+func (q *Queries) SettleExpiredMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error) {
+	result, err := q.db.ExecContext(ctx, settleExpiredMediaAuthorityDeliveries, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const supersedeExpiredObsoleteMediaAuthorityDeliveries = `-- name: SupersedeExpiredObsoleteMediaAuthorityDeliveries :execrows
+WITH candidates AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id,
+           delivery.authority_version, delivery.cell_id
+    FROM commodore.media_authority_deliveries AS delivery
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = delivery.authority_kind
+     AND current.authority_id = delivery.authority_id
+     AND current.authority_version > delivery.authority_version
+    WHERE (
+        delivery.status = 'pending'
+        OR (delivery.status = 'delivering' AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at <= NOW()))
+    )
+    ORDER BY delivery.updated_at, delivery.authority_kind,
+             delivery.authority_id, delivery.authority_version, delivery.cell_id
+    LIMIT $1
+    FOR UPDATE OF delivery SKIP LOCKED
+)
+UPDATE commodore.media_authority_deliveries AS delivery
+SET status = 'superseded', lease_expires_at = NULL,
+    last_error = 'superseded by a newer authority version', updated_at = NOW()
+FROM candidates
+WHERE delivery.authority_kind = candidates.authority_kind
+  AND delivery.authority_id = candidates.authority_id
+  AND delivery.authority_version = candidates.authority_version
+  AND delivery.cell_id = candidates.cell_id
+`
+
+func (q *Queries) SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error) {
+	result, err := q.db.ExecContext(ctx, supersedeExpiredObsoleteMediaAuthorityDeliveries, batchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -1707,7 +3216,10 @@ SET status = 'superseded', lease_expires_at = NULL,
 WHERE authority_kind = $1
   AND authority_id = $2
   AND authority_version < $3
-  AND status IN ('pending', 'delivering')
+  AND (
+      status = 'pending'
+      OR (status = 'delivering' AND (lease_expires_at IS NULL OR lease_expires_at <= NOW()))
+  )
 `
 
 type SupersedeOlderMediaAuthorityDeliveriesParams struct {
@@ -1818,34 +3330,44 @@ func (q *Queries) UpsertMediaAuthorityTarget(ctx context.Context, arg UpsertMedi
 
 const upsertMediaCellPlacementCapability = `-- name: UpsertMediaCellPlacementCapability :one
 INSERT INTO commodore.media_cell_placement_capabilities (
-    cell_id, max_schema_version, enforcement_ready, live_replicas, first_ready_at, attested_at, updated_at
+    cell_id, max_schema_version, enforcement_ready, live_replicas, long_validity_ready, use_reports_ready,
+    first_ready_at, attested_at, updated_at
 ) VALUES (
     $1, $2, $3, $4,
+    $5, $6,
     CASE WHEN $3::boolean THEN NOW() ELSE NULL END, NOW(), NOW()
 )
 ON CONFLICT (cell_id) DO UPDATE
 SET max_schema_version = EXCLUDED.max_schema_version,
     enforcement_ready = EXCLUDED.enforcement_ready,
     live_replicas = EXCLUDED.live_replicas,
+    long_validity_ready = EXCLUDED.long_validity_ready,
+    use_reports_ready = EXCLUDED.use_reports_ready,
+    activation_schema_version = CASE WHEN EXCLUDED.enforcement_ready
+        THEN LEAST(commodore.media_cell_placement_capabilities.activation_schema_version, EXCLUDED.max_schema_version)
+        ELSE 0 END,
     first_ready_at = CASE
         WHEN EXCLUDED.enforcement_ready AND commodore.media_cell_placement_capabilities.first_ready_at IS NULL THEN NOW()
         WHEN EXCLUDED.enforcement_ready THEN commodore.media_cell_placement_capabilities.first_ready_at
         ELSE NULL END,
     attested_at = NOW(),
     updated_at = NOW()
-RETURNING enforcement_ready, first_ready_at
+RETURNING enforcement_ready, first_ready_at, activation_schema_version
 `
 
 type UpsertMediaCellPlacementCapabilityParams struct {
-	CellID           string `db:"cell_id" json:"cell_id"`
-	MaxSchemaVersion int32  `db:"max_schema_version" json:"max_schema_version"`
-	EnforcementReady bool   `db:"enforcement_ready" json:"enforcement_ready"`
-	LiveReplicas     int32  `db:"live_replicas" json:"live_replicas"`
+	CellID            string `db:"cell_id" json:"cell_id"`
+	MaxSchemaVersion  int32  `db:"max_schema_version" json:"max_schema_version"`
+	EnforcementReady  bool   `db:"enforcement_ready" json:"enforcement_ready"`
+	LiveReplicas      int32  `db:"live_replicas" json:"live_replicas"`
+	LongValidityReady bool   `db:"long_validity_ready" json:"long_validity_ready"`
+	UseReportsReady   bool   `db:"use_reports_ready" json:"use_reports_ready"`
 }
 
 type UpsertMediaCellPlacementCapabilityRow struct {
-	EnforcementReady bool         `db:"enforcement_ready" json:"enforcement_ready"`
-	FirstReadyAt     sql.NullTime `db:"first_ready_at" json:"first_ready_at"`
+	EnforcementReady        bool         `db:"enforcement_ready" json:"enforcement_ready"`
+	FirstReadyAt            sql.NullTime `db:"first_ready_at" json:"first_ready_at"`
+	ActivationSchemaVersion int32        `db:"activation_schema_version" json:"activation_schema_version"`
 }
 
 func (q *Queries) UpsertMediaCellPlacementCapability(ctx context.Context, arg UpsertMediaCellPlacementCapabilityParams) (UpsertMediaCellPlacementCapabilityRow, error) {
@@ -1854,8 +3376,10 @@ func (q *Queries) UpsertMediaCellPlacementCapability(ctx context.Context, arg Up
 		arg.MaxSchemaVersion,
 		arg.EnforcementReady,
 		arg.LiveReplicas,
+		arg.LongValidityReady,
+		arg.UseReportsReady,
 	)
 	var i UpsertMediaCellPlacementCapabilityRow
-	err := row.Scan(&i.EnforcementReady, &i.FirstReadyAt)
+	err := row.Scan(&i.EnforcementReady, &i.FirstReadyAt, &i.ActivationSchemaVersion)
 	return i, err
 }

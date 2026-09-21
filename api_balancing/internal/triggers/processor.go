@@ -252,11 +252,16 @@ func (p *Processor) HandleMediaAuthorityApply(ctx context.Context, result locala
 		_, err = control.ReconcileActivePushTargetAuthority(ctx, result.TenantID, result.InternalName, desired)
 		return err
 	}
-	tenant, err := p.mediaAuthorityStore.Tenant(ctx, result.TenantID)
+	if snapshot.Freshness == localauthority.FreshnessHardExpired {
+		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{AuthorityID: snapshot.AuthorityID})
+		return errors.New("object authority unavailable for live restream reconciliation")
+	}
+	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, snapshot)
 	if err != nil {
 		return fmt.Errorf("load tenant authority for live restream reconciliation: %w", err)
 	}
 	if tenant.Authority == nil || tenant.Freshness == localauthority.FreshnessHardExpired {
+		p.mediaAuthorityStore.RefreshAuthorityAsync(localauthority.AuthorityLookup{AuthorityID: snapshot.AuthorityID})
 		return errors.New("tenant authority unavailable for live restream reconciliation")
 	}
 	if tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
@@ -1623,7 +1628,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			Error("PUSH_REWRITE has no Mist trigger UUID; denying before placement is claimed")
 		return "", true, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push rewrite missing trigger identity")
 	}
-	admissionCtx, cancelAdmission := context.WithTimeout(control.MediaRequestContext(context.Background(), "mist_push_rewrite"), MediaAdmissionTimeout)
+	// Cold-authority fetch and admission share the trigger's overall budget,
+	// not the shorter individual capacity-operation budget.
+	admissionCtx, cancelAdmission := context.WithTimeout(control.MediaRequestContext(context.Background(), "mist_push_rewrite"), 3*time.Second)
 	defer cancelAdmission()
 	localValidation, localAuthority, localFound, localErr := p.resolveReadyLocalIngest(admissionCtx, pushRewrite.GetStreamName())
 	if localErr != nil {
@@ -1678,6 +1685,12 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			message = "invalid stream key"
 		}
 		return "", true, ingesterrors.New(ingestErrorCodeForStreamKeyRejection(identity.GetRejectionReason()), message)
+	}
+	// The control plane validated a key this cell holds no authority for: a
+	// stream nobody has used for a while. Its authority is asked for now, because
+	// placement admission further down decides on the local pair alone.
+	if !localFound && !usedLocalIdentity {
+		p.fetchLocalIngestAuthority(admissionCtx, identity.GetStreamId())
 	}
 
 	// An existing session's cluster outranks the node's present registration:
@@ -2036,7 +2049,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 					Error("Local outage admission has no complete signed authority snapshot; denying")
 				return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "local ingest authority snapshot unavailable")
 			}
-			mintCtx, mintCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			mintCtx, mintCancel := context.WithTimeout(admissionCtx, 3*time.Second)
 			sid, outcome, sErr := control.CreateIngestSession(mintCtx, streamValidation.TenantId, trigger.GetNodeId(), streamValidation.InternalName, connectorPID, pushRewrite.GetTriggerUuid(), pushRewrite.GetTriggerUnixMillis(), dvrIntent, ingestClusterID, p.logger, authoritySnapshot...)
 			mintCancel()
 			if sErr != nil {
@@ -2725,6 +2738,8 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	streamSource := payload.StreamSource
 	streamName := streamSource.GetStreamName()
 	requestCtx := control.MediaRequestContext(context.Background(), "mist_stream_source")
+	requestCtx, cancelRequest := context.WithTimeout(requestCtx, 3*time.Second)
+	defer cancelRequest()
 
 	p.logger.WithFields(logging.Fields{
 		"stream_name": streamName,
@@ -2815,12 +2830,20 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 				return "balance:" + base, false, nil
 			}
 		}
+		// What the local set says when the control plane has nothing to add. A
+		// cell holds only the authorities in use, so a set that is incomplete or
+		// does not list the stream is not the last word while the control plane
+		// can be asked: the stream may simply not have been used for a while.
+		localAnswer := ""
 		if p.mediaAuthorityStore != nil && nodeClusterID != "" {
-			localSet, localErr := p.mediaAuthorityStore.ManagedStreams(requestCtx, nodeClusterID)
-			if localSet.Marked {
+			managedSource := func() (string, bool) {
+				localSet, localErr := p.mediaAuthorityStore.ManagedStreams(requestCtx, nodeClusterID)
+				if !localSet.Marked {
+					return "", false
+				}
 				if localErr != nil || !localSet.Complete {
 					p.logger.WithError(localErr).WithField("stream_name", streamName).Warn("STREAM_SOURCE: local managed-stream authority is incomplete")
-					return control.OfflineUnavailable, false, nil
+					return control.OfflineUnavailable, false
 				}
 				for _, row := range localSet.Rows {
 					if row.GetInternalName() != streamName && !strings.EqualFold(row.GetPlaybackId(), streamName) {
@@ -2828,12 +2851,20 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 					}
 					base := control.FoghornBalancerSourceForNode(nodeClusterID, trigger.GetNodeId())
 					if base == "" {
-						return control.OfflineUnavailable, false, nil
+						return control.OfflineUnavailable, true
 					}
-					return "balance:" + base, false, nil
+					return "balance:" + base, true
 				}
-				return control.OfflineNotConfigured, false, nil
+				return control.OfflineNotConfigured, false
 			}
+			answer, final := managedSource()
+			if !final && answer == control.OfflineNotConfigured && p.fetchLocalAuthority(requestCtx, localauthority.AuthorityLookup{InternalName: streamName}) {
+				answer, final = managedSource()
+			}
+			if final {
+				return answer, false, nil
+			}
+			localAnswer = answer
 		}
 		// Cold path: resolve via Commodore so admission decisions and
 		// streamCache hydration stay in sync.
@@ -2868,6 +2899,12 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 					"resolved_internal": resp.GetInternalName(),
 				}).Debug("STREAM_SOURCE: bare stream is not an admitted mist_native source")
 			}
+		}
+		// The control plane did not admit the stream, or could not be reached.
+		// The local set then stands: not configured, or unavailable while the set
+		// is incomplete.
+		if localAnswer != "" {
+			return localAnswer, false, nil
 		}
 	}
 
@@ -4184,6 +4221,8 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	userNew := payload.ViewerConnect
 	internalName := mist.ExtractInternalName(userNew.GetStreamName())
 	requestCtx := control.MediaRequestContext(context.Background(), "mist_user_new")
+	requestCtx, cancelRequest := context.WithTimeout(requestCtx, 3*time.Second)
+	defer cancelRequest()
 	p.logger.WithFields(logging.Fields{
 		"session_id":      userNew.GetSessionId(),
 		"internal_name":   internalName,
@@ -4329,7 +4368,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 
 	// Add viewer geographic data from GeoIP if available (bucketized)
 	if p.geoipClient != nil && userNew.GetHost() != "" {
-		if geoData := geoip.LookupCached(context.Background(), p.geoipClient, p.geoipCache, userNew.GetHost()); geoData != nil {
+		if geoData := geoip.LookupCached(requestCtx, p.geoipClient, p.geoipCache, userNew.GetHost()); geoData != nil {
 			userNew.ClientCountry = &geoData.CountryCode
 			userNew.ClientCity = &geoData.City
 			if bucket, centLat, centLon, ok := geo.Bucket(geoData.Latitude, geoData.Longitude); ok {
@@ -4356,7 +4395,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	// Raw IP in 'host' field is preserved for ClickHouse storage and future analysis
 
 	// Send enriched trigger to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
+	if err := p.sendTriggerToDecklogContext(requestCtx, trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"session_id":    userNew.GetSessionId(),
 			"internal_name": internalName,

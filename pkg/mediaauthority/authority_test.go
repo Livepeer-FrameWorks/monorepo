@@ -369,6 +369,26 @@ func TestAuthorityDurabilityBounds(t *testing.T) {
 		}
 	})
 
+	// A cell forgets an expired object authority once it was issued longer ago
+	// than this bound, so the bound has to hold for every envelope that verifies.
+	t.Run("media object validity is bounded at thirty days", func(t *testing.T) {
+		stream := &mediaauthoritypb.MediaObjectAuthority{
+			SchemaVersion: SchemaVersion, ObjectKind: mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM,
+			TenantId: "tenant-1", InternalName: "internal-1", PlaybackId: "playback-1",
+			Lifecycle:      mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			PlaybackPolicy: &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC},
+			Object:         &mediaauthoritypb.MediaObjectAuthority_LiveStream{LiveStream: &mediaauthoritypb.LiveStreamAuthority{StreamId: "stream-1", IngestMode: "push"}},
+		}
+		for validity, wantErr := range map[time.Duration]bool{MaxMediaObjectValidity: false, MaxMediaObjectValidity + time.Second: true} {
+			_, err := NewEnvelope(mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT, LiveStreamAuthorityID("stream-1"), 1,
+				fixtureNow, fixtureNow.Add(validity/2), fixtureNow.Add(validity), "key", "cell-a", stream,
+				[]*mediaauthoritypb.AuthoritySourceRevision{{Service: "commodore", Revision: "1"}})
+			if errors.Is(err, ErrMalformed) != wantErr || (!wantErr && err != nil) {
+				t.Fatalf("validity %s: error = %v, want rejected=%v", validity, err, wantErr)
+			}
+		}
+	})
+
 	t.Run("payload is bounded before persistence", func(t *testing.T) {
 		payload := fixtureTenant()
 		payload.DecisionReason = strings.Repeat("x", maxPayloadBytes)

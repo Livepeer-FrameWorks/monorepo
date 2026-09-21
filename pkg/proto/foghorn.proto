@@ -194,6 +194,14 @@ message MediaCellPlacementCapability {
   uint32 live_replicas = 3;
   // Every live replica of the cell reads schema-3 authorities (node selectors).
   bool node_placement_ready = 4;
+  // Every live replica accepts media-object authorities valid for up to 30
+  // days. Commodore issues the longer validity only when every target cell
+  // attests it, because an older replica rejects the envelope as malformed.
+  bool long_validity_ready = 5;
+  // Every live replica reports which authorities it decides on. Commodore stops
+  // renewing an unused object only when every cell it is delivered to reports
+  // use; a cell that does not would let an object in use go cold.
+  bool use_reports_ready = 6;
 }
 
 message InvalidatePlaybackAuthRequest {

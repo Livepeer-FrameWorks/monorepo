@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -106,7 +107,7 @@ func (adapter *MediaSourcePlacementAdapter) ResolveSource(ctx context.Context, c
 	if !ok {
 		return federation.PreparedPlacementSource{}, errors.New("authenticated source connection is unavailable")
 	}
-	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	pair, err := adapter.Authority.PlacementForInternalName(readCtx, connection.TenantID, connection.InternalName)
 	readErr := readCtx.Err()
 	stopRead()

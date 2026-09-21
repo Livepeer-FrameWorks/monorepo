@@ -750,3 +750,56 @@ func TestDrainAcknowledgementFromRetiredConnectionCannotSettleObligation(t *test
 		t.Fatalf("retired connection reached the durable drain marker: %v", err)
 	}
 }
+
+// A registration that passed Connect's entry check before shutdown began, and
+// reaches the registry after BeginShutdown's snapshot, is handed off instead of
+// published: it would otherwise miss the reconnect window, the going-away
+// notice and the release, and its disconnect would mark a healthy node
+// unhealthy. The node keeps the reconnect window and redials elsewhere.
+func TestRegistrationCrossingShutdownIsHandedOff(t *testing.T) {
+	ensureRegistry(t)
+	stubFingerprintResolves(t, "node-late", "tenant-late")
+	t.Cleanup(func() { shuttingDown.Store(false) })
+	resolve := resolveNodeFingerprintFn
+	resolveNodeFingerprintFn = func(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
+		// Shutdown begins while this registration is resolving its identity.
+		shuttingDown.Store(true)
+		return resolve(ctx, req)
+	}
+
+	store, _ := newTestStore(t)
+	setCommandRelay(t, buildRelay(t, store, "inst-self", "10.0.0.1:9090", &mockRelayPool{}))
+	sm := state.ResetDefaultManagerForTests()
+	if err := sm.EnableRedisSync(context.Background(), store, "inst-self", logging.NewLogger()); err != nil {
+		t.Fatalf("EnableRedisSync: %v", err)
+	}
+	t.Cleanup(func() { sm.Shutdown() })
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDB := db
+	db = mockDB
+	t.Cleanup(func() { db = prevDB; mockDB.Close() })
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs("node-late").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(3)))
+
+	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-late", ControlProtocolVersion: MinControlProtocolVersion}}},
+	}}
+	if cerr := (&Server{}).Connect(stream); status.Code(cerr) != codes.Unavailable {
+		t.Fatalf("registration crossing shutdown returned %v, want Unavailable", cerr)
+	}
+	registry.mu.RLock()
+	published := registry.conns["node-late"]
+	registry.mu.RUnlock()
+	if published != nil {
+		t.Fatal("a registration that crossed shutdown was published after the handoff snapshot")
+	}
+	if deadline, ok := sm.NodePendingReconnect("node-late"); !ok || !time.Now().Before(deadline) {
+		t.Fatalf("handed-off node has no reconnect window (deadline %v, ok %v): its disconnect would mark it unhealthy", deadline, ok)
+	}
+	if owner, _ := store.GetConnOwner(context.Background(), "node-late"); owner.InstanceID == "inst-self" {
+		t.Fatal("the handed-off registration kept this instance as the node's connection owner")
+	}
+}

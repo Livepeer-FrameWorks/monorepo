@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -144,7 +145,7 @@ func (runtime *LivePushPreparationRuntime) ResolvePreparedSource(ctx context.Con
 }
 
 func (runtime *LivePushPreparationRuntime) sourceAuthority(ctx context.Context, input PlacementSourceIdentity) (balancer.PlacementAuthority, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	pair, err := runtime.Authority.Placement(ctx, input.TenantID, input.ObjectID, input.InternalName)
 	if ctxErr := ctx.Err(); ctxErr != nil {

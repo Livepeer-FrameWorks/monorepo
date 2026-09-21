@@ -9,9 +9,11 @@ they do not become tenant-policy authorities themselves.
 
 The availability rule is deliberate: a control-plane outage does not invalidate
 a still-valid local decision. The local path never interprets missing or corrupt
-state as an allow; it may ask the connected authority when available. A signed
-revocation or tombstone remains a denial, and hard expiry remains unavailable;
-none can be overridden by connected fallback.
+state as an allow. A cell holds the authorities that are in use; one it does not
+hold, or holds past its validity, it asks Commodore for, applies, and then
+decides on locally. A signed revocation or tombstone remains a denial and is
+never asked around. When Commodore cannot be reached, an authority past its
+validity is refused.
 
 ## Authority contents
 
@@ -62,30 +64,203 @@ a generation before owner reads, then verifies that generation while holding
 the fence row only inside its short persistence transaction. A newer compile
 of the same authority therefore prevents an overtaken compile from committing,
 without making unrelated objects from one tenant invalidate each other or
-pinning a database connection across Quartermaster/Purser RPCs. Retry backoff
-includes deterministic per-row jitter so a superseded batch does not reconverge
-as another synchronized collision.
+pinning a database connection across Quartermaster/Purser RPCs. Losing the
+fence is not a service outage: the overtaken obligation stays pending and retries
+after 30 seconds without consuming its failure budget. Fetch contention retries
+within one bounded deadline, then returns `Aborted`, without opening the cell's
+shared outage backoff for unrelated objects.
 
-Push delivery is the fast path. Owner refresh and per-cell delivery have
-independent worker loops, so a blocked cell cannot stop authority refresh.
-Each remote delivery operation—including Quartermaster discovery, Foghorn
-resolution, and apply—is bounded to 35 seconds. Durable acknowledgement then
-gets an independent five-second settlement budget, so a slow cell cannot spend
-the database acknowledgement's deadline. Refresh compilation is bounded to 90
-seconds per claimed row and failure settlement likewise escapes the expired
-work context. A claimed batch contains at most one eight-worker wave and
-therefore stays below its two-minute lease.
-Per-cell obligations lease and retry
-independently, and a newer version terminally supersedes older pending work. On
-Foghorn registration/reconnect, Foghorn requests replay by its explicit control
-cell ID, never by a virtual cluster ID. Periodic reconciliation/backfill covers
-a missed source event. That pass enqueues tenants only; the tenant completion
-transaction owns dependent-object fanout, so streams and artifacts are not
-also enqueued directly and signed twice for the same safety pass. Purser's
-subscription trigger compares every authority-bearing field and ignores an
-UPDATE that wrote identical values. A cell acknowledges only after signature, schema,
+### Refresh obligations
+
+Refresh work is bounded by the number of authorities, not by event volume or by
+how long something has been failing. `commodore.media_authority_refresh_obligations`
+holds one row per target and lane. A target is a tenant authority
+(`tenant:<id>`), a media object (`media_object:live_stream:<id>`,
+`media_object:artifact:<id>`), or the set of a tenant's objects
+(`tenant_media_objects:<id>`); its key is also the compile-fence scope. Lanes are
+`event` for source changes, `bulk` for work enumerated from a set (a tenant's
+objects, the tenants to reconcile), and `tenant_deadline` / `object_deadline` for
+scheduled renewal, each with its own worker, lease, and timeout. A tenant change
+that touches thousands of objects therefore never stands in front of a change to
+one of them. Each lane is drained by one claimant feeding a fixed number of
+compile slots, claiming again as soon as a slot frees, so a lane's rate is what
+its compiles take and one slow compile holds one slot. The compiles of one claim
+share the inputs a tenant's objects all derive from (its subscription and tier);
+that memo is created before the claim and dropped with it, so nothing in it was
+read before the rows it serves were enqueued.
+
+Every writer goes through `commodore.enqueue_media_authority_obligation`: source
+triggers, owner-service events, placement and playback-policy changes, fanout,
+and renewal scheduling. A second event for a target folds into its existing row
+and bumps `revision`. Completion is fenced on the claimed revision, so an event
+that folds in while the row is compiling leaves it pending instead of being
+completed away. A target is never compiled by two lanes at once. Every claim
+writes the target's row in `media_authority_target_claims`, and a claim finding
+that row held by another lane under a live lease skips the target; settlement
+deletes it. A check of the other lane's lease alone would not do: it reads a
+snapshot, and two lanes can both pass it before either commits. Writing one
+row serializes them — on PostgreSQL the second waits and then sees the first's
+claim; under Yugabyte's snapshot isolation the second fails and the next pass
+sees it. Folds keep a live obligation lease because a fold flips the row to
+pending while its compile is still running. Without this, an event compile and a
+renewal of the same authority both run, and the compile fence discards one after
+its source reads and signing. Each claim carries a fresh token on the
+obligation and the claim row, and every settlement and release requires it: a
+worker whose lease lapsed, and whose target was claimed again at the same
+revision, settles and releases nothing. A compile that loses the fence to
+another compile of the same authority (a fetch, say) is not complete: that
+compile has only started and may still fail, so the row goes back to pending
+and runs once more, a no-op if the other compile published. A waiting event keeps its due time when its target changes again, so a
+target that keeps changing is not sent to the back of a backlog; a renewal's due
+time is replaced by each publication.
+
+A compile failure is classified. A failure that retrying cannot fix — a source
+row that cannot produce a valid envelope, an undecodable policy, a missing seal
+recipient, a cell without the required capability — parks the target after one
+attempt with a `park_reason`. A transient failure backs off with deterministic
+jitter and parks as `exhausted` after twelve attempts. A media object whose
+tenant has no published authority requests that authority and parks until it
+exists. A parked target costs nothing until a new event for it arrives or the
+hourly reconciler re-arms it; it is never retried on a timer by itself.
+
+Compiler errors are not access decisions. Missing recipients, unavailable
+decryption keys, unchanged source that cannot compile, or dependency outages leave the previous valid
+signed copy intact and alert through refresh obligations. A removed publishing
+credential, tighter playback policy, or changed placement restriction can revoke
+the old allow independently of billing or processing. Adding JWT signing keys,
+widening accepted audiences, or relaxing claims does not revoke existing access.
+An appended placement fallback or a wider selector/distance limit also retains
+existing access. Playback publications record a digest of the stored access
+configuration (including the encrypted webhook credential). A failed compile of
+a changed malformed policy or webhook configuration cannot silently retain the
+previous allow. An unchanged configuration that this compiler cannot interpret
+does not imply a new revocation. Failure to read the comparison state emits a
+dedicated `MediaAuthorityRevocationCheckFailed` alert and an authority-scoped log.
+Revocations have a separate bounded write deadline, retaining compile and parent
+fences, so a dependency consuming the compile budget cannot suppress them.
+The comparison is installed as soon as the object's source is loaded, before
+tenant lookup, so an unavailable parent cannot hide an explicit access change.
+Failed revocation persistence stays retryable. An unreadable fallback snapshot
+does not erase the original retry or parent-wakeup classification. A quote whose
+entitlement digest differs from the captured tenant waits for refreshed tenant
+authority; this cross-service race is not malformed source configuration.
+
+Current target cells and correction-only recipients are separate. When a cell
+leaves the target set, its correction horizon is frozen at the latest validity of
+any version previously sent there, including versions with lost acknowledgements.
+Only that cell's signed envelope is capped at the horizon; active recipients
+retain their normal leases and renewal schedule. The immutable delivery cap is
+used for claims, fetch, replay, acknowledged inventory, and recovery, including
+lost ACKs. It survives a later regrant without changing historical envelope
+validity. Publications lock recipient target rows until enqueue; pruning skips
+those locks. Renewals cannot keep a removed cell alive indefinitely. Expired retired target rows are
+pruned in indexed, bounded batches; version counters and recovery fences remain.
+A later explicit grant reactivates the cell and publishes an uncapped delivery,
+even if the combined active/correction recipient set is unchanged. Object compiles inherit only the
+tenant's active targets, never its historical correction recipients.
+
+A live stream that is not ingesting takes its origin from the tenant's preferred
+cluster, the same route origin connected validation reports. A stream with
+neither has no origin and compiles without a publishing credential: the cell
+finds no local credential for its stream key and validates it against Commodore,
+exactly as for a stream it has never seen. Only outage-time ingest, which has no
+cluster to bind to, is unavailable for it.
+
+### Publication
+
+A compile publishes a new version only when it would say something new. Inside
+the publishing transaction, after the fence is locked, the compiled authority is
+compared with the current version and published for exactly one of four causes:
+its `content` differs, its target `cells` differ, its `validity` would end
+earlier, or its `renewal` is due and would extend validity. Anything else is a
+no-op that writes no version, no delivery, and no fanout, so reconciliation and
+redundant events cost one read. A tombstone is terminal: it follows its target
+cells and is renewed while a valid older copy still needs correction. It stops
+renewing once no such copy remains. Cell sets are compared in
+byte order on both sides, never in the database's collation order.
+
+A live authority never rests on a settled renewal, because a cell refuses a
+hard-expired authority outright. Every no-op compile outside the renewal lanes
+restores a missing or settled renewal and leaves a live one untouched. A renewal
+that loses the compile fence to an event compile stays pending and runs again:
+the event compile may have published nothing. The stream process configuration
+an object carries is read from Purser and is part of its content, so a compile
+that cannot reach Purser fails and retries instead of publishing an empty
+configuration.
+
+Content identity is `content_digest`. Tenant payloads carry no per-compile
+entropy, so their deterministic encoding is their content. A media object seals
+secrets with a fresh ephemeral key and nonce on every compile; its digest covers
+the payload with the sealed boxes removed plus a commitment to each sealed
+secret's plaintext and recipient set, keyed from the signing key. Two compiles of
+identical state digest equal, a rotated secret or recipient does not, and rotating
+the signing key re-issues everything. Objects carrying commercial quotes have no
+stable identity, because quote observation and expiry are part of what they say,
+and always publish.
+
+A tenant publication fans out to the tenant's media objects only when
+`dependents_digest` — the tenant fields objects derive from, which excludes
+allowances, limits, and decision text — changes (and, while some cell still takes
+only short-lived object authorities, when tenant validity shrinks below what
+objects were capped to). The fanout obligation is written in the tenant's
+publishing transaction. Processing it is one statement that refreshes, in the
+`bulk` lane, the tenant's objects cells may still hold: the current version is
+not a tombstone and some version of the object is still valid. The newest
+version can be expired while an older one still verifies, so the check covers
+every version. An object with no valid version left has nothing to correct.
+Metering therefore publishes tenant versions without re-signing a single object.
+Every tenant compile that finds a valid tenant authority re-arms the objects
+parked waiting for it, even when the compile publishes nothing. One input reaches objects without passing through
+the tenant authority: process configuration comes from the tenant's tier. The
+two Purser reasons that can change it, `subscription_authority_changed` and
+`billing_tier_authority_changed`, refresh the tenant's objects directly.
+
+Push delivery is the fast path. Owner refresh and delivery have independent
+worker loops, and delivery is per cell: the cells with a delivery waiting are
+found by stepping through the per-cell index, and each is drained by its own
+goroutine with its own workers, which the tick never waits for. A cell that is
+slow or down keeps only its own workers busy. Each remote delivery
+operation—including Foghorn resolution and apply—is bounded to 35 seconds, and a
+cell's Foghorn addresses are remembered for thirty seconds and forgotten the
+moment a delivery to it fails. Durable acknowledgement then gets an independent
+five-second settlement budget, so a slow cell cannot spend the database
+acknowledgement's deadline. Refresh compilation is bounded to 90 seconds per
+claimed row and failure settlement likewise escapes the expired work context.
+Per-cell obligations lease and retry independently, and a newer version terminally
+supersedes older pending work. A version past its validity is never sent and
+leaves the queue.
+
+On Foghorn registration/reconnect, Foghorn requests replay by its explicit control
+cell ID, never by a virtual cluster ID, and says what it holds: a count and the
+XOR of one SHA-256 per valid authority version. When that matches what Commodore
+has on record as acknowledged by the cell, nothing is requeued, which is the
+ordinary case; a cell that lost its database gets everything still valid again,
+marked as a replay, and within a cell replayed deliveries are served after fresh
+ones so catching up never holds back a change or a revocation. A cell that
+refuses an envelope in a way retrying cannot change — it holds a newer version, a
+conflicting digest, or a terminal tombstone, or the envelope is malformed for that
+cell's release or past its validity on arrival — settles that delivery as
+`rejected` instead of returning it to the queue; replay re-opens it.
+
+Hourly reconciliation is the safety net behind event-driven refresh. It gives any
+live current authority without a renewal obligation one, recompiles the tenants in
+use (a no-op unless content drifted) and any active tenant that was never
+compiled, spread over the hour in the `bulk` lane, and re-arms parked targets. A
+tenant nobody uses is left alone. Objects are recompiled only when the compiler
+itself changed — its signing key or the shape of what it signs, recorded as a
+fingerprint — because that is the one change no source event announces, and an
+unchanged compile would never re-issue them. Source triggers in
+Purser, Quartermaster, and Commodore ignore an UPDATE that rewrote a row with its
+own values, and Quartermaster and Purser fold changes of one tenant and reason
+into a single unfinished outbox row. A cell acknowledges only after signature, schema,
 digest, audience, time, invariant, and monotonic-version checks pass and the
 envelope plus decoded indexes commit to the Foghorn database.
+
+An envelope valid for a minute or less is a short lease and has its own delivery
+worker with a one-second claim budget. `short_lease` is recorded on the delivery
+row when it is enqueued and indexed with the cell and due time; deriving it from
+the version's validity at claim time joins the queue to the whole version history
+on an expression no index can serve.
 
 Queue indexes that order by `next_attempt_at` are explicitly range-sharded.
 YugabyteDB otherwise makes the first index key a hash key, which turns a due
@@ -205,22 +380,211 @@ extend signed authority. Signed replacement delivery is authoritative.
 
 ## Validity and outages
 
-Tenant and live-stream envelopes refresh after ten minutes and hard-expire no
-later than 24 hours. Artifact envelopes hard-expire no later than seven days,
-and are also capped by their tenant authority. Before `refresh_after`, Foghorn
-decides locally. Between refresh and hard expiry it continues deciding locally
-and requests one background refresh. A failed refresh does not shorten the
-signed validity interval.
+What authority costs follows what is in use, not the size of the catalog. An
+authority is in use while it was decided on in some cell within the last thirty
+days, was created within the last seven, or (a live stream) is being ingested.
+Cells report the authorities they admit something on, once per authority per
+day; Commodore keeps that to the day in `media_authority_use`, and every use of
+an object is also a use of its tenant, so a tenant is never colder than its
+objects. An authority with no recorded use counts as used when recording
+started, so nothing is mistaken for unused by an upgrade.
 
-At hard expiry the local decision is unavailable. Signed denials and tombstones
-remain denials; delivery to every historically reached cell prevents a removed
-cell from retaining newly valid secrets. A hard-deleted tenant is compiled from
-its last version into a tenant tombstone and delivered to that same historical
-target set; it is not retried forever as an unresolved owner lookup. The
-unavoidable revocation bound is the time between an owner mutation and
-replacement delivery, capped by the old envelope's hard expiry. Pending
-delivery, version lag, apply rejection, and local freshness are operational
-signals, not permission defaults.
+An authority in use is published, delivered to the tenant's cells, and renewed.
+One that is not is not renewed for its own sake: its renewal goes `dormant`, and
+the copies cells hold run out. While a copy may still be valid somewhere, a
+change is still published, valid until the longest-lived copy runs out and
+never longer, so correcting a copy does not keep an unused object in cells. It
+is shorter when the compiled authority allows less, such as a new thirty-second
+quote or a shortened grant, because the signer refuses a version that outlives
+those. "May still be valid" is not decided by the current version alone: a
+shorter-lived replacement can run out while a cell that never received it still
+holds the longer version it replaced. A cell holds at least the version it last
+acknowledged (its fence refuses anything older) and at most the last one it was
+sent, so every version in that range, for every cell, counts. So while the
+current version runs out before an older copy does, it is renewed when due,
+unchanged or already expired: delivery never sends an expired version, and only
+a newer valid one reaches the cell still holding the older. Each renewal is
+bounded by that older copy, and the loop ends as soon as every cell has
+acknowledged the correction, or at the latest when the older copy runs out.
+Once no version is valid there is nothing left to correct and nothing is
+published; a change is compiled the next time the authority is used. A
+tombstone is published regardless, and is renewed by the same rule: an expired
+tombstone cannot be resent either, and a cell that missed it still holds the
+object.
+
+A change to an object is never parked behind a tenant authority that has run
+out while a cell may still hold a valid copy of the object. It is compiled on
+that lapsed tenant version (a placement object captures it as its parent all
+the same; a quoted one is still bounded by its quote) and published at once.
+Publishing first is not enough on its own: deliveries to a cell run in
+parallel, and another object's fetch can bring the tenant too, so the renewed
+tenant can reach the cell before the correction does. The cell closes that
+gap. A tenant authority that brings back a tenant the cell held only past its
+validity records `objects_trusted_from` on its projection. First delivery to a
+cell is not revival and does not introduce a fetch dependency. Every object
+copy lacking current-version confirmation begun after a revival barrier
+reads hard-expired. `confirmed_at` records the confirmation's start using the cell
+database clock; delivery arrival and duplicate delivery never advance it.
+A fetch that revives the tenant and supplies its objects uses the same start
+instant for both. Split object/tenant reads also capture and compare the parent
+version. A parent change causes one bounded local re-read of the object; a
+revival barrier or changed object still fails closed. A renewal that never lapsed
+withholds nothing in a coherent pair.
+
+**Restore fence.** Bounding corrections by acknowledgements relies on a cell
+never holding less than it acknowledged, and a restored cell database breaks
+that. Such a cell can hold a replaced version that is still valid, while its
+replacement has expired and cannot be resent. Two things keep it from being
+decided on:
+
+- The control plane, when a cell's per-identity inventory proves it holds less
+  than an acknowledged version,
+  stops trusting that cell's acknowledgements
+  (`media_authority_cell_ack_resets`). Every version the cell was ever sent
+  then counts again. It issues again every authority whose current version ran
+  out while an older one may still be valid there, and resends the current
+  versions that are still valid.
+- The cell withholds its authority behind a fence. While the fence is up, an
+  authority is decided on only after current-version confirmation begun in that fence
+  generation confirms it (a new version or one already held). An ordinary
+  delayed delivery cannot confirm it. Until then a read reports it
+  hard-expired, which every decision path answers by asking the control plane
+  and, when that cannot be done, refusing. The durable fence
+  (`foghorn.media_authority_restore_fence`) is raised by
+  the CLI restore workflow and by a proven inventory regression.
+  It is lowered only after a matching acknowledged-set summary, or a completed
+  inventory confirming the surviving copies current, taken after the fence, and
+  while it is up the cell summarises again every thirty seconds. Every process
+  loads the durable marker before serving. An ordinary restart uses valid local
+  authority immediately, including during a core transport or database outage.
+  A restore must stop every replica and fence the restored database before any
+  replica restarts; the CLI `cluster restore-fence prepare/complete` workflow
+  enforces these steps for native PostgreSQL/Yugabyte restores.
+
+The digest compares the highest acknowledged version, not the latest published
+version. A mismatch requests ordered inventory pages of at most 500 identities;
+it does not reset acknowledgements or replay the catalog. Pages compare each
+identity independently, so unrelated pending or backed-off deliveries cannot
+hide a regression. Applied-but-unacknowledged current copies can be confirmed
+immediately. ACK races remain inconclusive and are checked again. Their ordering
+uses a core-database clock watermark received before the cell reads the page,
+not a comparison between the two database clocks.
+
+Inventory confirms current held versions in batches without compiling each
+object. Each invocation handles at most four pages and retains its cursor for
+the next invocation, resumed after one second; failed or inconclusive passes
+retry after thirty seconds. Byte-ordered indexes support keyset paging without
+sorting the full catalog on each page. Ordinary delivery cannot provide this freshness proof;
+delivery of a still-withheld active object returns a retryable confirmation
+requirement, not a usable ACK. A valid current tenant/object pair can also be
+fetched without recompilation. Missing or expired current pairs are compiled
+under the normal fences and deadlines.
+
+Core and cells require recovery protocol 1. Deploy Commodore before Foghorn
+within the coordinated release; there is no legacy full-catalog replay fallback.
+An unsupported response preserves any existing durable fence, logs an upgrade
+requirement, and retries every thirty seconds on the same connection. Missing timestamps and clock skew over
+five minutes fail explicitly without mutating acknowledgements or delivery.
+Reachable but inconclusive responses neither raise nor lower a trust fence.
+Only a checked match can lower a durable fence. The coordinated provisioning
+plan orders Commodore before Foghorn; v0.3.11 prohibits Commodore rollback.
+
+A managed-stream object whose parent is missing makes the local set incomplete,
+requests the pair, and permits connected recovery. Incomplete local sets never
+authorize retraction of the cluster's other managed streams.
+
+Use wins every race with dormancy. Recording use and reviving the renewal commit
+together, and the renewal is revived even when the use was already recorded that
+day. A renewal compile in flight is folded (its revision moves), so a compile
+that has just decided the authority is unused cannot settle it dormant
+afterwards. A compile recording use of the authority it is compiling does not
+fold its own lane. A dormant renewal whose authority was used within the use
+window is counted as expired-in-use, so a lost revival still pages; that count
+starts from the recently used set, so it never reads the authorities nobody
+uses. There is no message that
+removes an authority from a cell: the control plane stops renewing and the copy
+expires, so a change signal only ever advances what a cell holds.
+
+A decision that needs an authority the cell does not hold as valid asks for it:
+`FetchMediaAuthority` records the use, compiles the tenant if its current
+version has lapsed (the object is built on that version; an older one a cell
+may still hold does not help), compiles the object, and returns the envelopes signed for that cell, which
+applies them and decides locally. This is what serves an object nobody has used
+for a while, and it is the only way one can be served where placement is
+enforced, because final placement admission decides on the local tenant and
+object pair alone. The placement pair reader asks too, so federation discovery,
+admission and ingest resolution on any cell a request reaches repair that cell's
+own authority rather than waiting for delivery. A decision waits at most two
+seconds for it, and less when its own deadline ends first; the fetch then
+carries on for any other decision waiting on it. A placement read allows each
+local read one second and the fetch its two, so a slow database never eats the
+fetch's time. A name that does
+not exist is asked for once per thirty seconds; and after any other failure
+decisions stop waiting for five seconds, so an unreachable control plane never
+adds a wait to every decision. When the fetch cannot be made the read stands as
+it was: absent falls to connected validation, expired is refused. The cost of
+all this is one sentence: **an object nobody has used for a month cannot start
+during a control-plane outage.** Everything in use can.
+
+A cell forgets an authority that ran out once no older signed version of it can
+still verify, which is `MaxMediaObjectValidity` after it was issued. That bound
+is enforced on every envelope at signing and at verification, and it is why
+forgetting the version the cell had reached cannot let an older one back in. A
+tombstone is never forgotten. A forgotten object is, to that cell, one it never
+held: readiness markers and the placement revision fence start over, and the
+stale-pointer purge sweeps its pointers and thumbnails.
+
+Tenant envelopes hard-expire no later than 24 hours. Media-object envelopes
+hard-expire no later than thirty days and are not capped by their tenant's
+validity: every decision a cell makes also requires the tenant authority, so what
+a cell serves while it cannot reach the control plane is still bounded by the
+tenant's 24 hours, and suspension, grant changes and billing travel in the tenant
+authority. A version carries a nominal validity with optional shorter per-cell
+correction caps. A replica that predates the longer bound rejects the envelope outright, so it is issued only
+when every cell the version goes to attests `long_validity_ready`; until then
+objects keep the earlier bounds (24 hours live, seven days artifact, capped by
+the tenant). Every object is compiled against the tenant authority
+it captured and is refused if that tenant changed before publication; it is
+bounded by the tenant's validity only when its placement policy carries
+commercial quotes, and then by the quotes as well.
+
+Every published version of an authority in use schedules its own renewal a third
+of the way through its validity, and `refresh_after` sits at half. Every
+authority, tenants included, renews at a fixed offset of its own, so authorities
+published together (a startup, a re-issue, a restored database) do not renew
+together for as long as they live. Renewal is a new version, so it changes nothing
+in how a cell applies authority. A cell that still holds a version past
+`refresh_after` is looking at an overdue renewal with half the validity left to
+recover in: it goes on deciding locally and asks for that one authority in the
+background.
+
+A change is never waiting for renewal: source changes publish through the event
+lane as they happen. The revocation bound is therefore the time from an owner
+mutation to replacement delivery, capped by the old envelope's hard expiry, and
+the renewal cadence does not enter it. Renewing more often than validity requires
+adds versions, deliveries, and audit rows in proportion to catalog size and time,
+and buys no tighter bound.
+
+At hard expiry the cell asks Commodore, and refuses if it cannot. Signed denials
+and tombstones remain denials. A change is delivered to the cells that may still
+hold a valid copy, including ones the tenant no longer has a grant in, which
+prevents a removed cell from retaining newly valid secrets; a cell whose every
+copy has run out has nothing left to correct and drops out. A tombstone goes to
+historical targets still within their fixed correction horizon. A hard-deleted
+tenant is compiled from its last version into a tenant tombstone and delivered
+to that same retained target set; it is not retried forever as an unresolved owner
+lookup. A tombstone is terminal and renews only while correcting an older valid
+copy. Pending delivery, version lag, apply
+rejection, parked refresh targets, and local freshness are operational signals,
+not permission defaults.
+
+Rejected-delivery alerts and the CLI doctor use the same actionable-rejection
+view. They resolve once neither the current version nor any older copy the cell
+could hold remains valid. An expired short correction still alerts while its
+older long-lived copy remains usable. Rejection history is retained.
+The signed-apply counter describes verification and persistence, not a later
+restream-reconciliation retry. A committed apply awaiting trust confirmation
+remains applied; an unacknowledged delivery remains visible in backlog metrics.
 
 New x402 settlement and other new control-plane mutations remain explicitly
 online-only. Bootstrap, node adoption, catalog management, and creation of a new
@@ -228,6 +592,28 @@ processing job are management paths, not outage media-serving paths.
 
 ### Known limitations
 
+- **An object nobody has used for a month cannot start during a control-plane
+  outage.** Its authority is not kept in cells, and the fetch that would bring it
+  back needs Commodore. Thirty days is measured from the last decision any cell
+  reported on it; an object that is ingesting, or younger than seven days, is in
+  use regardless.
+- **A restore bypassing the CLI fencing workflow is unsafe.** A process cannot
+  distinguish an unfenced backup from an ordinary restart without depending on
+  core availability. Always stop every replica with `cluster restore-fence
+prepare`, perform the native restore, then use `cluster restore-fence complete`
+  to fence the restored databases before replicas resume. Background inventory
+  detects acknowledged regressions but is not a substitute for this boundary.
+- **An always-on managed stream lost to a renewal failure can be retracted.** The
+  managed-stream set is reconciled from local rows once it is complete. Always-on
+  streams report use for as long as they are configured, so they are not
+  forgotten as unused, and `MediaAuthorityExpiredWarm` pages within minutes of
+  one expiring; a cell that forgot one thirty days later would drop it from the
+  set.
+- **A fixed grant expiry ends tenant validity until the next compile.** Tenant
+  validity is capped by the earliest grant expiry, and compiling against an
+  already expired grant is a transient failure. Foghorn does not enforce grant
+  expiry per grant, so a tenant whose grant lapses hard-expires as a whole until
+  the owner's change recompiles it.
 - **Asymmetric partitions can admit two publishers.** The signed outage owner
   is deterministic, but it cannot observe a still-live claim isolated in
   another cell. If that cell can keep serving while the outage-owner cell loses
@@ -356,6 +742,28 @@ the media volume must not erase control identity or last-good configuration.
 
 ## Operations and incident response
 
+`frameworks cluster doctor` reports **Media authority convergence**: unhealthy
+when a refresh target is parked, a refresh or a current delivery has been stuck
+for more than five minutes, an actionable rejection remains, an in-use authority
+is hard-expired, or authority garbage collection is overdue. Expired dormant
+rows alone are not an incident. `frameworks cluster diagnose media-authority` gives the
+detail behind it — obligations by lane and status, parked targets with their
+reason, versions per authority per hour and how many re-signs were identical,
+deliveries per cell, and each cell's recent rejections next to the version it
+holds. Both run read-only SQL on the database host, so they cover every Foghorn
+cell database. The matching alerts are `MediaAuthorityRefreshStuck`,
+`MediaAuthorityRefreshParked`, `MediaAuthorityRejectedDelivery`,
+`MediaAuthorityVersionChurn`, and the Purser and Quartermaster outbox alerts.
+
+The v0.3.11 rollout needs no operator step. Expand adds the obligations table,
+the digests, the `rejected` delivery status, and `short_lease`; an old Commodore
+replica keeps draining the refresh inbox and never touches the new table. Once
+the new binary runs, it folds the inbox's unfinished rows into one obligation per
+target and republishes every authority once, because versions issued before the
+digests existed have none to compare. Quartermaster's folding enqueue function is
+installed in postdeploy, after its unique index is verified, so its `ON CONFLICT`
+never runs without a valid arbiter.
+
 The v0.3.0 rollout repairs both sides of the artifact seam without bulk row
 rewrites in expand DDL. The catalogued
 `commodore_dvr_playback_authority_v0_3_0` migration snapshots parent-stream
@@ -410,11 +818,16 @@ attempt so a live claim can override the signed outage owner; after that attempt
 fails it resolves entirely from still-valid local authority and runtime state,
 without Quartermaster or Purser calls.
 
-Foghorn retains apply/verification audit observations for 30 days and deletes
-expired rows in bounded local batches. This diagnostic retention never changes
-the signed current authority or its decision.
+Foghorn retains apply/verification audit observations for 30 days. Each prune
+tick drains up to sixteen bounded batches, because one row is written per apply
+attempt and a single batch per tick deletes fewer rows than a small cell writes.
+Every rejected apply is also logged with the incoming and held versions. This
+diagnostic retention never changes the signed current authority or its decision.
 
-Commodore retains completed refresh-inbox work for seven days and expired
+Refresh obligations are not retained work: the table holds one row per target and
+lane and stays the size of the catalog. The refresh inbox that preceded it is
+still present; Commodore folds its unfinished rows into obligations in batches
+and keeps deleting its completed rows after seven days. Commodore retains expired
 central authority history for thirty days after `valid_until`. Hourly bounded
 batches delete only acknowledged or superseded deliveries for a non-current
 version, then remove versions with no remaining delivery. Current versions and

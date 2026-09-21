@@ -40,6 +40,13 @@ func TestMediaAuthorityQueueIndexesUseRangeSharding_RealYugabyte(t *testing.T) {
 		"idx_media_authority_versions_expiry_v2",
 		"idx_media_authority_refresh_inbox_due_v2",
 		"idx_media_authority_refresh_inbox_completed_v2",
+		"idx_media_authority_refresh_obligations_due",
+		"idx_media_authority_refresh_obligations_expiry",
+		"idx_media_authority_use_recent",
+		"idx_media_authority_deliveries_short_lease_due",
+		"idx_media_authority_deliveries_cell_due",
+		"idx_media_authority_deliveries_rejected",
+		"idx_media_authority_targets_retired",
 	} {
 		var definition string
 		if err := db.QueryRowContext(ctx, `SELECT pg_get_indexdef(to_regclass('commodore.' || $1))`, name).Scan(&definition); err != nil {

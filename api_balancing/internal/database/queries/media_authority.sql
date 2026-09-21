@@ -8,7 +8,7 @@ SELECT pg_advisory_xact_lock(
 );
 
 -- name: GetMediaAuthorityForUpdate :one
-SELECT authority_version, payload_sha256, payload
+SELECT authority_version, payload_sha256, payload, valid_until
 FROM foghorn.media_authorities
 WHERE authority_kind = sqlc.arg(authority_kind)
   AND authority_id = sqlc.arg(authority_id)
@@ -236,7 +236,12 @@ WHERE projection.tenant_id = sqlc.arg(tenant_id)::uuid;
 
 -- name: GetLocalMediaObjectAuthorityByPlaybackID :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
-       projection.authority_id, projection.authority_version, projection.local_read_ready
+       projection.authority_id, projection.authority_version, projection.local_read_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -248,7 +253,12 @@ LIMIT 1;
 
 -- name: GetLocalMediaObjectAuthorityByInternalName :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
-       projection.authority_id, projection.authority_version, projection.local_read_ready
+       projection.authority_id, projection.authority_version, projection.local_read_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -261,7 +271,12 @@ LIMIT 1;
 -- name: GetLocalMediaObjectAuthorityByPublishingCredential :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_id, projection.authority_version,
-       projection.local_ingest_ready
+       projection.local_ingest_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -287,7 +302,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.authority_version AS tenant_authority_version,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
-       tenant_projection.local_source_ready AS tenant_source_ready
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
   ON object_authority.authority_kind = 'media_object'
@@ -320,7 +336,8 @@ SELECT object_authority.payload AS object_payload,
        tenant_projection.authority_version AS tenant_authority_version,
        tenant_projection.local_read_ready AS tenant_read_ready,
        tenant_projection.local_ingest_ready AS tenant_ingest_ready,
-       tenant_projection.local_source_ready AS tenant_source_ready
+       tenant_projection.local_source_ready AS tenant_source_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS object_withheld_by_tenant_revival
 FROM foghorn.media_object_authority_projection AS object_projection
 JOIN foghorn.media_authorities AS object_authority
   ON object_authority.authority_kind = 'media_object'
@@ -348,7 +365,12 @@ WHERE projection.tenant_id = sqlc.arg(tenant_id)::uuid;
 -- name: GetLocalMediaObjectSourceAuthorityByInternalName :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_id, projection.authority_version,
-       projection.local_source_ready
+       projection.local_source_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -361,7 +383,12 @@ LIMIT 1;
 -- name: ListLocalManagedStreamAuthorities :many
 SELECT authority.authority_id, authority.authority_version, authority.payload, authority.payload_sha256,
        authority.refresh_after, authority.valid_until,
-       projection.local_source_ready
+       projection.local_source_ready,
+       COALESCE((SELECT revived.objects_trusted_from > authority.confirmed_at
+                 FROM foghorn.tenant_authority_projection AS revived
+                 WHERE revived.tenant_id = projection.tenant_id), FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE((SELECT parent.authority_version FROM foghorn.tenant_authority_projection AS parent
+                 WHERE parent.tenant_id = projection.tenant_id), 0)::bigint AS tenant_authority_version
 FROM foghorn.media_object_authority_projection AS projection
 JOIN foghorn.media_authorities AS authority
   ON authority.authority_kind = 'media_object'
@@ -409,3 +436,121 @@ SET local_source_ready = TRUE, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND authority_id = sqlc.arg(authority_id)
   AND authority_version = sqlc.arg(authority_version);
+
+-- name: ListHeldMediaAuthorityVersions :many
+-- What this cell holds as valid at as_of, to tell the control plane whether it
+-- has anything to repeat.
+SELECT authority_kind, authority_id, authority_version
+FROM foghorn.media_authorities
+WHERE valid_until > sqlc.arg(as_of)::timestamptz;
+
+-- name: ListCollectableMediaAuthorities :many
+-- Authorities this cell can forget: past their validity, and issued so long ago
+-- that no older signed version of them can still verify, so forgetting the
+-- version fence cannot let one back in. A tombstone is never forgotten: it is
+-- what refuses the object's return.
+SELECT held.authority_kind, held.authority_id, held.authority_version,
+       COALESCE(object.artifact_hash, '')::text AS artifact_hash
+FROM foghorn.media_authorities AS held
+LEFT JOIN foghorn.tenant_authority_projection AS tenant
+       ON held.authority_kind = 'tenant' AND tenant.tenant_id::text = held.authority_id
+LEFT JOIN foghorn.media_object_authority_projection AS object
+       ON held.authority_kind = 'media_object' AND object.authority_id = held.authority_id
+WHERE held.valid_until < NOW()
+  AND held.issued_at < sqlc.arg(issued_before)::timestamptz
+  AND COALESCE(tenant.lifecycle, object.lifecycle, '') <> 'tombstone'
+ORDER BY held.valid_until
+LIMIT sqlc.arg(batch_size);
+
+-- name: DeleteCollectedMediaObjectAuthorityProjection :exec
+DELETE FROM foghorn.media_object_authority_projection
+WHERE authority_id = sqlc.arg(authority_id)
+  AND authority_version = sqlc.arg(authority_version);
+
+-- name: DeleteCollectedTenantAuthorityProjection :exec
+DELETE FROM foghorn.tenant_authority_projection
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND authority_version = sqlc.arg(authority_version);
+
+-- name: DeleteCollectedMediaAuthority :execrows
+-- Fenced on the version that was found collectable and on its still being past
+-- its validity: an apply that advanced the authority in between keeps it.
+DELETE FROM foghorn.media_authorities
+WHERE authority_kind = sqlc.arg(authority_kind)
+  AND authority_id = sqlc.arg(authority_id)
+  AND authority_version = sqlc.arg(authority_version)
+  AND valid_until < NOW();
+
+-- name: GetMediaAuthorityRestoreFence :one
+-- When the fence was raised; the zero instant when there is none.
+SELECT COALESCE(
+    (SELECT fenced_at FROM foghorn.media_authority_restore_fence WHERE singleton),
+    'epoch'::timestamptz
+)::timestamptz AS fenced_at;
+
+-- name: RaiseMediaAuthorityRestoreFence :exec
+-- A new restore invalidates confirmations begun before this raise.
+INSERT INTO foghorn.media_authority_restore_fence (singleton, fenced_at)
+VALUES (TRUE, clock_timestamp())
+ON CONFLICT (singleton) DO UPDATE SET fenced_at = clock_timestamp();
+
+-- name: LowerMediaAuthorityRestoreFence :execrows
+-- Fenced on the instant the caller confirmed against, so a fence raised again
+-- after that confirmation stays up.
+DELETE FROM foghorn.media_authority_restore_fence
+WHERE singleton AND fenced_at <= sqlc.arg(confirmed_at)::timestamptz;
+
+-- name: BeginMediaAuthorityConfirmation :one
+SELECT clock_timestamp()::timestamptz AS started_at;
+
+-- name: ConfirmMediaAuthority :exec
+-- Only a fetch begun after a trust barrier can confirm the held version.
+UPDATE foghorn.media_authorities
+SET confirmed_at = GREATEST(confirmed_at, sqlc.arg(confirmed_at)::timestamptz)
+WHERE authority_kind = sqlc.arg(authority_kind)
+  AND authority_id = sqlc.arg(authority_id)
+  AND authority_version = sqlc.arg(authority_version);
+
+-- name: ConfirmRecoveredMediaAuthority :execrows
+UPDATE foghorn.media_authorities
+SET confirmed_at = GREATEST(confirmed_at, sqlc.arg(confirmed_at)::timestamptz)
+WHERE authority_kind = sqlc.arg(authority_kind)
+  AND authority_id = sqlc.arg(authority_id)
+  AND authority_version = sqlc.arg(authority_version);
+
+-- name: ListHeldMediaAuthorityPage :many
+SELECT authority_kind, authority_id, authority_version
+FROM foghorn.media_authorities
+WHERE valid_until > sqlc.arg(as_of)::timestamptz
+  AND (authority_kind COLLATE "C", authority_id COLLATE "C") >
+      (sqlc.arg(after_kind)::text COLLATE "C", sqlc.arg(after_id)::text COLLATE "C")
+ORDER BY authority_kind COLLATE "C", authority_id COLLATE "C"
+LIMIT sqlc.arg(page_size);
+
+-- name: MediaAuthorityConfirmationRequired :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.media_authorities AS authority
+    JOIN foghorn.media_object_authority_projection AS object
+      ON authority.authority_kind = 'media_object' AND authority.authority_id = object.authority_id
+    JOIN foghorn.tenant_authority_projection AS tenant ON tenant.tenant_id = object.tenant_id
+    WHERE authority.authority_id = sqlc.arg(authority_id)
+      AND object.lifecycle = 'active' AND authority.valid_until > sqlc.arg(as_of)::timestamptz
+      AND tenant.objects_trusted_from > authority.confirmed_at
+)::boolean AS required;
+
+-- name: HasMediaAuthorityConfirmationRequired :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.tenant_authority_projection AS tenant
+    JOIN foghorn.media_object_authority_projection AS object ON object.tenant_id = tenant.tenant_id
+    JOIN foghorn.media_authorities AS authority
+      ON authority.authority_kind = 'media_object' AND authority.authority_id = object.authority_id
+    WHERE object.lifecycle = 'active' AND authority.valid_until > sqlc.arg(as_of)::timestamptz
+      AND tenant.objects_trusted_from > authority.confirmed_at
+)::boolean AS required;
+
+-- name: WithholdTenantObjectsAppliedBefore :exec
+-- A revived tenant withholds objects not confirmed by a fetch begun after its
+-- barrier. A fetched parent and its objects share one confirmation instant.
+UPDATE foghorn.tenant_authority_projection
+SET objects_trusted_from = GREATEST(objects_trusted_from, COALESCE(sqlc.narg(confirmed_at)::timestamptz, clock_timestamp()))
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid;

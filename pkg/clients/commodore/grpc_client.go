@@ -275,12 +275,23 @@ func (c *GRPCClient) RequestMediaAuthorityRefresh(ctx context.Context, sourceSer
 	})
 }
 
-// RequestMediaAuthorityReplay asks Commodore to redeliver every current
-// authority assigned to the control cell. Foghorn calls this after its
-// listener is available, so an acknowledged-but-restored cell cannot remain
-// silently empty until a business-policy mutation creates a new version.
-func (c *GRPCClient) RequestMediaAuthorityReplay(ctx context.Context, controlCellID string) (*commodorepb.RequestMediaAuthorityReplayResponse, error) {
-	return c.internal.RequestMediaAuthorityReplay(ctx, &commodorepb.RequestMediaAuthorityReplayRequest{ControlCellId: controlCellID})
+// RequestMediaAuthorityReplayIfDrifted is the replay of a cell that knows what
+// it holds. Commodore requeues nothing when the summary matches what it has on
+// record as acknowledged by the cell.
+func (c *GRPCClient) RequestMediaAuthorityReplayIfDrifted(ctx context.Context, req *commodorepb.RequestMediaAuthorityReplayRequest) (*commodorepb.RequestMediaAuthorityReplayResponse, error) {
+	return c.internal.RequestMediaAuthorityReplay(ctx, req)
+}
+
+// FetchMediaAuthority returns current object and tenant envelopes for this cell,
+// compiling them when the current pair is missing or expired.
+func (c *GRPCClient) FetchMediaAuthority(ctx context.Context, req *commodorepb.FetchMediaAuthorityRequest) (*commodorepb.FetchMediaAuthorityResponse, error) {
+	return c.internal.FetchMediaAuthority(ctx, req)
+}
+
+// ReportMediaAuthorityUse reports the authorities this cell decided on.
+func (c *GRPCClient) ReportMediaAuthorityUse(ctx context.Context, controlCellID string, uses []*commodorepb.MediaAuthorityUse) error {
+	_, err := c.internal.ReportMediaAuthorityUse(ctx, &commodorepb.ReportMediaAuthorityUseRequest{ControlCellId: controlCellID, Uses: uses})
+	return err
 }
 
 // ValidateStreamKey checks a stream key and takes NO placement claim — the

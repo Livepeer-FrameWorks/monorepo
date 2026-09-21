@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
@@ -155,7 +156,7 @@ func (gate *PlacementPolicyGate) Assess(ctx context.Context, req *placementpb.Pr
 }
 
 func (gate *PlacementPolicyGate) readAuthority(ctx context.Context, req *placementpb.PreparePlacementRequest) (balancer.PlacementAuthority, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	defer cancel()
 	query := req.GetQuery()
 	pair, err := gate.Authority.Placement(ctx, query.TenantId, query.ObjectId, query.InternalName)

@@ -54,7 +54,7 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 				if tenant != connection.TenantID || internal != connection.InternalName {
 					t.Fatal("authority lookup lost connection scope")
 				}
-				if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > time.Second {
+				if deadline, ok := readCtx.Deadline(); !ok || time.Until(deadline) > localauthority.PlacementReadTimeout {
 					t.Fatal("authority lookup is unbounded")
 				}
 				if scenario == "authority error" {

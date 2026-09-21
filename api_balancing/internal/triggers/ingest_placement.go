@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/federation"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
@@ -111,7 +112,7 @@ func (adapter *IngestPlacementAdapter) AdmitPublisher(ctx context.Context, conne
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 	pair, err := adapter.Authority.PlacementForInternalName(readCtx, connection.TenantID, connection.InternalName)
 	if err == nil {
 		err = readCtx.Err()

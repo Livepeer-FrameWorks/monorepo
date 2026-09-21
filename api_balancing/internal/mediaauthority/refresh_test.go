@@ -7,8 +7,11 @@ import (
 	"time"
 )
 
-func TestSoftExpiryRefreshIsBackgroundAndCooldownBounded(t *testing.T) {
-	store := &Store{now: func() time.Time { return storeFixtureNow }, refresh: &refreshCoordinator{}}
+// Against a control plane that cannot be asked for one authority, a soft-expired
+// read still asks it to replay the cell.
+func TestSoftExpiryWithoutFetcherReplaysInBackgroundWithCooldown(t *testing.T) {
+	store := &Store{now: func() time.Time { return storeFixtureNow }, refresh: &refreshCoordinator{}, fetcher: &fetchCoordinator{}}
+	lookup := AuthorityLookup{AuthorityID: "live_stream:stream-1"}
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -18,13 +21,13 @@ func TestSoftExpiryRefreshIsBackgroundAndCooldownBounded(t *testing.T) {
 		<-release
 		return nil
 	})
-	store.observeFreshness(FreshnessSoftExpired)
+	store.observeFreshness(FreshnessSoftExpired, lookup)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("background refresh did not start")
 	}
-	store.observeFreshness(FreshnessSoftExpired)
+	store.observeFreshness(FreshnessSoftExpired, lookup)
 	if calls.Load() != 1 {
 		t.Fatalf("refresh calls during cooldown = %d", calls.Load())
 	}
@@ -40,7 +43,7 @@ func TestSoftExpiryRefreshIsBackgroundAndCooldownBounded(t *testing.T) {
 		startedAgain <- struct{}{}
 		return nil
 	})
-	store.observeFreshness(FreshnessSoftExpired)
+	store.observeFreshness(FreshnessSoftExpired, lookup)
 	select {
 	case <-startedAgain:
 	case <-time.After(time.Second):

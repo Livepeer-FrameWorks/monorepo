@@ -75,7 +75,7 @@ func (resolver *ViewerPlacementResolver) subject(ctx context.Context, request co
 		return viewerPlacementSubject{}, errors.New("stored media placement is unavailable")
 	}
 	read := func() (balancer.PlacementAuthority, error) {
-		readCtx, stop := context.WithTimeout(ctx, time.Second)
+		readCtx, stop := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
 		defer stop()
 		var pair localauthority.PlacementPair
 		var readErr error

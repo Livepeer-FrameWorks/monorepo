@@ -604,16 +604,27 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	go func() {
 		backoff := time.Second
 		const maxBackoff = 30 * time.Second
+		var goingAwayAt time.Time
 		for {
 			connStart := time.Now()
-			if err := runClient(cfg.FoghornControlAddr, logger); err != nil {
+			err := runClient(cfg.FoghornControlAddr, logger)
+			announced := errors.Is(err, errFoghornGoingAway)
+			switch {
+			case announced:
+				goingAwayAt = time.Now()
+				backoff = time.Second
+				logger.Info("Foghorn is going away; reconnecting to the cell")
+			case err != nil:
 				logger.WithError(err).Warn("Helmsman control client disconnected; retrying")
 			}
 			if time.Since(connStart) > maxBackoff {
 				backoff = time.Second
 			}
-			time.Sleep(applyJitter(backoff, reconnectJitterPct))
-			if backoff < maxBackoff {
+			time.Sleep(nextReconnectDelay(backoff, goingAwayAt, time.Now(), announced))
+			// The backoff grows only while it is what paces the redial, so it starts
+			// from a second again when the redial window after a notice runs out.
+			redialing := !goingAwayAt.IsZero() && time.Since(goingAwayAt) < goingAwayRedialWindow
+			if !redialing && backoff < maxBackoff {
 				backoff *= 2
 			}
 		}
@@ -755,6 +766,52 @@ var (
 )
 
 var errStreamDisconnected = errors.New("gRPC control stream disconnected")
+
+const (
+	// How long requests already sent get to be answered after Foghorn says it is
+	// going away, before the stream is closed under them. Each of them holds a
+	// Mist trigger whose whole budget is four seconds.
+	goingAwayDrain = 2 * time.Second
+	// For this long after the notice the client redials about once a second
+	// instead of backing off. The instance that sent it has closed its listener,
+	// so the address resolves to the rest of the cell; in a cell of one it is the
+	// same instance coming back, which takes seconds, not the doubling backoff.
+	goingAwayRedialWindow   = 20 * time.Second
+	goingAwayRedialInterval = time.Second
+)
+
+// errFoghornGoingAway ends a connection whose Foghorn announced it is shutting
+// down. It is not a failure: the node reconnects at once.
+var errFoghornGoingAway = errors.New("foghorn announced it is going away")
+
+// awaitInFlightMistTriggers waits until every blocking trigger already sent has
+// been answered, or the drain runs out.
+func awaitInFlightMistTriggers(limit time.Duration) {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		pendingMutex <- struct{}{}
+		inFlight := len(pendingMistTriggers)
+		<-pendingMutex
+		if inFlight == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// nextReconnectDelay decides how long the client waits before dialing again.
+// goingAwayAt is when Foghorn last announced it was going away (zero if never).
+func nextReconnectDelay(backoff time.Duration, goingAwayAt, now time.Time, firstAfterNotice bool) time.Duration {
+	if !goingAwayAt.IsZero() && now.Sub(goingAwayAt) < goingAwayRedialWindow {
+		if firstAfterNotice {
+			// Spread a cell's worth of nodes over a short moment instead of having
+			// them all dial the surviving instances in the same millisecond.
+			return applyJitter(goingAwayRedialInterval/4, 100) / 2
+		}
+		return applyJitter(goingAwayRedialInterval, reconnectJitterPct)
+	}
+	return applyJitter(backoff, reconnectJitterPct)
+}
 
 func offerResponse[T any](ch chan<- T, response T) {
 	select {
@@ -1870,6 +1927,17 @@ func runClient(addr string, logger logging.Logger) error {
 				handleMistTriggerResponse(x.MistTriggerResponse)
 			case *ipcpb.ControlMessage_MistTriggerAck:
 				go handleMistTriggerAck(x.MistTriggerAck)
+			case *ipcpb.ControlMessage_GoingAway:
+				// Nothing more is sent on this stream: a new blocking trigger waits
+				// for the next connection the way it does through any reconnect, and
+				// everything else goes to its outbox. The receive loop keeps running,
+				// so requests already sent are still answered; once they are, the
+				// connection ends and the client redials at once.
+				clearConn()
+				go func() {
+					awaitInFlightMistTriggers(goingAwayDrain)
+					errCh <- errFoghornGoingAway
+				}()
 			case *ipcpb.ControlMessage_Error:
 				if errMsg := x.Error; errMsg != nil {
 					code := errMsg.GetCode()

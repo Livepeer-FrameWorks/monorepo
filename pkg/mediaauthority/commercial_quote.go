@@ -110,8 +110,11 @@ func PlacementCommercialQuote(tenant *mediapb.TenantAuthority, object *mediapb.M
 			return nil, fmt.Errorf("%w: commercial quote: %w", ErrMalformed, err)
 		}
 		entitlement, entitlementErr := PlacementCommercialEntitlementDigest(tenant)
-		if entitlementErr != nil || quote.GetEntitlementDigest() != entitlement {
-			return nil, fmt.Errorf("%w: commercial entitlement differs from joined grants", ErrMalformed)
+		if entitlementErr != nil {
+			return nil, fmt.Errorf("%w: commercial entitlement: %w", ErrMalformed, entitlementErr)
+		}
+		if quote.GetEntitlementDigest() != entitlement {
+			return nil, ErrEntitlementMismatch
 		}
 		if mediaVerb == verb {
 			selected = quote

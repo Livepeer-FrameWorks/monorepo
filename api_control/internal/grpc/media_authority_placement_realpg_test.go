@@ -4,6 +4,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"frameworks/api_control/internal/database/commodoredb"
 	"frameworks/api_control/internal/placementpolicy"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
@@ -100,6 +103,45 @@ func testMediaPlacementObjectPolicy(t *testing.T, db *sql.DB) {
 			}
 		})
 	}
+	t.Run("changed placement is denied while processing compilation is unavailable", func(t *testing.T) {
+		server.logger = logging.NewLogger()
+		server.mediaAuthorityKeyID = "placement-deny"
+		server.mediaAuthorityPrivateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+		tenant.BillingModel = mediapb.TenantBillingModel_TENANT_BILLING_MODEL_POSTPAID
+		now := time.Now().UTC()
+		revisions := []*mediapb.AuthoritySourceRevision{{Service: "commodore", Revision: "prior-placement"}}
+		if _, err := commodoredb.New(db).UpsertMediaCellPlacementCapability(ctx, commodoredb.UpsertMediaCellPlacementCapabilityParams{CellID: "cell-a", MaxSchemaVersion: 2, EnforcementReady: true, LiveReplicas: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.persistTenantAuthority(ctx, tenant, []string{"cell-a"}, revisions, now, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		prior := proto.CloneOf(live)
+		prior.PlacementTenantRevision = tenant.GetMediaPlacement().GetRevision()
+		prior.MediaPlacement = &pb.PolicySet{}
+		id := sharedauthority.LiveStreamAuthorityID(streamID)
+		if err := server.persistMediaObjectAuthority(ctx, id, prior, []string{"cell-a"}, revisions, now, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		dependencyErr := errors.New("processing dependency unavailable")
+		err := server.withMediaAuthorityCompileFence(ctx, "media_object:"+id, func(compiling context.Context) error {
+			return server.revokeChangedAccessOnCompileFailure(compiling, id, prior.GetObjectKind(), prior.GetPlaybackPolicy(), nil, dependencyErr)
+		})
+		if !errors.Is(err, dependencyErr) {
+			t.Fatalf("lost retryable processing failure: %v", err)
+		}
+		row, err := commodoredb.New(db).GetCurrentMediaAuthorityPayload(ctx, commodoredb.GetCurrentMediaAuthorityPayloadParams{AuthorityKind: "media_object", AuthorityID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		denied := &mediapb.MediaObjectAuthority{}
+		if err := proto.Unmarshal(row.Payload, denied); err != nil {
+			t.Fatal(err)
+		}
+		if denied.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE {
+			t.Fatal("prior placement survived while its restrictive replacement could not compile")
+		}
+	})
 	if _, err := db.ExecContext(ctx, "UPDATE commodore.streams SET deleted_at=NOW() WHERE tenant_id=$1 AND id=$2", tenant.TenantId, streamID); err != nil {
 		t.Fatal(err)
 	}

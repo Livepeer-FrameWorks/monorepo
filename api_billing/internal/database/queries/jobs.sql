@@ -759,16 +759,15 @@ WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 RETURNING id::text AS id;
 
 -- name: BackfillSubscriptionPeriodFromDraft :exec
+-- This runs for every usage summary. The IS NULL filter keeps a subscription
+-- whose period is already set from being rewritten with its own values: an
+-- UPDATE that names a column fires that column's UPDATE OF triggers even when
+-- the value does not change.
 UPDATE purser.tenant_subscriptions
 SET billing_period_start = COALESCE(billing_period_start, sqlc.arg(period_start)),
     billing_period_end = COALESCE(billing_period_end, sqlc.arg(period_end)),
     next_billing_date = COALESCE(next_billing_date, sqlc.arg(period_end)),
-    updated_at = CASE
-        WHEN billing_period_start IS NULL
-          OR billing_period_end IS NULL
-          OR next_billing_date IS NULL
-        THEN NOW()
-        ELSE updated_at
-    END
+    updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND status = 'active';
+  AND status = 'active'
+  AND (billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL);

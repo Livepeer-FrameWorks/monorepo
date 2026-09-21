@@ -59,6 +59,17 @@ git add .
 git commit -qm 'prepare v0.2.96'
 pending_commit=$(git rev-parse HEAD)
 expect_pass 'committed pending release matches its catalog' --diff-base v0.2.95
+git tag v0.2.96-rc1
+expect_pass 'an RC keeps the base release pending' --worktree
+printf '%s\n' 'SELECT 22;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'an RC migration is already immutable' --worktree
+git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'the commit hook protects RC migrations too' pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git show HEAD:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+printf '%s\n' 'SELECT 3;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/002_candidate_fix.sql
+expect_pass 'the next RC may append a migration in the same release bucket' --worktree
+rm pkg/database/sql/migrations/commodore/v0.2.96/expand/002_candidate_fix.sql
 expect_pass 'a missing diff base falls back to the latest shipped tag' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 if ! grep -q 'shipped migrations are compared against v0.2.95' "$test_root/output"; then
   echo 'FAIL: missing diff base should report its shipped-tag fallback' >&2

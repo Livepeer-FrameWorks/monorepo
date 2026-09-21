@@ -42,6 +42,10 @@ type Querier interface {
 	AttachProviderPaymentIDToIntent(ctx context.Context, arg AttachProviderPaymentIDToIntentParams) error
 	AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) (int64, error)
 	AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) (int64, error)
+	// This runs for every usage summary. The IS NULL filter keeps a subscription
+	// whose period is already set from being rewritten with its own values: an
+	// UPDATE that names a column fires that column's UPDATE OF triggers even when
+	// the value does not change.
 	BackfillSubscriptionPeriodFromDraft(ctx context.Context, arg BackfillSubscriptionPeriodFromDraftParams) error
 	BackfillTenantBillingPeriod(ctx context.Context, arg BackfillTenantBillingPeriodParams) error
 	CancelLocalMollieSubscription(ctx context.Context, tenantID string) error

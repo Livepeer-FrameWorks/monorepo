@@ -137,7 +137,54 @@ func (p *Processor) ObserveConnectedPlayback(ctx context.Context, input string, 
 // have passed rollout comparison; an unready pair deliberately falls back to
 // the connected path. Once ready, expiry or denial never falls back to a
 // central allow.
+//
+// A cell holds only the authorities in use. One it does not hold, or holds past
+// its validity, is asked for once and read again: that is what serves an object
+// nobody has used for a while, and it is the control plane answering, not this
+// cell deciding on stale state. When the fetch cannot be made the read stands as
+// it was, so an unreachable control plane still means an expired authority is
+// refused.
 func (p *Processor) resolveReadyLocalPlayback(ctx context.Context, input string, byPlaybackID bool) (localPlaybackAuthority, bool, error) {
+	// Runtime namespaces are resolved by the internal-name pass. Looking them
+	// up as playback IDs would add a core fetch before an already-local source.
+	if byPlaybackID && mist.ExtractInternalName(input) != input {
+		return localPlaybackAuthority{}, false, nil
+	}
+	result, found, err := p.readReadyLocalPlayback(ctx, input, byPlaybackID)
+	if localAuthorityNeedsFetch(found, err) {
+		lookup := localauthority.AuthorityLookup{InternalName: input}
+		if byPlaybackID {
+			lookup = localauthority.AuthorityLookup{PlaybackID: input}
+		}
+		if p.fetchLocalAuthority(ctx, lookup) {
+			result, found, err = p.readReadyLocalPlayback(ctx, input, byPlaybackID)
+		}
+	}
+	if err == nil && found && result.target != nil {
+		p.mediaAuthorityStore.NoteMediaObjectUse(result.object)
+	}
+	return result, found, err
+}
+
+// localAuthorityNeedsFetch reports a read that found nothing, or found an
+// authority past its validity. A denial or a tombstone is an answer and is
+// never fetched around.
+func localAuthorityNeedsFetch(found bool, err error) bool {
+	return (!found && err == nil) || IsLocalAuthorityExpired(err)
+}
+
+// fetchLocalAuthority reports whether local state advanced and is worth reading
+// again.
+func (p *Processor) fetchLocalAuthority(ctx context.Context, lookup localauthority.AuthorityLookup) bool {
+	if p == nil || p.mediaAuthorityStore == nil {
+		return false
+	}
+	// The store counts the outcome, for this path and every other.
+	applied, _ := p.mediaAuthorityStore.Fetch(ctx, lookup) //nolint:errcheck // a fetch that cannot be made leaves the read as it was
+	return applied
+}
+
+func (p *Processor) readReadyLocalPlayback(ctx context.Context, input string, byPlaybackID bool) (localPlaybackAuthority, bool, error) {
 	if p == nil || p.mediaAuthorityStore == nil {
 		return localPlaybackAuthority{}, false, nil
 	}
@@ -161,6 +208,13 @@ func (p *Processor) resolveReadyLocalPlayback(ctx context.Context, input string,
 		return localPlaybackAuthority{}, true, fmt.Errorf("read local media-object authority: %w", err)
 	}
 	result := localPlaybackAuthority{object: object}
+	// A tombstone is terminal however old it is: it is never renewed, so it is
+	// always past its validity sooner or later, and that must not turn a refusal
+	// into a question for the control plane.
+	if object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE {
+		p.observeMediaAuthorityLocalRead(index, "denied")
+		return result, true, errLocalAuthorityDenied
+	}
 	if !object.Ready {
 		p.observeMediaAuthorityLocalRead(index, "unready")
 		return result, true, nil
@@ -174,7 +228,7 @@ func (p *Processor) resolveReadyLocalPlayback(ctx context.Context, input string,
 		p.observeMediaAuthorityLocalRead(index, "denied")
 		return result, true, errLocalAuthorityDenied
 	}
-	tenant, err := p.mediaAuthorityStore.Tenant(ctx, payload.GetTenantId())
+	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
 	if err != nil {
 		p.observeMediaAuthorityLocalRead("tenant", "error")
 		return result, true, fmt.Errorf("read local tenant authority: %w", err)
@@ -443,7 +497,7 @@ func (p *Processor) promoteLocalPlaybackIfMatching(ctx context.Context, input st
 		p.observeMediaAuthorityShadow("policy_mismatch")
 		return
 	}
-	tenant, err := p.mediaAuthorityStore.Tenant(ctx, target.TenantID)
+	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
 	if err != nil || tenant.Freshness == localauthority.FreshnessHardExpired || tenant.Authority == nil {
 		p.observeMediaAuthorityShadow("tenant_unavailable")
 		return

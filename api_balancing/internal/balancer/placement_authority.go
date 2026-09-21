@@ -84,8 +84,11 @@ func compilePlacementAuthority(pair localauthority.PlacementPair, verb placement
 	if tenant == nil || object == nil || !sharedauthority.IsPlacementSchema(tenant.GetSchemaVersion()) || tenant.GetSchemaVersion() != object.GetSchemaVersion() {
 		return PlacementAuthority{}, ErrPlacementAuthorityNotReady
 	}
+	// Freshness also carries the cell's restore fence: a pair it withholds reads
+	// hard-expired while its signed validity still runs.
 	if !ready || now.IsZero() || pair.Tenant.Version <= 0 || pair.Object.Version <= 0 ||
-		!now.Before(pair.Tenant.ValidUntil) || !now.Before(pair.Object.ValidUntil) {
+		!now.Before(pair.Tenant.ValidUntil) || !now.Before(pair.Object.ValidUntil) ||
+		pair.Tenant.Freshness == localauthority.FreshnessHardExpired || pair.Object.Freshness == localauthority.FreshnessHardExpired {
 		return PlacementAuthority{}, ErrPlacementAuthorityNotReady
 	}
 	if tenant.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||

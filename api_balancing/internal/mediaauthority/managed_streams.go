@@ -50,19 +50,37 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 		if err != nil {
 			return result, err
 		}
+		object.ParentVersion = row.TenantAuthorityVersion
+		// A tombstone remains a deny after its envelope expires. It needs no
+		// parent, secret or renewal and cannot make a desired set incomplete.
+		if object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE {
+			continue
+		}
 		object.SourceReady = row.LocalSourceReady
+		object.Freshness = s.fencedFreshness(object.Freshness, "media_object", row.AuthorityID, row.WithheldByTenantRevival)
 		if !object.SourceReady {
 			result.Complete = false
 			continue
 		}
+		// One authority past its validity makes the set incomplete; it does not
+		// fail the whole cluster's set. An incomplete set is never used to retract
+		// anything, and the caller asks the control plane while it is reachable.
+		// The authority is asked for again so the set completes by itself.
 		if object.Freshness == FreshnessHardExpired {
-			return result, fmt.Errorf("managed-stream authority %q hard-expired", row.AuthorityID)
+			result.Complete = false
+			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})
+			continue
 		}
 		authority := object.Authority
 		if authority == nil || authority.GetLiveStream() == nil {
 			return result, fmt.Errorf("managed-stream authority %q has no live-stream payload", row.AuthorityID)
 		}
-		tenant, err := s.TenantSource(ctx, authority.GetTenantId())
+		tenant, err := s.TenantSourceForObject(ctx, object)
+		if errors.Is(err, sql.ErrNoRows) {
+			result.Complete = false
+			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})
+			continue
+		}
 		if err != nil {
 			return result, fmt.Errorf("load managed-stream tenant %q: %w", authority.GetTenantId(), err)
 		}
@@ -71,7 +89,9 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 			continue
 		}
 		if tenant.Freshness == FreshnessHardExpired {
-			return result, fmt.Errorf("managed-stream tenant authority %q hard-expired", authority.GetTenantId())
+			result.Complete = false
+			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})
+			continue
 		}
 		if authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
 			tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
@@ -96,6 +116,13 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 			AllowedClusterIds: append([]string(nil), secret.GetNativeAllowedClusterIds()...),
 		}
 		result.Rows = append(result.Rows, managed)
+		// An always-on stream is in use for as long as it is configured, whether
+		// or not anyone is watching: it has to keep being renewed, or the set it
+		// is elected from would lose it. An on-demand one is in use when its
+		// source is resolved.
+		if managed.GetAlwaysOn() {
+			s.NoteMediaObjectUse(object)
+		}
 		origin, official := authority.GetOriginClusterId(), tenant.Authority.GetOfficialClusterId()
 		result.Contexts[live.GetStreamId()] = &commodorepb.ResolveStreamContextResponse{
 			Admitted: true, StreamId: live.GetStreamId(), PlaybackId: authority.GetPlaybackId(), InternalName: authority.GetInternalName(),
@@ -120,7 +147,7 @@ func (s *Store) PromoteManagedStreamIfMatching(ctx context.Context, clusterID st
 	if err != nil {
 		return ManagedStreamPromotionNone, err
 	}
-	tenant, err := s.TenantSource(ctx, object.Authority.GetTenantId())
+	tenant, err := s.TenantSourceForObject(ctx, object)
 	if err != nil {
 		return ManagedStreamPromotionNone, err
 	}

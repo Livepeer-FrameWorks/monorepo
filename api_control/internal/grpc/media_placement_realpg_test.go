@@ -153,12 +153,14 @@ func testMediaPlacementRepository(t *testing.T, db *sql.DB) {
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_placement_changes WHERE tenant_id=$1 AND scope_kind='tenant'`, tenantID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("CAS duplicate receipts: %d %v", count, err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_inbox WHERE tenant_id=$1 AND source_event_id LIKE 'placement:tenant:%'`, tenantID).Scan(&count); err != nil || count != 2 {
+	// Both applied revisions refresh the same tenant authority, so they fold into
+	// one obligation whose revision counts them.
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(sum(revision), 0) FROM commodore.media_authority_refresh_obligations WHERE tenant_id=$1 AND lane='event' AND last_source_event_id LIKE 'placement:tenant:%'`, tenantID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("CAS duplicate outbox: %d %v", count, err)
 	}
 
 	// A failed refresh enqueue must roll back both intent and its success receipt.
-	if _, err := db.ExecContext(ctx, `ALTER TABLE commodore.media_authority_refresh_inbox ADD CONSTRAINT placement_test_outbox_failure CHECK (source_event_id <> 'placement:tenant:10000000-0000-4000-8000-000000000071:3')`); err != nil {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE commodore.media_authority_refresh_obligations ADD CONSTRAINT placement_test_outbox_failure CHECK (last_source_event_id <> 'placement:tenant:10000000-0000-4000-8000-000000000071:3')`); err != nil {
 		t.Fatal(err)
 	}
 	failing := command

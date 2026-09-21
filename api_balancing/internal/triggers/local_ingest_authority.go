@@ -54,7 +54,35 @@ func (p *Processor) ResolveLocalIngestContext(ctx context.Context, credential st
 // means that object has not passed connected shadow comparison yet. Once the
 // exact versions are marked ready, denial or hard expiry never falls back to a
 // central allow.
+//
+// An authority held past its validity is asked for once and read again; when
+// that cannot be done the expiry stands and the push is refused. A credential
+// the cell holds nothing for is not fetched here: the credential never leaves
+// the cell, so the caller validates it against the control plane, which names
+// the stream, and asks for that stream's authority (fetchLocalIngestAuthority).
 func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
+	response, result, found, err := p.readReadyLocalIngest(ctx, credential)
+	if IsLocalAuthorityExpired(err) && result.object.AuthorityID != "" &&
+		p.fetchLocalAuthority(ctx, localauthority.AuthorityLookup{AuthorityID: result.object.AuthorityID}) {
+		response, result, found, err = p.readReadyLocalIngest(ctx, credential)
+	}
+	if err == nil && response != nil && response.GetValid() {
+		p.mediaAuthorityStore.NoteMediaObjectUse(result.object)
+	}
+	return response, result, found, err
+}
+
+// fetchLocalIngestAuthority brings a stream's authority into this cell after the
+// control plane validated its key. Final placement admission decides on the
+// local pair alone, so a stream nobody has used for a while can only be admitted
+// once its authority is here.
+func (p *Processor) fetchLocalIngestAuthority(ctx context.Context, streamID string) {
+	if streamID = strings.TrimSpace(streamID); streamID != "" {
+		p.fetchLocalAuthority(ctx, localauthority.AuthorityLookup{AuthorityID: sharedauthority.LiveStreamAuthorityID(streamID)})
+	}
+}
+
+func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string) (*commodorepb.ValidateStreamKeyResponse, localIngestAuthority, bool, error) {
 	if p == nil || p.mediaAuthorityStore == nil {
 		return nil, localIngestAuthority{}, false, nil
 	}
@@ -72,12 +100,23 @@ func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential stri
 		p.observeMediaAuthorityLocalRead("publishing_credential", "unready")
 		return nil, result, true, nil
 	}
+	payload := object.Authority
+	live := payload.GetLiveStream()
+	// A tombstone is terminal however old it is, and it is never renewed, so it
+	// is refused here before its age can turn the refusal into a question for
+	// the control plane.
+	if payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE {
+		p.observeMediaAuthorityLocalRead("publishing_credential", "denied")
+		return &commodorepb.ValidateStreamKeyResponse{
+			Valid: false, Error: "Invalid stream key", TenantId: payload.GetTenantId(), UserId: payload.GetUserId(),
+			StreamId: live.GetStreamId(), PlaybackId: payload.GetPlaybackId(), InternalName: payload.GetInternalName(),
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+		}, result, true, nil
+	}
 	if object.Freshness == localauthority.FreshnessHardExpired {
 		p.observeMediaAuthorityLocalRead("publishing_credential", "hard_expired")
 		return nil, result, true, errLocalAuthorityExpired
 	}
-	payload := object.Authority
-	live := payload.GetLiveStream()
 	if payload != nil && live != nil && payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && live.GetIngestMode() != "push" {
 		p.observeMediaAuthorityLocalRead("publishing_credential", "denied")
 		return &commodorepb.ValidateStreamKeyResponse{
@@ -95,7 +134,7 @@ func (p *Processor) resolveReadyLocalIngest(ctx context.Context, credential stri
 			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, result, true, nil
 	}
-	tenant, err := p.mediaAuthorityStore.Tenant(ctx, payload.GetTenantId())
+	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
 	if err != nil {
 		return nil, result, true, fmt.Errorf("read local tenant ingest authority: %w", err)
 	}
@@ -204,7 +243,7 @@ func (p *Processor) promoteLocalIngestIfMatching(ctx context.Context, credential
 		p.observeMediaAuthorityShadow("ingest_output_mismatch")
 		return
 	}
-	tenant, err := p.mediaAuthorityStore.Tenant(ctx, connected.GetTenantId())
+	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
 	if err != nil || tenant.Freshness == localauthority.FreshnessHardExpired || tenant.Authority == nil {
 		return
 	}

@@ -1021,11 +1021,18 @@ CREATE TABLE IF NOT EXISTS quartermaster.media_authority_refresh_outbox (
     tenant_id UUID NOT NULL,
     reason VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    -- Trigger-enqueued changes of one (tenant, reason) fold into a single
+    -- unfinished row through coalesce_key; revision fences a delivery that
+    -- claimed an older fold from completing away a newer one. A NULL key is a
+    -- row that is never folded into.
+    coalesce_key VARCHAR(320),
+    revision BIGINT NOT NULL DEFAULT 1,
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     lease_expires_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     last_error TEXT,
+    pending_since TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_quartermaster_media_authority_refresh_status
@@ -1041,6 +1048,10 @@ CREATE INDEX IF NOT EXISTS idx_quartermaster_media_authority_refresh_due_v2
 CREATE INDEX IF NOT EXISTS idx_quartermaster_media_authority_refresh_tenant
     ON quartermaster.media_authority_refresh_outbox(tenant_id, created_at DESC);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_quartermaster_media_authority_refresh_coalesced
+    ON quartermaster.media_authority_refresh_outbox(coalesce_key)
+    WHERE status <> 'completed';
+
 CREATE OR REPLACE FUNCTION quartermaster.enqueue_media_authority_refresh(
     p_tenant_id UUID,
     p_reason TEXT
@@ -1051,8 +1062,30 @@ BEGIN
     IF p_tenant_id IS NULL THEN
         RETURN;
     END IF;
-    INSERT INTO quartermaster.media_authority_refresh_outbox(source_event_id, tenant_id, reason)
-    VALUES (p_reason || ':' || gen_random_uuid()::text, p_tenant_id, p_reason);
+    INSERT INTO quartermaster.media_authority_refresh_outbox(source_event_id, tenant_id, reason, coalesce_key)
+    VALUES (p_reason || ':' || gen_random_uuid()::text, p_tenant_id, p_reason, p_tenant_id::text || ':' || p_reason)
+    ON CONFLICT (coalesce_key) WHERE status <> 'completed'
+    DO UPDATE SET
+        revision = quartermaster.media_authority_refresh_outbox.revision + 1,
+        status = 'pending',
+        next_attempt_at = NOW(),
+        completed_at = NULL,
+        last_error = NULL,
+        -- The age of the oldest unfinished obligation, not of the latest fold: a
+        -- superseding revision must not make a stuck queue look young again.
+        pending_since = LEAST(
+            quartermaster.media_authority_refresh_outbox.pending_since,
+            EXCLUDED.pending_since
+        ),
+        -- An active delivery lease stays as a short serialization fence. The
+        -- claimed revision can no longer complete this row, and the replacement
+        -- revision becomes claimable as soon as that lease ends.
+        lease_expires_at = CASE
+            WHEN quartermaster.media_authority_refresh_outbox.status = 'delivering'
+            THEN quartermaster.media_authority_refresh_outbox.lease_expires_at
+            ELSE NULL
+        END,
+        updated_at = NOW();
 END;
 $$;
 
@@ -1063,6 +1096,10 @@ AS $$
 DECLARE
     affected_tenant UUID;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     affected_tenant := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
     PERFORM quartermaster.enqueue_media_authority_refresh(affected_tenant, 'tenant_authority_changed');
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
@@ -1081,6 +1118,10 @@ AS $$
 DECLARE
     affected_tenant UUID;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     affected_tenant := CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END;
     PERFORM quartermaster.enqueue_media_authority_refresh(affected_tenant, 'cluster_access_changed');
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
@@ -1097,14 +1138,21 @@ AS $$
 DECLARE
     old_cluster TEXT;
     new_cluster TEXT;
+    affected RECORD;
 BEGIN
+    -- An UPDATE that rewrites a row with its own values changes no authority.
+    IF TG_OP = 'UPDATE' AND to_jsonb(OLD) - 'updated_at' = to_jsonb(NEW) - 'updated_at' THEN
+        RETURN NEW;
+    END IF;
     old_cluster := CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN OLD.cluster_id ELSE NULL END;
     new_cluster := CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN NEW.cluster_id ELSE NULL END;
-    INSERT INTO quartermaster.media_authority_refresh_outbox(source_event_id, tenant_id, reason)
-    SELECT 'cluster_authority_changed:' || gen_random_uuid()::text, access.tenant_id,
-           'cluster_authority_changed'
-    FROM quartermaster.tenant_cluster_access AS access
-    WHERE access.cluster_id IN (old_cluster, new_cluster);
+    FOR affected IN
+        SELECT DISTINCT access.tenant_id
+        FROM quartermaster.tenant_cluster_access AS access
+        WHERE access.cluster_id IN (old_cluster, new_cluster)
+    LOOP
+        PERFORM quartermaster.enqueue_media_authority_refresh(affected.tenant_id, 'cluster_authority_changed');
+    END LOOP;
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
 $$;

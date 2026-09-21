@@ -19,6 +19,12 @@ const (
 	ReplicaHeartbeatInterval = 15 * time.Second
 	ReplicaLivenessWindow    = 60 * time.Second
 	replicaLedgerRetention   = 24 * time.Hour
+	// replicaAuthorityFeatureLevel is what this binary does with media authority
+	// beyond placement. Level 1: accepts 30-day media-object authorities, fetches
+	// an authority the cell does not hold, and reports the authorities it
+	// decides on. The three ship together because Commodore stops keeping every
+	// object in every cell only when a cell does all of them.
+	replicaAuthorityFeatureLevel = 1
 )
 
 // placementEnforced is process state: startup sets it only after the public
@@ -50,6 +56,12 @@ type CellPlacementCapability struct {
 	EnforcementReady        bool
 	LiveReplicas            int64
 	NodePlacementReady      bool
+	// Every live replica accepts 30-day media-object authorities, and every live
+	// replica reports use. Both follow from the replicas' authority feature
+	// level; they are separate on the wire because Commodore acts on them
+	// separately.
+	LongValidityReady bool
+	UseReportsReady   bool
 }
 
 // CellPlacementCapability reads the replica ledger. A cell with no live rows,
@@ -71,6 +83,8 @@ func (s *Store) CellPlacementCapability(ctx context.Context) (CellPlacementCapab
 		SupportedSchemaVersions: []uint32{sharedauthority.SchemaVersion, sharedauthority.PlacementSchemaVersion},
 		LiveReplicas:            row.LiveReplicas,
 		NodePlacementReady:      row.LiveReplicas > 0 && row.MinSchemaVersion >= int32(sharedauthority.NodePlacementSchemaVersion),
+		LongValidityReady:       row.LiveReplicas > 0 && row.MinAuthorityFeatureLevel >= 1,
+		UseReportsReady:         row.LiveReplicas > 0 && row.MinAuthorityFeatureLevel >= 1,
 	}
 	capability.EnforcementReady = PlacementEnforced() && row.LiveReplicas > 0 && row.AllEnforced &&
 		row.MinSchemaVersion >= int32(sharedauthority.PlacementSchemaVersion)
@@ -91,6 +105,7 @@ func (s *Store) RecordReplicaHeartbeat(ctx context.Context, replicaID, release s
 	return foghorndb.New(s.db).UpsertControlReplicaHeartbeat(ctx, foghorndb.UpsertControlReplicaHeartbeatParams{
 		ReplicaID: replicaID, ReleaseVersion: strings.TrimSpace(release),
 		PlacementSchemaVersion: int32(sharedauthority.NodePlacementSchemaVersion), PlacementEnforced: PlacementEnforced(),
+		AuthorityFeatureLevel: replicaAuthorityFeatureLevel,
 	})
 }
 

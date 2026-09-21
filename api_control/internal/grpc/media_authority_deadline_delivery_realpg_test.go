@@ -157,7 +157,8 @@ func testMediaPlacementDeadlineDelivery(t *testing.T, db *sql.DB) {
 		if _, err := q.UpsertCurrentMediaAuthority(ctx, commodoredb.UpsertCurrentMediaAuthorityParams{AuthorityKind: "tenant", AuthorityID: id, AuthorityVersion: 1}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := q.EnqueueMediaAuthorityDelivery(ctx, commodoredb.EnqueueMediaAuthorityDeliveryParams{AuthorityKind: "tenant", AuthorityID: id, AuthorityVersion: 1, CellID: cell, SignedEnvelope: encoded}); err != nil {
+		if _, err := q.EnqueueMediaAuthorityDelivery(ctx, commodoredb.EnqueueMediaAuthorityDeliveryParams{AuthorityKind: "tenant", AuthorityID: id, AuthorityVersion: 1, CellID: cell, SignedEnvelope: encoded,
+			ShortLease: mediaAuthorityShortLease(uint32(schema), now, now.Add(lifetime))}); err != nil {
 			t.Fatal(err)
 		}
 	}

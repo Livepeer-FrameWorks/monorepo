@@ -362,15 +362,13 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
-	// Playback policy is snapshotted into every signed media-object authority.
-	// Queue a tenant fanout in the same transaction as the mutation so local
-	// playback cannot retain an older stream/DVR/chapter decision after commit.
-	if _, refreshErr := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
-		SourceService: "commodore",
-		SourceEventID: "playback-policy:" + outboxID,
-		TenantID:      tenantID,
-		Reason:        "playback_policy_changed",
-	}); refreshErr != nil {
+	// Playback policy is snapshotted into every signed media-object authority and
+	// is no part of the tenant authority, so the refresh targets the tenant's
+	// objects directly. It is queued in the same transaction as the mutation so
+	// local playback cannot retain an older stream/DVR/chapter decision after
+	// commit.
+	if refreshErr := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaObjectsAuthorityTarget(tenantID), tenantID,
+		"tenant_media_objects:playback_policy_changed", "commodore", "playback-policy:"+outboxID); refreshErr != nil {
 		s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}

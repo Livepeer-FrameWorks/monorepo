@@ -73,6 +73,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterStorageCmd())
 	cluster.AddCommand(newClusterBackupCmd())
 	cluster.AddCommand(newClusterRestoreCmd())
+	cluster.AddCommand(newClusterRestoreFenceCmd())
 	cluster.AddCommand(newClusterDiagnoseCmd())
 	cluster.AddCommand(newClusterSyncGeoIPCmd())
 	cluster.AddCommand(newClusterSetChannelCmd())
@@ -1040,6 +1041,18 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 				})
 			}
 
+			totalChecks++
+			authorityResult := doctorMediaAuthorityConvergence(cmd.Context(), rc, doctorSSHPool, stringFlag(cmd, "ssh-key").Value)
+			printHealthResult(cmd, "Media authority convergence", authorityResult)
+			if authorityResult.OK {
+				passedChecks++
+			} else {
+				remediationSteps = append(remediationSteps, ux.NextStep{
+					Cmd: "frameworks cluster diagnose media-authority",
+					Why: "List parked refresh targets, stuck or refused deliveries, and cell apply rejections with their reasons.",
+				})
+			}
+
 			if deep {
 				totalChecks++
 				var capabilityResult *health.CheckResult
@@ -1095,6 +1108,9 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	}
 	ux.PrintNextSteps(out, steps)
 
+	if passedChecks != totalChecks || (cpReport.Checked && !cpReport.OK()) {
+		return fmt.Errorf("cluster health checks did not pass")
+	}
 	return nil
 }
 

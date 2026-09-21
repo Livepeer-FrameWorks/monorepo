@@ -24,16 +24,33 @@ SET status = 'delivering', attempts = refresh.attempts + 1,
 FROM candidates
 WHERE refresh.id = candidates.id
 RETURNING refresh.id::text AS id, refresh.source_event_id,
-          refresh.tenant_id::text AS tenant_id, refresh.reason, refresh.attempts;
+          refresh.tenant_id::text AS tenant_id, refresh.reason, refresh.attempts, refresh.revision;
 
 -- name: CompleteMediaAuthorityRefresh :execrows
+-- A change folded into the row during delivery bumps its revision, so the
+-- delivery that claimed the older revision cannot complete the newer one away.
 UPDATE quartermaster.media_authority_refresh_outbox
 SET status = 'completed', completed_at = NOW(), lease_expires_at = NULL,
     last_error = NULL, updated_at = NOW()
-WHERE id = sqlc.arg(id)::uuid AND status = 'delivering';
+WHERE id = sqlc.arg(id)::uuid AND status = 'delivering'
+  AND revision = sqlc.arg(revision);
+
+-- name: ReleaseSupersededMediaAuthorityRefresh :execrows
+UPDATE quartermaster.media_authority_refresh_outbox
+SET status = 'pending', next_attempt_at = NOW(), lease_expires_at = NULL,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)::uuid AND status = 'pending'
+  AND revision > sqlc.arg(revision);
 
 -- name: FailMediaAuthorityRefresh :execrows
 UPDATE quartermaster.media_authority_refresh_outbox
 SET status = 'pending', next_attempt_at = sqlc.arg(next_attempt_at),
     lease_expires_at = NULL, last_error = sqlc.arg(last_error), updated_at = NOW()
-WHERE id = sqlc.arg(id)::uuid AND status = 'delivering';
+WHERE id = sqlc.arg(id)::uuid AND status = 'delivering'
+  AND revision = sqlc.arg(revision);
+
+-- name: GetMediaAuthorityRefreshOutboxStats :one
+SELECT COUNT(*)::bigint AS pending_count,
+       COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(LEAST(pending_since, created_at)))), 0)::double precision AS oldest_pending_seconds
+FROM quartermaster.media_authority_refresh_outbox
+WHERE status <> 'completed';

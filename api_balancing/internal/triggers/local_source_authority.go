@@ -13,11 +13,29 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// localSourceNeedsFetch reports a source read that found nothing, or found an
+// authority past its validity. A cell holds only the authorities in use, so
+// either is asked for once and read again; a disabled, denied, or tombstoned
+// source is an answer and is never fetched around.
+func localSourceNeedsFetch(snapshot localauthority.SourceSnapshot, found bool, err error) bool {
+	if !found {
+		return err == nil
+	}
+	return snapshot.Object.Freshness == localauthority.FreshnessHardExpired || snapshot.Tenant.Freshness == localauthority.FreshnessHardExpired
+}
+
 func (p *Processor) localPullSource(ctx context.Context, internalName string) (*commodorepb.ResolvePullSourceByInternalNameResponse, localauthority.SourceSnapshot, bool, bool, error) {
 	if p == nil || p.mediaAuthorityStore == nil {
 		return nil, localauthority.SourceSnapshot{}, false, false, nil
 	}
 	resolution, err := control.ResolveLocalPullSource(ctx, p.mediaAuthorityStore, internalName)
+	if localSourceNeedsFetch(resolution.Snapshot, resolution.Found, err) &&
+		p.fetchLocalAuthority(ctx, localauthority.AuthorityLookup{InternalName: internalName}) {
+		resolution, err = control.ResolveLocalPullSource(ctx, p.mediaAuthorityStore, internalName)
+	}
+	if err == nil && resolution.Marked && resolution.Response != nil && resolution.Response.GetEnabled() {
+		p.mediaAuthorityStore.NoteMediaObjectUse(resolution.Snapshot.Object)
+	}
 	return resolution.Response, resolution.Snapshot, resolution.Found, resolution.Marked, err
 }
 
@@ -55,6 +73,17 @@ func localTenantAllowsSourceCluster(tenant *mediaauthoritypb.TenantAuthority, cl
 }
 
 func (p *Processor) localArtifactSource(ctx context.Context, internalName string) (*commodorepb.ResolveArtifactInternalNameResponse, localauthority.SourceSnapshot, bool, bool, error) {
+	response, snapshot, found, marked, err := p.readLocalArtifactSource(ctx, internalName)
+	if localSourceNeedsFetch(snapshot, found, err) && p.fetchLocalAuthority(ctx, localauthority.AuthorityLookup{InternalName: internalName}) {
+		response, snapshot, found, marked, err = p.readLocalArtifactSource(ctx, internalName)
+	}
+	if err == nil && marked && response != nil && response.GetFound() {
+		p.mediaAuthorityStore.NoteMediaObjectUse(snapshot.Object)
+	}
+	return response, snapshot, found, marked, err
+}
+
+func (p *Processor) readLocalArtifactSource(ctx context.Context, internalName string) (*commodorepb.ResolveArtifactInternalNameResponse, localauthority.SourceSnapshot, bool, bool, error) {
 	if p == nil || p.mediaAuthorityStore == nil {
 		return nil, localauthority.SourceSnapshot{}, false, false, nil
 	}
@@ -110,7 +139,7 @@ func (p *Processor) promoteLocalArtifactSourceIfMatching(ctx context.Context, co
 		return
 	}
 	readObject, objectErr := p.mediaAuthorityStore.MediaObjectByInternalName(ctx, snapshot.Object.Authority.GetInternalName())
-	readTenant, tenantErr := p.mediaAuthorityStore.Tenant(ctx, snapshot.Object.Authority.GetTenantId())
+	readTenant, tenantErr := p.mediaAuthorityStore.TenantForObject(ctx, readObject)
 	if objectErr != nil || tenantErr != nil || !readObject.Ready || !readTenant.Ready ||
 		readObject.Freshness == localauthority.FreshnessHardExpired || readTenant.Freshness == localauthority.FreshnessHardExpired ||
 		readObject.Version != snapshot.Object.Version || readTenant.Version != snapshot.Tenant.Version ||

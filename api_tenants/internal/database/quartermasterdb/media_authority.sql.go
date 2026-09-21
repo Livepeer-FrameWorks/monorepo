@@ -29,7 +29,7 @@ SET status = 'delivering', attempts = refresh.attempts + 1,
 FROM candidates
 WHERE refresh.id = candidates.id
 RETURNING refresh.id::text AS id, refresh.source_event_id,
-          refresh.tenant_id::text AS tenant_id, refresh.reason, refresh.attempts
+          refresh.tenant_id::text AS tenant_id, refresh.reason, refresh.attempts, refresh.revision
 `
 
 type ClaimMediaAuthorityRefreshBatchParams struct {
@@ -43,6 +43,7 @@ type ClaimMediaAuthorityRefreshBatchRow struct {
 	TenantID      string `db:"tenant_id" json:"tenant_id"`
 	Reason        string `db:"reason" json:"reason"`
 	Attempts      int32  `db:"attempts" json:"attempts"`
+	Revision      int64  `db:"revision" json:"revision"`
 }
 
 func (q *Queries) ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error) {
@@ -60,6 +61,7 @@ func (q *Queries) ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg Claim
 			&i.TenantID,
 			&i.Reason,
 			&i.Attempts,
+			&i.Revision,
 		); err != nil {
 			return nil, err
 		}
@@ -79,10 +81,18 @@ UPDATE quartermaster.media_authority_refresh_outbox
 SET status = 'completed', completed_at = NOW(), lease_expires_at = NULL,
     last_error = NULL, updated_at = NOW()
 WHERE id = $1::uuid AND status = 'delivering'
+  AND revision = $2
 `
 
-func (q *Queries) CompleteMediaAuthorityRefresh(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeMediaAuthorityRefresh, id)
+type CompleteMediaAuthorityRefreshParams struct {
+	ID       string `db:"id" json:"id"`
+	Revision int64  `db:"revision" json:"revision"`
+}
+
+// A change folded into the row during delivery bumps its revision, so the
+// delivery that claimed the older revision cannot complete the newer one away.
+func (q *Queries) CompleteMediaAuthorityRefresh(ctx context.Context, arg CompleteMediaAuthorityRefreshParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeMediaAuthorityRefresh, arg.ID, arg.Revision)
 	if err != nil {
 		return 0, err
 	}
@@ -117,16 +127,63 @@ UPDATE quartermaster.media_authority_refresh_outbox
 SET status = 'pending', next_attempt_at = $1,
     lease_expires_at = NULL, last_error = $2, updated_at = NOW()
 WHERE id = $3::uuid AND status = 'delivering'
+  AND revision = $4
 `
 
 type FailMediaAuthorityRefreshParams struct {
 	NextAttemptAt time.Time      `db:"next_attempt_at" json:"next_attempt_at"`
 	LastError     sql.NullString `db:"last_error" json:"last_error"`
 	ID            string         `db:"id" json:"id"`
+	Revision      int64          `db:"revision" json:"revision"`
 }
 
 func (q *Queries) FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAuthorityRefreshParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, failMediaAuthorityRefresh, arg.NextAttemptAt, arg.LastError, arg.ID)
+	result, err := q.db.ExecContext(ctx, failMediaAuthorityRefresh,
+		arg.NextAttemptAt,
+		arg.LastError,
+		arg.ID,
+		arg.Revision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getMediaAuthorityRefreshOutboxStats = `-- name: GetMediaAuthorityRefreshOutboxStats :one
+SELECT COUNT(*)::bigint AS pending_count,
+       COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(LEAST(pending_since, created_at)))), 0)::double precision AS oldest_pending_seconds
+FROM quartermaster.media_authority_refresh_outbox
+WHERE status <> 'completed'
+`
+
+type GetMediaAuthorityRefreshOutboxStatsRow struct {
+	PendingCount         int64   `db:"pending_count" json:"pending_count"`
+	OldestPendingSeconds float64 `db:"oldest_pending_seconds" json:"oldest_pending_seconds"`
+}
+
+func (q *Queries) GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityRefreshOutboxStats)
+	var i GetMediaAuthorityRefreshOutboxStatsRow
+	err := row.Scan(&i.PendingCount, &i.OldestPendingSeconds)
+	return i, err
+}
+
+const releaseSupersededMediaAuthorityRefresh = `-- name: ReleaseSupersededMediaAuthorityRefresh :execrows
+UPDATE quartermaster.media_authority_refresh_outbox
+SET status = 'pending', next_attempt_at = NOW(), lease_expires_at = NULL,
+    updated_at = NOW()
+WHERE id = $1::uuid AND status = 'pending'
+  AND revision > $2
+`
+
+type ReleaseSupersededMediaAuthorityRefreshParams struct {
+	ID       string `db:"id" json:"id"`
+	Revision int64  `db:"revision" json:"revision"`
+}
+
+func (q *Queries) ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseSupersededMediaAuthorityRefresh, arg.ID, arg.Revision)
 	if err != nil {
 		return 0, err
 	}

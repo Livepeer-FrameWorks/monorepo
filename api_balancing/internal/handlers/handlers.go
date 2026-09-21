@@ -1420,6 +1420,13 @@ func resolveSourceAuthority(ctx context.Context, streamName string) (ctxkeys.Clu
 	if tenantID != "" {
 		if store := control.LocalMediaAuthorityStore(); store != nil {
 			snapshot, snapshotErr := store.TenantSource(ctx, tenantID)
+			// A tenant authority held past its validity is asked for once and read
+			// again. When that cannot be done it stays expired and is refused below.
+			if snapshotErr == nil && snapshot.SourceReady && snapshot.Freshness == localauthority.FreshnessHardExpired {
+				if applied, _ := store.Fetch(ctx, localauthority.AuthorityLookup{TenantID: tenantID}); applied { //nolint:errcheck // a fetch that cannot be made leaves the read as it was
+					snapshot, snapshotErr = store.TenantSource(ctx, tenantID)
+				}
+			}
 			if snapshotErr == nil && snapshot.SourceReady {
 				tenant := snapshot.Authority
 				if snapshot.Freshness == localauthority.FreshnessHardExpired || tenant == nil ||

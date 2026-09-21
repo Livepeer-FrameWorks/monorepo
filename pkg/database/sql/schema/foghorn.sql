@@ -1666,6 +1666,7 @@ CREATE TABLE IF NOT EXISTS foghorn.media_authorities (
     payload BYTEA NOT NULL,
     source_revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    confirmed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
     PRIMARY KEY (authority_kind, authority_id),
     CONSTRAINT chk_foghorn_media_authority_kind
         CHECK (authority_kind IN ('tenant', 'media_object')),
@@ -1682,6 +1683,20 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_refresh
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_expiry
     ON foghorn.media_authorities(valid_until);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_inventory
+    ON foghorn.media_authorities(authority_kind COLLATE "C" ASC, authority_id COLLATE "C" ASC)
+    INCLUDE (authority_version, valid_until);
+
+-- Present while the cell may hold media authority older than what it last
+-- acknowledged: its database was restored, or the control plane found it holding
+-- something other than what it acknowledged. While it is present an authority
+-- is decided on only once the control plane has sent it again; the row goes
+-- when the cell's summary of what it holds matches the control plane's record.
+CREATE TABLE IF NOT EXISTS foghorn.media_authority_restore_fence (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    fenced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS foghorn.tenant_authority_projection (
     tenant_id UUID PRIMARY KEY,
@@ -1700,6 +1715,12 @@ CREATE TABLE IF NOT EXISTS foghorn.tenant_authority_projection (
     local_source_ready BOOLEAN NOT NULL DEFAULT FALSE,
     valid_until TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Set when a tenant authority brings back a tenant the cell held only past
+    -- its validity, or not at all. Object copies of the tenant applied before it
+    -- are withheld until the control plane sends them again: they were not
+    -- corrected while the tenant was out, and nothing orders their corrections
+    -- before the tenant's return.
+    objects_trusted_from TIMESTAMPTZ,
     CONSTRAINT chk_tenant_authority_projection_lifecycle
         CHECK (lifecycle IN ('active', 'inactive', 'tombstone')),
     CONSTRAINT chk_tenant_authority_projection_billing
@@ -1812,7 +1833,10 @@ CREATE TABLE IF NOT EXISTS foghorn.media_authority_apply_audit (
     reason TEXT NOT NULL DEFAULT '',
     observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_media_authority_apply_outcome
-        CHECK (outcome IN ('applied', 'duplicate', 'rollback_rejected', 'conflict_rejected', 'verification_rejected'))
+        CHECK (outcome IN (
+            'applied', 'duplicate', 'stale_version_rejected', 'rollback_rejected',
+            'conflict_rejected', 'terminal_lifecycle_rejected', 'verification_rejected'
+        ))
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_authority
@@ -1829,6 +1853,10 @@ CREATE TABLE IF NOT EXISTS foghorn.control_replicas (
     release_version TEXT NOT NULL DEFAULT '',
     placement_schema_version INTEGER NOT NULL CHECK (placement_schema_version > 0),
     placement_enforced BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Level 1: accepts 30-day media-object authorities, fetches an authority the
+    -- cell does not hold, reports the authorities it decides on. A replica that
+    -- predates the column stays at 0; the cell attests the minimum.
+    authority_feature_level INTEGER NOT NULL DEFAULT 0,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

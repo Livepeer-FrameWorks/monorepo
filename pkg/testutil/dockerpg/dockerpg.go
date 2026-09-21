@@ -265,6 +265,9 @@ func runDocker(parent context.Context, timeout time.Duration, args ...string) (s
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err())
+	}
 	return string(out), err
 }
 
@@ -276,9 +279,13 @@ func DiscoverPublishedHostPort(name, containerPort string) (string, error) {
 	defer cancel()
 	var portOut string
 	var err error
+	var lastInspectedPorts string
+	attempts := 0
 	for {
+		attempts++
 		portOut, err = runDocker(deadline, probeTimeout, "inspect", "-f", "{{json .NetworkSettings.Ports}}", name)
 		if err == nil {
+			lastInspectedPorts = strings.TrimSpace(portOut)
 			if p := parseInspectedHostPort(portOut, containerPort); p != "" {
 				return p, nil
 			}
@@ -288,9 +295,9 @@ func DiscoverPublishedHostPort(name, containerPort string) (string, error) {
 			if err == nil {
 				err = fmt.Errorf("no host mapping in inspected ports %q", portOut)
 			}
-			return "", fmt.Errorf("docker did not publish %s within %s: %w\nstate: %s\nlogs:\n%s",
-				containerPort, portDiscoveryBudget, err,
-				cliDiagnostic("inspect", "-f", "{{.State.Status}} {{.State.Error}}", name),
+			return "", fmt.Errorf("docker port discovery for %s failed within %s after %d inspections: %w\nlast successful port map: %q\nstate and ports: %s\nlogs:\n%s",
+				containerPort, portDiscoveryBudget, attempts, err, lastInspectedPorts,
+				cliDiagnostic("inspect", "-f", "{{.State.Status}} {{.State.Error}} ports={{json .NetworkSettings.Ports}}", name),
 				cliDiagnostic("logs", "--tail", "20", name))
 		case <-time.After(pollInterval):
 		}

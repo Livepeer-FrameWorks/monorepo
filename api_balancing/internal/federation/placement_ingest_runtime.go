@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -68,10 +69,10 @@ func (runtime *LiveIngestPreparationRuntime) observe(ctx context.Context, req *p
 	if err := placement.ValidatePreparationDeadline(req, runtime.now()); err != nil || req.GetQuery().GetVerb() != placementpb.Verb_VERB_INGEST || req.GetQuery().GetSourceGeneration() != "" {
 		return ingestListener{}, status.Error(codes.InvalidArgument, "ingest preparation requires a valid publisher request")
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
 	q := req.Query
-	pair, err := runtime.Authority.Placement(ctx, q.TenantId, q.ObjectId, q.InternalName)
+	readCtx, stopRead := context.WithTimeout(ctx, localauthority.PlacementReadTimeout)
+	pair, err := runtime.Authority.Placement(readCtx, q.TenantId, q.ObjectId, q.InternalName)
+	stopRead()
 	if err != nil {
 		return ingestListener{}, err
 	}

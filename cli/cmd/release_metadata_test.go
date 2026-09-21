@@ -2,11 +2,46 @@ package cmd
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
+	"frameworks/cli/pkg/gitops"
+	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"gopkg.in/yaml.v3"
 )
+
+func TestReleaseMetadataV0311AcceptsItsOwnCandidateCLI(t *testing.T) {
+	previous := fwv.Version
+	t.Cleanup(func() { fwv.Version = previous })
+	for _, target := range []string{"v0.3.11-rc1", "v0.3.11-rc2", "v0.3.11"} {
+		t.Run(target, func(t *testing.T) {
+			cmd := newReleaseMetadataCmd()
+			var buf bytes.Buffer
+			cmd.SetOut(&buf)
+			cmd.SetArgs([]string{target})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			var manifest gitops.Manifest
+			if err := yaml.Unmarshal(buf.Bytes(), &manifest); err != nil {
+				t.Fatal(err)
+			}
+			manifest.PlatformVersion = target
+			if manifest.MinCLIVersion != "v0.3.11-rc1" || len(manifest.RollbackDisabled) != 1 || manifest.RollbackDisabled[0] != "commodore" {
+				t.Fatalf("unexpected candidate metadata: %s", buf.String())
+			}
+			fwv.Version = target
+			if err := validateFetchedReleaseCompatibility(io.Discard, &manifest, false); err != nil {
+				t.Fatalf("release rejects its own CLI: %v", err)
+			}
+			fwv.Version = "v0.3.10"
+			if err := validateFetchedReleaseCompatibility(io.Discard, &manifest, false); err == nil {
+				t.Fatal("previous CLI passed the new release floor")
+			}
+		})
+	}
+}
 
 func TestReleaseMetadata_EmitsV0_3Boundary(t *testing.T) {
 	cmd := newReleaseMetadataCmd()

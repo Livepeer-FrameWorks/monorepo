@@ -528,6 +528,39 @@ The remaining edge-hardening signals are likewise bounded:
 | `purser_media_authority_refresh_completions_total`      | `outcome`            | Completed refresh attempts (`delivered` or safely `superseded`)                                   |
 | `purser_media_authority_refresh_worker_ready`           | none                 | `1` only while the durable worker has both database and Commodore dependencies                    |
 
+Quartermaster's media-authority refresh outbox exposes the same queue signals as
+Purser's: `quartermaster_media_authority_refresh_pending`,
+`quartermaster_media_authority_refresh_oldest_pending_seconds` (measured from the
+oldest unfinished obligation, so folding a newer change into a row does not make
+a stuck queue look young), and
+`quartermaster_media_authority_refresh_failures_total{stage}` with stages
+`commodore_delivery`, `complete`, `superseded_release`, `completion_fence_miss`,
+and `observe`.
+
+Commodore's media-authority refresh queue holds one obligation per target and
+lane (`event`, `bulk`, `object_deadline`, `tenant_deadline`), so every series
+below is bounded by lane, target kind, settlement outcome, or publish cause. The
+gauges are refreshed every thirty seconds from partial indexes; none of them
+reads a table in proportion to the catalog:
+
+| Metric                                                      | Labels                    | Meaning                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `commodore_media_authority_refresh_pending`                 | `lane`                    | Obligations that are due and not yet settled                                                                                                                                                                                                                                                           |
+| `commodore_media_authority_refresh_oldest_pending_seconds`  | `lane`                    | Seconds the oldest due obligation has waited; a scheduled renewal counts from its due time, not from when it was scheduled                                                                                                                                                                             |
+| `commodore_media_authority_refresh_parked`                  | `target_kind`             | Targets that cannot compile until source state changes (`tenant`, `live_stream`, `artifact`, `tenant_media_objects`)                                                                                                                                                                                   |
+| `commodore_media_authority_refresh_settlements_total`       | `lane`, `outcome`         | How a claimed obligation settled: `completed` (published), `noop` (unchanged), `superseded`, `transient`, `parked`, or `dormant` (a renewal of an authority nobody uses)                                                                                                                               |
+| `commodore_media_authority_expired_warm`                    | `authority_kind`          | Authorities still being renewed whose current version has run out; zero unless renewal is failing to reach an authority in use                                                                                                                                                                         |
+| `commodore_media_authority_revocation_check_failures_total` | `stage`                   | Failed compile-failure access checks: `previous_read`, `previous_decode`, `playback_source_read`, `placement_read`, or `deny_publish`. Authority IDs are in logs, not metric labels. Any increase raises `MediaAuthorityRevocationCheckFailed`; it resolves after ten minutes without another failure. |
+| `commodore_media_authority_versions_published_total`        | `authority_kind`, `cause` | Why a version was published: `content`, `targets`, `validity`, or `renewal`. `noop` settlements publish nothing                                                                                                                                                                                        |
+| `commodore_media_authority_early_renewals_total`            | `authority_kind`          | Renewals published while the replaced version had used less than a quarter of its validity (renewal is due at a third); any sustained rate is a scheduling defect                                                                                                                                      |
+| `commodore_media_authority_rejected_deliveries`             | `authority_kind`          | Current-version deliveries a cell refused on a precondition; retrying cannot converge them                                                                                                                                                                                                             |
+| `foghorn_media_authority_fetches_total`                     | `outcome`                 | What came of each decision that asked Commodore for an authority (every path: triggers, placement and federation, playback API, background refresh): `applied`, `nothing` (none for this cell, or recently asked), `unavailable`, `not_installed` (no Commodore to ask, or one that predates fetching) |
+
+`commodore_media_authority_observation_timestamp_seconds` is the Unix timestamp
+of the last successful complete queue observation (no labels). Its stale alert
+detects database timeouts that would otherwise leave refresh/expiry gauges frozen.
+Negative authority lookups count as `nothing`, not a fetch outage.
+
 The node-identity census itself is the secret-free scanned/skipped count emitted
 by the required `quartermaster_node_identity_keys_v0_3_0` data migration. Node,
 tenant, cluster, hostname, fingerprint, and token values never appear as metric

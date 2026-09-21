@@ -56,7 +56,9 @@ func verifyMediaCapacityConsent(t *testing.T, db *sql.DB) {
 	countRefresh := func(tenant string) int {
 		t.Helper()
 		var count int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM quartermaster.media_authority_refresh_outbox WHERE tenant_id = $1::uuid`, tenant).Scan(&count); err != nil {
+		// Changes of one (tenant, reason) fold into one unfinished row, so the
+		// number of requested refreshes is the revision total, not the row count.
+		if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(revision), 0) FROM quartermaster.media_authority_refresh_outbox WHERE tenant_id = $1::uuid`, tenant).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		return count

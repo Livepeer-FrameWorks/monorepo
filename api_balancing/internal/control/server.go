@@ -1548,6 +1548,12 @@ type Server struct {
 }
 
 func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
+	// An instance that is draining has told its nodes to reconnect elsewhere.
+	// Its listener is already closed, so this only catches a stream that was
+	// being opened at that moment.
+	if shuttingDown.Load() {
+		return status.Error(codes.Unavailable, "foghorn is shutting down")
+	}
 	// Serialize Send across the goroutine-dispatched handlers below; gRPC
 	// SendMsg is not concurrency-safe. Reassigning the parameter means every
 	// downstream use (conn.stream storage, stream-identity comparisons, handler
@@ -1979,6 +1985,24 @@ receiveLoop:
 			}
 
 			registry.mu.Lock()
+			// BeginShutdown raises shuttingDown and then snapshots the registry
+			// under this lock. A registration that started before shutdown and
+			// reaches here after the snapshot would miss its reconnect window, the
+			// going-away notice and the release, and its disconnect would mark a
+			// healthy node unhealthy. Checking the flag under the lock means every
+			// registration is either in the snapshot or handed off here.
+			if shuttingDown.Load() {
+				registry.mu.Unlock()
+				deadline := time.Now().Add(state.RestartReconnectWindow())
+				state.DefaultManager().SetNodePendingReconnect(canonicalNodeID, deadline)
+				if rawAssertedID != canonicalNodeID {
+					state.DefaultManager().SetNodePendingReconnect(rawAssertedID, deadline)
+				}
+				releaseConnectionCapacity()
+				releaseConnOwnerForDisconnect(canonicalNodeID, connFence, registry.log)
+				cleanup()
+				return status.Error(codes.Unavailable, "foghorn is shutting down")
+			}
 			var retire *conn
 			if prevConn, ok := registry.conns[canonicalNodeID]; ok && prevConn != newConn {
 				retire = prevConn // a stale dispatcher must not send over the replaced connection
@@ -2601,6 +2625,102 @@ func processDrainStreamResponse(resp *ipcpb.DrainStreamResponse, session NodeSes
 		logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to record drain acknowledgement")
 	}
 	return true
+}
+
+const (
+	// How long a node told this instance is going away gets to finish the
+	// requests it has in flight and close the stream itself, before the stream
+	// is ended for it.
+	shutdownDrainWindow = 3 * time.Second
+	shutdownNoticeSend  = 2 * time.Second
+)
+
+// shuttingDown refuses new control streams while this instance drains. A node
+// redials the moment it is told to, and must land on another instance.
+var shuttingDown atomic.Bool
+
+// BeginShutdown hands this instance's control connections to the rest of the
+// cell. The nodes behind them are healthy and about to reconnect elsewhere, so
+// the disconnect that follows must not mark them unhealthy or withdraw them
+// from DNS: each gets the reconnect window a node gets when it announces its own
+// restart. A node that does not come back falls out through heartbeat
+// staleness instead.
+//
+// closeListeners runs after new streams are refused and before nodes are told to
+// go, so an immediate redial cannot land back on this instance. Each node is
+// then told to go, has shutdownDrainWindow to let its in-flight requests be
+// answered and close the stream itself, and is released if it has not. A
+// Helmsman that predates the notice ignores it and is released the same way.
+func BeginShutdown(ctx context.Context, closeListeners func(), log logging.Logger) {
+	shuttingDown.Store(true)
+	if registry == nil {
+		if closeListeners != nil {
+			closeListeners()
+		}
+		return
+	}
+	type local struct {
+		id string
+		c  *conn
+	}
+	registry.mu.RLock()
+	conns := make([]local, 0, len(registry.conns))
+	for nodeID, c := range registry.conns {
+		conns = append(conns, local{id: nodeID, c: c})
+	}
+	registry.mu.RUnlock()
+
+	deadline := time.Now().Add(state.RestartReconnectWindow())
+	for _, entry := range conns {
+		state.DefaultManager().SetNodePendingReconnect(entry.id, deadline)
+		if entry.c.canonicalID != "" && entry.c.canonicalID != entry.id {
+			state.DefaultManager().SetNodePendingReconnect(entry.c.canonicalID, deadline)
+		}
+	}
+	if closeListeners != nil {
+		closeListeners()
+	}
+	notice := &ipcpb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &ipcpb.ControlMessage_GoingAway{GoingAway: &ipcpb.GoingAway{Reason: "shutdown"}},
+	}
+	var notified sync.WaitGroup
+	for _, entry := range conns {
+		notified.Add(1)
+		go func() {
+			defer notified.Done()
+			if err := sendOnConnBounded(ctx, entry.id, entry.c, notice, shutdownNoticeSend); err != nil && log != nil {
+				log.WithError(err).WithField("node_id", entry.id).Debug("Could not tell a node this instance is going away; it reconnects when the stream ends")
+			}
+		}()
+	}
+	notified.Wait()
+
+	drained := time.NewTimer(shutdownDrainWindow)
+	defer drained.Stop()
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for waiting := true; waiting; {
+		registry.mu.RLock()
+		remaining := len(registry.conns)
+		registry.mu.RUnlock()
+		if remaining == 0 {
+			break
+		}
+		select {
+		case <-poll.C:
+		case <-drained.C:
+			waiting = false
+		case <-ctx.Done():
+			waiting = false
+		}
+	}
+	for _, entry := range conns {
+		entry.c.releaseControl()
+	}
+	if log != nil {
+		log.WithField("nodes", len(conns)).Info("Handed control connections to the rest of the cell")
+	}
 }
 
 // CleanupLocalConnOwners removes Redis conn_owner keys for currently connected nodes,

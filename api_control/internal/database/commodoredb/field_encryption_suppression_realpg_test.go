@@ -33,7 +33,7 @@ func TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM commodore.media_authority_refresh_inbox`); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM commodore.media_authority_refresh_obligations`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,7 +59,7 @@ func TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG(t *testing.T
 		t.Fatal(err)
 	}
 	var suppressed int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_inbox`).Scan(&suppressed); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_obligations`).Scan(&suppressed); err != nil {
 		t.Fatal(err)
 	}
 	if suppressed != 0 {
@@ -78,11 +78,13 @@ func TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG(t *testing.T
 			t.Fatal(err)
 		}
 	}
+	// Events fold per target, so the three changes are counted by revision: a
+	// push target refreshes its stream's obligation rather than adding a row.
 	var active int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.media_authority_refresh_inbox`).Scan(&active); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(sum(revision), 0) FROM commodore.media_authority_refresh_obligations`).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
 	if active != 3 {
-		t.Fatalf("media-authority triggers are not active outside the migration transaction: got %d rows", active)
+		t.Fatalf("media-authority triggers are not active outside the migration transaction: got %d folded events", active)
 	}
 }

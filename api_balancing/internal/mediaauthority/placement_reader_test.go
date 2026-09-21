@@ -60,8 +60,8 @@ func testPlacementReadJoinsTenant(t *testing.T, byName bool) {
 				objectHash[0] ^= 1
 			}
 			refresh, expiry := storeFixtureNow.Add(-time.Second), storeFixtureNow.Add(time.Minute)
-			columns := []string{"object_payload", "object_payload_sha256", "object_refresh_after", "object_valid_until", "object_authority_id", "object_authority_version", "object_read_ready", "object_ingest_ready", "object_source_ready", "tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until", "tenant_authority_version", "tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready"}
-			values := []driver.Value{objectBytes, objectHash, refresh, expiry, authorityID, int64(11), true, false, true, tenantBytes, tenantHash, refresh, expiry.Add(time.Minute), int64(12), false, true, false}
+			columns := []string{"object_payload", "object_payload_sha256", "object_refresh_after", "object_valid_until", "object_authority_id", "object_authority_version", "object_read_ready", "object_ingest_ready", "object_source_ready", "tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until", "tenant_authority_version", "tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready", "object_withheld_by_tenant_revival"}
+			values := []driver.Value{objectBytes, objectHash, refresh, expiry, authorityID, int64(11), true, false, true, tenantBytes, tenantHash, refresh, expiry.Add(time.Minute), int64(12), false, true, false, false}
 			var got PlacementPair
 			if byName {
 				mock.ExpectQuery("SELECT object_authority.payload AS object_payload").WithArgs(tenantID, "internal").WillReturnRows(sqlmock.NewRows(columns).AddRow(values...))

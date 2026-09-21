@@ -163,11 +163,75 @@ func main() {
 			"Age in seconds of the oldest unacknowledged current authority delivery",
 			[]string{"authority_kind"},
 		),
+		MediaAuthorityRejectedDeliveries: metricsCollector.NewGauge(
+			"media_authority_rejected_deliveries",
+			"Current authority deliveries a target cell refused on a precondition",
+			[]string{"authority_kind"},
+		),
+		MediaAuthorityRefreshPending: metricsCollector.NewGauge(
+			"media_authority_refresh_pending",
+			"Refresh obligations that are due and not yet settled",
+			[]string{"lane"},
+		),
+		MediaAuthorityRefreshOldestPendingSeconds: metricsCollector.NewGauge(
+			"media_authority_refresh_oldest_pending_seconds",
+			"Seconds the oldest due refresh obligation has been waiting",
+			[]string{"lane"},
+		),
+		MediaAuthorityRefreshParked: metricsCollector.NewGauge(
+			"media_authority_refresh_parked",
+			"Refresh targets that cannot compile until their source state changes",
+			[]string{"target_kind"},
+		),
+		MediaAuthorityExpiredWarm: metricsCollector.NewGauge(
+			"media_authority_expired_warm",
+			"Authorities still being renewed whose current version has run out",
+			[]string{"authority_kind"},
+		),
+		MediaAuthorityRevocationCheckFailures: metricsCollector.NewCounter(
+			"media_authority_revocation_check_failures_total",
+			"Compile-failure access checks that could not complete",
+			[]string{"stage"},
+		),
+		MediaAuthorityObservationTimestamp: metricsCollector.NewGauge(
+			"media_authority_observation_timestamp_seconds",
+			"Unix timestamp of the last complete authority obligation observation",
+			[]string{},
+		),
+		MediaAuthorityRefreshSettlements: metricsCollector.NewCounter(
+			"media_authority_refresh_settlements_total",
+			"Claimed refresh obligations by how they settled",
+			[]string{"lane", "outcome"},
+		),
+		MediaAuthorityVersionsPublished: metricsCollector.NewCounter(
+			"media_authority_versions_published_total",
+			"Published authority versions by the reason a new version was needed",
+			[]string{"authority_kind", "cause"},
+		),
+		MediaAuthorityEarlyRenewals: metricsCollector.NewCounter(
+			"media_authority_early_renewals_total",
+			"Renewals published while the replaced version had used less than a quarter of its validity",
+			[]string{"authority_kind"},
+		),
 		FieldDecryptFailures: metricsCollector.NewCounter(
 			"field_decrypt_failures_total",
 			"Application-field decryption failures by bounded purpose and ciphertext format",
 			[]string{"purpose", "format"},
 		),
+	}
+	for _, lane := range []string{"event", "bulk", "object_deadline", "tenant_deadline"} {
+		for _, outcome := range []string{"completed", "noop", "superseded", "transient", "parked", "dormant"} {
+			serverMetrics.MediaAuthorityRefreshSettlements.WithLabelValues(lane, outcome).Add(0)
+		}
+	}
+	for _, kind := range []string{"tenant", "media_object"} {
+		for _, cause := range []string{"content", "targets", "validity", "renewal"} {
+			serverMetrics.MediaAuthorityVersionsPublished.WithLabelValues(kind, cause).Add(0)
+		}
+		serverMetrics.MediaAuthorityEarlyRenewals.WithLabelValues(kind).Add(0)
+	}
+	for _, stage := range []string{"previous_read", "previous_decode", "playback_source_read", "placement_read", "deny_publish"} {
+		serverMetrics.MediaAuthorityRevocationCheckFailures.WithLabelValues(stage).Add(0)
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{

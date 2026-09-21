@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_control/internal/clusterurls"
@@ -126,7 +127,23 @@ type ServerMetrics struct {
 	MediaAuthorityPending              *prometheus.GaugeVec
 	MediaAuthorityMaxVersionLag        *prometheus.GaugeVec
 	MediaAuthorityOldestPendingSeconds *prometheus.GaugeVec
-	FieldDecryptFailures               *prometheus.CounterVec
+	MediaAuthorityRejectedDeliveries   *prometheus.GaugeVec
+	// Refresh-obligation queue: due work and its age per lane, parked targets,
+	// how each claimed obligation settled, and why versions were published.
+	MediaAuthorityRefreshPending              *prometheus.GaugeVec
+	MediaAuthorityRefreshOldestPendingSeconds *prometheus.GaugeVec
+	MediaAuthorityRefreshParked               *prometheus.GaugeVec
+	MediaAuthorityRevocationCheckFailures     *prometheus.CounterVec
+	MediaAuthorityExpiredWarm                 *prometheus.GaugeVec
+	MediaAuthorityObservationTimestamp        *prometheus.GaugeVec
+	MediaAuthorityRefreshSettlements          *prometheus.CounterVec
+	MediaAuthorityVersionsPublished           *prometheus.CounterVec
+	// MediaAuthorityEarlyRenewals counts renewals published while the version
+	// they replace had used less than a quarter of its validity. Renewal is due
+	// at a third, so a healthy compiler never counts one, whatever the catalog
+	// size or validity class.
+	MediaAuthorityEarlyRenewals *prometheus.CounterVec
+	FieldDecryptFailures        *prometheus.CounterVec
 }
 
 type streamAdmissionBilling interface {
@@ -163,6 +180,8 @@ type CommodoreServer struct {
 	placementInventorySource  mediaPlacementInventorySource
 	mediaAuthorityKeyID       string
 	mediaAuthorityPrivateKey  ed25519.PrivateKey
+	// mediaAuthorityLegacyAdopter is touched only by its own worker goroutine.
+	mediaAuthorityLegacyAdopter mediaAuthorityLegacyAdopter
 	// placementSweepCursor pages the activation backlog so a permanently
 	// blocked prefix cannot hide the scopes behind it. Guarded because the
 	// worker that advances it is not the only possible reader.
@@ -193,6 +212,17 @@ type CommodoreServer struct {
 	// admissionRefresh collapses concurrent admission-state refreshes for the
 	// same tenant into one Quartermaster/Purser round trip.
 	admissionRefresh singleflight.Group
+	// mediaAuthorityFetch shares one compile between cells asking for the same
+	// authority at once.
+	mediaAuthorityFetch singleflight.Group
+	// mediaAuthorityDeliveryCells holds the cells a delivery drainer is running
+	// for, so each cell has exactly one.
+	mediaAuthorityDeliveryCells    sync.Map
+	mediaAuthorityQueuesObservedAt atomic.Int64
+	// foghornDiscovery remembers a cell's Foghorn addresses briefly. Deliveries
+	// to one cell arrive in bursts, and asking Quartermaster for each of them is
+	// the same answer many times over.
+	foghornDiscovery sync.Map
 	// routeBuild collapses concurrent full route constructions for the same
 	// tenant; each one fans out to Quartermaster, Purser, and Foghorn discovery.
 	routeBuild           singleflight.Group
@@ -338,6 +368,34 @@ func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID st
 	return dedupeAddrs(addrs...)
 }
 
+const foghornDiscoveryTTL = 30 * time.Second
+
+type foghornDiscoveryEntry struct {
+	addrs []string
+	until time.Time
+}
+
+// discoverFoghornAddrsBriefly is discoverFoghornAddrs for the asynchronous
+// delivery paths, which reach one cell many times in a burst. An answer is kept
+// for foghornDiscoveryTTL; an empty one is not kept, and forgetFoghornDiscovery
+// drops it the moment a delivery to the cell fails.
+func (s *CommodoreServer) discoverFoghornAddrsBriefly(ctx context.Context, clusterID string) []string {
+	if cached, ok := s.foghornDiscovery.Load(clusterID); ok {
+		if entry, typed := cached.(foghornDiscoveryEntry); typed && time.Now().Before(entry.until) {
+			return entry.addrs
+		}
+	}
+	addrs := s.discoverFoghornAddrs(ctx, clusterID)
+	if len(addrs) > 0 {
+		s.foghornDiscovery.Store(clusterID, foghornDiscoveryEntry{addrs: addrs, until: time.Now().Add(foghornDiscoveryTTL)})
+	}
+	return addrs
+}
+
+func (s *CommodoreServer) forgetFoghornDiscovery(clusterID string) {
+	s.foghornDiscovery.Delete(clusterID)
+}
+
 // resolveFoghornForClusterDirect resolves a cluster's Foghorn via Quartermaster SERVICE DISCOVERY, independent of any
 // tenant plan/entitlement. Stream-cleanup delivery must reach a DURABLY-RECORDED owning cell even after tenant routing
 // changed (a tenant de-entitled from a cluster it once ingested on would drop out of resolveFoghornForCluster's
@@ -346,7 +404,7 @@ func (s *CommodoreServer) resolveFoghornForClusterDirect(ctx context.Context, cl
 	if strings.TrimSpace(clusterID) == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
-	addr := s.nextFoghornAddr(clusterID, s.discoverFoghornAddrs(ctx, clusterID))
+	addr := s.nextFoghornAddr(clusterID, s.discoverFoghornAddrsBriefly(ctx, clusterID))
 	if addr == "" {
 		return nil, status.Errorf(codes.NotFound, "no foghorn instance discovered for cluster %s", clusterID)
 	}
@@ -1276,26 +1334,44 @@ func tierProcessesForLifecycle(tier *purserpb.BillingTier, lifecycle string) str
 // lifecycle. Resolution order: per-stream override → tenant override (if tier
 // allows) → tier default. streamID may be empty for tenant-scoped lookups.
 func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) string {
-	if s.purserClient == nil {
+	processesJSON, err := s.resolveProcessesJSONStrict(ctx, tenantID, streamID, clusterID, lifecycle)
+	if err != nil {
 		return "[]"
+	}
+	return processesJSON
+}
+
+// resolveProcessesJSONStrict reports a Purser failure instead of degrading to
+// an empty process list. A connected response can degrade for one request; a
+// signed authority cannot, because the empty list would be what every cell
+// holds until the stream is next published.
+func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) (string, error) {
+	if s.purserClient == nil {
+		return "[]", nil
 	}
 	lifecycle = normalizeProcessLifecycle(lifecycle)
 
-	// Get tenant's subscription → tier
-	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
+	// Get tenant's subscription → tier. Every stream of a tenant asks the same two
+	// questions, twice each (live and DVR), so authority compiles claimed together
+	// share the answers.
+	subResp, err := memoizedCompileInput(ctx, "subscription\x00"+tenantID, func() (*purserpb.GetSubscriptionResponse, error) {
+		return s.purserClient.GetSubscription(ctx, tenantID)
+	})
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get subscription for process config")
-		return "[]"
+		return "", fmt.Errorf("load subscription for process config: %w", err)
 	}
 	sub := subResp.GetSubscription()
 	if sub == nil {
-		return "[]"
+		return "[]", nil
 	}
 
-	tier, err := s.purserClient.GetBillingTier(ctx, sub.GetTierId())
+	tier, err := memoizedCompileInput(ctx, "billing_tier\x00"+sub.GetTierId(), func() (*purserpb.BillingTier, error) {
+		return s.purserClient.GetBillingTier(ctx, sub.GetTierId())
+	})
 	if err != nil {
 		s.logger.WithError(err).WithField("tier_id", sub.GetTierId()).Warn("Failed to get billing tier for process config")
-		return "[]"
+		return "", fmt.Errorf("load billing tier for process config: %w", err)
 	}
 
 	processesJSON := tierProcessesForLifecycle(tier, lifecycle)
@@ -1338,13 +1414,13 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 	}
 
 	if processesJSON == "" || processesJSON == "[]" {
-		return "[]"
+		return "[]", nil
 	}
 
 	// Livepeer entries carry no hardcoded_broadcasters — Foghorn fills the
 	// broadcaster list from its cluster's Livepeer gateway instances at
 	// cache/dispatch time.
-	return mist.NormalizeProcessConfigSelectors(processesJSON)
+	return mist.NormalizeProcessConfigSelectors(processesJSON), nil
 }
 
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
@@ -9538,6 +9614,8 @@ func commodoreServiceOnlyMethods() []string {
 		commodorepb.InternalService_CreateUserInTenant_FullMethodName,
 		commodorepb.InternalService_RecordPullSourceEvent_FullMethodName,
 		commodorepb.InternalService_RequestMediaAuthorityReplay_FullMethodName,
+		commodorepb.InternalService_FetchMediaAuthority_FullMethodName,
+		commodorepb.InternalService_ReportMediaAuthorityUse_FullMethodName,
 		commodorepb.PushTargetService_GetStreamPushTargets_FullMethodName,
 		commodorepb.PushTargetService_UpdatePushTargetStatus_FullMethodName,
 	}
