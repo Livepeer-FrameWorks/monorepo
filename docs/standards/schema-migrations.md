@@ -169,7 +169,7 @@ The exhaustive Yugabyte target reconstructs every supported tagged/current datab
 therefore a release and scheduled-CI proof, not the default inner-loop check for every Go
 change. Use `make verify-yugabyte-service SERVICE=<name>` for query or repository changes in
 one of `commodore`, `purser`, `navigator`, `skipper`, `quartermaster`,
-`periscope-metering`, `foghorn`, or `lookout`. Use
+`periscope-metering`, `foghorn`, `lookout`, or `bosun`. Use
 `make verify-yugabyte-database DATABASE=<name>` when that database's baseline, migrations,
 or capability assumptions changed; this runs its tagged/current convergence plus its service
 contracts. The database name for Periscope Metering is `periscope`. Both focused targets use

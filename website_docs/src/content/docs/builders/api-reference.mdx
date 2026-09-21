@@ -41,7 +41,24 @@ Authorization: Bearer YOUR_JWT_OR_API_TOKEN
 Get your API token from **Developer → API** in the dashboard.
 
 The dashboard may authenticate via httpOnly cookies.  
-Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `serviceInstancesHealth`, `networkStatus` (queries only).
+Public allowlist (no auth required): `serverInfo`, `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and the orchestrator queries (queries only).
+
+Subscriptions send the token in the `connection_init` payload of the WebSocket connection:
+
+```json
+{ "type": "connection_init", "payload": { "Authorization": "Bearer YOUR_JWT_OR_API_TOKEN" } }
+```
+
+A connection without an `Authorization` value is anonymous and can only run public operations. A
+connection whose `Authorization` value does not authenticate (expired, revoked, or malformed) is
+closed with code `4403` before the server acknowledges it; reconnecting with the same token fails
+the same way, so get a new token first. This holds even when the browser also sends a valid session
+cookie: a present `Authorization` value is never replaced by another credential. When the gateway
+cannot check the token because its authentication service is unavailable, it closes with `1013`
+(try again later); reconnect with backoff. Over HTTP the same case answers `503`.
+
+The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read the token again
+for every reconnect.
 
 ## Try It Out
 
@@ -227,14 +244,26 @@ If the gateway can’t determine a viewer IP (for GeoIP routing), this query wil
 
 ## Error Handling
 
-GraphQL errors come in the `errors` array. Mutation errors for unions are returned as typed objects (check `__typename`).
+A request can fail in three places, and each has its own shape.
+
+**Before GraphQL runs**, the gateway answers with an HTTP status and a JSON body that has `error`,
+often `message` and `code`, and no `errors` array:
+
+| Status | Meaning                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------ |
+| 401    | The token is missing or invalid (`{"error": "authentication failed"}`).                                            |
+| 402    | The operation needs credit, a payment method, or an x402 payment; `code` says which (`INSUFFICIENT_BALANCE`, ...). |
+| 429    | Rate limited. `Retry-After` gives the seconds to wait.                                                             |
+| 5xx    | The gateway or a service behind it failed. Queries are safe to retry.                                              |
+
+**While GraphQL runs**, errors come in the `errors` array with `extensions.code`:
 
 ```json
 {
-  "data": null,
+  "data": { "stream": null },
   "errors": [
     {
-      "message": "Stream not found",
+      "message": "resource not found",
       "path": ["stream"],
       "extensions": {
         "code": "NOT_FOUND"
@@ -244,12 +273,47 @@ GraphQL errors come in the `errors` array. Mutation errors for unions are return
 }
 ```
 
-Common codes:
+| `extensions.code`                                   | Meaning                                                          |
+| --------------------------------------------------- | ---------------------------------------------------------------- |
+| `UNAUTHORIZED`                                      | Missing or invalid credentials.                                  |
+| `FORBIDDEN`                                         | The token lacks the permission the operation needs.              |
+| `NOT_FOUND`                                         | The resource does not exist or belongs to another tenant.        |
+| `VALIDATION_ERROR`                                  | An argument is invalid.                                          |
+| `CONFLICT`                                          | The resource already exists, or a concurrent change won.         |
+| `FAILED_PRECONDITION`                               | The resource is not in a state that allows the operation.        |
+| `RATE_LIMITED`                                      | A service-side limit was reached.                                |
+| `UNAVAILABLE`                                       | A service behind the gateway is unavailable or timed out; retry. |
+| `INTERNAL_ERROR`                                    | An unexpected failure.                                           |
+| `GRAPHQL_VALIDATION_FAILED`, `GRAPHQL_PARSE_FAILED` | The document does not match this server's schema (HTTP 422).     |
 
-- `UNAUTHORIZED` - Missing or invalid token
-- `FORBIDDEN` - Token lacks required permissions
-- `NOT_FOUND` - Resource doesn't exist
-- `VALIDATION_ERROR` - Invalid input
+Some errors carry a more specific code, for example `BILLING_PROFILE_REQUIRED` with the missing
+fields in `extensions.required_fields`. Errors without a code are resolver messages, such as a
+missing required input.
+
+**As a result value**, most mutations return a union of the result and typed errors. Select
+`__typename` and each error member; a `ValidationError` names the `field`, a `NotFoundError` the
+`resourceType` and `resourceId`, and a `RateLimitError` the seconds in `retryAfter`:
+
+```graphql
+mutation {
+  createStream(input: { name: "" }) {
+    __typename
+    ... on Stream {
+      id
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+    }
+  }
+}
+```
+
+The [SDKs](/builders/sdks) turn each of these into one typed error class, the same in every
+language.
 
 ## Building Queries
 
@@ -322,8 +386,9 @@ req.Header.Set("Authorization", "Bearer YOUR_TOKEN")
 resp, _ := http.DefaultClient.Do(req)
 ```
 
-FrameWorks does not publish a first-party GraphQL SDK yet. Use any GraphQL client in your language,
-or generate typed bindings from the schema.
+For TypeScript, Go, and Python, the [SDKs](/builders/sdks) ship typed operations for streams,
+media, uploads, playback access, push targets, developer tokens, usage, and events. For other
+languages, use any GraphQL client or generate typed bindings from the schema.
 
 ## Schema Reference
 

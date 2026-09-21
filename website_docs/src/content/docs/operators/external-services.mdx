@@ -351,8 +351,9 @@ When `CLUSTER_ID` is set, Chandler takes the full descriptor tuple (`s3_bucket` 
 
 - **Foghorn** (`api_balancing`) — geo-aware viewer routing decisions
 - **Quartermaster** (`api_tenants`) — geolocates nodes at bootstrap for federation map placement
+- **Purser** (`api_billing`) — records the payer country on crypto top-up invoices
 
-If no MMDB is configured, GeoIP is disabled and services fall back to non-geographic behavior.
+If `GEOIP_MMDB_PATH` is empty, GeoIP is disabled and services fall back to non-geographic behavior. A service whose `GEOIP_MMDB_PATH` is set to a file that is missing or cannot be opened refuses to start.
 
 **CLI Provisioning (recommended):**
 
@@ -480,8 +481,11 @@ sending a partial summary.
      - `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`
      - `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
      - `payment_intent.succeeded`, `payment_intent.payment_failed`
-     - `charge.refunded`, `charge.dispute.created`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`
+     - `charge.refunded`, `charge.updated`, `charge.dispute.created`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`
    - Reveal the endpoint **Signing secret** (`whsec_…`)
+   - `charge.updated` delivers the balance transaction Purser records as the settled EUR
+     amount, fee, and exchange rate of each card payment; pending settlements are also
+     re-read every 10 minutes.
 4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
 5. Enable payment methods (**Settings → Payment methods**). The hosted Checkout pins an
    explicit, currency-aware allowlist in code: `card` always, plus `sepa_debit`, `ideal`, and

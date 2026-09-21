@@ -155,10 +155,10 @@ update. Missing four consecutive refreshes eventually denies source lookup;
 that bounded availability cost prevents a copied URL from becoming permanent
 authority.
 
-Deployed Foghorn containers set `GRPC_METADATA_POLICY=deny`. Ambient inbound
-tenant or user metadata is therefore discarded unless a method explicitly
-authenticates and reconstructs delegated identity; the compose-level default is
-not the production service posture.
+Foghorn's `GRPC_METADATA_POLICY` defaults to `deny`, and deployed Foghorn
+containers also set it explicitly. Ambient inbound tenant or user metadata is
+therefore discarded unless a method explicitly authenticates and reconstructs
+delegated identity. Other control-plane services default to `allow`.
 
 Helmsman's node mode, Prometheus-node administration, and trigger-WAL controls
 use a loopback-only management listener. Unsafe management binds fail startup.

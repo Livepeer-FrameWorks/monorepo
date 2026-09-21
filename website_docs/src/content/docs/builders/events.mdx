@@ -1,0 +1,197 @@
+---
+title: "Events"
+description: "The public event catalog: every event type your account receives, when it fires, its subject, and its payload fields."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+FrameWorks records a public event whenever something in your account changes state: a stream goes
+live, a clip becomes ready, an upload fails processing, an invoice is issued. The service that owns
+the change writes the event in the same transaction as the change itself, so an event is never
+sent for a change that did not commit.
+
+Two ways deliver them, with the same payloads:
+
+- the `tenantEvents` subscription, while your client is connected;
+- [webhooks](/builders/webhooks): signed HTTPS requests to your endpoints, retried for about three
+  days, with a 30-day delivery log and replay.
+
+## Subscribe
+
+```graphql
+subscription ClipEvents($streamId: ID) {
+  tenantEvents(types: ["clip.ready", "clip.failed"], streamId: $streamId) {
+    id
+    type
+    time
+    subject
+    data {
+      __typename
+      ... on ClipReady {
+        artifact {
+          artifactId
+          streamId
+          playbackId
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          artifactId
+        }
+        reason
+      }
+    }
+  }
+}
+```
+
+Both arguments are optional:
+
+- `types` passes only the listed event types, compared as exact strings (`"clip.ready"`, not
+  `"clip.*"`). Omit it to receive every type your permissions allow.
+- `streamId` passes only events whose payload names that stream: `streamId` on stream and
+  multistream events, `artifact.streamId` on clip and recording events. Uploads, API tokens,
+  billing, account, and custom domain events name no stream, so they never match a `streamId`
+  filter.
+
+Subscriptions run over the WebSocket endpoint described in the
+[API reference](/builders/api-reference). You receive only your own account's events.
+
+Stream, clip, recording, upload, and multistream events require `streams:read`;
+billing and account events require `billing:read`; API token and custom domain
+events require `developer:read`. Explicitly requesting a type you cannot read
+returns `FORBIDDEN`. An omitted `types` filter is narrowed to your permissions;
+it does not grant access to other categories.
+
+## Envelope
+
+| Field     | Meaning                                                                                       |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `id`      | Event ID. The same event keeps the same ID wherever it is delivered; use it to deduplicate.   |
+| `type`    | The event type from the catalog below, e.g. `stream.live`.                                    |
+| `time`    | When the change committed.                                                                    |
+| `subject` | The object the event is about, as `<aggregate>/<id>`, e.g. `streams/<stream id>`.             |
+| `data`    | The payload of the type. In GraphQL it is a union; select fields with `... on <PayloadType>`. |
+
+<Aside type="note" title="Delivery">
+  The subscription delivers events while you are connected. It does not replay events you missed
+  while disconnected, and an event can arrive twice around a reconnect. Deduplicate by `id`, and
+  read current state with queries (for example `storageArtifactsConnection` or `vodUploadStatus`)
+  after reconnecting. Ordering across different objects is not guaranteed.
+</Aside>
+
+## The payload fields are the contract
+
+The field names in the tables below are the JSON names of each payload, exactly as GraphQL returns
+them and as [webhook](/builders/webhooks#the-request) bodies carry them. Within this version, fields are only added, never renamed or
+removed; a breaking change ships as a new version of the payload. Enum values are the full
+upper-case names shown here, such as `MEDIA_FAILURE_REASON_PROCESSING_FAILED`. Amounts are
+`{ amountMinor, currency }`: an integer in the currency's minor unit (cents for EUR) and an ISO 4217
+code.
+
+Payloads carry only identifiers and values your account already sees through the API. They never
+contain internal stream names, node IDs, storage paths, URLs, IP addresses, or raw error text.
+Media failures carry a coarse `reason`; the error detail for an artifact is on the artifact itself.
+
+Clip, recording, and upload events share one `artifact` object:
+
+| Field        | Meaning                                                                         |
+| ------------ | ------------------------------------------------------------------------------- |
+| `artifactId` | The artifact's public hash, the `hash` of its `storageArtifactsConnection` row. |
+| `kind`       | `ARTIFACT_KIND_CLIP`, `ARTIFACT_KIND_RECORDING`, or `ARTIFACT_KIND_UPLOAD`.     |
+| `streamId`   | The source stream; empty for uploads.                                           |
+| `playbackId` | The playback ID, once one is assigned.                                          |
+
+Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_FAILED`,
+`_STORAGE_FAILED`, `_INVALID_INPUT`, `_QUOTA_EXCEEDED`, `_TIMED_OUT` (each prefixed
+`MEDIA_FAILURE_REASON`).
+
+## Streams
+
+Subject: `streams/<stream id>`.
+
+| Type                 | Fires when                                                        | Payload                                                                   |
+| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                          |
+| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (the changed fields by API name)              |
+| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                |
+| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                |
+| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
+| `stream.live`        | The stream becomes playable.                                      | `streamId`                                                                |
+| `stream.idle`        | The ingest session ends.                                          | `streamId`                                                                |
+
+`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session.
+
+## Clips, recordings, and uploads
+
+Subject: `artifacts/<artifact id>`.
+
+| Type               | Fires when                                                   | Payload                                     |
+| ------------------ | ------------------------------------------------------------ | ------------------------------------------- |
+| `clip.requested`   | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
+| `clip.ready`       | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
+| `clip.failed`      | The clip could not be produced.                              | `artifact`, `reason`                        |
+| `recording.ready`  | A DVR recording is finalized and playable.                   | `artifact`, `durationMs`, `sizeBytes`       |
+| `recording.failed` | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
+| `upload.created`   | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
+| `upload.completed` | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
+| `upload.aborted`   | The upload is aborted before completion.                     | `artifact`                                  |
+| `upload.ready`     | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
+| `upload.failed`    | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+
+Upload events carry no transfer progress. Your client knows its own transfer progress; for the
+server-side state of an upload, query `vodUploadStatus`.
+
+## Multistreaming
+
+Subject: `push_targets/<target id>`.
+
+| Type                         | Fires when                                  | Payload                                                          |
+| ---------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `multistream.status_changed` | A multistream target's push status changes. | `streamId`, `targetId`, `targetName`, `status`, `previousStatus` |
+
+`status` and `previousStatus` are `MULTISTREAM_STATUS_IDLE`, `_PENDING`, `_PUSHING`, `_RETRYING`,
+`_STOPPING`, or `_FAILED` (each prefixed `MULTISTREAM_STATUS`). `targetName` is your label for the
+target, never its URL.
+
+## API tokens
+
+Subject: `api_tokens/<token id>`.
+
+| Type                | Fires when               | Payload                                                      |
+| ------------------- | ------------------------ | ------------------------------------------------------------ |
+| `api_token.created` | An API token is created. | `tokenId`, `name`, `permissions`, `expiresAt` (null if none) |
+| `api_token.revoked` | An API token is revoked. | `tokenId`                                                    |
+
+## Billing
+
+| Type                      | Subject                 | Fires when                                                              | Payload                                                                         |
+| ------------------------- | ----------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `billing.invoice_created` | `invoices/<invoice id>` | An invoice is issued. Drafts and invoices held for review emit nothing. | `invoiceId`, `amountDue`, `periodStart`, `periodEnd`, `dueAt`                   |
+| `billing.invoice_paid`    | `invoices/<invoice id>` | An invoice is paid.                                                     | `invoiceId`, `amountPaid`                                                       |
+| `billing.payment_failed`  | `payments/<payment id>` | A charge fails.                                                         | `paymentId`, `invoiceId`, `amount`, `reason`, `provider`, `providerReferenceId` |
+| `billing.topup_credited`  | `topups/<top-up id>`    | A prepaid top-up is credited to your balance.                           | `topupId`, `amount`                                                             |
+| `billing.details_updated` | `tenants/<account id>`  | Your billing details change.                                            | `changedFields`                                                                 |
+
+A charge your payment provider starts on its own subscription leaves `paymentId` and `invoiceId`
+empty and names the provider (`provider`, e.g. `stripe`) and its identifier for the charge
+(`providerReferenceId`). Payment failure reasons are `PAYMENT_FAILURE_REASON_DECLINED`,
+`_INSUFFICIENT_FUNDS`, `_EXPIRED_METHOD`, `_AUTHENTICATION_REQUIRED`, and `_PROCESSING_ERROR`.
+
+## Account and custom domains
+
+| Type                     | Subject                   | Fires when                                 | Payload            |
+| ------------------------ | ------------------------- | ------------------------------------------ | ------------------ |
+| `account.suspended`      | `tenants/<account id>`    | Your account is suspended.                 | `reason`           |
+| `custom_domain.verified` | `custom_domains/<domain>` | A custom domain passes verification.       | `domain`           |
+| `custom_domain.failed`   | `custom_domains/<domain>` | A custom domain fails verification or TLS. | `domain`, `reason` |
+
+Suspension reasons: `SUSPENSION_REASON_BALANCE_EXHAUSTED`, `_PAYMENT_OVERDUE`, `_POLICY`. Custom
+domain failure reasons: `CUSTOM_DOMAIN_FAILURE_REASON_VERIFICATION_EXPIRED` (verification did not
+succeed within the verification period) and `_CERTIFICATE_FAILED`.
+
+In GraphQL, the `reason` fields of payment, account, and custom domain events have different enum
+types from the media `reason`. When one selection covers several of them, alias the field, for
+example `suspensionReason: reason`.

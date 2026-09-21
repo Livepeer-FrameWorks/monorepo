@@ -93,6 +93,10 @@ Paid tiers include monthly allocations with overage billing:
 | Production | €999   | 2M                | None               |
 | Enterprise | Custom | Custom            | Contract-defined   |
 
+Every tier includes recording, the analytics dashboard, and API access. Tiers differ in allowances,
+retention caps, support level, and SLA, and only Enterprise lets a tenant replace the tier's
+processing profiles with its own.
+
 Paid self-serve tiers do not impose a plan-level retention cap. Content still follows its configured
 artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
 clips.
@@ -134,14 +138,35 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
 
+## Currency
+
+Prices and the prepaid balance are in EUR. Each tenant also has a presentment
+currency, derived from the billing address country: EUR in the European
+Economic Area, GBP in the United Kingdom, and USD everywhere else. You never
+choose it, and it cannot change while a provider subscription, an unpaid
+invoice, or a pending Mollie first payment exists.
+
+- **Top-ups** are charged in the presentment currency. A USD or GBP amount is
+  converted to EUR at the official ECB reference rate when the checkout or
+  deposit quote is created, and that EUR amount is what the balance receives.
+- **Invoices** are computed in EUR and presented and charged in the presentment
+  currency at the ECB rate of the finalization date. A payment of an invoice
+  records its share of the invoice's EUR amount at that rate, whatever the rate
+  is on the day it is paid.
+- **Records** of every top-up, invoice payment, and invoice keep the amount
+  charged, the EUR amount, the rate, and the ECB reference date. GraphQL returns
+  them as `conversion` on top-ups and payments and as the `presentment*` fields
+  on invoices; tax documents state net and VAT in EUR.
+
+The top-up and prepaid-balance operations take no currency argument.
+
 ## Topping Up
 
 ### Card
 
-Pay via Stripe or Mollie. The minimum fiat top-up is **€5.00 / 500 cents** for
-the currently supported EUR flow. Purser validates the selected provider and
-currency before creating checkout; a provider may require a higher minimum for
-a future currency. Funds credit only after provider confirmation.
+Pay via Stripe or Mollie, in the tenant's presentment currency. The minimum
+fiat top-up is **500 cents**; a provider may require a higher minimum for a
+currency. Funds credit only after provider confirmation.
 
 ### Crypto
 

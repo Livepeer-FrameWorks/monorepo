@@ -1,0 +1,200 @@
+---
+title: "SDKs"
+description: "The TypeScript, Go, and Python SDKs: typed operations, retries, pagination, typed errors, uploads, playback tokens, subscriptions, and webhooks."
+---
+
+import { Aside, Code, Tabs, TabItem } from "@astrojs/starlight/components";
+import tsQuickstart from "../../../../../npm_api/examples/quickstart.ts?raw";
+import tsUpload from "../../../../../npm_api/examples/upload.ts?raw";
+import tsPlayback from "../../../../../npm_api/examples/playbackToken.ts?raw";
+import tsWebhooks from "../../../../../npm_api/examples/webhooks.ts?raw";
+import tsSubscription from "../../../../../npm_api/examples/subscription.ts?raw";
+import goQuickstart from "../../../../../sdk_go/examples/quickstart/main.go?raw";
+import goUpload from "../../../../../sdk_go/examples/upload/main.go?raw";
+import goPlayback from "../../../../../sdk_go/examples/playbacktoken/main.go?raw";
+import goWebhooks from "../../../../../sdk_go/examples/webhooks/main.go?raw";
+import goSubscription from "../../../../../sdk_go/examples/subscription/main.go?raw";
+import pyQuickstart from "../../../../../sdk_python/examples/quickstart.py?raw";
+import pyUpload from "../../../../../sdk_python/examples/upload.py?raw";
+import pyPlayback from "../../../../../sdk_python/examples/playback_token.py?raw";
+import pyWebhooks from "../../../../../sdk_python/examples/webhook_receiver.py?raw";
+import pySubscription from "../../../../../sdk_python/examples/subscription.py?raw";
+
+FrameWorks publishes SDKs for TypeScript, Go, and Python. All three are generated from the same
+curated set of GraphQL operations, share one version, and pass the same conformance fixtures, so
+they behave the same way. Every example on this page is a file in the repository that CI compiles
+or type-checks (`tsc`, `go vet`, `mypy`).
+
+| Language   | Package                                                                      | Needs                 |
+| ---------- | ---------------------------------------------------------------------------- | --------------------- |
+| TypeScript | `npm install @livepeer-frameworks/api` (plus `graphql-ws` for subscriptions) | Node 22+ or a browser |
+| Go         | `go get github.com/Livepeer-FrameWorks/sdk-go`                               | Go 1.27+              |
+| Python     | `pip install livepeer-frameworks`                                            | Python 3.10+          |
+
+Other languages use the [GraphQL API](/builders/api-reference) directly and a
+[Standard Webhooks](https://www.standardwebhooks.com/) library for [webhooks](/builders/webhooks).
+
+## What the SDKs cover
+
+The operations cover streams and stream keys, clips, DVR recordings and chapters, VOD assets and
+uploads, storage artifact listing, viewer and ingest endpoint resolution, usage, playback access
+control (signing keys, playback policies, access tests), multistream push targets, developer
+tokens, the server version, and the `tenantEvents` subscription. Each operation is a typed
+document (TypeScript), a typed function (Go), or a typed method on the client (Python).
+
+Around the operations, each SDK has the same small runtime:
+
+- **Authentication.** Pass a developer token, or a function that returns the current one. The
+  client reads it for every request, and a subscription reads it again for every reconnect.
+- **Retries.** Queries are retried on network errors and HTTP 408, 429, 500, 502, 503, and 504,
+  with backoff and `Retry-After`. A mutation is retried only when the request provably never
+  reached the server: the connection was refused, the host name did not resolve, or the gateway
+  answered 429. A mutation that timed out, lost its connection after sending, or got a 5xx may
+  have run, and the gateway does not deduplicate replayed mutations, so the client returns the
+  error instead; check the outcome before you send it again. Paid mutations settled with x402
+  need an idempotency key, and the gateway deduplicates those by it.
+- **Subscriptions.** A connection the gateway closes with 4403 before acknowledging it has an
+  invalid or expired token and fails with `AuthenticationError`. Any other close or network error,
+  before or after the acknowledgement, reconnects with backoff; each acknowledged connection
+  starts the reconnect budget again.
+- **Typed errors.** Every failure is a subclass of `FrameWorksError` with the same name in each
+  language: `NetworkError`, `AuthenticationError`, `PaymentRequiredError`, `RateLimitError`,
+  `ServerError`, `HTTPError`, `ProtocolError`, `GraphQLError`, `SchemaMismatchError`,
+  `ResultError`, `ServerTooOldError`, `UnsupportedOperationError`, and `UploadError`.
+- **Result unions.** Most mutations return a union of the result and typed errors.
+  `expectResult` returns the result or raises a `ResultError` naming the error member, its
+  message, and the input field or resource it concerns.
+- **Pagination.** Iterators for the three list shapes: relay cursors (`streamsConnection`),
+  offsets (`storageArtifactsConnection`), and page tokens (`dvrChapters`).
+- **Server check.** Before operations the client reads `serverInfo`, shared per URL and read again
+  after five minutes. See [Versions](#versions).
+
+## Create and list streams
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="TypeScript">
+    <Code code={tsQuickstart} lang="ts" title="quickstart.ts" />
+  </TabItem>
+  <TabItem label="Go">
+    <Code code={goQuickstart} lang="go" title="quickstart/main.go" />
+  </TabItem>
+  <TabItem label="Python">
+    <Code code={pyQuickstart} lang="python" title="quickstart.py" />
+  </TabItem>
+</Tabs>
+
+## Upload a file
+
+The upload helper calls `createVodUpload`, sends the file's parts to the presigned URLs with
+bounded concurrency, retries a failed part, and completes the upload with the part ETags. If
+anything fails after the upload is created, it calls `abortVodUpload` before raising the error.
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="TypeScript">
+    <Code code={tsUpload} lang="ts" title="upload.ts" />
+  </TabItem>
+  <TabItem label="Go">
+    <Code code={goUpload} lang="go" title="upload/main.go" />
+  </TabItem>
+  <TabItem label="Python">
+    <Code code={pyUpload} lang="python" title="upload.py" />
+  </TabItem>
+</Tabs>
+
+## Sign playback tokens
+
+For content with a JWT [playback policy](/builders/playback-access-control), sign viewer tokens on
+your backend with the private key `createSigningKey` returned. The signer puts the key's `kid` in
+the header and sets `exp`, `iat`, and optionally `nbf`, `sub`, `aud`, and your own claims, which
+must match the policy's `requiredAudience` and `requiredClaimsJson`.
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="TypeScript">
+    <Code code={tsPlayback} lang="ts" title="playbackToken.ts" />
+  </TabItem>
+  <TabItem label="Go">
+    <Code code={goPlayback} lang="go" title="playbacktoken/main.go" />
+  </TabItem>
+  <TabItem label="Python">
+    <Code code={pyPlayback} lang="python" title="playback_token.py" />
+  </TabItem>
+</Tabs>
+
+## Receive webhooks
+
+Verification uses the official Standard Webhooks library of each language. Pass the raw request
+body: parsing and re-serializing the JSON changes the bytes that were signed. Parsing decodes the
+payload into a type generated from the [event catalog](/builders/events). An event type the SDK
+does not know yet comes back as a raw event, not as an error.
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="TypeScript">
+    <Code code={tsWebhooks} lang="ts" title="webhooks.ts" />
+  </TabItem>
+  <TabItem label="Go">
+    <Code code={goWebhooks} lang="go" title="webhooks/main.go" />
+  </TabItem>
+  <TabItem label="Python">
+    <Code code={pyWebhooks} lang="python" title="webhook_receiver.py" />
+  </TabItem>
+</Tabs>
+
+## Subscribe to events
+
+`tenantEvents` delivers the same events as webhooks over a WebSocket. When the gateway closes the
+connection before acknowledging it, the token is invalid or expired: the SDK raises
+`AuthenticationError` and does not reconnect. After any other drop it reconnects, reading the
+token again.
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="TypeScript">
+    <Code code={tsSubscription} lang="ts" title="subscription.ts" />
+  </TabItem>
+  <TabItem label="Go">
+    <Code code={goSubscription} lang="go" title="subscription/main.go" />
+  </TabItem>
+  <TabItem label="Python">
+    <Code code={pySubscription} lang="python" title="subscription.py" />
+  </TabItem>
+</Tabs>
+
+## Versions
+
+The SDKs are 0.x until the platform reaches 1.0, and the three languages always share a version.
+Under 0.x each minor version is a line: 0.1, 0.2, and so on. A line names the oldest FrameWorks
+release it supports and supports every stable release from there on.
+
+| SDK line | Oldest supported FrameWorks release |
+| -------- | ----------------------------------- |
+| 0.1      | v0.3.11                             |
+
+Within a line, operations are only added; a breaking change starts a new minor line. Before the
+first operation, the client reads the server's `serverInfo`:
+
+- A stable release older than the line's minimum raises `ServerTooOldError`.
+- An operation added after the server's release raises `UnsupportedOperationError` and is not
+  sent.
+- Development builds and release candidates are not checked.
+- If the check itself fails, for example on a network error, the call goes ahead and the next
+  call checks again. A v0.3.10 gateway answers an anonymous `serverInfo` with HTTP 402; that is no
+  verdict either, and the client does not ask that gateway again for five minutes.
+- The answer is reused for five minutes. The client asks again at once before a cached answer
+  would fail a call as too old, and when an operation fails schema validation; if the fresh answer
+  fails the check, the call fails with that error instead.
+
+<Aside type="note" title="New enum values and union members">
+  A newer server can return an enum value or union member the SDK does not know. Every SDK decodes
+  the response anyway, so keep a default branch wherever you branch on an enum or on `__typename`:
+
+- **Union members.** TypeScript returns the member's object as sent. Go decodes it as
+  `*frameworks.UnknownMember` and Python as `UnknownMember`, each carrying the `__typename` and
+  the member's raw JSON. The TypeScript union types list only the members the SDK knows.
+- **Enum values.** TypeScript enum types include `"%future added value"`. Go enums are string
+  types, so an unknown value keeps its string. Python enums subclass `OpenEnum`: an unknown value
+  decodes to a member whose `value` is the server's string and whose `is_unknown` is true.
+- **Errors.** `expectResult` raises an unknown member as a `ResultError` carrying its
+  `__typename`, message, and code.
+
+Webhook parsing returns an event type the SDK does not know as a raw event.
+
+</Aside>

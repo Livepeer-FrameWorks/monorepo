@@ -43,6 +43,14 @@ One image — `livepeerframeworks/frameworks-edge` (also on GHCR) — runs the w
 - **Thumbnails** need no plumbing (same-container `/tmp/mist_thumbs`); hot-storage cleanup/eviction behaves exactly as native given the dedicated `edge_storage` volume — on macOS set `HELMSMAN_STORAGE_CAPACITY_BYTES` so thresholds track a real budget instead of the whole Docker VM disk.
 - **Volumes should be local filesystems**: Mist payload entries are promoted with same-directory atomic renames, while hot storage depends on timely and accurate capacity reporting. On macOS prefer named volumes over virtiofs binds for media I/O performance.
 
+### Development stack
+
+The dev `docker-compose.yml` runs the same image as its `edge` service (profile `edge`, on by default in the generated `.env`), built locally as `frameworks-edge:dev`; the `two-cell` profile adds `edge-b` for the second cell. There is no separate Helmsman or MistServer dev container.
+
+- **Staging.** `make edge-dev-dist` (`scripts/edge-dev-dist.sh`) runs `edge/stage-dist.sh` with Helmsman built from the working tree, the MistServer release pinned in that script, and the Caddy artifact pinned in `config/infrastructure.yaml`, all checksum-verified. `EDGE_DEV_MIST_TAR` swaps in a local MistServer install tree; `scripts/verify-mist-current-source.sh` writes one from a Mist checkout when `MIST_INSTALL_TREE_OUT` is set. Each run stamps Helmsman (and a local Mist tree) with a unique version, so `seed-edge` replaces the copies on the `edge_opt` volume after `docker compose up --build edge`.
+- **Shape.** Bridge networking with the Mist ports published on the host (4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp); Caddy's 80/443 and Helmsman's 18007 stay container-internal, and the dev nginx on 18090 routes `/view/`, `/hls/`, `/webrtc/` and `/mist/` to `edge`. `EDGE_DOMAIN=localhost`; the node enrolls with the demo bootstrap token. Compose overrides `MISTSERVER_URL`, `MISTSERVER_HTTP_URL` and `HELMSMAN_WEBHOOK_URL` to loopback because the shared `.env` names compose services.
+- **Mounts.** `infrastructure/mistserver.conf` is mounted at `/etc/frameworks/mistserver.conf` (its triggers point at `localhost:18007`; Helmsman reconciles them through the Mist API) and `infrastructure/demo-recordings` at `/data/storage`. The recordings bind is a dev convenience over the local-filesystem rule above; the other paths use named volumes.
+
 `frameworks edge deploy` is the operator-friendly path. It can either use the logged-in Bridge flow to create/reuse an edge cluster and issue an enrollment token, or accept a pre-existing `--enrollment-token`. `frameworks edge provision` remains the lower-level/admin path for explicit domains, manifests, registration, and certificate fetches.
 
 ## Cluster Node Lifecycle
@@ -205,6 +213,7 @@ Data comes from Helmsman's in-memory state (already tracked from polling and tri
 - `cli/pkg/provisioner/edge_role.go` — Ansible role handoff and native binary pin resolution
 - `cli/internal/templates/edge.go` — manual compose/.edge.env templates (container + native)
 - `edge/` — single edge image: Dockerfile, s6-rc service tree, `stage-dist.sh`
+- `scripts/edge-dev-dist.sh` — stages `edge/dist/` for the dev compose `edge` service
 - `api_sidecar/internal/edgeseed/` — container init-seed (dirs, binary install, bootstrap config)
 - `api_sidecar/internal/updater/procctl*.go` — systemd/launchd/s6 service-control seam
 - `ansible/collections/ansible_collections/frameworks/infra/roles/edge/` — container/native edge role

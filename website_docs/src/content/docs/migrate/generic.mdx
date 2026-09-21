@@ -5,8 +5,6 @@ sidebar:
   order: 99
 ---
 
-import { Aside } from "@astrojs/starlight/components";
-
 Use this guide when FrameWorks does not have a dedicated migration page for your current platform.
 Most live-video APIs share the same shape: RTMP or WHIP in, HLS/WebRTC out, REST API on the side,
 and webhooks for events. FrameWorks also accepts Enhanced RTMP (E-RTMP) on the RTMP ingest endpoint.
@@ -40,25 +38,27 @@ If you've never written a GraphQL client, codegen is the smoothest path:
 
 Skipper can also draft queries for you — paste your old REST call and ask for the GraphQL equivalent.
 
-### Outbound webhooks → GraphQL subscriptions
+### Outbound webhooks
 
-Most platforms ship outbound HTTP webhooks for stream lifecycle, recording readiness, and multistream health. FrameWorks delivers these over GraphQL subscriptions today (WebSocket).
+Most platforms ship outbound HTTP webhooks for stream lifecycle, recording readiness, and
+multistream health. FrameWorks sends the events of its [public catalog](/builders/events) as
+[webhooks](/builders/webhooks): a signed `POST` of `{ id, type, api_version, created_at, data }`
+to each of your endpoints (at most 10), retried for about three days, with a 30-day delivery log
+and replay. Signatures follow the Standard Webhooks scheme, so its official libraries verify them.
+The same events are also available live over the `tenantEvents` subscription.
 
-| Generic event                  | FrameWorks subscription          |
-| ------------------------------ | -------------------------------- |
-| Stream went live / idle        | `liveStreamEvents(streamId)`     |
-| Recording / DVR lifecycle      | `liveDvrLifecycle(streamId)`     |
-| VOD upload progress            | `liveVodLifecycle`               |
-| Viewer connect / disconnect    | `liveConnectionEvents(streamId)` |
-| Track list / quality changes   | `liveTrackListUpdates(streamId)` |
-| Storage / artifact events      | `liveStorageEvents(streamId)`    |
-| Transcoding / processing usage | `liveProcessingEvents(streamId)` |
+| Generic event                                                         | FrameWorks                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Stream went live / idle                                               | `stream.live` / `stream.idle` webhooks; `liveStreamEvents(streamId)` for detail |
+| Stream, clip, recording, upload, multistream, billing, account events | Webhooks or `tenantEvents(types, streamId)`; see [Events](/builders/events)     |
+| VOD upload state                                                      | `upload.*` webhooks; `vodUploadStatus(uploadId)`                                |
+| Viewer connect / disconnect                                           | `liveConnectionEvents(streamId)` subscription                                   |
+| Track list / quality changes                                          | `liveTrackListUpdates(streamId)` subscription                                   |
+| Storage / artifact events                                             | `liveStorageEvents(streamId)` subscription                                      |
+| Transcoding / processing usage                                        | `liveProcessingEvents(streamId)` subscription                                   |
 
-<Aside type="caution">
-  If your environment can't hold a long-lived subscription (a serverless cron, a webhook-driven
-  Lambda), poll the relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. Outbound HTTP
-  callbacks are on the roadmap, but GraphQL subscriptions are the supported event surface today.
-</Aside>
+Viewer, track, storage, and processing streams are high-volume telemetry and stay
+subscription-only.
 
 ### Bearer API key → JWT, developer token, or wallet
 
@@ -134,14 +134,13 @@ Honest list, applies regardless of source:
 
 - AI Pipelines (text-to-image, image-to-video, ASR, live-video-to-video). Keep provider-specific
   AI calls on the source platform until FrameWorks exposes an equivalent surface.
-- Outbound HTTP webhooks. Replaced by subscriptions for now.
 - RTMP and FLV-over-HTTP pull sources. Our MistServer fork has no RTMP/FLV pull module —
   RTSP, SRT, RIST, HLS, DTSC, and MPEG-TS over UDP (incl. multicast) are all supported, but
   a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
   your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
-- First-class Python and Go SDKs. Use GraphQL codegen against the public schema until first-party
-  SDKs are published.
+- SDKs beyond TypeScript, Go, and Python. Those three [ship](/builders/sdks); for other languages,
+  use GraphQL codegen against the public schema and a Standard Webhooks library.
 - DRM (Widevine / FairPlay / PlayReady). In development.
 - Multi-participant SFU rooms. These are not exposed as a FrameWorks product surface today.
 - Per-target rendition selection on multistream.

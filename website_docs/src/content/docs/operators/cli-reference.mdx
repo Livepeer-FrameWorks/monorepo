@@ -585,6 +585,13 @@ viewer or ingest placement enforcement.
 | `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
 | `frameworks cluster clickhouse migrate cutover`                    | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command. |
 
+`cluster migrate --phase contract` (with or without `--dry-run`) and `cluster data-migrate run` of
+an irreversible migration take `--backup <dir|s3-url>`: a backup from `cluster backup create` that
+started less than an hour earlier and whose migration ledger digests still match the databases the
+command changes. Without one they refuse. A migration is irreversible when the service marks it so,
+when the service binary does not report the field, or when the release that declares it disables
+rollback for its service. See [Backup and Restore](/operators/backup-restore/#the-migration-gate).
+
 **Examples:**
 
 ```bash
@@ -1115,76 +1122,76 @@ authoritative Quartermaster descriptor; deployed components enforce it as immuta
 
 ## Backup & Restore Commands
 
-### frameworks cluster backup
+Backups cover every PostgreSQL/YugabyteDB service database, the databases of named postgres
+instances, and the ClickHouse billing facts. See [Backup and Restore](/operators/backup-restore/)
+for what is covered, the manifest, and the restore procedure.
 
-Backup cluster components to local storage.
+### frameworks cluster backup create
+
+Dump the selected databases to a local directory or an S3 prefix.
 
 **Usage:**
 
 ```bash
-frameworks cluster backup <component> [flags]
+frameworks cluster backup create --to <dir|s3-url> (--all | --database <name>... | --clickhouse) [flags]
 ```
 
-**Components:**
-
-- `postgres` - PostgreSQL/YugabyteDB dump (pg_dumpall)
-- `clickhouse` - ClickHouse databases (TSV format)
-- `volumes` - Docker volumes (tar.gz archives)
-- `config` - Configuration files (.env, docker-compose.yml, /etc/frameworks)
-- `all` - Backup everything
-
-Backups are local-only. The command writes timestamped artifacts under the
-selected output directory; treat the exact filenames as CLI-owned.
+The dump tools (`pg_dump`, `ysql_dump`, `clickhouse-client`) run on the database hosts over SSH;
+their gzip-compressed output streams to the CLI and is written under a new
+`frameworks-backup-<UTC time>` directory below `--to`. The manifest is written last. Any failure
+fails the command, and a backup without a manifest is incomplete.
 
 **Flags:**
 
 - `--manifest string` - Cluster manifest file
-- `--output string` - Output directory (default: `./backups`)
-- `--skip-upload` - Deprecated no-op; backups are local-only
+- `--to string` - Destination directory or `s3://bucket/prefix` (required)
+- `--all` - Every PostgreSQL/YugabyteDB database and the ClickHouse billing facts
+- `--database string` - Database to back up: physical name, or `<instance>/<name>` for a named postgres instance (repeatable)
+- `--clickhouse` - The ClickHouse billing facts
+
+S3 destinations use the standard AWS configuration: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+(or a profile), `AWS_REGION`, and `AWS_ENDPOINT_URL_S3` for an S3-compatible store.
 
 **Examples:**
 
 ```bash
-# Backup everything
-frameworks cluster backup all --output /backups
-
-# Backup only Postgres
-frameworks cluster backup postgres --output /opt/backups
-
-# Backup ClickHouse
-frameworks cluster backup clickhouse --output /backups
-
-# Backup volumes
-frameworks cluster backup volumes --output /backups
-
-# Backup config files
-frameworks cluster backup config --output /backups
+frameworks cluster backup create --to /var/backups/frameworks --all
+frameworks cluster backup create --to s3://ops-backups/frameworks --database purser
+frameworks cluster backup create --to /var/backups/frameworks --database support/chatwoot
 ```
+
+### frameworks cluster backup verify
+
+Read a backup's manifest and check the size and SHA-256 of every file.
+
+**Usage:**
+
+```bash
+frameworks cluster backup verify --from <dir|s3-url>
+```
+
+**Flags:**
+
+- `--from string` - Backup directory or `s3://` URL (required)
 
 ---
 
 ### frameworks cluster restore
 
-Restore components from backup files.
+Restore databases from a backup. Each database is restored into `<name>__restore`, compared with
+the manifest (ledger digest and per-table row counts), checked against the schema migration floor
+and, for Foghorn cells, the cell storage identity. Only then are the services that use it stopped,
+the restored database swapped in, and the services started and validated. The live database is kept
+as `<name>__prerestore`. ClickHouse fact rows are moved into the live tables partition by partition,
+and the previous rows are kept in `<table>__prerestore`.
 
 **Usage:**
 
 ```bash
-frameworks cluster restore <component> [flags]
+frameworks cluster restore --from <dir|s3-url> (--all | --database <name>... | --clickhouse) [flags]
 ```
 
-**⚠️ Warning:** Restore will STOP services and OVERWRITE existing data!
-
-**Components:**
-
-- `postgres` - Restore from SQL dump. Every restored Foghorn database gets its
-  media-authority restore fence raised: the cell decides on its restored media
-  authority only after Commodore has confirmed or re-sent it, and cannot serve
-  it while Commodore is unreachable. The fence lowers by itself once the cell
-  and Commodore agree on what it holds.
-- `clickhouse` - Restore from TSV directory
-- `volumes` - Restore from tar.gz archive
-- `config` - Restore configuration files
+**Warning:** Restore stops affected services and replaces their database contents, preserving the previous copies until finish. Foghorn restores must raise the durable media-authority fence before restart.
 
 For a native PostgreSQL or Yugabyte restore, use the complete cluster manifest
 containing **every Foghorn replica** sharing those databases:
@@ -1200,10 +1207,7 @@ frameworks cluster doctor
 while any replica is running, fences every restored cell database, and only then
 starts the replicas. Failure before fencing completes leaves them stopped.
 Use the same manifest for both commands. Do not restart replicas between these
-steps or clear a fence to bypass an unreachable core. The `postgres` dump restore
-command only supports Docker PostgreSQL; it refuses native PostgreSQL and
-Yugabyte before stopping services. Use the fenced native workflow above for
-current native deployments.
+steps or clear a fence to bypass an unreachable core. For database-native restores outside the backup-manifest workflow, use the fenced native workflow above.
 
 Authority recovery requires matching core/cell protocol support. Upgrade
 Commodore before Foghorn within the coordinated release. An unsupported core
@@ -1214,32 +1218,34 @@ stays raised until recovery succeeds. There is no legacy replay fallback.
 **Flags:**
 
 - `--manifest string` - Cluster manifest file
-- `--from string` - Path to backup file or directory (required)
-- `--skip-validation` - Skip service health validation after postgres/clickhouse restore
-- `--yes` - Skip confirmation prompt
+- `--from string` - Backup directory or `s3://` URL (required)
+- `--all` - Every database and the ClickHouse facts in the backup
+- `--database string` - Database to restore (repeatable)
+- `--clickhouse` - The ClickHouse billing facts
+- `--yes` - Skip the confirmation prompt
 
 **Examples:**
 
 ```bash
-# Restore Postgres
-frameworks cluster restore postgres \
-  --from /backups/2025-01-17/postgres-20250117-143000.sql
+frameworks cluster restore --from /var/backups/frameworks/frameworks-backup-20260919T101500Z --database purser
+frameworks cluster restore --from s3://ops-backups/frameworks/frameworks-backup-20260919T101500Z --all --yes
+```
 
-# Restore ClickHouse
-frameworks cluster restore clickhouse \
-  --from /backups/2025-01-17/clickhouse-20250117-143000/
+### frameworks cluster restore finish
 
-# Restore volumes
-frameworks cluster restore volumes \
-  --from /backups/2025-01-17/volumes-20250117-143000.tar.gz
+Drop the `__prerestore` copies (and any leftover `__restore` shadows) once the restored data is
+confirmed.
 
-# Restore config
-frameworks cluster restore config \
-  --from /backups/2025-01-17/config-20250117-143000.tar.gz
+```bash
+frameworks cluster restore finish --database purser
+```
 
-# Restore without validation
-frameworks cluster restore postgres \
-  --from /backups/postgres.sql --skip-validation
+### frameworks cluster restore rollback
+
+Stop the services again, put the `__prerestore` copies back in place, and start the services.
+
+```bash
+frameworks cluster restore rollback --all
 ```
 
 ---

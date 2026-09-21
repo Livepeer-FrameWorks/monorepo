@@ -77,8 +77,9 @@ State the catalog gate. A migration required before `postdeploy` may intentional
 
 Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block:
 
-    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --dry-run
-    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --yes
+    frameworks cluster backup create --manifest <path> --to <backup-dir> --all
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --backup <completed-backup-path> --dry-run
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --backup <completed-backup-path> --yes
 
 Classify everything else explicitly instead of using `cluster provision` as a catch-all:
 
@@ -148,6 +149,8 @@ workflow runs the same preflight before release planning or artifact builds.
 1.  **Get the commit list.**
 
     git log <prev-tag>..<this-tag> --oneline
+
+    `make release-notes-draft SINCE=<prev-tag> NOTES_VERSION=<this-tag>` prints the same commits grouped into the body sections by conventional-commit type. Use it as a checklist only: every bullet stays unverified until the steps below confirm it, and the Upgrade section is always written from the diff.
 
 2.  **Get the diff stat to find big commits.**
 

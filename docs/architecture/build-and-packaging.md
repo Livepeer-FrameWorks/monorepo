@@ -136,6 +136,27 @@ Auto-bumped on each release by `scripts/bump.sh` in the tap repo, triggered from
 
 `scripts/install.sh` — curl-pipe-sh installer for CLI binary. Detects OS and arch and downloads the packaged release asset (`.zip` on macOS, `.tar.gz` on Linux).
 
+### SDK, Player, and StreamCrafter Packages
+
+The SDKs (`@livepeer-frameworks/api` on npm, `livepeer-frameworks` on PyPI, and `github.com/Livepeer-FrameWorks/sdk-go`) share one version, kept in `npm_api/package.json`. The player (`@livepeer-frameworks/player-{core,react,svelte,wc}`) and StreamCrafter (`@livepeer-frameworks/streamcrafter-{core,react,svelte,wc}`) packages version on their own. None of them follows the platform tag. CI never publishes; the owner publishes from a workstation with `scripts/publish-packages.sh`.
+
+Release procedure:
+
+1. `pnpm changeset` describes the change.
+2. `pnpm version-packages` bumps the versions and changelogs, and copies the SDK version into `sdk_go` and `sdk_python` (`make sdk-version-sync`).
+3. Commit the result and push it to master.
+4. Run `scripts/publish-packages.sh` from a clean checkout of that commit.
+
+The script refuses a dirty working tree or a commit that `origin/master` does not contain. It publishes only versions a registry does not have yet, so a re-run after a failure continues where the previous run stopped:
+
+- **Gates.** `make sdk-release-gates` and the playback-verifier test (`TestSDKPlaybackTokensPassThePlaybackVerifier`) run first; a failure publishes nothing. CI runs the same checks in the `sdk` and `generated-contracts` jobs of `ci.yml`.
+- **npm.** One `npm login`, then every package builds in dependency order and each new version publishes with `pnpm publish --access public`, which rewrites `workspace:` ranges to real versions. `@livepeer-frameworks/api` publishes first, then the player and StreamCrafter cores, then their wrappers. A core whose `@livepeer-frameworks/api` version is not on npm is refused, because it would not install. The packages carry no provenance attestation, since npm issues those only to CI builds.
+- **PyPI.** `sdk_python` is built in the `make sdk-py-venv` environment, checked with `twine check`, and uploaded with `twine upload` using the owner's PyPI credentials.
+- **Go.** In a clone under `$TMPDIR`, the release commit is built on top of sdk-go `main`: the `sdk_go/` tree at the release commit plus `testdata/sdk_conformance`, with `replace ../pkg` swapped for the pseudo-version of the released monorepo commit, then `go vet` and `go test`. `git push --atomic` sends `main` and the `v<version>` tag together with the owner's git credentials, so a `main` that moved rejects both. The first release, with no `main` yet, starts from the `git subtree split` history of `sdk_go/`. The pseudo-version resolves only while the monorepo is public, because `pkg` is fetched from it.
+- **Tag.** Once npm, PyPI, and the Go mirror serve the SDK version, the script tags the commit `sdk-v<version>` locally and prints the push command. `make verify-api-compat` reads that tag.
+
+`--dry-run` prints the registry state and every publish, push, and tag without running the gates or changing anything. `--only npm|pypi|go` publishes to one registry.
+
 ## Deployment Identity Model
 
 A service instance on a node is a `(deploy_mode, artifact_identity)` tuple. `deploy_mode` is `docker` or `native` and is selectable per service per node — a single cluster mixes both freely.

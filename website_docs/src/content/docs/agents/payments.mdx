@@ -157,8 +157,10 @@ LPT is not supported as a top-up asset. Chainlink doesn't publish an official LP
 
 The one-cent crypto minimum is the prepaid ledger's credit precision, not a
 claim that every transfer is economical after wallet or network fees. Browser
-fiat top-ups use a provider-aware minimum, currently 500 cents for both Stripe
-and Mollie EUR/USD checkout.
+fiat top-ups use a provider-aware minimum, currently 500 cents for Stripe and
+Mollie checkout in EUR, USD, and GBP. Checkout charges the tenant's presentment
+currency, derived from the billing country, and credits the EUR balance at the
+ECB reference rate locked when the checkout is created.
 
 ## Invoice payments and postpaid setup
 

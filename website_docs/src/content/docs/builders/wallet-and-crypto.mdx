@@ -145,7 +145,7 @@ and postal address before instructions are issued.
 
 ```graphql
 mutation Topup {
-  createCryptoTopup(input: { amountCents: 10000, asset: USDC, currency: "EUR" }) {
+  createCryptoTopup(input: { amountCents: 10000, asset: USDC }) {
     topupId
     depositAddress
     asset
@@ -156,6 +156,13 @@ mutation Topup {
     quotedAt
     expiresAt
     network
+    conversion {
+      originalAmountCents
+      originalCurrency
+      eurAmountCents
+      unitsPerEur
+      referenceDate
+    }
   }
 }
 
@@ -173,7 +180,7 @@ mutation CheckStatus {
 }
 ```
 
-Once credited, the funds appear in your prepaid balance (`prepaidBalance` query) and are spent against usage like any other top-up.
+`amountCents` is in the tenant's presentment currency (see [billing](/builders/billing#currency)); `conversion` shows the EUR credit it converts to at the ECB rate locked with the quote. Once credited, the funds appear in your EUR prepaid balance (`prepaidBalance` query) and are spent against usage like any other top-up.
 The confirmed credit is the VAT tax point and creates the retained top-up invoice;
 later usage only consumes that already-invoiced balance.
 

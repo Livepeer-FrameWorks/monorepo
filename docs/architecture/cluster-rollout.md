@@ -30,14 +30,9 @@ preflight will succeed.
 rather than leaving the operator to drive migrations, reconciliations, and version
 moves by hand. Release-metadata validation is fail-closed: a malformed or
 unresolved release manifest aborts the plan before any host is touched. Rollout
-gating distinguishes **readiness** from **liveness** at the level of which check a
-step waits on. An HTTP service gates on its _readiness_ path — `ReadyPath` when the
-service defines one, otherwise its HTTP `HealthPath` — via `HTTPReady`
-(`GateForService`, `cli/pkg/orchestrator/gate.go`; `Service.ReadinessPath()`,
-`pkg/servicedefs/servicedefs.go`). A service with a defined `ReadyPath` (e.g.
-Chandler) therefore gates on `/ready`, which proves the backing store rather than
-merely that the process is up, while the container liveness `HEALTHCHECK` stays on
-`HealthPath`. Only a service with no usable HTTP readiness path (non-HTTP, or no
+gating distinguishes **readiness** from **liveness**; see
+[Readiness contract](#readiness-contract) for which path each gate probes and
+for how long. Only a service with no usable HTTP readiness path (non-HTTP, or no
 port) falls back to gating on `systemd` unit activity. This is gate selection
 only — there is no host cordon, drain, or re-admission mechanism. Because the plan
 is resumable, an interrupted run picks up at the first incomplete step instead of
@@ -55,11 +50,87 @@ every manifest entry as a platform binary:
 | Host infrastructure         | Reported, but never upgraded implicitly                    | Dedicated OS, database, or data lifecycle                                         |
 | Control-plane desired state | Reported, but never reconciled implicitly during a release | `cluster control-plane plan/reconcile`                                            |
 
-The mutating release sequence is expand migrations, platform-artifact upgrades
+Before the first mutation, and under `--dry-run` too, `release apply` runs its
+preflight in this order: fetched release metadata against the CLI (`min_cli_version`,
+required transitions, `min_source_version`), artifact resolution, the source floor
+against detected replica versions (`cli/cmd/cluster_source_floor.go`), then prior-release
+completeness (`enforcePriorReleasesComplete`, `cli/cmd/cluster_prior_release_preflight.go`).
+The last check reads every PostgreSQL/YugabyteDB service ledger that already has a
+baseline or ledger, and the ClickHouse ledgers, through `firstIncompletePriorRelease`,
+plus the required data migrations of earlier releases (`datamigrate.PreDeployBlockers`).
+A gap refuses the release and names the lowest unfinished release to apply first.
+Databases the release creates are skipped, because they are born from the current
+baseline. Env contracts and required operator inputs are checked next. The per-service
+pre-deploy gate (`runUpgradePreDeployGate`) repeats the ledger and data-migration checks
+for every service it deploys, so `cluster upgrade` keeps the same refusal.
+
+The mutating release sequence is host convergence, service database creation and
+expand migrations, platform-artifact upgrades
 with declared transitions at their ordering points, then postdeploy migrations.
 Contract migrations are universally deferred. `release apply` prints the exact
 `cluster migrate --phase contract` command, which the operator runs only after
 the release's rollback or observation window closes.
+
+## Readiness contract
+
+Every Go service serves two HTTP endpoints on its main port:
+
+- `/health` is **liveness**: the process is up. Container `HEALTHCHECK`s, the
+  dev compose stack, and ingress probes use it.
+- `/ready` is **readiness**: the instance can serve. It is 503 until every
+  background gRPC listener serves (a gRPC listener waits up to two minutes for
+  its TLS files), while any of the service's own dependency checks fails
+  (database, ClickHouse, Kafka producer, Chandler's object store, Helmsman's
+  MistServer), and for the whole drain window after shutdown starts. It never
+  depends on another FrameWorks service, so there is no startup cycle.
+
+Go services serve `/ready` from `pkg/server.NewServiceRouter` from v0.3.11 on.
+Chandler's store-backed `/ready` exists in every supported release. Releases
+v0.3.10 and earlier answer `/ready` with 404 for every other service.
+`pkg/servicedefs` records both facts: `ReadyPath` is the endpoint and
+`ReadySince` is the first release that serves it (empty when every supported
+release does). Consumers pick the path in one of two ways:
+
+| Consumer                                                                                                           | Knows the probed binary's release?  | Path                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| Native gate (`go_service` validate) and Compose gate (`compose_stack` validate), for deploy and automatic rollback | Yes, the version being deployed     | `ReadinessPathFor(version)`: `/ready` from `ReadySince` on, `/health` for an older release |
+| Orchestrator gate in `cluster apply` (`GateForService`)                                                            | No, it restarts what is on the host | `ReadinessPath()`                                                                          |
+| `cluster doctor` probes                                                                                            | No                                  | `ReadinessPath()`                                                                          |
+| Quartermaster registry (rendered by the CLI and self-registration) and the health poller's fallback                | No                                  | `ReadinessPath()`                                                                          |
+| Navigator load-balancer monitors (one monitor per pool, pools mix releases during a rolling upgrade)               | No                                  | `ReadinessPath()`; edge pool types and the root ingress pool keep `/health`                |
+
+`ReadinessPath()` is `ReadyPath` only when `ReadySince` is empty, and
+`HealthPath` otherwise, so a version-blind consumer never probes `/ready` on a
+binary that may predate it. In v0.3.11 this means the rollout gates probe
+`/ready` for v0.3.11 binaries and `/health` for a rollback to v0.3.10, while the
+version-blind consumers stay on `/health` for every Go service except Chandler.
+
+The version-blind consumers move to `/ready` when the release catalog guarantees
+that no older binary can be running: a release declares `min_source_version` at
+or above `ReadySince`, and `ReadySince` is removed from `servicedefs` in the same
+change. `TestReadySinceRemovedOnceSourceFloorReachesIt`
+(`cli/internal/releases/source_floor_test.go`) fails until both happen together.
+
+**Source floor.** `min_source_version` on a catalog release is the lowest
+release a cluster may run when it moves to that release or back from it; the
+effective floor carries forward from earlier releases
+(`releases.MinSourceVersionFor`). `cluster upgrade` and `cluster release apply`
+detect the release every platform-artifact replica runs (host detection, the
+same `cli/pkg/detect` read the upgrade uses per host) and refuse, before any
+mutation, when a replica is below the target's floor, when the target is below a
+running replica's floor (a rollback past the floor), or when a replica's version
+cannot be read as a release (`cli/cmd/cluster_source_floor.go`). There is no
+override flag. When no catalog release declares a floor, nothing is read. The
+release metadata carries the effective floor, and the CLI refuses a fetched
+manifest whose floor disagrees with its own catalog. Edge nodes are not part of
+the floor: no consumer probes Helmsman's `/ready`, and Navigator's edge pools
+use the edge ingress `/health`.
+
+**Waits.** The native and Compose validate steps, the `cluster upgrade` health
+wait (including the automatic rollback's), and the orchestrator's default gate
+all wait up to 150 seconds (`provisioner.RolloutReadinessTimeout`, and the
+`go_service_validate_timeout` and `compose_stack_validate_timeout` role
+defaults). The Livepeer gateway keeps its own 300-second wait.
 
 ## Control-plane desired state
 
@@ -156,6 +227,8 @@ versions: detect current version/mode → fetch target → stop → pull/downloa
 start → validate health. On health-check failure it automatically rolls back to
 the previous version unless `--no-rollback` (or when the recorded previous
 version/mode is incomplete, in which case rollback is disabled with a warning).
+The rollback's health check probes the readiness path of the restored release,
+so restoring a binary that predates `/ready` is gated on `/health`.
 
 Rollback restores the service artifact only: it does **not** undo schema or data
 migrations. `cluster upgrade` is a low-level recovery primitive; the normal whole
@@ -194,6 +267,9 @@ updates; `--apply` runs the mutating playbook host by host.
 - `cli/cmd/cluster_release.go` - static planning and ordered release apply
 - `cli/cmd/cluster_control_plane.go` - explicit desired-state plan/reconcile
 - `cli/cmd/cluster_apply.go`, `cli/cmd/cluster_upgrade.go`, `cli/cmd/cluster_os_update.go`
+- `cli/cmd/cluster_source_floor.go` - `min_source_version` enforcement against detected replica versions
+- `cli/cmd/cluster_prior_release_preflight.go` - prior-release completeness in `release apply` preflight
+- `pkg/servicedefs/servicedefs.go` - `ReadyPath`, `ReadySince`, `ReadinessPath()`, `ReadinessPathFor()`
 - `cli/pkg/gitops/` - release manifests, checksums, digests, channel resolution
 
 ## Gotchas

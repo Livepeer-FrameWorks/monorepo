@@ -13,6 +13,21 @@ That surface is not all "real" configuration. A large part of it is derived or d
 
 The first rule should be: treat `.env` as generated output, not as a hand-maintained source of truth.
 
+## Typed Service Configuration
+
+Every Go service uses a typed configuration struct in `api_*/internal/appconfig`. The struct is the source of truth for what the service reads at startup:
+
+- Every field carries `env`, `desc`, and `introduced` tags, plus `default`, `required`, `secret`, `deprecated`, and `replacement` where they apply. Shared keys come from the blocks in `pkg/config/blocks.go`. A port default of `@servicedefs.http_port` or `@servicedefs.grpc_port` resolves from `pkg/servicedefs`, so a port number is declared once.
+- `config.Load` reports every missing or unparseable key in one startup error, without echoing rejected values. A value that is empty or only whitespace counts as unset.
+- `introduced` is `v0.3.0` for a variable that existed at the schema migration floor. A new variable uses the next release version declared in `cli/internal/releases/catalog.yaml`, and the generator rejects any version outside the catalog. To rename a variable, keep the old field with `deprecated` and `replacement` until the release that removes it.
+- A field that must follow a SIGHUP env-file reload is read through `config.Live` at use time. Every other field applies at startup.
+- Steward and Skipper read email branding from the live snapshot when sending. Deckhand is startup-only and requires a restart; it does not advertise SIGHUP reload support.
+- `/debug/config` records each loaded snapshot's source when it is decoded, so later environment changes cannot relabel a still-active startup value. Secrets remain redacted.
+- CLI rendering checks required values, scalar syntax, and shared log-level/metadata-policy enums. Service-specific cross-field validation still runs in the service. `warning` is a supported log-level alias and metadata policy is case-insensitive; Helmsman tolerates unknown log levels on customer-managed edges.
+- `make generate-config-reference` regenerates the operator page `website_docs/src/content/docs/operators/configuration-reference.mdx` and the CLI schema `cli/internal/configschema/config-schema.json`. `make verify-config-annotations` fails when either is stale, when an annotation is invalid, when a migrated command reads the environment outside its struct, or when a non-test file under `pkg/` reads the environment directly.
+- Shared packages take their settings as parameters, filled from the service's typed configuration. The shared blocks `config.Logging`, `config.GRPCMetadataPolicy`, `config.SystemTenant`, and `config.GeoIP` carry `LOG_LEVEL`, `GRPC_METADATA_POLICY`, `SYSTEM_TENANT_ID`, and `GEOIP_MMDB_PATH`, and a block's `Validate` runs at load. Only these shared-package reads remain, listed in `sharedEnvReadAllowlist` in `scripts/configref/main.go`: the `BUILD_ENV` guard in `pkg/grpcutil/tls.go` and `pkg/clients/foghorn/grpc_client.go`, which fails closed because an injected flag would default to permissive; the `LOG_LEVEL` bootstrap read in `pkg/logging`, so logging works before configuration loads; the helpers in `pkg/config/env.go` and the env-file reload in `pkg/config/reload.go`; and test harness overrides in `pkg/testutil`.
+- Migrated services serve `/ready` from dependency checks and the authenticated `/debug/config` and `/debug/pprof` endpoints through `pkg/server.NewServiceRouter`, and stop HTTP and gRPC listeners together through `pkg/server.Run`.
+
 ## Canonical Layers
 
 Use these layers when adding or reviewing config:
@@ -83,7 +98,9 @@ Recommendation:
 - `CLUSTER_ACCESS_MATERIALIZATION_SECRET` is rendered only to Quartermaster and
   Purser. It authenticates the narrow commercial/owner grant materialization
   and revocation envelopes; it is not a general service credential. Both
-  services refuse to start without it. Local Compose supplies an explicit
+  services refuse to start without it and read it once at startup, so rotating
+  it means updating both and restarting Purser and Quartermaster; until both
+  restart, materializations and revocations fail. Local Compose supplies an explicit
   development-only fallback; non-development manifests must inject a shared,
   generated value.
 - `FOGHORN_BALANCER_CAPABILITY_SECRET` is rendered to every Foghorn replica. It signs

@@ -31,7 +31,7 @@ We co-maintain MistServer, so this guide starts with the uncomfortable but usefu
 ## TL;DR
 
 - **What stays:** RTMP/RTMPS, E-RTMP, SRT, and WHIP ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
-- **What changes:** Mist JSON config and HTTP API calls become GraphQL mutations; Mist triggers become GraphQL subscriptions or platform-managed webhook policies; per-node Prometheus becomes FrameWorks telemetry; `pushStart` and automatic pushes become stream-scoped push targets.
+- **What changes:** Mist JSON config and HTTP API calls become GraphQL mutations; Mist triggers become signed webhooks, GraphQL subscriptions, or platform-managed webhook policies; per-node Prometheus becomes FrameWorks telemetry; `pushStart` and automatic pushes become stream-scoped push targets.
 - **What you gain:** provider-operated cross-cluster routing and federation, managed GraphQL, sprite-sheet seek previews, `?jwt=` playback auth across protocols, Skipper diagnostics, managed registration for Mist pull sources, wallet auth, MCP, x402, and a future marketplace path for operator-owned edge capacity.
 - **What you give up:** raw config portability, custom HTTP/exec triggers, exec inputs, FLV workflows, multiview compositor management, SCTE-35 insertion, JWT-on-ingest, wildcard stream inheritance, custom variables in recording paths, and direct Mist analyser workflows.
 
@@ -130,15 +130,15 @@ If you use the bundled MistServer Meta-Player today, you can keep using it again
 
 ### Triggers and events
 
-MistServer triggers can POST to URLs or execute local programs. Some are blocking and can change behavior. FrameWorks replaces the common event cases with GraphQL subscriptions and reserves blocking authorization for playback policies.
+MistServer triggers can POST to URLs or execute local programs. Some are blocking and can change behavior. FrameWorks replaces the common non-blocking event cases with its public events, delivered as signed [webhooks](/builders/webhooks) or over the `tenantEvents` subscription, plus per-stream telemetry subscriptions, and reserves blocking authorization for playback policies.
 
 | MistServer trigger                                                                      | FrameWorks path                                                                                  |
 | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `STREAM_LOAD` / stream lifecycle                                                        | `liveStreamEvents(streamId)`                                                                     |
+| `STREAM_LOAD` / stream lifecycle                                                        | `stream.connected`, `stream.live`, `stream.idle` events; `liveStreamEvents(streamId)` for detail |
 | `USER_NEW` / `USER_END`                                                                 | `liveConnectionEvents(streamId)` for events, or playback policy for authorization                |
 | `LIVE_TRACK_LIST`                                                                       | `liveTrackListUpdates(streamId)`                                                                 |
-| `RECORDING_END` / DVR lifecycle                                                         | `liveDvrLifecycle(streamId)` and `liveClipLifecycle(streamId)`                                   |
-| Push completion or failure                                                              | Poll `stream(id).pushTargets.status`; no dedicated push subscription today                       |
+| `RECORDING_END` / DVR lifecycle                                                         | `recording.ready`, `recording.failed`, `clip.ready`, `clip.failed` events                        |
+| Push completion or failure                                                              | `multistream.status_changed` event                                                               |
 | Custom HTTP trigger handlers                                                            | [Stay on raw MistServer](https://mistserver.com/) or ask us to scope a managed callback          |
 | Custom executable trigger handlers                                                      | [Stay on raw MistServer](https://mistserver.com/)                                                |
 | `STREAM_BUFFER`, `STREAM_BITRATE`, `RTMP_PUSH_REWRITE`, `DEFAULT_STREAM` custom routing | [Stay on raw MistServer](https://mistserver.com/) or ask us to scope a managed routing primitive |
@@ -289,7 +289,7 @@ Use this path when you want to stop running the media engine and accept the mana
 2. **Classify blockers.** Anything in [What you give up](#what-you-give-up-vs-raw-mistserver) needs a replacement plan before you cut over.
 3. **Create FrameWorks streams.** Use the dashboard or `createStream(input)`.
 4. **Repoint encoders.** RTMP/RTMPS, E-RTMP, SRT, and WHIP remain the normal managed ingest paths.
-5. **Replace trigger scripts.** Use subscriptions for events. For Mist `USER_NEW` authorization scripts, use `setPlaybackPolicy` with `type: WEBHOOK` so FrameWorks calls your authorization endpoint on viewer connect.
+5. **Replace trigger scripts.** Point trigger-driven HTTP handlers at a [webhook endpoint](/builders/webhooks) for the public events, or use subscriptions. For Mist `USER_NEW` authorization scripts, use `setPlaybackPolicy` with `type: WEBHOOK` so FrameWorks calls your authorization endpoint on viewer connect.
 6. **Recreate push targets.** Use `createPushTarget(streamId, input)` per stream.
 7. **Recreate recording and DVR behavior.** Use `record: true` or `startDVR(streamId)`.
 8. **Swap playback URLs or player code.** If you use MistServer Meta-Player, either keep it with raw Mist or move to `@livepeer-frameworks/player-*` for the managed FrameWorks playback surface.

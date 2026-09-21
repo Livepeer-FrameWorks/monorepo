@@ -1,5 +1,6 @@
 {
   "name": "website_docs",
+  "private": true,
   "type": "module",
   "version": "0.1.0",
   "scripts": {

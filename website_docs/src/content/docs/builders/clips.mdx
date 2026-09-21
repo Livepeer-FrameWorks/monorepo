@@ -57,19 +57,46 @@ mutation CreateClip {
 
 The returned `playbackId` is what you hand to the player or pass to `resolveViewerEndpoint`. Clip materialization runs asynchronously — the resource exists immediately but the playable manifest may take a few seconds to appear depending on segment availability.
 
-### Lifecycle subscription
+### Clip events
 
-Subscribe to `liveClipLifecycle` for real-time creation / readiness / failure events on clips you own:
+Subscribe to `tenantEvents` with the clip event types for real-time request, readiness, and failure
+events on your clips. Pass `streamId` to receive only clips of one stream:
 
 ```graphql
 subscription {
-  liveClipLifecycle {
-    clipId
-    status
-    error
+  tenantEvents(types: ["clip.requested", "clip.ready", "clip.failed"]) {
+    id
+    type
+    time
+    data {
+      ... on ClipRequested {
+        artifact {
+          artifactId
+          streamId
+        }
+        durationMs
+      }
+      ... on ClipReady {
+        artifact {
+          artifactId
+          playbackId
+        }
+        durationMs
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          artifactId
+        }
+        reason
+      }
+    }
   }
 }
 ```
+
+`artifactId` is the clip's `hash`. See [Events](/builders/events) for every event type and payload
+field.
 
 ## Listing clips
 

@@ -1,0 +1,133 @@
+---
+title: "Webhooks and a Public Event Catalog"
+date: 2026-09-19
+authors:
+  - frameworks
+excerpt: "FrameWorks now publishes a versioned catalog of account events, delivers it live over the tenantEvents subscription, and sends it to your HTTPS endpoints as Standard Webhooks-signed requests with retries, a 30-day log, and replay."
+description: "FrameWorks now publishes a versioned catalog of account events, delivers it live over the tenantEvents subscription, and sends it to your HTTPS endpoints as Standard Webhooks-signed requests with retries, a 30-day log, and replay."
+tags:
+  - announcements
+  - engineering
+  - architecture
+---
+
+Until now, a FrameWorks integration that needed to react to a stream going live or a clip becoming
+ready had two options: keep a GraphQL subscription open, or poll. Neither works well for a
+serverless function or a backend that restarts during deploys. Webhooks are the missing piece, and
+before we could send them we needed a set of events that is safe to hand to a third-party server
+and stable enough to write code against.
+
+## The event catalog
+
+The [event catalog](/builders/events) has 28 event types across streams (`stream.created`,
+`stream.connected`, `stream.live`, `stream.idle`, `stream.key_rotated`, and more), clips,
+recordings, uploads, multistream targets, API tokens, billing, account suspension, and custom
+domains. Each type has a protobuf message in a versioned public package, and that message is the
+payload. It carries identifiers and values your account already sees through the API. It does not
+carry internal stream names, node IDs, storage paths, IP addresses, or raw error text; a failed
+clip reports a coarse reason such as `MEDIA_FAILURE_REASON_PROCESSING_FAILED`.
+
+The service that owns a change writes the event in the same database transaction as the change,
+through an outbox. A `billing.invoice_paid` event therefore exists only if the invoice really is
+paid, and `stream.key_rotated` is written by the transaction that replaced the key. Within the
+`v1` package fields are only added. A breaking change ships as a `v2` message, and each webhook
+endpoint pins the version it was created with.
+
+## Live: tenantEvents
+
+The same events are available over a GraphQL subscription, filtered by type and stream:
+
+```graphql
+subscription {
+  tenantEvents(types: ["clip.ready", "upload.ready"]) {
+    id
+    type
+    time
+    data {
+      __typename
+      ... on ClipReady {
+        artifact {
+          artifactId
+          playbackId
+        }
+        sizeBytes
+      }
+    }
+  }
+}
+```
+
+The dashboard's media library uses it to refresh when an artifact finishes processing.
+
+## Webhooks
+
+Under **Developer → Webhooks** you can add up to 10 HTTPS endpoints and pick the event types each
+one receives, or `*` for all of them. Each event becomes a `POST`:
+
+```
+webhook-id: 0199a3c2-7e41-7d2a-9b3e-5f8c1d2e4a67
+webhook-timestamp: 1789826608
+webhook-signature: v1,NSZG8yLlem8faHh7EcOnDIbFIp4Wa/3hhM320Atl5LM=
+
+{"id":"0199a3c2-7e41-7d2a-9b3e-5f8c1d2e4a67","type":"clip.ready","api_version":"v1","created_at":"2026-09-19T14:03:27.412Z","data":{"artifact":{"artifactId":"c7f3a9e2b41d4f6a8e0b5d2c9a1f7e34","kind":"ARTIFACT_KIND_CLIP","streamId":"5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13","playbackId":"k3v9x2m7q4w8"},"durationMs":"30000","sizeBytes":"7340032"}}
+```
+
+That is a real request body and signature, produced by the delivery code with the example secret
+`whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw`. The `data` object uses the protobuf JSON mapping, so
+64-bit values such as `sizeBytes` are strings.
+
+The signature follows the [Standard Webhooks](https://www.standardwebhooks.com/) specification:
+HMAC-SHA256 over `<webhook-id>.<webhook-timestamp>.<body>`. We chose it over a scheme of our own
+because verification libraries already exist for most languages. In Node:
+
+```ts
+import { Webhook } from "standardwebhooks";
+
+const event = new Webhook(process.env.FRAMEWORKS_WEBHOOK_SECRET!).verify(rawBody, headers);
+```
+
+We checked the example above against the official TypeScript, Go, and Python libraries; all three
+accept it. The [webhooks guide](/builders/webhooks) has full receivers in each language.
+
+## Retries, auto-disable, and replay
+
+Any `2xx` within 10 seconds is a success. Anything else, including a redirect, is retried after
+30 seconds, 2 minutes, 10 minutes, and so on up to 24 hours: 12 attempts over about three days.
+An endpoint whose last 20 attempts failed, with the first of them at least five days ago, is
+disabled, and the account's billing contact gets an email with a link to the endpoint.
+
+Every delivery and every attempt stays in the log for 30 days, with the status code, latency, and
+the first kilobyte of your response. From the endpoint's page, or with `replayWebhookDelivery`,
+you can send one delivery again. After an outage on your side, `replayWebhookDeliveries` resends
+the failed and skipped deliveries of a time range, 1,000 per call. A replay keeps the event ID, so
+a receiver that deduplicates on `webhook-id` handles it safely. `testWebhookEndpoint` sends a
+signed `webhook.test` event and shows you the response directly.
+
+Secrets rotate without downtime. After `rotateWebhookEndpointSecret`, each request carries two
+signatures for 24 hours, one per secret, and the libraries accept either. Pass
+`revokePrevious: true` if the old secret leaked.
+
+An endpoint receives events from the moment it is created; there is no backfill. Because the event
+time comes from the service that made the change and the creation time from the webhook service,
+that boundary is accurate to about a second.
+
+## How delivery is built
+
+Delivery runs in a new service, Bosun, in the aggregator region. It reads the public events from
+Kafka in a durable consumer group, stores each event once even when it arrives from several
+regions, and creates one delivery row per subscribed endpoint in the same transaction. Workers
+claim due deliveries with a lease, allow at most five requests in flight per endpoint, and make
+the HTTP call outside any transaction. Endpoint URLs must resolve to public addresses, and that
+check runs again on every connection, so a DNS record changed to point at an internal address
+after creation is refused at send time. Signing secrets are encrypted with a key only Bosun holds.
+
+Keeping this out of the services that validate stream keys and serve playback means a slow
+customer endpoint delays only its own deliveries.
+
+## Where to start
+
+- [Webhooks](/builders/webhooks): endpoints, the body, verification in TypeScript, Go, and
+  Python, retries, and replay.
+- [Events](/builders/events): every event type, when it fires, and its payload fields.
+- Agents connected over MCP can list endpoints and deliveries, and create, test, or replay with an
+  explicit confirmation string.

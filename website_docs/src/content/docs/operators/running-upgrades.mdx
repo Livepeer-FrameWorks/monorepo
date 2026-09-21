@@ -88,12 +88,17 @@ intentional provision or component-specific operation when their pins change.
    ```
 
 6. After the rollback window closes, apply any deferred contract migrations. They
-   are printed by the release plan but never run implicitly by `release apply`:
+   are printed by the release plan but never run implicitly by `release apply`.
+   Contract migrations need a backup that started less than an hour earlier and still
+   matches the migration ledgers, so take one right before:
 
    ```bash
-   frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run
-   frameworks cluster migrate --phase contract --to-version vX.Y.Z
+   frameworks cluster backup create --to /var/backups/frameworks --all
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run --backup <printed path>
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z --backup <printed path>
    ```
+
+   See [Backup and Restore](/operators/backup-restore/#the-migration-gate).
 
 </Steps>
 
@@ -458,6 +463,12 @@ leaves every running binary reachable. `release plan` lists the stage, and
 `release apply --dry-run` runs each host's precheck and reports whether it would install,
 converge, or skip.
 
+Before the first mutation, `release apply` checks that every earlier release is finished: the
+postdeploy migrations of earlier releases must be in every service database and ClickHouse ledger,
+and their required data migrations must be complete. Otherwise it stops, changes nothing, and names
+the release to apply first (`frameworks cluster release apply --version <that release>`). Databases
+the release creates are exempt, because they start from the current baseline.
+
 Before the first mutation, `release apply` also renders every service it will install or upgrade
 and fails if a declared operator input (for example `LOOKOUT_ALERTMANAGER_TOKEN` for Lookout) is
 missing, in `--dry-run` too. `cluster provision` runs the same check over its whole plan.
@@ -813,6 +824,33 @@ place:
 frameworks cluster upgrade bridge --version rc --no-rollback
 ```
 
+## Health and readiness
+
+Every FrameWorks Go service answers two endpoints on its HTTP port:
+
+| Endpoint  | Meaning                                                                                                                                                                                                                    |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/health` | Live: the process is running. Container health checks and ingress probes use it.                                                                                                                                           |
+| `/ready`  | Able to serve: 200 only after the service's own database, ClickHouse, Kafka, or object-store checks pass and its gRPC listeners serve. It returns 503 while a check fails and from the moment the service starts draining. |
+
+Services serve `/ready` from v0.3.11 on; Chandler has always served it. Earlier
+releases answer 404 on `/ready`.
+
+**Rollout waits.** After deploying a service, `cluster upgrade` and
+`cluster release apply` wait up to 150 seconds for it to report ready before the
+upgrade counts as failed and the automatic rollback starts. A v0.3.11 or later
+binary is checked on `/ready`. A rollback to v0.3.10 or earlier is checked on
+`/health`, because that binary has no `/ready`. `cluster apply` waits up to 150
+seconds per host as well. A service that cannot reach its own database within the
+wait fails its rollout, which is the intended outcome: fix the dependency and
+rerun the command.
+
+**Quartermaster, Navigator, and `cluster doctor`.** These cannot tell which
+release a given instance runs, so for now they keep checking `/health` for every
+Go service except Chandler. They move to `/ready` in the release that requires
+v0.3.11 as the minimum source (see
+[Supported upgrade sources](/operators/release-lifecycle/#supported-upgrade-sources)).
+
 ## CLI support status
 
 Today, `frameworks cluster migrate --phase expand` applies pending embedded
@@ -865,12 +903,16 @@ state; `run --dry-run` is read-only; `run`, `status`, `verify`, `pause`, and
 `resume` operate through the service binary on the target host. If a
 release declares a required data migration but the service binary cannot report
 state, upgrade and postdeploy/contract gates fail closed instead of treating
-the unknown as safe.
+the unknown as safe. `run` of an irreversible data migration (for example
+`purser_eur_ledger_conversion_v0_3_11` or `commodore_field_encryption_v0_3_0`)
+requires `--backup` with a backup under an hour old whose ledgers match the
+service's databases; `run --dry-run` does not.
 
 Contract migrations are intentionally separate. `release plan` prints the deferred
 command, and `cluster migrate --phase contract` runs it only after the matching
-data-migration gate succeeds, so destructive cleanup cannot be mixed into the routine
-expand/deploy step or silently eliminate the rollback path.
+data-migration gate succeeds and a fresh matching backup is passed with `--backup`,
+so destructive cleanup cannot be mixed into the routine expand/deploy step or
+silently eliminate the rollback path.
 
 ## Local compose exception
 

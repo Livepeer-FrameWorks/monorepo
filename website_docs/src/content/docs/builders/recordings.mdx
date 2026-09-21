@@ -388,19 +388,37 @@ After creation, clips go through a processing pipeline:
 3. **ready** — Available for playback
 4. **failed** — Something went wrong (check `errorMessage`)
 
-Track progress in real time with the `liveClipLifecycle` subscription:
+Follow clips in real time with the clip events of `tenantEvents`:
 
 ```graphql
 subscription {
-  liveClipLifecycle(streamId: "stream-global-id") {
-    clipHash
-    stage
-    playbackId
-    progressPercent
-    error
+  tenantEvents(
+    types: ["clip.requested", "clip.ready", "clip.failed"]
+    streamId: "stream-global-id"
+  ) {
+    type
+    time
+    data {
+      ... on ClipReady {
+        artifact {
+          artifactId
+          playbackId
+        }
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          artifactId
+        }
+        reason
+      }
+    }
   }
 }
 ```
+
+The same subscription with `types: ["recording.ready", "recording.failed"]` reports finalized and
+failed DVR recordings. See [Events](/builders/events) for every event type.
 
 ### Clip Playback
 
@@ -525,7 +543,9 @@ After upload completion, the asset goes through validation:
 - **UPLOADING** → **PROCESSING** → **READY**
 - If validation fails: **FAILED**
 
-Track progress with the `liveVodLifecycle` subscription.
+Poll `vodUploadStatus(uploadId)` for the state of an upload, or subscribe to `tenantEvents` with
+`types: ["upload.completed", "upload.ready", "upload.failed"]` to learn when processing finishes.
+Events carry no progress percentage; see [Events](/builders/events).
 
 ### VOD Playback
 

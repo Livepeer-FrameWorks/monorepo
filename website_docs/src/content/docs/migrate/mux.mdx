@@ -23,8 +23,8 @@ worth keeping during the cut-over.
 - **What stays:** RTMP/RTMPS and SRT ingest, HLS playback, signed JWT playback, simulcast
   targets, live-to-VOD recording, clips.
 - **What changes:** REST → GraphQL · API access token (HTTP Basic) → developer token (Bearer)
-  or wallet sign-in · outbound HTTP webhooks → GraphQL subscriptions or polling · `?token=`
-  JWT → `?jwt=` JWT, **signed with ES256 instead of RS256** · `aud`-scoped tokens (per
+  or wallet sign-in · Mux webhooks → FrameWorks webhooks with Standard Webhooks signatures (or
+  the `tenantEvents` subscription) · `?token=` JWT → `?jwt=` JWT, **signed with ES256 instead of RS256** · `aud`-scoped tokens (per
   asset type) → one signed URL gates HLS / LL-HLS / DASH / WHEP / MP4 · `@mux/mux-player-react`
   → `@livepeer-frameworks/player-*` · built-in referrer/UA playback restrictions → webhook
   playback policy.
@@ -33,9 +33,8 @@ worth keeping during the cut-over.
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · outbound HTTP
-  webhooks · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
+- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
+  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
   Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
 
@@ -90,7 +89,7 @@ playback ID). See [Recordings, Clips & VOD](/builders/recordings#archive-chapter
 | `DELETE /video/v1/live-streams/{id}/simulcast-targets/{target_id}`                  | `deletePushTarget(id)` mutation                                              |
 | Up to 6 simultaneous targets per stream                                             | No documented hard cap; tested across Twitch / YouTube / Facebook / X / Kick |
 | Per-target rendition selection                                                      | Not exposed today (default output is pushed)                                 |
-| Simulcast events on webhooks (`.starting` / `.broadcasting` / `.errored` / `.idle`) | Poll `stream(id).pushTargets.status`; no dedicated subscription today        |
+| Simulcast events on webhooks (`.starting` / `.broadcasting` / `.errored` / `.idle`) | `multistream.status_changed` on webhooks or `tenantEvents`                   |
 
 ### Access control
 
@@ -128,21 +127,25 @@ API, playback policies for viewers.
 
 ### Real-time events
 
-| Mux webhook                                                                            | FrameWorks path                                                                         |
-| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `video.live_stream.connected` / `.recording` / `.active` / `.disconnected` / `.idle`   | `liveStreamEvents(streamId)`                                                            |
-| `video.asset.created` / `.ready` / `.errored` / `.updated` / `.deleted`                | `liveVodLifecycle` for VOD; `liveStorageEvents(streamId)` for artifacts                 |
-| `video.upload.created` / `.asset_created` / `.errored` / `.cancelled`                  | `vodUploadStatus`, `liveVodLifecycle`                                                   |
-| `video.live_stream.simulcast_target.starting` / `.broadcasting` / `.errored` / `.idle` | Poll `stream(id).pushTargets.status`; no dedicated subscription today                   |
-| `video.asset.track.*` (subtitles/captions ready)                                       | Live captions / transcription not GA on FrameWorks                                      |
-| Mux CLI webhook forwarding for local dev                                               | Subscribe to `%GATEWAY_WS_URL%` directly from your dev machine — no port-forward needed |
+FrameWorks delivers the events below as [webhooks](/builders/webhooks) and over the
+`tenantEvents` subscription, with the same payloads.
 
-<Aside type="caution">
-  FrameWorks does not deliver outbound HTTP webhooks today — events flow over GraphQL subscriptions
-  (WebSocket). If your environment can't hold an open subscription, fall back to polling the
-  relevant query (`stream(id)`, `vodAsset(id)`) on a short interval. HTTP-callback delivery is on
-  the roadmap, but subscriptions are the supported event surface today.
-</Aside>
+| Mux webhook                                                                            | FrameWorks event                                                                                      |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `video.live_stream.connected`                                                          | `stream.connected`                                                                                    |
+| `video.live_stream.active`                                                             | `stream.live`                                                                                         |
+| `video.live_stream.disconnected` / `.idle`                                             | `stream.idle`                                                                                         |
+| `video.live_stream.recording`                                                          | No event; `liveStreamEvents(streamId)` carries detailed stream state                                  |
+| `video.live_stream.created` / `.updated` / `.deleted`                                  | `stream.created` / `stream.updated` / `stream.deleted`                                                |
+| `video.asset.ready` / `.errored`                                                       | `upload.ready` / `upload.failed` for uploads, `recording.*` for recordings, `clip.*` for clips        |
+| `video.asset.created` / `.updated` / `.deleted`                                        | `upload.created` for uploads; no asset update or delete event                                         |
+| `video.upload.created` / `.asset_created` / `.errored` / `.cancelled`                  | `upload.created` / `upload.completed` / `upload.failed` / `upload.aborted`                            |
+| `video.live_stream.simulcast_target.starting` / `.broadcasting` / `.errored` / `.idle` | `multistream.status_changed`                                                                          |
+| `video.asset.track.*` (subtitles/captions ready)                                       | Live captions / transcription not GA on FrameWorks                                                    |
+| Mux CLI webhook forwarding for local dev                                               | Subscribe to `tenantEvents` on `%GATEWAY_WS_URL%` from your dev machine, or expose a public HTTPS URL |
+
+Webhook endpoints must be public HTTPS URLs; FrameWorks refuses private and loopback addresses.
+For local development, subscribe to `tenantEvents` or use a tunnel that gives you a public URL.
 
 ## Step-by-step
 
@@ -226,7 +229,11 @@ Mux's REST shape is the closer of the two big migrations to translate (Studio's 
 ad-hoc); most Mux endpoints have a one-to-one GraphQL operation in the
 [Streams translation table](#streams) above.
 
-### 5. Replace webhooks with subscriptions
+### 5. Point your webhook receiver at FrameWorks
+
+Create an endpoint under **Developer → Webhooks** (or with `createWebhookEndpoint`) for the event
+types you handle, and store the `whsec_...` secret it returns. Then swap the signature check and
+the event names in your receiver.
 
 Before (Mux):
 
@@ -243,27 +250,31 @@ app.post("/mux-webhook", verifyMuxSignature, (req, res) => {
 After (FrameWorks):
 
 ```js
-import { createClient } from "graphql-ws";
+import { Webhook } from "standardwebhooks";
 
-const ws = createClient({ url: "%GATEWAY_WS_URL%", connectionParams: { authToken } });
-ws.subscribe(
-  {
-    query: `subscription { liveStreamEvents { streamId state } }`,
-  },
-  {
-    next: (msg) => {
-      const { streamId, state } = msg.data.liveStreamEvents;
-      if (state === "live") notifyDashboard(streamId);
-    },
-    error: console.error,
-    complete: () => {},
+const wh = new Webhook(process.env.FRAMEWORKS_WEBHOOK_SECRET);
+
+app.post("/frameworks-webhook", express.raw({ type: "application/json" }), (req, res) => {
+  let event;
+  try {
+    event = wh.verify(req.body.toString("utf8"), {
+      "webhook-id": req.header("webhook-id"),
+      "webhook-timestamp": req.header("webhook-timestamp"),
+      "webhook-signature": req.header("webhook-signature"),
+    });
+  } catch {
+    return res.sendStatus(401);
   }
-);
+  if (event.type === "stream.live") {
+    notifyDashboard(event.data.streamId);
+  }
+  res.sendStatus(204);
+});
 ```
 
-If you can't keep a connection open (a serverless cron, for instance), poll `stream(id)`
-every few seconds instead — it's idempotent and cheap. The Mux CLI's local webhook-forwarding
-flow is unnecessary on FrameWorks: subscribe straight from your laptop.
+Deduplicate on `event.id` as you would on Mux's event ID. The [webhooks guide](/builders/webhooks)
+covers the body shape, retries, and replay. If a server-side process holds a connection anyway,
+the `tenantEvents` subscription delivers the same events without an endpoint.
 
 ### 6. Plan playback access control
 
@@ -377,12 +388,11 @@ your stack about which of these you depend on before cutting over.
   custom-domain delivery. FrameWorks materializes explicit platform-subdomain and BYO-domain
   entitlements from the active subscription; downgrade tears down served DNS/TLS state while
   retaining the requested name for later re-entitlement.
-- **Outbound HTTP webhooks** — FrameWorks uses GraphQL subscriptions today. HTTP-callback
-  delivery is on the roadmap.
 - **Breadth of first-class server-side SDKs.** Mux ships official SDKs for Node, Python,
   Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
-  ships the player suite (`@livepeer-frameworks/player-*`) and GraphQL codegen against the
-  public schema; first-class server-side SDKs in those languages aren't published yet.
+  ships [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the
+  player suite (`@livepeer-frameworks/player-*`); for Ruby, PHP, Elixir, Java, and .NET, use
+  GraphQL codegen against the public schema.
 - **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
   policy. The webhook playback policy can express the same rules, but it's not a toggle.
 - **VOD URL ingest.** `POST /assets` with `input.url: "https://..."` (Mux pulling a VOD file
@@ -416,16 +426,16 @@ Heads-up so nothing surprises you:
 - **GraphQL learning curve.** If you've never written a query, the
   [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available
   fields. Skipper can also draft queries.
-- **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived
-  connection is awkward in your stack.
+- **Webhook bodies render 64-bit integers as strings.** `sizeBytes`, `durationMs`, and money
+  amounts arrive as `"7340032"`, not `7340032`; parse them explicitly.
 - **The player swap is not API-compatible.** Props, attribute casing, and theming differ —
   budget a few hours to walk through [Player (Playback)](/builders/playback) examples.
 - **Stream keys, playback IDs, and asset IDs are not transferable.** Reissue stream keys and
   update embeds.
 - **Playback signing is not key-portable.** Re-create signing keys in FrameWorks and update
   your token transport from `?token=` to `?jwt=` (or `Authorization: Bearer`).
-- **No webhook history backfill.** Past Mux events stay on Mux; subscribe fresh on
-  FrameWorks.
+- **No webhook history backfill.** Past Mux events stay on Mux. A FrameWorks webhook endpoint
+  receives events from the moment it is created, so create it before you move traffic.
 
 ## Get help
 

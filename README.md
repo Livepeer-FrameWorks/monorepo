@@ -39,6 +39,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Commodore (`api_control`): auth, streams, business logic
   - Quartermaster (`api_tenants`): tenants, clusters, nodes
   - Purser (`api_billing`): usage, invoices, payments
+  - Bosun (`api_webhooks`): outbound webhooks; delivers public domain events to tenant endpoints with signing, retries, and replay
   - Livepeer Signer: ETH transaction signer for Livepeer Gateway
 - Media plane
   - Foghorn (`api_balancing`): regional load balancer & media pipeline orchestrator (HA via Redis, cross-cluster federation via FoghornFederation gRPC)
@@ -104,11 +105,14 @@ For local development and testing:
 git clone https://github.com/Livepeer-FrameWorks/monorepo.git
 cd monorepo
 cp config/env/secrets.env.example config/env/secrets.env  # edit values as needed
-make env  # writes .env from config/env
-docker-compose up
+make env            # writes .env from config/env, with COMPOSE_PROFILES=edge
+make edge-dev-dist  # stages Helmsman from source plus pinned MistServer and Caddy for the edge image
+docker compose up --build
 ```
 
 The Compose stack loads `${ENV_FILE:-.env}` automatically. Override `ENV_FILE` (and pass `--env-file` to docker compose) when you want to use a different generated env file (for example `.env.staging`).
+
+Compose profiles select the slice that starts: no profile is the control plane, `edge` adds the media edge bundle (Caddy, MistServer and Helmsman in one container, as on production edges), `support` adds Chatwoot and Listmonk, `two-cell` adds a second media cell, and `llm` adds Ollama. The presets are listed in the generated `.env` and in `CONTRIBUTING.md`.
 
 Endpoints (local)
 
@@ -117,8 +121,8 @@ Endpoints (local)
 - App via Nginx: http://localhost:18090
 - Web Console: http://localhost:18030
 - Marketing site: http://localhost:18031
-- Listmonk (Admin): http://localhost:9001
-- MistServer: http://localhost:4242 (RTMP: 1935, HTTP: 8080)
+- Listmonk (Admin, `support` profile): http://localhost:9001
+- MistServer on the edge (`edge` profile): http://localhost:4242 (RTMP: 1935, SRT: 8889/udp, HTTP: 8080)
 - Kafka (external): localhost:29092
 - Postgres: localhost:5432
 - ClickHouse: 8123 (HTTP), 9000 (native)
@@ -150,6 +154,8 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Control / API                 | Purser                   | 18003    | Health/Metrics                                                                                                 |
 | Control / API                 | Purser (gRPC)            | 19003    | gRPC API                                                                                                       |
 | Control / API                 | Livepeer Signer          | 18016    | ETH transaction signer for Livepeer Gateway (not in dev compose)                                               |
+| Control / API                 | Bosun (api_webhooks)     | 18013    | Outbound webhooks health/metrics (aggregator region only)                                                      |
+| Control / API                 | Bosun (gRPC)             | 19009    | Webhook endpoints, delivery log, and replay API                                                                |
 | Event & Analytics             | Periscope Query          | 18004    | HTTP health/metrics only                                                                                       |
 | Event & Analytics             | Periscope Query (gRPC)   | 19004    | gRPC API                                                                                                       |
 | Event & Analytics             | Periscope Ingest         | 18005    | Kafka consumer                                                                                                 |

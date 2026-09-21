@@ -284,6 +284,7 @@ new events and do not scrub records already retained by an older deployment.
 - `node_metrics_samples` and `node_state_current`: Node telemetry and “current state” snapshots.
 - `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`) with serving `cluster_id` copied from the authenticated Mist envelope.
 - `artifact_events` and `artifact_state_current`: Clip/DVR/VOD lifecycle events + current artifact state. The authoritative durable-storage fields in `artifact_state_current` (`is_synced`, `sync_status`, `storage_location`, `is_finalized`) are set SOLELY by the Foghorn-validated Clip/DVR/Vod lifecycle events (emitted after `processSyncComplete`/freeze validation), and the diagnostic `storage_lifecycle` stream never writes them. `has_local_copy` (placement) is NOT taken from those events — it is derived at read time from present-copy counts in `artifact_node_copy_current` (a node holds a present copy), independent of any lifecycle-written column.
+- `artifact_state_current_v2`: latest public lifecycle state per (tenant, artifact) projected from the clip, recording, and upload events on `domain.events`, with no internal names, nodes, paths, or URLs. It replaces rows by `version`: a producer-stamped aggregate version when present, else the UUIDv7 event ID's time order, so a late or mirrored older event never overwrites a newer state. A v0.3.11 postdeploy seeds it from `artifact_state_current`. Transitions without a domain event (queued, progress, DVR started and recording) stay only in `artifact_state_current` and `artifact_events`. See [service-events.md §3.1](service-events.md).
 - `routing_decisions`: Load balancing decision telemetry. `cluster_id` is the emitting cluster context, `selected_cluster_id` is the cluster that owns the selected node, `remote_cluster_id` is the cross-cluster target, and `control_cell_id` identifies the decision-maker. Resolved content identity, including origin, is carried into the event synchronously; legacy asynchronous enrichment is fill-only and is skipped when resolution already supplied an identity.
 - `processing_events`: Transcoding/processing usage telemetry retained for diagnostics. The rated processing source is `processing_segments_final`, projected from durable Livepeer and AV segment-complete triggers.
 - `storage_snapshots` and `storage_events`: Storage capacity snapshots and lifecycle actions. `storage_events` is a DIAGNOSTIC stream: the sidecar (Helmsman) emits `storage_lifecycle` (e.g. `ACTION_SYNCED`) before Foghorn validates the sync attempt, so it can reflect a stale, timed-out, or ultimately-rejected attempt. `processStorageLifecycle` therefore writes ONLY `storage_events` and never `artifact_state_current`.
@@ -556,6 +557,13 @@ Signalman is the realtime hub for dashboard subscriptions:
 - viewer metric updates (`ViewerMetrics` / client lifecycle)
 - node health events
 - stream lifecycle events
+- public tenant events on `CHANNEL_EVENTS`, served as the `tenantEvents` subscription: the
+  registered public messages from `domain.events` (stream, clip, recording, upload, multistream,
+  API token, billing, account, custom domain), delivered only to the owning tenant. Bridge filters
+  by exact type and by the payload's stream, and refuses any payload the registry does not mark
+  public. Public events carry no progress, file paths, storage URLs, or node IDs; the dashboard
+  reads upload state from `vodUploadStatus` and artifact state from the catalog. See
+  [service-events.md](service-events.md).
 
 Key rule: do not broadcast raw client IP fields; redact before emit.
 

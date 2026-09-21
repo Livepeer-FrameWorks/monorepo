@@ -527,6 +527,7 @@ The remaining edge-hardening signals are likewise bounded:
 | `purser_media_authority_refresh_failures_total`         | `stage`              | Refresh delivery, reconciliation, completion-fence, or queue-observation failure                  |
 | `purser_media_authority_refresh_completions_total`      | `outcome`            | Completed refresh attempts (`delivered` or safely `superseded`)                                   |
 | `purser_media_authority_refresh_worker_ready`           | none                 | `1` only while the durable worker has both database and Commodore dependencies                    |
+| `purser_fx_rate_reference_age_seconds`                  | `currency`           | Seconds since the start of the newest stored ECB reference date; conversions refuse beyond 5 days |
 
 Quartermaster's media-authority refresh outbox exposes the same queue signals as
 Purser's: `quartermaster_media_authority_refresh_pending`,
@@ -573,3 +574,11 @@ Chain order: `GRPCMetricsInterceptor → GRPCLoggingInterceptor → GRPCAuthInte
 ### Naming and double-prefix trap
 
 `pkg/monitoring/metrics.go` `NewCounter` / `NewGauge` / `NewHistogram` already prepend `serviceName + "_"`. Never pass a name that itself begins with the service name — the result is a double-prefixed metric (`<svc>_<svc>_*`).
+
+### Shared-package metrics
+
+A metric registered by a shared package carries the service as a `service` label instead of a name prefix, so one dashboard query covers every service.
+
+| Metric                                  | Type    | Labels    | Meaning                                                                                                                                                                  |
+| --------------------------------------- | ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config_reload_failures_total{service}` | Counter | `service` | SIGHUP reloads that failed (`pkg/server`). The previous configuration stays in effect; the Error log names the keys and `/debug/config` shows the last failure and time. |

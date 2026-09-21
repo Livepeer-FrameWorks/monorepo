@@ -19,10 +19,12 @@ With more regions the rule is the same for every ordered pair: links into the ag
 
 The canonical names and sets live in `pkg/topology/kafka_topics.go`; MM2 provisioning and every consumer read them from there.
 
-| Direction                                        | Topics                                                                                                             | Consumed by                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| Regional to aggregator                           | `analytics_events`, `service_events`, `analytics.raw_mist_triggers`, `billing.usage_reports`, `decklog_events_dlq` | Aggregator Periscope-Ingest and Purser; aggregator Signalman |
-| Aggregator to regional, and regional to regional | `analytics_events`, `service_events`                                                                               | Regional Signalman                                           |
+| Direction                                        | Topics                                                                                                                              | Consumed by                                                  |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Regional to aggregator                           | `analytics_events`, `service_events`, `analytics.raw_mist_triggers`, `billing.usage_reports`, `decklog_events_dlq`, `domain.events` | Aggregator Periscope-Ingest and Purser; aggregator Signalman |
+| Aggregator to regional, and regional to regional | `analytics_events`, `service_events`, `domain.events`                                                                               | Regional Signalman                                           |
+
+`domain.events` carries the registered domain events ([service-events.md](service-events.md) §3.1). Its consumers dedup on `ce_id`, so the local topic and every `{source_region}.domain.events` copy can be read together. No service consumes it yet.
 
 `analytics.raw_mist_triggers` is the raw final and accounting trigger journal; final facts and metering are projected from it, so regional usage is only billed once its copy reaches the aggregator.
 

@@ -188,7 +188,7 @@ const workflows = [
         features: [
           { label: "Dashboard · API · MCP", status: "available" },
           { label: "Skipper diagnostics", status: "expanding" },
-          { label: "Event webhooks", status: "next" },
+          { label: "Event webhooks", status: "available" },
         ],
       },
     ],

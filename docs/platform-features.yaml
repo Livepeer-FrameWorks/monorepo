@@ -31,6 +31,10 @@
 #                 generator derives the reverse `enables` list. related: is
 #                 for non-directional peers only.
 #   - aliases:    retired slugs that should keep resolving in the webapp.
+#   - enforced_by: server-side gates from the closed set in
+#                 scripts/registry/main.go (enforcementGates). Each gate names
+#                 its capabilities field in schema.graphql and its enforcer
+#                 files; the validator rejects unknown gates.
 #   - surfaces.cli.commands: `frameworks` command paths ("edge update");
 #                 every segment is validated against cobra Use: declarations
 #                 in cli/cmd/.
@@ -65,7 +69,7 @@ features:
       graphql:
         mutations: [createStream, updateStream, deleteStream, refreshStreamKey]
         queries: [stream, streamsConnection, streamingConfig]
-        subscriptions: [liveStreamEvents, liveTrackListUpdates]
+        subscriptions: [liveStreamEvents, liveTrackListUpdates, tenantEvents]
       mcp:
         tools: [create_stream, update_stream, delete_stream, refresh_stream_key]
       webapp:
@@ -260,6 +264,26 @@ features:
               - builders/playback-theming.mdx
               - builders/playback-advanced.mdx
 
+      - slug: viewer-protocol-selection
+        name: Viewer protocol selection
+        description: resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument.
+        status: shipped
+        depends_on: [playback]
+        required_surfaces:
+          graphql: { required: true }
+          mcp:
+            {
+              required: false,
+              reason: "Players choose the protocol client-side; agents resolve endpoints via resolve_playback_endpoint.",
+            }
+          webapp: { required: false, reason: "A player request argument, not a dashboard setting." }
+          docs: { required: true }
+        surfaces:
+          graphql:
+            queries: [resolveViewerEndpoint]
+          docs:
+            pages: [builders/playback-advanced.mdx]
+
       - slug: playback-access-control
         name: Playback access control
         description: Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.
@@ -384,7 +408,7 @@ features:
       graphql:
         mutations: [startDVR, stopDVR, deleteDVR]
         queries: [storageArtifactsConnection]
-        subscriptions: [liveDvrLifecycle]
+        subscriptions: [tenantEvents]
       mcp:
         tools: [start_dvr, stop_dvr, delete_dvr]
       webapp:
@@ -446,7 +470,7 @@ features:
       graphql:
         mutations: [createVodUpload, completeVodUpload, abortVodUpload, deleteVodAsset]
         queries: [vodAsset, storageArtifactsConnection, vodUploadStatus]
-        subscriptions: [liveVodLifecycle]
+        subscriptions: [tenantEvents]
       mcp:
         tools:
           [
@@ -512,7 +536,7 @@ features:
       graphql:
         mutations: [createClip, deleteClip]
         queries: [clip, storageArtifactsConnection]
-        subscriptions: [liveClipLifecycle]
+        subscriptions: [tenantEvents]
       mcp:
         tools: [create_clip, delete_clip]
       webapp:
@@ -525,6 +549,7 @@ features:
     area: media-library
     description: Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds.
     status: shipped
+    enforced_by: [recording-retention]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -672,6 +697,7 @@ features:
     kind: foundation
     description: Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster.
     status: partial
+    enforced_by: [processing-customizable, cluster-media-processing]
     gap_reason: |
       Livepeer Gateway-backed transcoding is live with processing telemetry (see the transcoding subitem). Processing jobs
       run on foghorn.processing_jobs and Foghorn already routes each job by processing class against per-node advertised
@@ -1413,6 +1439,7 @@ features:
     area: infrastructure
     description: Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission.
     status: partial
+    enforced_by: [cluster-media-ingest, cluster-media-playback, cluster-media-storage]
     gap_reason: |
       Management API and web controls are implemented, including exact-revision review/apply/recovery and owner
       permissions. Routing runs through the placement path for every content kind: encoder push
@@ -1602,6 +1629,29 @@ features:
       docs:
         pages: [operators/running-upgrades.mdx]
 
+  - slug: cluster-backup-restore
+    name: Cluster backup and restore
+    area: infrastructure
+    audience: platform
+    status: shipped
+    description: CLI backups of every authoritative store — per-database PostgreSQL/YugabyteDB dumps and the ClickHouse billing facts — to a local directory or S3, with a manifest of file hashes, row counts and migration-ledger digests. Restores go through a verified shadow and a reversible swap; contract and irreversible data migrations require a backup under an hour old that still matches the live ledgers.
+    related: [rollout-orchestrator]
+    required_surfaces:
+      cli: { required: true }
+      docs: { required: true }
+    surfaces:
+      cli:
+        commands:
+          [
+            "cluster backup create",
+            "cluster backup verify",
+            "cluster restore",
+            "cluster restore finish",
+            "cluster restore rollback",
+          ]
+      docs:
+        pages: [operators/backup-restore.mdx]
+
   - slug: livepeer-signer
     name: Livepeer transaction signer
     area: infrastructure
@@ -1761,7 +1811,7 @@ features:
     area: developer
     description: The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs.
     status: partial
-    gap_reason: The GraphQL API, playground, and developer tokens ship; outbound webhooks and server-side SDKs are roadmap subitems.
+    gap_reason: The GraphQL API, playground, developer tokens, public tenant events, outbound webhooks, and the TypeScript, Go, and Python SDKs ship; SDKs for other languages do not (backend-sdks).
     required_surfaces:
       graphql:
         {
@@ -1775,7 +1825,7 @@ features:
       webapp:
         routes: ["/developer/playground"]
       docs:
-        pages: [builders/api-reference.mdx]
+        pages: [builders/api-reference.mdx, builders/sdks.mdx]
     subitems:
       - slug: developer-tokens
         name: Developer API tokens
@@ -1818,25 +1868,88 @@ features:
           docs:
             pages: [builders/api-reference.mdx]
 
+      - slug: tenant-events
+        name: Public tenant events
+        description: One public event contract for streams, clips, recordings, uploads, multistream targets, API tokens, billing, account, and custom domains, written by each owning service in the same transaction as the change and delivered live through the tenantEvents subscription, filterable by type and stream.
+        status: shipped
+        required_surfaces:
+          graphql: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+          mcp:
+            {
+              required: false,
+              reason: "MCP has no subscription transport; agents read the same state through queries and tools.",
+            }
+        surfaces:
+          graphql:
+            subscriptions: [tenantEvents]
+          webapp:
+            routes: ["/library", "/developer/playground"]
+          docs:
+            pages: [builders/events.mdx]
+
       - slug: outbound-webhooks
         name: Outbound event webhooks
-        description: Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events.
-        status: roadmap
-        gap_reason: Not shipped. Inbound playback-auth webhook exists (covered by playback-access-control); outbound delivery is future work.
+        description: Up to 10 tenant HTTPS endpoints receive the public tenant events (the tenantEvents payloads) as Standard Webhooks-signed requests, retried for about three days with auto-disable after sustained failure, with a 30-day delivery log, single and range replay, test deliveries, and secret rotation with a 24-hour overlap. Delivered by the Bosun service.
+        status: shipped
+        related: [tenant-events]
         required_surfaces:
           graphql: { required: true }
           mcp: { required: true }
           webapp: { required: true }
           docs: { required: true }
+        surfaces:
+          graphql:
+            queries:
+              [
+                webhookEndpoint,
+                webhookEndpointsConnection,
+                webhookDeliveriesConnection,
+                webhookDelivery,
+                webhookEventTypes,
+              ]
+            mutations:
+              [
+                createWebhookEndpoint,
+                updateWebhookEndpoint,
+                deleteWebhookEndpoint,
+                enableWebhookEndpoint,
+                disableWebhookEndpoint,
+                rotateWebhookEndpointSecret,
+                testWebhookEndpoint,
+                replayWebhookDelivery,
+                replayWebhookDeliveries,
+              ]
+          mcp:
+            tools:
+              [
+                list_webhook_endpoints,
+                get_webhook_endpoint,
+                list_webhook_deliveries,
+                get_webhook_delivery,
+                list_webhook_event_types,
+                create_webhook_endpoint,
+                update_webhook_endpoint,
+                delete_webhook_endpoint,
+                enable_webhook_endpoint,
+                disable_webhook_endpoint,
+                rotate_webhook_secret,
+                test_webhook_endpoint,
+                replay_webhook_delivery,
+                replay_webhook_deliveries,
+              ]
+          webapp:
+            routes: ["/developer/webhooks", "/developer/webhooks/:id"]
+          docs:
+            pages: [builders/webhooks.mdx, builders/events.mdx]
 
       - slug: backend-sdks
         name: Backend SDKs
-        description: Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows.
-        status: roadmap
-        gap_reason: |
-          Not shipped. Only frontend JS packages (player, StreamCrafter) exist today, and the migration guides disclose the
-          missing server-side SDKs as a parity gap. Phased delivery, starting with Node and Python; each SDK covers API access,
-          webhook verification, uploads, access tokens, and JWT signing.
+        description: SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from one curated operation set and released under one version. Each has typed operations for streams, stream keys, clips, DVR, VOD, uploads, playback access control, push targets, developer tokens, usage, and the tenantEvents subscription, plus retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing.
+        status: partial
+        gap_reason: TypeScript, Go, and Python SDKs ship; there are no SDKs for PHP, Ruby, Elixir, Java, or C#, which use the GraphQL API and the Standard Webhooks libraries directly.
+        depends_on: [developer-tokens, tenant-events, outbound-webhooks]
         required_surfaces:
           graphql:
             {
@@ -1846,6 +1959,11 @@ features:
           mcp: { required: false, reason: "Agents use the MCP server directly." }
           webapp: { required: true }
           docs: { required: true }
+        surfaces:
+          webapp:
+            routes: ["/developer/sdks"]
+          docs:
+            pages: [builders/sdks.mdx]
 
   - slug: agents-mcp
     name: Agents (MCP server)
@@ -1971,10 +2089,11 @@ features:
     area: account
     description: Tenant identity, billing setup, retention defaults, routing preferences, and wallet-provisioned account lifecycle.
     status: partial
+    enforced_by: [custom-subdomain, custom-domain]
     gap_reason: |
       Core tenant account setup is live: retry-safe wallet-provisioned prepaid accounts, refreshable wallet sessions, tenant name, billing details, billing tier/balance, storage retention defaults,
       and preferred cluster/routing settings are exposed. Broader tenant administration is still expanding: team/RBAC, notification preferences,
-      custom domains/branding, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.
+      custom domains, security controls, and account lifecycle controls are not yet complete across API, dashboard, MCP, and docs.
     required_surfaces:
       graphql: { required: true }
       webapp: { required: true }
@@ -2054,5 +2173,6 @@ features:
     kind: foundation
     audience: platform
     status: shipped
+    enforced_by: [platform-operator]
     description: Cross-tenant operational view for platform operators — audit-logged and read-oriented — used for support, incident response, and platform-wide analytics.
     required_surfaces: {}

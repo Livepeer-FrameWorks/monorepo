@@ -1,0 +1,113 @@
+---
+title: "SDKs for TypeScript, Go, and Python"
+date: 2026-09-19
+authors:
+  - frameworks
+excerpt: "FrameWorks now publishes SDKs for TypeScript, Go, and Python. All three are generated from the same 44 operations, share one version, and pass the same conformance fixtures."
+description: "FrameWorks now publishes SDKs for TypeScript, Go, and Python. All three are generated from the same 44 operations, share one version, and pass the same conformance fixtures."
+tags:
+  - announcements
+  - engineering
+---
+
+Until now, a FrameWorks integration outside the browser started with a GraphQL client of your
+choice and a copy of the schema. The player and StreamCrafter packages covered playback and
+browser ingest, but creating streams, uploading files, signing viewer tokens, and checking webhook
+signatures from a backend meant writing that code yourself. That changes today with three
+packages:
+
+- `@livepeer-frameworks/api` on npm, for Node 22 and later and for browsers.
+- `github.com/Livepeer-FrameWorks/sdk-go` for Go.
+- `livepeer-frameworks` on PyPI, with a synchronous and an asynchronous client.
+
+The [SDK guide](/builders/sdks) has examples in all three languages.
+
+## One set of operations
+
+The SDKs do not wrap the whole schema. They ship a curated set of 44 operations, kept in
+`pkg/graphql/public` in the FrameWorks repository: 19 queries, 24 mutations, and the
+`tenantEvents` subscription. They cover streams and stream keys, clips, DVR recordings and
+chapters, VOD assets and uploads, storage artifact listing, viewer and ingest endpoint
+resolution, usage, playback access control (signing keys, playback policies, and access tests),
+multistream push targets, developer tokens, and the server version.
+
+Each language generates its types from those files: `@graphql-codegen` for TypeScript,
+`genqlient` for Go, and `ariadne-codegen` for Python. When an operation changes, CI regenerates
+all three and fails if the committed code differs. Every mutation that returns a result union
+selects each of its error members, so a `ValidationError` or `NotFoundError` arrives as a typed
+value you can match on, not as a missing field.
+
+## What the runtime does
+
+The generated code is paired with a small hand-written runtime per language. It does the same
+things in each:
+
+- **Retries.** Queries are retried on network errors and on HTTP 408, 429, 500, 502, 503, and
+  504, with jittered backoff, and they wait as long as `Retry-After` asks. Mutations are retried
+  only when you pass an idempotency key.
+- **Typed errors.** HTTP 401 and a GraphQL `UNAUTHORIZED` error both become an
+  `AuthenticationError`; 402 becomes a `PaymentRequiredError`; 429 a `RateLimitError` with the
+  seconds to wait. A result union error member becomes a `ResultError` that names the member and
+  the field. The class names are the same in all three languages.
+- **Pagination.** The API has three list shapes: relay cursors (`streamsConnection`), offsets
+  (`storageArtifactsConnection`), and page tokens (`dvrChapters`). Each SDK has an iterator for
+  each shape.
+- **A server version check.** Before the first operation, the client reads `serverInfo` once per
+  URL. Against a release older than the SDK line supports it raises `ServerTooOldError`, and an
+  operation newer than the server raises `UnsupportedOperationError` without being sent. A
+  network failure during that check is not treated as "too old", and development builds skip it.
+- **Subscriptions.** The client sends the token in the WebSocket connection payload and reads it
+  again for every reconnect.
+
+To make the gateway's side of this reliable, two things changed in this release. The gateway now
+sets `extensions.code` on errors from backend services (`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
+`VALIDATION_ERROR`, and a few more); the API reference listed those codes before, but only one
+billing error actually carried a code. And a WebSocket connection whose `Authorization` value does
+not authenticate is now closed before it is acknowledged. Before, it silently continued as an
+anonymous connection, and a subscription with an expired token failed later with a less useful
+error. The SDKs treat that early close as an authentication error and stop reconnecting.
+
+## Helpers that are not GraphQL
+
+- **Uploads.** `createVodUpload` returns presigned URLs for each part of the file. The upload
+  helper sends the parts with bounded concurrency, retries a failed part, completes the upload
+  with the part ETags, and aborts the upload if anything fails.
+- **Playback tokens.** Content with a JWT playback policy needs a viewer token signed with your
+  signing key. The helper produces the ES256 token the playback verifier expects: the key's `kid`
+  in the header, a required `exp`, and optional `nbf`, audience, and custom claims.
+- **Webhooks.** Verification wraps the official Standard Webhooks library for each language, so
+  the SDK contains no signature code of its own. Parsing returns the event with its payload
+  decoded into a type generated from the event protobuf definitions. An event type the SDK does
+  not know yet is returned as a raw event instead of an error, so a new event type on the server
+  never breaks an older SDK.
+
+## The same behavior in three languages
+
+Three runtimes written by hand drift apart unless something checks them. The repository has a
+directory of language-neutral JSON fixtures, `sdk_conformance`, and each SDK's test suite loads
+them: 17 retry cases, 24 error shapes, 9 pagination cases, 12 server version cases, 5
+subscription cases, 7 upload cases, 14 webhook cases including the Standard Webhooks reference
+vector, and one call per operation against a response built from the schema. A change that makes
+one language behave differently fails CI.
+
+For playback tokens the check goes one step further. Each SDK's token for a shared test key is
+recorded in the fixtures, and a Go test runs all three through the same policy evaluation the
+media edge runs when a viewer connects. The first run of that test caught a mistake in the
+fixtures themselves: a not-before time that was still in the future.
+
+## Versions
+
+The SDKs start at 0.1.0 and stay at 0.x until the platform reaches 1.0. All three share one
+version. Each minor line names the oldest FrameWorks release it supports, and supports every
+stable release from there on; 0.1 needs v0.3.11, the first release that serves `serverInfo`.
+Within a line, operations are only added. A breaking change starts a new minor line.
+
+On the server side, CI checks every operation of each supported line against the schema of each
+supported release, and fails on a schema change that would break a field an SDK line uses. The
+rules are written down in the repository's GraphQL deprecation policy.
+
+## What is not included
+
+There are no SDKs for PHP, Ruby, Elixir, Java, or C#. Those integrations keep using the GraphQL API
+directly, with a Standard Webhooks library for signatures. The player and StreamCrafter packages
+still carry their own gateway queries; moving them onto the typed operations is the next step.

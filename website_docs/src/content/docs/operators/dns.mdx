@@ -288,7 +288,9 @@ edge-distributed bundle includes it. Only `cert_issuing` and `cert_issued` domai
 join bundle orders, so one broken custom domain cannot block issuance or renewal
 for the tenant alias and healthy SANs. A failed order marks only that domain
 `cert_failed` (check `last_error`) and retries after `next_attempt_at`, 15 minutes
-later. No bundle is rebuilt, because the serving bundle never contained the
+later. A domain whose CNAMEs have not verified within 7 days becomes
+`verification_failed` and is no longer retried; a new `EnsureCustomDomain` for it,
+such as the tenant removing and adding the domain again, restarts verification. No bundle is rebuilt, because the serving bundle never contained the
 failed SAN. A failed renewal leaves every domain's status and SAN in place while
 the still-valid bundle keeps serving; `GetCustomDomainStatus` reports it as
 `last_renewal_error` until the next successful bundle clears it.

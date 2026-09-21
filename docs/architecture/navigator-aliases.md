@@ -111,9 +111,16 @@ from later orders. A failed renewal of an existing bundle is not a status change
 The still-valid bundle keeps serving, so Navigator records `last_renewal_error`
 and `last_renewal_error_at` on the tenant's `cert_issuing`/`cert_issued` domains,
 and the next successful or confirmed bundle clears them.
-Re-ensuring a `tearing_down` domain restores `pending_verification`;
+A domain whose CNAMEs have not verified 7 days after `verification_started_at`
+(`logic.CustomDomainVerificationPeriod`, a code constant) moves to
+`verification_failed`, a terminal status the worker no longer processes.
+Re-ensuring a `tearing_down` or `verification_failed` domain restores
+`pending_verification` with a new verification period;
 verification, issuance metadata, and final deletion are all fenced by the current
-lifecycle row. Removal re-orders an issued alias's bundle without the SAN before
+lifecycle row. The first verification, the first entry into `cert_failed` since
+the last issuance or reactivation, and the move to `verification_failed` commit
+`custom_domain.verified` or `custom_domain.failed` with the status change
+(see [service-events.md](service-events.md)). Removal re-orders an issued alias's bundle without the SAN before
 final deletion, which deletes the tenant-scoped ACME account once no other custom
 domain in `verified`, `pending_alias`, `cert_issuing`, `cert_issued`, or
 `cert_failed` still uses it; pending-verification and teardown rows cannot preserve

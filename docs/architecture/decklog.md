@@ -8,18 +8,23 @@ Decklog (`api_firehose`) is the single gRPC ingress gateway between event produc
 Foghorn ─────────────────┐ SendEvent (MistTrigger)
 Bridge / Commodore /     │                                    ┌→ analytics_events
 Quartermaster / Purser / ├ SendServiceEvent (ServiceEvent)    │
-Deckhand / Foghorn ──────┤                        Decklog ────┼→ service_events
+Deckhand / Foghorn ──────┤                                    ├→ service_events
+                         │                        Decklog ────┤
+Producer outboxes ───────┤ PublishDomainEvents                ├→ domain.events
                          │                                    │
 Livepeer gateways ───────┘ SendGatewayTelemetry               └→ analytics.raw_mist_triggers
 ```
 
-Three unary RPCs on `DecklogService` (`pkg/proto`):
+Four unary RPCs on `DecklogService` (`pkg/proto`):
 
 | RPC                    | Payload                                | Published to                                          | Producers                                                                                            |
 | ---------------------- | -------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `SendEvent`            | `MistTrigger` envelope (oneof payload) | `analytics_events` (+ raw journal for final triggers) | Foghorn (enriched media-plane triggers, lifecycle polls, playback beacons)                           |
 | `SendServiceEvent`     | `ServiceEvent` (typed oneof payloads)  | `service_events`                                      | Bridge, Commodore, Quartermaster, Purser, Deckhand, Foghorn ([service-events.md](service-events.md)) |
+| `PublishDomainEvents`  | `DomainEventBatch` (registered types)  | `domain.events`, keyed `<aggregate>/<id>`             | Domain event outbox relays (`pkg/events/outbox`, [service-events.md](service-events.md) §3.1)        |
 | `SendGatewayTelemetry` | `GatewayTelemetryEvent`                | `analytics_events`                                    | Livepeer gateways (orchestrator discovery/state/transcode/AI)                                        |
+
+`PublishDomainEvents` is the one RPC that assigns nothing: the producer's stored event ID is the dedup key, so a batch with a missing ID, an unregistered type (`FAILED_PRECONDITION`), a payload that does not decode as its registered message, or a tenant that does not match the type's scope is rejected before any record is produced.
 
 Transport is gRPC-only: TLS plus service-token auth via the shared interceptor (`pkg/middleware`), default port 18006. Success is **ack-after-Kafka** — an RPC returns OK only after the Kafka publish commits. That property is what Helmsman's trigger WAL and Foghorn's `MistTriggerAck` rely on: a positive ack means the trigger is durably ingested. See [trigger-durability.md](trigger-durability.md).
 
@@ -31,7 +36,7 @@ The Kafka record is the transparent `protojson` serialization of the protobuf me
 
 ## Tenant attribution is fail-closed
 
-Decklog rejects any event without a valid UUID `tenant_id` — there is no zero-UUID fallback tenant, and an un-attributed event never reaches Kafka. Enrichment is upstream's job (Foghorn for media-plane triggers); rejections are counted on `events_ingested_total{status="tenant_rejected"|"tenant_missing"}`.
+Decklog rejects any event without a valid UUID `tenant_id` — there is no zero-UUID fallback tenant, and an un-attributed event never reaches Kafka. The exceptions are declared, not inferred: a service event whose type `pkg/serviceevents.PlatformScoped` allows (operator-audience events, and the cluster lifecycle events whose domain counterparts the registry declares platform-scoped), and a domain event whose registered scope is `PLATFORM`, which must carry no tenant. Enrichment is upstream's job (Foghorn for media-plane triggers); rejections are counted on `events_ingested_total{status="tenant_rejected"|"tenant_missing"}`.
 
 Gateway telemetry has a two-tenant model: `cluster_owner_tenant_id` is always required (discovery/state events are attributed to the cluster owner), and transcode/AI outcome events additionally require `stream_tenant_id`, which becomes the effective event tenant while cluster-owner identity stays in the payload for dual-attribution joins.
 
@@ -64,8 +69,9 @@ Events carry envelope v2 identity: `source_region` / `source_cluster_id` (where 
 | `analytics_events`            | `ANALYTICS_KAFKA_TOPIC`      | Typed analytics envelope (JSON) from `SendEvent` / `SendGatewayTelemetry` |
 | `service_events`              | `SERVICE_EVENTS_KAFKA_TOPIC` | Service-plane envelope (JSON) from `SendServiceEvent`                     |
 | `analytics.raw_mist_triggers` | `DECKLOG_RAW_TRIGGERS_TOPIC` | Marshaled `MistTrigger` protobuf, final/accounting triggers only          |
+| `domain.events`               | none (fixed name)            | Domain event protobuf with CloudEvents headers from `PublishDomainEvents` |
 
-Retention policy targets for these (and the DLQ below) are in [service-events.md](service-events.md) §7. `billing.usage_reports` is produced by Periscope Query, not Decklog ([meter-contracts.md](meter-contracts.md)).
+Retention for these (and the DLQ below) is declared in `pkg/topology` and listed in [service-events.md](service-events.md) §7. `billing.usage_reports` is produced by Periscope Query, not Decklog ([meter-contracts.md](meter-contracts.md)).
 
 ## DLQ + retry contract (consumed downstream)
 
@@ -81,9 +87,11 @@ Failures are visible on `dlq_messages_total{topic, error_type}`.
 
 ## Key Files
 
-- `api_firehose/internal/grpc/server.go` - all three RPCs, unwrap, event_id derivation, raw journal, envelope backfill
+- `api_firehose/internal/grpc/server.go` - `SendEvent`, `SendServiceEvent`, `SendGatewayTelemetry`, unwrap, event_id derivation, raw journal, envelope backfill
+- `api_firehose/internal/grpc/domain_events.go` - `PublishDomainEvents` validation and batch produce
 - `api_firehose/cmd/decklog/main.go` - topic/env wiring, TLS, Quartermaster bootstrap
-- `pkg/clients/decklog/client.go` - producer-side client (respects pre-set `EventId`)
+- `pkg/clients/decklog/client.go` - producer-side client (respects a pre-set `EventId` and stamps a UUIDv7 when it is empty; never stamps domain event IDs)
+- `pkg/events` - domain event registry, envelope validation, CloudEvents record encoding
 - `pkg/kafka/dlq.go` - `DLQPayload` + `EncodeDLQMessage`
 - `api_analytics_ingest/cmd/periscope/main.go` - `wrapWithDLQ` / `wrapRetryOnly` consumer wrappers
 

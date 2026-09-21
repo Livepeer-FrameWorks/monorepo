@@ -509,6 +509,15 @@ infrastructure:
       - name: analytics_events
         partitions: 10
         replication_factor: 3
+        config:
+          retention.ms: "604800000" # 7 days
+      - name: domain.events
+        partitions: 12
+        replication_factor: 3
+        config:
+          retention.ms: "15552000000" # 180 days
+          cleanup.policy: delete
+      # ...plus every other platform topic in the table below
 ```
 
 **Fields:**
@@ -524,7 +533,20 @@ infrastructure:
   - `dir_id` (required) - directory UUID for dynamic quorum bootstrap. Generate with `kafka-storage.sh random-uuid`
 - `controller_port` (optional) - combined mode only, default `9093`
 - `brokers` (required) - at least 1; use 3+ for production
-- `topics` (optional)
+- `topics` (required) - every topic must set `config.retention.ms`. Each Kafka cluster must declare the platform topics below: the aggregator cluster all of them, and each `regional` cluster all except `lookout.incidents`. The platform topics have fixed settings, and the CLI refuses a manifest that omits one or whose values differ, printing the entry to add:
+
+  | Topic                         | `retention.ms`           | Other required settings                                                                            |
+  | ----------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------- |
+  | `analytics_events`            | `604800000` (7 days)     |                                                                                                    |
+  | `service_events`              | `15552000000` (180 days) |                                                                                                    |
+  | `analytics.raw_mist_triggers` | `2592000000` (30 days)   |                                                                                                    |
+  | `billing.usage_reports`       | `31536000000` (365 days) |                                                                                                    |
+  | `decklog_events_dlq`          | `7776000000` (90 days)   |                                                                                                    |
+  | `lookout.incidents`           | `604800000` (7 days)     |                                                                                                    |
+  | `domain.events`               | `15552000000` (180 days) | `partitions: 12`, `replication_factor: 3` (or the broker count if lower), `cleanup.policy: delete` |
+
+  Provisioning creates missing topics and applies the declared config to topics that already exist, without restarting brokers.
+
 - `min_insync_replicas` (optional)
 - `delete_topic_enable` (optional)
 - `offsets_topic_replication_factor` (optional)

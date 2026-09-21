@@ -22,6 +22,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | --- | --- | --- | --- |
 | **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
 | ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
+| ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
@@ -96,6 +97,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Internal CA and certificate sync** *(foundation)* *(platform)* | Available | — | Two-tier internal PKI — 72-hour service leaves issued by Navigator's internal CA via node- and cluster-bound cert_sync tokens, distributed by Privateer; public ACME (DNS-01) covers external listeners. |
 | **WireGuard mesh and internal DNS** *(foundation)* *(platform)* | Available | CLI, Docs | Self-managed encrypted service mesh with no external dependency — three-layer peer configuration (gitops seed, last-known, managed), dependency-derived topology, and a loopback .internal resolver per node. |
 | **Cluster rollout orchestrator** *(foundation)* *(platform)* | Available | CLI, Docs | Manifest-driven convergence — dependency-ordered phases, canary and region-staggered waves with health gates, content-addressed release pinning, and automatic rollback on failed health validation. |
+| **Cluster backup and restore** *(platform)* | Available | CLI, Docs | CLI backups of every authoritative store — per-database PostgreSQL/YugabyteDB dumps and the ClickHouse billing facts — to a local directory or S3, with a manifest of file hashes, row counts and migration-ledger digests. Restores go through a verified shadow and a reversible swap; contract and irreversible data migrations require a backup under an hour old that still matches the live ledgers. |
 | **Livepeer transaction signer** *(foundation)* *(platform)* | Available | — | Keystore-backed remote ETH transaction signer so the Livepeer gateway never holds key custody on media nodes. |
 
 ### Commerce & Billing
@@ -113,11 +115,12 @@ This broader inventory includes the [product capability matrix](/platform/featur
 
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
-| **Developer API** | Expanding | API, Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
+| **Developer API** | Expanding | API, Agents (MCP), Dashboard, Docs | The GraphQL API and the tooling around it — playground, API tokens, webhooks, and server-side SDKs. |
 | ↳ Developer API tokens *(foundation)* | Available | API, Dashboard, Docs | Long-lived API tokens for SDK / CI use. |
 | ↳ GraphQL playground | Available | Dashboard, Docs | Interactive GraphQL explorer wired to the live schema. |
-| ↳ Outbound event webhooks | Planned | — | Tenant-configured outbound webhooks for stream / clip / VOD lifecycle events. |
-| ↳ Backend SDKs | Planned | — | Server-side SDKs (Node, Python, PHP, Ruby, Elixir, Java, C#) wrapping the GraphQL API, webhooks, uploads, and access-token/JWT workflows. |
+| ↳ Public tenant events | Available | API, Dashboard, Docs | One public event contract for streams, clips, recordings, uploads, multistream targets, API tokens, billing, account, and custom domains, written by each owning service in the same transaction as the change and delivered live through the tenantEvents subscription, filterable by type and stream. |
+| ↳ Outbound event webhooks | Available | API, Agents (MCP), Dashboard, Docs | Up to 10 tenant HTTPS endpoints receive the public tenant events (the tenantEvents payloads) as Standard Webhooks-signed requests, retried for about three days with auto-disable after sustained failure, with a 30-day delivery log, single and range replay, test deliveries, and secret rotation with a 24-hour overlap. Delivered by the Bosun service. |
+| ↳ Backend SDKs | Expanding | Dashboard, Docs | SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from one curated operation set and released under one version. Each has typed operations for streams, stream keys, clips, DVR, VOD, uploads, playback access control, push targets, developer tokens, usage, and the tenantEvents subscription, plus retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing. |
 | **Agents (MCP server)** | Available | API, Agents (MCP), Dashboard, Docs | Model Context Protocol server exposing FrameWorks operations to agents. |
 | ↳ Skipper (in-app consultant agent) | Expanding | API, Agents (MCP), Dashboard, Docs | Conversational platform agent for support and investigations. |
 

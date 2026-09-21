@@ -1,0 +1,172 @@
+---
+title: "Backup and Restore"
+description: "Back up a FrameWorks cluster's authoritative databases, restore them, and the backup that contract and irreversible migrations require."
+sidebar:
+  order: 12
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+`frameworks cluster backup create` dumps the data a cluster cannot rebuild. `frameworks cluster restore`
+puts it back. Both run from the operator machine: the CLI starts the dump and load tools on the database
+hosts over SSH and streams the data to and from the destination you name.
+
+## What a backup covers
+
+- **PostgreSQL / YugabyteDB service databases.** Every database in
+  `infrastructure.postgres.databases`, one dump per physical database. Each Foghorn cell (`foghorn_eu`,
+  `foghorn_us`) is its own database. Dumped with `pg_dump` or `ysql_dump` in `pre-data`, `data` and
+  `post-data` sections, gzip-compressed.
+- **Named postgres instances.** The databases of `infrastructure.postgres.instances`, for example the
+  `support` instance with Chatwoot, Listmonk and Metabase. Dumped with `pg_dump`, same sections.
+- **ClickHouse billing facts.** `viewer_sessions_final`, `restream_sessions_final`,
+  `stream_sessions_final`, `processing_segments_final`, `api_requests`, `storage_snapshots`,
+  `storage_gb_seconds_5m` and `projection_divergences` in `periscope`, as gzip-compressed TabSeparated
+  rows per table, plus the migration ledger in the manifest.
+
+Not covered: object storage (recordings, clips, VOD, thumbnails), Kafka, Valkey, and SOPS-managed
+secrets. ClickHouse rollups, materialized views, raw telemetry and cursors are derived from the facts or
+from Kafka and are not dumped.
+
+<Aside type="note" title="No storage policy">
+  The CLI writes the backup where you tell it and nothing else. It does not require an off-site
+  copy, encryption, or a retention period, and it never deletes old backups. A local directory is a
+  valid destination. Copying backups elsewhere, encrypting them, and pruning them are up to you.
+</Aside>
+
+## Taking a backup
+
+```bash
+frameworks cluster backup create --to /var/backups/frameworks --all
+frameworks cluster backup create --to s3://ops-backups/frameworks --database purser --clickhouse
+```
+
+- `--to` is a local directory or an `s3://bucket/prefix` URL. The backup goes into a new
+  `frameworks-backup-<UTC time>` directory under it; the command prints the full path.
+- `--all` covers every database and the ClickHouse facts. Otherwise name databases with `--database`
+  (repeatable; `<instance>/<name>` for a named instance) and add `--clickhouse` for the facts.
+- S3 destinations use the standard AWS configuration: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+  (or a profile), `AWS_REGION`, and `AWS_ENDPOINT_URL_S3` for an S3-compatible store such as Hetzner
+  Object Storage or Cloudflare R2. A custom endpoint uses path-style requests.
+
+Services keep running during a backup. Each dump section is one consistent snapshot of its database.
+The CLI reads the migration ledger before and after each database's dump and fails when it changed, so a
+backup never straddles a migration. Any failure fails the whole command, and no manifest is written.
+
+### Layout and manifest
+
+```text
+frameworks-backup-20260919T101500Z/
+  postgres/purser/pre-data.sql.gz
+  postgres/purser/data.sql.gz
+  postgres/purser/post-data.sql.gz
+  support/chatwoot/...
+  clickhouse/periscope/api_requests.tsv.gz
+  ...
+  manifest.json          (written last)
+```
+
+`manifest.json` records, for every database, the size and SHA-256 of each file, the owner, locale and
+database-level grants, the migration ledger rows and their digest, and the row count of every table as
+counted from the dump itself. For ClickHouse it records the columns and dumped row count of every table
+and the ledger digest. A backup directory without `manifest.json` is incomplete.
+
+Check a backup at any time:
+
+```bash
+frameworks cluster backup verify --from /var/backups/frameworks/frameworks-backup-20260919T101500Z
+```
+
+## The migration gate
+
+Two operations change data in ways that redeploying the previous release does not undo. They refuse to
+run without a backup:
+
+- **Contract migrations**: `frameworks cluster migrate --phase contract`, including `--dry-run`, when
+  any contract migration is pending. With nothing pending, no backup is asked for.
+- **Irreversible data migrations**: `frameworks cluster data-migrate run <service>.<id>`, except with
+  `--dry-run`, which runs inside a read-only transaction. A data migration is irreversible when the
+  release that declares it lists its service under `rollback_disabled`, when the service binary marks it
+  irreversible, or when the binary does not report the field.
+
+Pass the backup with `--backup <dir|s3-url>`. It is accepted only when:
+
+1. its manifest and the files of the affected databases verify,
+2. it started at most one hour ago, and
+3. every database the operation changes still has the migration ledger digest the backup recorded, so
+   no migration ran after the backup.
+
+The one-hour limit is fixed. Nothing is written to the database; the gate only reads.
+
+```bash
+frameworks cluster backup create --to /var/backups/frameworks --all
+frameworks cluster migrate --phase contract --to-version v0.3.11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
+frameworks cluster data-migrate run purser.purser_eur_ledger_conversion_v0_3_11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
+```
+
+`cluster release apply` does not require a backup.
+
+## Restoring
+
+1. Restore the databases you need:
+
+   ```bash
+   frameworks cluster restore --from /var/backups/frameworks/frameworks-backup-20260919T101500Z --database purser
+   ```
+
+   The command verifies the manifest and every file hash first. It then restores each database into
+   `<name>__restore` next to the live database and compares it with the manifest: the ledger digest and
+   the row count of every table must match. It refuses a backup below the schema migration floor, and a
+   Foghorn cell database whose cell storage identity differs from the live cell. Up to here the live
+   database is untouched.
+
+2. After you confirm, the CLI stops the services that use the restored databases (with each service's
+   Ansible role), renames the live database to `<name>__prerestore`, renames the restored copy into its
+   place, starts the services again and waits for them to validate. If a step fails, the services it
+   stopped are started again.
+
+3. The command lists the migrations that ran after the backup. They are no longer applied; re-apply them
+   with `frameworks cluster migrate --phase expand` and then `--phase postdeploy`.
+
+4. Once the restored data is confirmed, drop the previous copies:
+
+   ```bash
+   frameworks cluster restore finish --database purser
+   ```
+
+   Or put the previous databases back instead:
+
+   ```bash
+   frameworks cluster restore rollback --database purser
+   ```
+
+A restored database is unavailable to its services from the moment they stop until they validate again.
+Plan the restore of a large database accordingly.
+
+### ClickHouse facts
+
+`--clickhouse` (or `--all`) loads each fact table into `<table>__restore`, checks the loaded row count,
+and then replaces the live table's rows partition by partition. The live table keeps its identity, so the
+materialized views that read it keep working and are not fed a second time. The previous rows stay in
+`<table>__prerestore` until `restore finish` or `restore rollback`. The periscope services are stopped
+during the swap without removing their systemd units or Compose containers.
+
+The rollback copy is first built as `<table>__prerestore_building`. Only after its row count and content
+fingerprint match the live table is it atomically renamed to `<table>__prerestore`. A failed or
+interrupted preparation is never accepted as a rollback source and leaves that live table untouched.
+After rolling back any tables already swapped, `restore finish` removes the preparation tables so a
+fresh restore can be attempted.
+
+- Fact rows written after the backup started are not in the restored tables. The periscope-ingest
+  consumers resume from their committed Kafka offsets, so those rows are not replayed.
+- The ClickHouse schema is not restored. Every column in the backup must still exist in the live table.
+- Restoring ClickHouse is supported on a single-node cluster only.
+
+## Limits
+
+- A restore replaces whole databases; there is no point-in-time or single-table restore.
+- On YugabyteDB, the sessions the CLI ends before the rename are those on the node it runs on. The
+  services that use the database are stopped first, so no other session is expected; a remaining one
+  fails the rename, and the live database stays in place.
+- Object storage is not versioned or copied by this command. A restored Foghorn database can reference
+  objects that were deleted after the backup.

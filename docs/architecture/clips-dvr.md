@@ -97,17 +97,42 @@ Gateway handles this as:
 
 ```graphql
 subscription {
-  liveClipLifecycle(streamId: "stream-id-here") {
-    clipHash
-    stage
-    progressPercent
-    sizeBytes
-    error
+  tenantEvents(
+    types: ["clip.ready", "clip.failed", "recording.ready"]
+    streamId: "stream-id-here"
+  ) {
+    id
+    type
+    time
+    data {
+      ... on ClipReady {
+        artifact {
+          artifactId
+          playbackId
+        }
+        sizeBytes
+      }
+      ... on ClipFailed {
+        artifact {
+          artifactId
+        }
+        reason
+      }
+      ... on RecordingReady {
+        artifact {
+          artifactId
+        }
+        durationMs
+      }
+    }
   }
 }
 ```
 
-Gateway → Signalman → Kafka events → Frontend
+Foghorn `domain.events` (public clip/recording/upload types) → Signalman `CHANNEL_EVENTS` →
+Bridge `tenantEvents` (type and stream filters) → Frontend. Public events carry no progress, file
+paths, storage URLs, or node IDs; queued/processing progress is read from the artifact catalog and
+`vodUploadStatus`.
 
 ### Mutations (Create/Delete)
 
@@ -549,7 +574,8 @@ artifact_type = 'vod'
 
 ### Signalman (api_realtime) - Real-time Events
 
-- `api_realtime/internal/grpc` - WebSocket subscriptions for liveClipLifecycle, liveDvrLifecycle
+- `api_realtime/cmd/signalman/domain_events.go` - public clip/recording/upload events onto `CHANNEL_EVENTS`
+- `api_gateway/internal/resolvers/tenant_events.go` - the `tenantEvents` subscription and its filters
 
 ### Analytics Ingest (api_analytics_ingest)
 
@@ -559,5 +585,5 @@ artifact_type = 'vod'
 
 - `pkg/graphql/operations/queries/GetStorageArtifactsConnection.gql` - unified catalog query
   (all kinds) with durable lifecycle + duration + tracks
-- `pkg/graphql/operations/subscriptions/ClipLifecycle.gql` - Real-time updates
-- `pkg/graphql/operations/subscriptions/DvrLifecycle.gql` - Real-time updates
+- `pkg/graphql/operations/subscriptions/TenantEvents.gql` - Real-time public events (the library
+  listens with the clip, recording, and upload types)

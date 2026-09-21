@@ -5,7 +5,36 @@
 1. Clone: `git clone https://github.com/Livepeer-FrameWorks/monorepo.git`
 2. Copy secrets: `cp config/env/secrets.env.example config/env/secrets.env`
 3. Generate env: `make env`
-4. Start stack: `docker-compose up`
+4. Stage the media edge: `make edge-dev-dist` (needs Go and network access to the MistServer and Caddy release assets)
+5. Start the stack: `docker compose up --build`
+
+### Starting part of the stack
+
+Services without a profile form the control plane: databases, Kafka, the Go services, the web apps and nginx.
+Compose profiles add the rest. The generated `.env` sets `COMPOSE_PROFILES=edge` and lists the presets below as
+comments; change that line, or set `COMPOSE_PROFILES` in your shell, to start a different slice.
+
+| Preset                           | Starts                                                                           |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| `COMPOSE_PROFILES=`              | Control plane only                                                               |
+| `COMPOSE_PROFILES=edge`          | Control plane and the media edge (default)                                       |
+| `COMPOSE_PROFILES=edge,support`  | Also Chatwoot and Listmonk                                                       |
+| `COMPOSE_PROFILES=edge,two-cell` | Also a second media cell (`foghorn-b`, `edge-b`); see `infrastructure/two-cell/` |
+| `COMPOSE_PROFILES=llm`           | Control plane and a local Ollama runtime                                         |
+
+- **Edge.** The `edge` service runs the production edge bundle (Caddy, MistServer and Helmsman under s6-overlay)
+  built from `edge/Dockerfile` as `frameworks-edge:dev`. `make edge-dev-dist` stages Helmsman from your working tree
+  and pinned MistServer and Caddy releases into `edge/dist/`. After changing Helmsman, run it again, then
+  `docker compose up --build edge`. To test a local MistServer build, pass an install-tree tarball:
+  `make edge-dev-dist EDGE_DEV_MIST_TAR=/path/to/mistserver.tar.gz` (`scripts/verify-mist-current-source.sh` writes one
+  when `MIST_INSTALL_TREE_OUT` is set). nginx routes `/view/`, `/hls/`, `/webrtc/` and `/mist/` to the edge; RTMP
+  (1935), SRT (8889/udp), RTSP (5554), DTSC (4200), WebRTC (18203/udp), Mist HTTP (8080) and the controller (4242)
+  are published on the host.
+- **Without the edge or support services.** nginx resolves upstreams per request, so their routes answer with the
+  maintenance page. Deckhand, Commodore and Steward start without Chatwoot and Listmonk; they only call them while
+  handling a support webhook or a newsletter subscription.
+- `make verify-compose-profiles` runs `docker compose config` for every preset; CI runs it when the compose file or
+  env generation changes.
 
 ## Code Style
 

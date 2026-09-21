@@ -13,29 +13,31 @@
 
 ## Where to Find Context
 
-| Area                            | Location                                   |
-| ------------------------------- | ------------------------------------------ |
-| Architecture, services, ports   | `README.md`                                |
-| Analytics pipeline, event types | `docs/architecture/analytics-pipeline.md`  |
-| Artifact processing pipeline    | `docs/architecture/processing-pipeline.md` |
-| Service events backbone         | `docs/architecture/service-events.md`      |
-| Multiregion topology            | `docs/architecture/multiregion.md`         |
-| Viewer routing algorithm        | `docs/architecture/viewer-routing.md`      |
-| TLS and service identity        | `docs/architecture/tls.md`                 |
-| Agent/wallet/x402/MCP           | `docs/architecture/agent-access.md`        |
-| Multistreaming / push targets   | `docs/architecture/multistreaming.md`      |
-| Lookout incidents & alerting    | `docs/architecture/lookout.md`             |
-| OS tuning & cluster os update   | `docs/architecture/os-tuning.md`           |
-| UI design system                | `docs/standards/design-system.md`          |
-| Metrics naming/units            | `docs/standards/metrics.md`                |
-| Code comments policy            | `docs/standards/code-comments.md`          |
-| Schema migrations & baseline    | `docs/standards/schema-migrations.md`      |
-| Release catalog & upgrade gates | `cli/internal/releases/catalog.yaml`       |
-| Release notes & operator steps  | `docs/standards/release-notes.md`          |
-| Deployment & ops                | `website_docs/src/content/docs/operators/` |
-| Dev runtime                     | `docker-compose.yml`                       |
-| Release pipeline                | `.github/workflows/release.yml`            |
-| Workflows, Svelte 5 patterns    | `CONTRIBUTING.md`                          |
+| Area                             | Location                                                       |
+| -------------------------------- | -------------------------------------------------------------- |
+| Architecture, services, ports    | `README.md`                                                    |
+| Analytics pipeline, event types  | `docs/architecture/analytics-pipeline.md`                      |
+| Artifact processing pipeline     | `docs/architecture/processing-pipeline.md`                     |
+| Service events backbone          | `docs/architecture/service-events.md`                          |
+| Multiregion topology             | `docs/architecture/multiregion.md`                             |
+| Viewer routing algorithm         | `docs/architecture/viewer-routing.md`                          |
+| TLS and service identity         | `docs/architecture/tls.md`                                     |
+| Agent/wallet/x402/MCP            | `docs/architecture/agent-access.md`                            |
+| Multistreaming / push targets    | `docs/architecture/multistreaming.md`                          |
+| Lookout incidents & alerting     | `docs/architecture/lookout.md`                                 |
+| Bosun outbound webhooks          | `docs/architecture/bosun.md`                                   |
+| Public events & webhook contract | `website_docs/src/content/docs/builders/{events,webhooks}.mdx` |
+| OS tuning & cluster os update    | `docs/architecture/os-tuning.md`                               |
+| UI design system                 | `docs/standards/design-system.md`                              |
+| Metrics naming/units             | `docs/standards/metrics.md`                                    |
+| Code comments policy             | `docs/standards/code-comments.md`                              |
+| Schema migrations & baseline     | `docs/standards/schema-migrations.md`                          |
+| Release catalog & upgrade gates  | `cli/internal/releases/catalog.yaml`                           |
+| Release notes & operator steps   | `docs/standards/release-notes.md`                              |
+| Deployment & ops                 | `website_docs/src/content/docs/operators/`                     |
+| Dev runtime                      | `docker-compose.yml`                                           |
+| Release pipeline                 | `.github/workflows/release.yml`                                |
+| Workflows, Svelte 5 patterns     | `CONTRIBUTING.md`                                              |
 
 ## Code Style
 

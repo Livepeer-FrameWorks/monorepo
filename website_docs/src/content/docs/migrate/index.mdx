@@ -93,9 +93,10 @@ Regardless of where you're coming from, the moves are the same:
 A few things differ from most peers, so we surface them once here instead of repeating them in every guide:
 
 - **GraphQL-first API.** REST is used for auth, webhook ingress, and playback URLs only. The application surface is GraphQL — query, mutation, and subscription. Codegen against the public schema is the recommended path; Houdini, urql, and Apollo all work.
-- **Subscriptions instead of outbound webhooks.** Real-time events flow over GraphQL subscriptions
-  today. Outbound HTTP callbacks are on the roadmap, but subscriptions are the supported event
-  surface for current migrations.
+- **Webhooks and subscriptions share one event catalog.** The public events (streams, clips,
+  recordings, uploads, multistream targets, billing, account) arrive as Standard Webhooks-signed
+  [webhooks](/builders/webhooks) or live over the `tenantEvents` subscription, with the same
+  payloads. High-volume telemetry such as viewer connections stays subscription-only.
 - **Wallet auth + x402 for agents.** Autonomous callers don't need an account. Sign with an EVM wallet (EIP-191) or attach a gasless USDC payment (EIP-3009) and go. See [Agent Access](/agents/overview).
 - **Managed hybrid edges.** You can run MistServer and Helmsman edge nodes on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane.
 - **Skipper.** The in-product AI consultant runs diagnostics (rebuffering, packet loss, routing), explains the API, and is reachable from the dashboard, the docs (`⌘J`), or via MCP. Treat it as a first-line support channel.

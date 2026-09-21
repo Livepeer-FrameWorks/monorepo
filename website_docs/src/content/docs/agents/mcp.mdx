@@ -103,7 +103,7 @@ discovery.
 
 | URI                                         | Description                                             |
 | ------------------------------------------- | ------------------------------------------------------- |
-| `account://status`                          | Account status, blockers, and capabilities              |
+| `account://status`                          | Account status, blockers, tool access, and capabilities |
 | `billing://balance`                         | Prepaid balance, drain rate, estimated hours left       |
 | `billing://pricing`                         | Canonical meter catalog and effective tier rules        |
 | `billing://transactions`                    | Recent balance transactions                             |
@@ -146,10 +146,37 @@ Always read this first. Returns:
   "rated_work_ready": true,
   "next_actions": [],
   "blockers": [],
-  "capabilities": {
+  "tool_access": {
     "create_stream": true,
     "create_clip": true,
     "read_analytics": true
+  },
+  "server_info": {
+    "version": "v0.3.11",
+    "features": ["clips", "dvr-recordings", "viewer-protocol-selection"]
+  },
+  "capabilities": {
+    "tenant": {
+      "platform_operator": false,
+      "recording_retention_capped": true,
+      "recording_retention_max_days": 30,
+      "processing_customizable": false,
+      "custom_subdomain": true,
+      "custom_domain": false
+    },
+    "clusters": [
+      {
+        "cluster_id": "eu-central",
+        "cluster_name": "EU Central",
+        "role": "preferred",
+        "access_level": "shared",
+        "ingest": true,
+        "playback": true,
+        "storage": true,
+        "processing": false
+      }
+    ],
+    "observed_at": "2026-09-18T09:00:00Z"
   },
   "billing": {
     "model": "prepaid",
@@ -172,6 +199,12 @@ does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
 
+`tool_access` says which MCP tools this account may call right now. `capabilities`
+says which platform gates are open for the tenant, read from the services that
+enforce them and cached for 30 seconds; a section whose source is unavailable is
+omitted and named under `unavailable` rather than guessed. `server_info` is the
+release and the shipped feature slugs, readable without authentication.
+
 ### Billing and usage resources
 
 `billing://pricing` returns every active canonical meter, including meters that
@@ -192,103 +225,117 @@ email, and operator settlement.
 
 Actions the agent can perform.
 
-| Tool                                  | Description                                        | Requires                                                                              |
-| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `get_media_placement_policy`          | Read saved/effective policy and rollout            | Auth + placement:read                                                                 |
-| `get_media_placement_options`         | Page through authorized placement selectors        | Auth + placement:read                                                                 |
-| `preview_media_placement`             | Preview saved or draft routing; not a reservation  | Auth + placement:read                                                                 |
-| `review_media_placement_change`       | Review exact policy updates without applying       | Owner/Admin + placement:write                                                         |
-| `apply_media_placement_change`        | Apply a reviewed, idempotent policy change         | Owner/Admin + placement:write; API tokens also need mcp:high-risk                     |
-| `get_media_placement_change`          | Recover a change with its original idempotency key | Auth + placement:read                                                                 |
-| `get_cluster_media_consent`           | Read cluster-owner media consent                   | Auth + placement:read + cluster ownership                                             |
-| `review_cluster_media_consent_change` | Review owner consent without applying              | Owner/Admin + placement:write + cluster ownership                                     |
-| `apply_cluster_media_consent_change`  | Apply reviewed, idempotent owner consent           | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
-| `get_cluster_media_consent_change`    | Recover an owner-consent change                    | Auth + placement:read + cluster ownership                                             |
-| `request_wallet_challenge`            | Request a single-use EIP-191 login/link challenge  | None                                                                                  |
-| `list_linked_wallets`                 | List wallets linked to the authenticated user      | Auth                                                                                  |
-| `link_wallet`                         | Link a wallet using a fresh signed challenge       | Auth                                                                                  |
-| `unlink_wallet`                       | Unlink a wallet while retaining a sign-in method   | Auth                                                                                  |
-| `link_email`                          | Add email/password and send verification           | Auth                                                                                  |
-| `activate_free_tier`                  | Activate Free after email verification             | Auth                                                                                  |
-| `get_tenant_settings`                 | Read tenant identity and routing settings          | Auth                                                                                  |
-| `update_tenant_settings`              | Update tenant name, primary cluster, or model      | Owner/Admin                                                                           |
-| `update_billing_details`              | Set billing address                                | Auth                                                                                  |
-| `get_payment_options`                 | Get tenant-bound x402 payment options              | Auth                                                                                  |
-| `submit_payment`                      | Submit an x402 top-up payment                      | Auth                                                                                  |
-| `topup_balance`                       | Request ETH or USDC deposit address (locked rate)  | Auth                                                                                  |
-| `check_topup`                         | Check crypto payment status                        | Auth                                                                                  |
-| `pay_invoice`                         | Create or resume an invoice payment                | Auth + Billing                                                                        |
-| `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup       | Auth + Billing                                                                        |
-| `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid        | Auth + Billing                                                                        |
-| `create_stream`                       | Create a push or pull stream                       | Auth                                                                                  |
-| `update_stream`                       | Update stream settings or pull-source config       | Auth                                                                                  |
-| `delete_stream`                       | Delete a stream                                    | Auth + Confirm                                                                        |
-| `list_stream_keys`                    | List push-stream ingest keys                       | Auth                                                                                  |
-| `create_stream_key`                   | Create an additional push-stream ingest key        | Auth + Confirm                                                                        |
-| `delete_stream_key`                   | Deactivate a push-stream ingest key                | Auth + Confirm                                                                        |
-| `refresh_stream_key`                  | Rotate a push stream's primary key                 | Auth + Confirm                                                                        |
-| `validate_stream_key`                 | Validate an ingest key                             | Auth                                                                                  |
-| `list_push_targets`                   | List masked multistream destinations               | Auth                                                                                  |
-| `create_push_target`                  | Add a multistream destination                      | Auth                                                                                  |
-| `update_push_target`                  | Update or enable a multistream destination         | Auth                                                                                  |
-| `delete_push_target`                  | Delete a multistream destination                   | Auth                                                                                  |
-| `create_clip`                         | Create clip from stream                            | Auth + Balance                                                                        |
-| `delete_clip`                         | Delete a clip                                      | Auth                                                                                  |
-| `start_dvr`                           | Start DVR recording                                | Auth + Balance                                                                        |
-| `stop_dvr`                            | Stop DVR recording                                 | Auth                                                                                  |
-| `delete_dvr`                          | Delete a DVR recording and stored media            | Auth + Confirm                                                                        |
-| `get_retention_policy`                | Read tenant media-retention defaults and bounds    | Auth                                                                                  |
-| `set_retention_policy`                | Set tenant media-retention defaults                | Owner/Admin + Billing                                                                 |
-| `set_stream_retention_overrides`      | Set DVR/clip retention overrides for a stream      | Owner/Admin + Billing                                                                 |
-| `update_asset_retention`              | Override retention for DVR, clip, or VOD           | Owner/Admin + Billing                                                                 |
-| `reset_asset_retention`               | Reset asset retention to the cascade default       | Owner/Admin + Billing + Confirm                                                       |
-| `create_vod_upload`                   | Start a VOD upload                                 | Auth + Balance                                                                        |
-| `get_vod_upload_status`               | Inspect uploaded and missing VOD parts             | Auth                                                                                  |
-| `complete_vod_upload`                 | Finalize a VOD upload                              | Auth + Balance                                                                        |
-| `abort_vod_upload`                    | Cancel an upload                                   | Auth                                                                                  |
-| `delete_vod_asset`                    | Delete a VOD asset                                 | Auth + Confirm                                                                        |
-| `resolve_playback_endpoint`           | Get viewer playback URLs                           | None                                                                                  |
-| `list_signing_keys`                   | List playback signing keys                         | Auth                                                                                  |
-| `create_signing_key`                  | Create a one-shot ES256 private key                | Auth + Confirm                                                                        |
-| `revoke_signing_key`                  | Revoke a playback signing key                      | Auth + Confirm                                                                        |
-| `set_playback_policy`                 | Set JWT or webhook playback policy                 | Auth + Confirm                                                                        |
-| `clear_playback_policy`               | Clear playback policy                              | Auth + Confirm                                                                        |
-| `test_playback_access`                | Test JWT/webhook playback policy behavior          | Auth                                                                                  |
-| `diagnose_rebuffering`                | Analyze rebuffering events                         | Auth                                                                                  |
-| `diagnose_buffer_health`              | Analyze buffer health and dry events               | Auth                                                                                  |
-| `diagnose_packet_loss`                | Analyze packet loss (protocol-aware)               | Auth                                                                                  |
-| `diagnose_routing`                    | Analyze CDN routing decisions                      | Auth                                                                                  |
-| `get_stream_health_summary`           | Aggregated stream health metrics                   | Auth                                                                                  |
-| `get_anomaly_report`                  | Detect anomalies vs baseline                       | Auth                                                                                  |
-| `list_support_conversations`          | List recent support conversations                  | Auth                                                                                  |
-| `search_support_history`              | Search support conversations                       | Auth                                                                                  |
-| `introspect_schema`                   | Explore the GraphQL schema                         | Auth                                                                                  |
-| `generate_query`                      | Generate a GraphQL query from templates            | Auth                                                                                  |
-| `execute_query`                       | Execute a GraphQL query                            | Auth + Balance                                                                        |
-| `ask_consultant`                      | Full Skipper pipeline with confidence tagging      | Auth + Balance                                                                        |
-| `browse_marketplace`                  | Browse available infrastructure clusters           | None                                                                                  |
-| `subscribe_to_cluster`                | Subscribe to a cluster                             | Owner/Admin + Infrastructure                                                          |
-| `unsubscribe_from_cluster`            | Remove a cluster subscription                      | Owner/Admin + Infrastructure + Confirm                                                |
-| `create_cluster_invite`               | Invite a tenant to subscribe to an owned cluster   | Owner/Admin + Infrastructure                                                          |
-| `revoke_cluster_invite`               | Revoke an outstanding cluster invite               | Owner/Admin + Infrastructure                                                          |
-| `accept_cluster_invite`               | Redeem a cluster invite                            | Owner/Admin + Infrastructure                                                          |
-| `request_cluster_subscription`        | Request access to a cluster                        | Owner/Admin + Infrastructure                                                          |
-| `approve_subscription_request`        | Approve a pending cluster subscription             | Owner/Admin + Infrastructure                                                          |
-| `reject_subscription_request`         | Reject a pending cluster subscription              | Owner/Admin + Infrastructure                                                          |
-| `set_preferred_cluster`               | Set preferred cluster for DNS steering             | Owner/Admin + Settings                                                                |
-| `update_cluster_marketplace`          | Update cluster visibility, approval, or pricing    | Owner/Admin + Infrastructure + Confirm                                                |
-| `create_enrollment_token`             | Create an enrollment token for edge bootstrap      | Owner/Admin + Infrastructure                                                          |
-| `get_node_info`                       | Fetch node details                                 | Owner/Admin + Infrastructure                                                          |
-| `manage_node`                         | Activate/deactivate/drain/restart a node           | Owner/Admin + Infrastructure                                                          |
-| `set_node_mode`                       | Set node mode (normal/draining/maintenance)        | Owner/Admin + Infrastructure                                                          |
-| `get_node_health`                     | Node health and metrics summary                    | Owner/Admin + Infrastructure                                                          |
-| `list_incidents`                      | Incidents on clusters the tenant owns              | Owner/Admin + Infrastructure                                                          |
-| `get_incident`                        | One incident with alerts and timeline              | Owner/Admin + Infrastructure                                                          |
-| `acknowledge_incident`                | Acknowledge a firing incident                      | Owner/Admin + Infrastructure                                                          |
-| `assign_incident`                     | Assign an incident to yourself, or unassign it     | Owner/Admin + Infrastructure                                                          |
-| `resolve_incident`                    | Resolve an incident manually                       | Owner/Admin + Infrastructure                                                          |
-| `add_incident_note`                   | Add a note to an incident timeline                 | Owner/Admin + Infrastructure                                                          |
-| `create_edge_cluster`                 | Create edge cluster (returns token and Foghorn)    | Owner/Admin + Infrastructure                                                          |
+| Tool                                  | Description                                                | Requires                                                                              |
+| ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `get_media_placement_policy`          | Read saved/effective policy and rollout                    | Auth + placement:read                                                                 |
+| `get_media_placement_options`         | Page through authorized placement selectors                | Auth + placement:read                                                                 |
+| `preview_media_placement`             | Preview saved or draft routing; not a reservation          | Auth + placement:read                                                                 |
+| `review_media_placement_change`       | Review exact policy updates without applying               | Owner/Admin + placement:write                                                         |
+| `apply_media_placement_change`        | Apply a reviewed, idempotent policy change                 | Owner/Admin + placement:write; API tokens also need mcp:high-risk                     |
+| `get_media_placement_change`          | Recover a change with its original idempotency key         | Auth + placement:read                                                                 |
+| `get_cluster_media_consent`           | Read cluster-owner media consent                           | Auth + placement:read + cluster ownership                                             |
+| `review_cluster_media_consent_change` | Review owner consent without applying                      | Owner/Admin + placement:write + cluster ownership                                     |
+| `apply_cluster_media_consent_change`  | Apply reviewed, idempotent owner consent                   | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
+| `get_cluster_media_consent_change`    | Recover an owner-consent change                            | Auth + placement:read + cluster ownership                                             |
+| `request_wallet_challenge`            | Request a single-use EIP-191 login/link challenge          | None                                                                                  |
+| `list_linked_wallets`                 | List wallets linked to the authenticated user              | Auth                                                                                  |
+| `link_wallet`                         | Link a wallet using a fresh signed challenge               | Auth                                                                                  |
+| `unlink_wallet`                       | Unlink a wallet while retaining a sign-in method           | Auth                                                                                  |
+| `link_email`                          | Add email/password and send verification                   | Auth                                                                                  |
+| `activate_free_tier`                  | Activate Free after email verification                     | Auth                                                                                  |
+| `get_tenant_settings`                 | Read tenant identity and routing settings                  | Auth                                                                                  |
+| `update_tenant_settings`              | Update tenant name, primary cluster, or model              | Owner/Admin                                                                           |
+| `update_billing_details`              | Set billing address                                        | Auth                                                                                  |
+| `get_payment_options`                 | Get tenant-bound x402 payment options                      | Auth                                                                                  |
+| `submit_payment`                      | Submit an x402 top-up payment                              | Auth                                                                                  |
+| `topup_balance`                       | Request ETH or USDC deposit address (locked rate)          | Auth                                                                                  |
+| `check_topup`                         | Check crypto payment status                                | Auth                                                                                  |
+| `pay_invoice`                         | Create or resume an invoice payment                        | Auth + Billing                                                                        |
+| `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup               | Auth + Billing                                                                        |
+| `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid                | Auth + Billing                                                                        |
+| `create_stream`                       | Create a push or pull stream                               | Auth                                                                                  |
+| `update_stream`                       | Update stream settings or pull-source config               | Auth                                                                                  |
+| `delete_stream`                       | Delete a stream                                            | Auth + Confirm                                                                        |
+| `list_stream_keys`                    | List push-stream ingest keys                               | Auth                                                                                  |
+| `create_stream_key`                   | Create an additional push-stream ingest key                | Auth + Confirm                                                                        |
+| `delete_stream_key`                   | Deactivate a push-stream ingest key                        | Auth + Confirm                                                                        |
+| `refresh_stream_key`                  | Rotate a push stream's primary key                         | Auth + Confirm                                                                        |
+| `validate_stream_key`                 | Validate an ingest key                                     | Auth                                                                                  |
+| `list_push_targets`                   | List masked multistream destinations                       | Auth                                                                                  |
+| `create_push_target`                  | Add a multistream destination                              | Auth                                                                                  |
+| `update_push_target`                  | Update or enable a multistream destination                 | Auth                                                                                  |
+| `delete_push_target`                  | Delete a multistream destination                           | Auth                                                                                  |
+| `create_clip`                         | Create clip from stream                                    | Auth + Balance                                                                        |
+| `delete_clip`                         | Delete a clip                                              | Auth                                                                                  |
+| `start_dvr`                           | Start DVR recording                                        | Auth + Balance                                                                        |
+| `stop_dvr`                            | Stop DVR recording                                         | Auth                                                                                  |
+| `delete_dvr`                          | Delete a DVR recording and stored media                    | Auth + Confirm                                                                        |
+| `get_retention_policy`                | Read tenant media-retention defaults and bounds            | Auth                                                                                  |
+| `set_retention_policy`                | Set tenant media-retention defaults                        | Owner/Admin + Billing                                                                 |
+| `set_stream_retention_overrides`      | Set DVR/clip retention overrides for a stream              | Owner/Admin + Billing                                                                 |
+| `update_asset_retention`              | Override retention for DVR, clip, or VOD                   | Owner/Admin + Billing                                                                 |
+| `reset_asset_retention`               | Reset asset retention to the cascade default               | Owner/Admin + Billing + Confirm                                                       |
+| `create_vod_upload`                   | Start a VOD upload                                         | Auth + Balance                                                                        |
+| `get_vod_upload_status`               | Inspect uploaded and missing VOD parts                     | Auth                                                                                  |
+| `complete_vod_upload`                 | Finalize a VOD upload                                      | Auth + Balance                                                                        |
+| `abort_vod_upload`                    | Cancel an upload                                           | Auth                                                                                  |
+| `delete_vod_asset`                    | Delete a VOD asset                                         | Auth + Confirm                                                                        |
+| `resolve_playback_endpoint`           | Get viewer playback URLs                                   | None                                                                                  |
+| `list_signing_keys`                   | List playback signing keys                                 | Auth                                                                                  |
+| `create_signing_key`                  | Create a one-shot ES256 private key                        | Auth + Confirm                                                                        |
+| `revoke_signing_key`                  | Revoke a playback signing key                              | Auth + Confirm                                                                        |
+| `set_playback_policy`                 | Set JWT or webhook playback policy                         | Auth + Confirm                                                                        |
+| `clear_playback_policy`               | Clear playback policy                                      | Auth + Confirm                                                                        |
+| `test_playback_access`                | Test JWT/webhook playback policy behavior                  | Auth                                                                                  |
+| `diagnose_rebuffering`                | Analyze rebuffering events                                 | Auth                                                                                  |
+| `diagnose_buffer_health`              | Analyze buffer health and dry events                       | Auth                                                                                  |
+| `diagnose_packet_loss`                | Analyze packet loss (protocol-aware)                       | Auth                                                                                  |
+| `diagnose_routing`                    | Analyze CDN routing decisions                              | Auth                                                                                  |
+| `get_stream_health_summary`           | Aggregated stream health metrics                           | Auth                                                                                  |
+| `get_anomaly_report`                  | Detect anomalies vs baseline                               | Auth                                                                                  |
+| `list_support_conversations`          | List recent support conversations                          | Auth                                                                                  |
+| `search_support_history`              | Search support conversations                               | Auth                                                                                  |
+| `introspect_schema`                   | Explore the GraphQL schema                                 | Auth                                                                                  |
+| `generate_query`                      | Generate a GraphQL query from templates                    | Auth                                                                                  |
+| `execute_query`                       | Execute a GraphQL query                                    | Auth + Balance                                                                        |
+| `ask_consultant`                      | Full Skipper pipeline with confidence tagging              | Auth + Balance                                                                        |
+| `browse_marketplace`                  | Browse available infrastructure clusters                   | None                                                                                  |
+| `subscribe_to_cluster`                | Subscribe to a cluster                                     | Owner/Admin + Infrastructure                                                          |
+| `unsubscribe_from_cluster`            | Remove a cluster subscription                              | Owner/Admin + Infrastructure + Confirm                                                |
+| `create_cluster_invite`               | Invite a tenant to subscribe to an owned cluster           | Owner/Admin + Infrastructure                                                          |
+| `revoke_cluster_invite`               | Revoke an outstanding cluster invite                       | Owner/Admin + Infrastructure                                                          |
+| `accept_cluster_invite`               | Redeem a cluster invite                                    | Owner/Admin + Infrastructure                                                          |
+| `request_cluster_subscription`        | Request access to a cluster                                | Owner/Admin + Infrastructure                                                          |
+| `approve_subscription_request`        | Approve a pending cluster subscription                     | Owner/Admin + Infrastructure                                                          |
+| `reject_subscription_request`         | Reject a pending cluster subscription                      | Owner/Admin + Infrastructure                                                          |
+| `set_preferred_cluster`               | Set preferred cluster for DNS steering                     | Owner/Admin + Settings                                                                |
+| `update_cluster_marketplace`          | Update cluster visibility, approval, or pricing            | Owner/Admin + Infrastructure + Confirm                                                |
+| `create_enrollment_token`             | Create an enrollment token for edge bootstrap              | Owner/Admin + Infrastructure                                                          |
+| `get_node_info`                       | Fetch node details                                         | Owner/Admin + Infrastructure                                                          |
+| `manage_node`                         | Activate/deactivate/drain/restart a node                   | Owner/Admin + Infrastructure                                                          |
+| `set_node_mode`                       | Set node mode (normal/draining/maintenance)                | Owner/Admin + Infrastructure                                                          |
+| `get_node_health`                     | Node health and metrics summary                            | Owner/Admin + Infrastructure                                                          |
+| `list_incidents`                      | Incidents on clusters the tenant owns                      | Owner/Admin + Infrastructure                                                          |
+| `get_incident`                        | One incident with alerts and timeline                      | Owner/Admin + Infrastructure                                                          |
+| `acknowledge_incident`                | Acknowledge a firing incident                              | Owner/Admin + Infrastructure                                                          |
+| `assign_incident`                     | Assign an incident to yourself, or unassign it             | Owner/Admin + Infrastructure                                                          |
+| `resolve_incident`                    | Resolve an incident manually                               | Owner/Admin + Infrastructure                                                          |
+| `add_incident_note`                   | Add a note to an incident timeline                         | Owner/Admin + Infrastructure                                                          |
+| `list_webhook_endpoints`              | Webhook endpoints with status and failure counters         | Auth + developer:read                                                                 |
+| `get_webhook_endpoint`                | One webhook endpoint (never its secret)                    | Auth + developer:read                                                                 |
+| `list_webhook_deliveries`             | Delivery log with endpoint, status, type, and time filters | Auth + developer:read                                                                 |
+| `get_webhook_delivery`                | One delivery with every HTTP attempt                       | Auth + developer:read                                                                 |
+| `list_webhook_event_types`            | Public event types an endpoint can subscribe to            | Auth + developer:read                                                                 |
+| `create_webhook_endpoint`             | Create an endpoint; returns the signing secret once        | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `update_webhook_endpoint`             | Change an endpoint's URL, description, or types            | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `delete_webhook_endpoint`             | Delete an endpoint with its secrets and log                | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `enable_webhook_endpoint`             | Enable a disabled endpoint                                 | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `disable_webhook_endpoint`            | Disable an endpoint and skip its pending deliveries        | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `rotate_webhook_secret`               | Replace the signing secret; returns it once                | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `test_webhook_endpoint`               | Send a signed webhook.test event                           | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `replay_webhook_delivery`             | Send one finished delivery again under its ID              | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `replay_webhook_deliveries`           | Replay failed and skipped deliveries in a range            | Owner/Admin + developer:write + Confirm; API tokens also need mcp:high-risk           |
+| `create_edge_cluster`                 | Create edge cluster (returns token and Foghorn)            | Owner/Admin + Infrastructure                                                          |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`
@@ -338,18 +385,21 @@ never a login credential.
 
 **topup_balance**
 
-- `amount_cents` (required): Target credit amount in tenant currency cents (USD or EUR)
+- `amount_cents` (required): Amount in cents of the tenant's presentment currency (EUR, USD, or GBP, derived from the billing country)
 - `asset`: `USDC` (default) or `ETH`. LPT is reserved but currently rejected (no Chainlink LPT/USD feed).
 
 Response is a locked-rate quote: `token_amount` (send exactly this much), `price_usd`
 (locked at issue time via Chainlink for ETH; 1:1 for USDC), `quote_source`
 (`chainlink` or `one_to_one`), `network` (defaults to Arbitrum), and an
-`expires_at` 24h out. The balance credit at confirmation is `received × locked_price`,
-so you get exactly the quoted amount regardless of price drift inside the TTL.
+`expires_at` 24h out. `currency` and `conversion` state the presentment amount and
+the EUR credit it converts to: `original_amount_cents`, `original_currency`,
+`eur_amount_cents`, `units_per_eur`, `rate_source`, and the ECB `reference_date`.
+The prepaid balance is always EUR, and confirmation credits the EUR amount locked
+with the quote regardless of price or exchange-rate drift inside the TTL.
 
 `check_topup` returns `status` of `pending | confirming | completed | expired`,
-plus `tx_hash`, `confirmations`, and on completion `credited_cents` /
-`credited_currency` (USD or EUR per the account).
+plus `tx_hash`, `confirmations`, the same `conversion`, and on completion
+`credited_cents` / `credited_currency` (always EUR).
 
 **pay_invoice**
 
@@ -360,7 +410,11 @@ plus `tx_hash`, `confirmations`, and on completion `credited_cents` /
 The tool charges only the invoice's current outstanding balance. Repeating the
 same call resumes its pending checkout or crypto quote. A different method is
 rejected until the pending payment expires or fails. Read `billing://payments`
-to inspect recent attempts and confirmation state.
+to inspect recent attempts and confirmation state. Invoice amounts are EUR; a
+finalized invoice adds `presentment_amount_cents`, `presentment_currency`,
+`presentment_units_per_eur`, and `presentment_reference_date`, the total charged
+at the ECB rate of its finalization date. Payments and the `pay_invoice` result
+carry a `conversion` with the amount charged and the EUR amount applied.
 
 **start_postpaid_setup**
 
