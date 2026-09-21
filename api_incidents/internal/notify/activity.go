@@ -14,6 +14,7 @@ import (
 	"frameworks/api_incidents/internal/database/lookoutdb"
 	"frameworks/api_incidents/internal/incidents"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -303,73 +304,61 @@ var (
 	_ outbox.TokenFencedStore        = (*ActivityStore)(nil)
 )
 
-func (s *ActivityStore) EnqueueActivity(ctx context.Context, activity OperatorActivity, channels []string) (err error) {
+func (s *ActivityStore) EnqueueActivity(ctx context.Context, activity OperatorActivity, channels []string) error {
 	raw, err := json.Marshal(activity.Payload)
 	if err != nil {
 		return fmt.Errorf("marshal operator activity: %w", err)
 	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
+	return database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
+		q := lookoutdb.New(tx)
+		for _, channel := range channels {
+			if err := q.EnqueueOperatorActivity(ctx, lookoutdb.EnqueueOperatorActivityParams{
+				SourceEventID: activity.SourceEventID,
+				EventType:     activity.EventType,
+				TenantID:      nullTenant(activity.TenantID),
+				Channel:       channel,
+				Payload:       raw,
+			}); err != nil {
+				return fmt.Errorf("enqueue operator activity: %w", err)
+			}
 		}
-	}()
-	q := lookoutdb.New(tx)
-	for _, channel := range channels {
-		if err := q.EnqueueOperatorActivity(ctx, lookoutdb.EnqueueOperatorActivityParams{
-			SourceEventID: activity.SourceEventID,
-			EventType:     activity.EventType,
-			TenantID:      nullTenant(activity.TenantID),
-			Channel:       channel,
-			Payload:       raw,
-		}); err != nil {
-			return fmt.Errorf("enqueue operator activity: %w", err)
-		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
-func (s *ActivityStore) ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) (claims []outbox.Claim[ActivityDelivery], err error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
-		}
-	}()
-	q := lookoutdb.New(tx)
-	rows, err := q.ClaimOperatorActivityCandidates(ctx, lookoutdb.ClaimOperatorActivityCandidatesParams{
-		LeaseMilliseconds: lease.Milliseconds(), BatchSize: int32(batchSize),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("select operator activity outbox: %w", err)
-	}
-	claims = make([]outbox.Claim[ActivityDelivery], 0, len(rows))
-	for _, row := range rows {
-		token := uuid.NewString()
-		affected, err := q.LeaseOperatorActivity(ctx, lookoutdb.LeaseOperatorActivityParams{
-			LeaseToken: token, ID: row.ID, TenantID: row.TenantID,
+func (s *ActivityStore) ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) ([]outbox.Claim[ActivityDelivery], error) {
+	var claims []outbox.Claim[ActivityDelivery]
+	err := database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
+		q := lookoutdb.New(tx)
+		rows, err := q.ClaimOperatorActivityCandidates(ctx, lookoutdb.ClaimOperatorActivityCandidatesParams{
+			LeaseMilliseconds: lease.Milliseconds(), BatchSize: int32(batchSize),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("lease operator activity outbox: %w", err)
+			return fmt.Errorf("select operator activity outbox: %w", err)
 		}
-		if affected != 1 {
-			return nil, errors.New("lease operator activity outbox: selected row disappeared")
+		claims = make([]outbox.Claim[ActivityDelivery], 0, len(rows))
+		for _, row := range rows {
+			token := uuid.NewString()
+			affected, err := q.LeaseOperatorActivity(ctx, lookoutdb.LeaseOperatorActivityParams{
+				LeaseToken: token, ID: row.ID, TenantID: row.TenantID,
+			})
+			if err != nil {
+				return fmt.Errorf("lease operator activity outbox: %w", err)
+			}
+			if affected != 1 {
+				return errors.New("lease operator activity outbox: selected row disappeared")
+			}
+			claims = append(claims, outbox.Claim[ActivityDelivery]{
+				ID: claimID(row.TenantID.String, row.ID), Attempts: int(row.Attempts), LeaseToken: token,
+				Payload: ActivityDelivery{
+					OutboxID: row.ID, TenantID: row.TenantID.String, SourceEventID: row.SourceEventID,
+					EventType: row.EventType, Channel: row.Channel, Payload: row.Payload,
+				},
+			})
 		}
-		claims = append(claims, outbox.Claim[ActivityDelivery]{
-			ID: claimID(row.TenantID.String, row.ID), Attempts: int(row.Attempts), LeaseToken: token,
-			Payload: ActivityDelivery{
-				OutboxID: row.ID, TenantID: row.TenantID.String, SourceEventID: row.SourceEventID,
-				EventType: row.EventType, Channel: row.Channel, Payload: row.Payload,
-			},
-		})
-	}
-	if err := tx.Commit(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return claims, nil
