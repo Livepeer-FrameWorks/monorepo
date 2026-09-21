@@ -12,3 +12,15 @@ packages:
 injectWorkspacePackages: true
 syncInjectedDepsAfterScripts:
   - build
+
+allowBuilds:
+  "@reown/appkit": true
+  "@swc/core": true
+  bufferutil: true
+  esbuild: true
+  lefthook: true
+  sharp: true
+  utf-8-validate: true
+
+patchedDependencies:
+  "@codecov/sveltekit-plugin": patches/@codecov__sveltekit-plugin.patch

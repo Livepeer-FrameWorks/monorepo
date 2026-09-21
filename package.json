@@ -41,19 +41,5 @@
     "prettier-plugin-astro": "^0.14.1",
     "prettier-plugin-svelte": "^3.5.1",
     "typescript-eslint": "^8.58.2"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@reown/appkit",
-      "@swc/core",
-      "bufferutil",
-      "esbuild",
-      "lefthook",
-      "sharp",
-      "utf-8-validate"
-    ],
-    "patchedDependencies": {
-      "@codecov/sveltekit-plugin": "patches/@codecov__sveltekit-plugin.patch"
-    }
   }
 }
