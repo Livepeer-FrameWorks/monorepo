@@ -1536,7 +1536,10 @@ ci-local-frontend:
 	@echo "Running local frontend CI checks..."
 	pnpm lint
 	pnpm run format:check
+	pnpm --filter frameworks-frontend exec svelte-kit sync
+	pnpm --filter frameworks-frontend gql:codegen
 	pnpm test:coverage
+	pnpm --filter frameworks-frontend test:components
 	pnpm build
 
 REPORTS_DIR := reports
