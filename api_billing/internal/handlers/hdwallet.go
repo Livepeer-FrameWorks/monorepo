@@ -13,6 +13,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -100,22 +101,21 @@ func DeriveAddressFromXpub(xpub string, index uint32) (string, error) {
 // Returns the index to use and the xpub.
 func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
 	ctx := context.Background()
-	tx, err := hw.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	index, xpub, err := hw.GetNextDerivationIndexTx(ctx, tx)
+	// The index comes from UPDATE ... RETURNING on the committed wallet row, so
+	// a replayed transaction re-allocates from committed state and an aborted
+	// attempt consumes no index.
+	var index uint32
+	var xpub string
+	err := database.WithRetryablePostgresTx(ctx, hw.db, nil, func(tx *sql.Tx) error {
+		var allocErr error
+		index, xpub, allocErr = hw.GetNextDerivationIndexTx(ctx, tx)
+		return allocErr
+	})
 	if err != nil {
 		return 0, "", err
 	}
 
-	if err = tx.Commit(); err != nil {
-		return 0, "", fmt.Errorf("failed to commit: %w", err)
-	}
-
-	return uint32(index), xpub, nil
+	return index, xpub, nil
 }
 
 // GetNextDerivationIndexTx atomically gets and increments the next derivation index within a transaction.
@@ -209,19 +209,13 @@ type DepositQuote struct {
 // a crypto_wallets row. See DepositAddressParams for the shape.
 func (hw *HDWallet) GenerateDepositAddress(p DepositAddressParams) (walletID string, address string, err error) {
 	ctx := context.Background()
-	tx, err := hw.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	walletID, address, err = hw.GenerateDepositAddressTx(ctx, tx, p)
+	err = database.WithRetryablePostgresTx(ctx, hw.db, nil, func(tx *sql.Tx) error {
+		var generateErr error
+		walletID, address, generateErr = hw.GenerateDepositAddressTx(ctx, tx, p)
+		return generateErr
+	})
 	if err != nil {
 		return "", "", err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return "", "", fmt.Errorf("failed to commit: %w", err)
 	}
 
 	return walletID, address, nil
@@ -393,37 +387,37 @@ func (hw *HDWallet) RotateHDWallet(ctx context.Context, xpub, network string) (p
 	if _, err = validateHDWalletXpub(xpub, network); err != nil {
 		return "", 0, false, err
 	}
-	tx, err := hw.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", 0, false, fmt.Errorf("begin HD wallet rotation: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := purserdb.New(tx)
-	state, stateErr := queries.LockHDWalletState(ctx)
-	err = stateErr
-	if errors.Is(err, sql.ErrNoRows) {
-		if err = queries.InitializeRotatedHDWalletState(ctx, purserdb.InitializeRotatedHDWalletStateParams{Xpub: xpub, Network: network}); err != nil {
-			return "", 0, false, fmt.Errorf("initialize HD wallet during rotation: %w", err)
+	err = database.WithRetryablePostgresTx(ctx, hw.db, nil, func(tx *sql.Tx) error {
+		previous, nextIndex, changed = "", 0, false
+		queries := purserdb.New(tx)
+		state, stateErr := queries.LockHDWalletState(ctx)
+		if errors.Is(stateErr, sql.ErrNoRows) {
+			if initErr := queries.InitializeRotatedHDWalletState(ctx, purserdb.InitializeRotatedHDWalletStateParams{Xpub: xpub, Network: network}); initErr != nil {
+				return fmt.Errorf("initialize HD wallet during rotation: %w", initErr)
+			}
+			changed = true
+			return nil
 		}
-		if err = tx.Commit(); err != nil {
-			return "", 0, false, err
+		if stateErr != nil {
+			return fmt.Errorf("load active HD wallet key: %w", stateErr)
 		}
-		return "", 0, true, nil
+		previous, nextIndex = state.Xpub, uint32(state.NextIndex)
+		if strings.TrimSpace(previous) == strings.TrimSpace(xpub) {
+			return errTxReadOnlyExit
+		}
+		if rotateErr := queries.RotateHDWalletState(ctx, purserdb.RotateHDWalletStateParams{Xpub: xpub, Network: network}); rotateErr != nil {
+			return fmt.Errorf("rotate active HD wallet key: %w", rotateErr)
+		}
+		changed = true
+		return nil
+	})
+	if errors.Is(err, errTxReadOnlyExit) {
+		return previous, nextIndex, false, nil
 	}
 	if err != nil {
-		return "", 0, false, fmt.Errorf("load active HD wallet key: %w", err)
-	}
-	previous, next := state.Xpub, state.NextIndex
-	if strings.TrimSpace(previous) == strings.TrimSpace(xpub) {
-		return previous, uint32(next), false, nil
-	}
-	if err = queries.RotateHDWalletState(ctx, purserdb.RotateHDWalletStateParams{Xpub: xpub, Network: network}); err != nil {
-		return "", 0, false, fmt.Errorf("rotate active HD wallet key: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
 		return "", 0, false, err
 	}
-	return previous, uint32(next), true, nil
+	return previous, nextIndex, changed, nil
 }
 
 // ValidateXpub checks if stored xpub can derive addresses

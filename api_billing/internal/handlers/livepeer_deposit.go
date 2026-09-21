@@ -17,6 +17,7 @@ import (
 	"time"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	livepeerchain "github.com/Livepeer-FrameWorks/monorepo/pkg/livepeer/chain"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -591,35 +592,30 @@ func (m *LivepeerDepositMonitor) reserveFundingAttempt(ctx context.Context, gate
 	if m.db == nil || m.dailyCapWei == nil || m.dailyCapWei.Sign() <= 0 {
 		return 0, false, fmt.Errorf("durable Livepeer funding ledger unavailable")
 	}
-	tx, err := m.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('purser-livepeer-funding-daily'))`); err != nil {
-		return 0, false, err
-	}
-	var spentText string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_wei), 0)::text FROM purser.livepeer_funding_attempts WHERE funding_day = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date`).Scan(&spentText); err != nil {
-		return 0, false, err
-	}
-	spent, ok := new(big.Int).SetString(spentText, 10)
-	if !ok {
-		return 0, false, fmt.Errorf("invalid funding ledger total %q", spentText)
-	}
-	amount := new(big.Int).Add(new(big.Int).Set(deposit), reserve)
-	if new(big.Int).Add(spent, amount).Cmp(m.dailyCapWei) > 0 {
-		return 0, false, fmt.Errorf("daily Livepeer funding cap exceeded: spent=%s requested=%s cap=%s", spent, amount, m.dailyCapWei)
-	}
-	var repeated bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.livepeer_funding_attempts WHERE gateway_address = $1 AND created_at > NOW() - INTERVAL '24 hours')`, strings.ToLower(gateway)).Scan(&repeated); err != nil {
-		return 0, false, err
-	}
 	var id int64
-	if err := tx.QueryRowContext(ctx, `INSERT INTO purser.livepeer_funding_attempts (gateway_address, amount_wei, deposit_wei, reserve_wei) VALUES ($1, $2::numeric, $3::numeric, $4::numeric) RETURNING id`, strings.ToLower(gateway), amount.String(), deposit.String(), reserve.String()).Scan(&id); err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(); err != nil {
+	var repeated bool
+	err := database.WithRetryablePostgresTx(ctx, m.db, nil, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('purser-livepeer-funding-daily'))`); err != nil {
+			return err
+		}
+		var spentText string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_wei), 0)::text FROM purser.livepeer_funding_attempts WHERE funding_day = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date`).Scan(&spentText); err != nil {
+			return err
+		}
+		spent, ok := new(big.Int).SetString(spentText, 10)
+		if !ok {
+			return fmt.Errorf("invalid funding ledger total %q", spentText)
+		}
+		amount := new(big.Int).Add(new(big.Int).Set(deposit), reserve)
+		if new(big.Int).Add(spent, amount).Cmp(m.dailyCapWei) > 0 {
+			return fmt.Errorf("daily Livepeer funding cap exceeded: spent=%s requested=%s cap=%s", spent, amount, m.dailyCapWei)
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.livepeer_funding_attempts WHERE gateway_address = $1 AND created_at > NOW() - INTERVAL '24 hours')`, strings.ToLower(gateway)).Scan(&repeated); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `INSERT INTO purser.livepeer_funding_attempts (gateway_address, amount_wei, deposit_wei, reserve_wei) VALUES ($1, $2::numeric, $3::numeric, $4::numeric) RETURNING id`, strings.ToLower(gateway), amount.String(), deposit.String(), reserve.String()).Scan(&id)
+	})
+	if err != nil {
 		return 0, false, err
 	}
 	return id, repeated, nil

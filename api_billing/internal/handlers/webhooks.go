@@ -910,19 +910,11 @@ func (s *Service) recordMonthlyClusterCredit(ctx context.Context, obj *StripeInv
 		periodStart = periodEnd.AddDate(0, -1, 0)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	if persistErr := operator.PersistStripeSubscriptionCredit(ctx, tx,
-		obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid,
-		periodStart, periodEnd, "cluster_monthly"); persistErr != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("rollback failed (%w) after credit error: %w", rbErr, persistErr)
-		}
-		return persistErr
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		return operator.PersistStripeSubscriptionCredit(ctx, tx,
+			obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid,
+			periodStart, periodEnd, "cluster_monthly")
+	})
 }
 
 // handleStripeInvoiceFailed handles invoice.payment_failed events
@@ -1677,96 +1669,84 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 	ctx, cancel := context.WithTimeout(parentCtx, 15*time.Second)
 	defer cancel()
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin reversal tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-				s.logger.WithError(rbErr).Warn("Failed to roll back reversal tx")
-			}
-		}
-	}()
+	applied := false
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		applied = false
 
-	// Locate the originating billing_payments row by tx_id. For Stripe
-	// we match on the PaymentIntent id; for Mollie on the payment id.
-	var paymentID, invoiceID, tenantID, paymentCurrency string
-	var pendingTopupID sql.NullString
-	queries := purserdb.New(tx)
-	payment, err := queries.GetInvoicePaymentForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
-	if errors.Is(err, sql.ErrNoRows) {
-		// Maybe it was a prepaid top-up rather than an invoice payment.
-		topup, topupErr := queries.GetPendingTopupForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
-		err = topupErr
+		// Locate the originating billing_payments row by tx_id. For Stripe
+		// we match on the PaymentIntent id; for Mollie on the payment id.
+		var paymentID, invoiceID, tenantID, paymentCurrency string
+		var pendingTopupID sql.NullString
+		queries := purserdb.New(tx)
+		payment, err := queries.GetInvoicePaymentForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("reversal %s references unknown provider payment %s: %w",
-				in.providerReversalID, in.providerPaymentID, errWebhookMissingLocalReference)
+			// Maybe it was a prepaid top-up rather than an invoice payment.
+			topup, topupErr := queries.GetPendingTopupForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
+			err = topupErr
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("reversal %s references unknown provider payment %s: %w",
+					in.providerReversalID, in.providerPaymentID, errWebhookMissingLocalReference)
+			}
+			if err != nil {
+				return fmt.Errorf("lookup topup for reversal: %w", err)
+			}
+			pendingTopupID = sql.NullString{String: topup.TopupID, Valid: true}
+			tenantID, paymentCurrency = topup.TenantID, topup.Currency
+		} else if err != nil {
+			return fmt.Errorf("lookup payment for reversal: %w", err)
+		} else {
+			paymentID, invoiceID, tenantID, paymentCurrency = payment.PaymentID, payment.InvoiceID, payment.TenantID, payment.Currency
+		}
+
+		// Sanity: provider may report the reversal in a different currency
+		// than the original payment. Refuse to reconcile rather than mixing.
+		if paymentCurrency != "" && in.currency != "" && paymentCurrency != in.currency {
+			return fmt.Errorf("reversal currency %s != payment currency %s", in.currency, paymentCurrency)
+		}
+
+		// Idempotent reversal-ledger insert. A pending dispute observation may
+		// transition to succeeded when the money-moving provider event arrives;
+		// already-succeeded rows return no id and are treated as replays.
+		reversalID, err := queries.UpsertSucceededPaymentReversal(ctx, purserdb.UpsertSucceededPaymentReversalParams{
+			TenantID: tenantID, PaymentID: optionalSQLString(paymentID), PendingTopupID: pendingTopupID,
+			InvoiceID: optionalSQLString(invoiceID), Provider: in.provider, ReversalType: in.reversalType,
+			ProviderReversalID: in.providerReversalID, ProviderChargeID: optionalSQLString(in.providerChargeID),
+			AmountCents: in.amountCents, Currency: in.currency, Reason: optionalSQLString(in.reason),
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			// Replay: row already existed, nothing more to do.
+			return nil
 		}
 		if err != nil {
-			return false, fmt.Errorf("lookup topup for reversal: %w", err)
+			return fmt.Errorf("insert reversal: %w", err)
 		}
-		pendingTopupID = sql.NullString{String: topup.TopupID, Valid: true}
-		tenantID, paymentCurrency = topup.TenantID, topup.Currency
-	} else if err != nil {
-		return false, fmt.Errorf("lookup payment for reversal: %w", err)
-	} else {
-		paymentID, invoiceID, tenantID, paymentCurrency = payment.PaymentID, payment.InvoiceID, payment.TenantID, payment.Currency
-	}
 
-	// Sanity: provider may report the reversal in a different currency
-	// than the original payment. Refuse to reconcile rather than mixing.
-	if paymentCurrency != "" && in.currency != "" && paymentCurrency != in.currency {
-		return false, fmt.Errorf("reversal currency %s != payment currency %s", in.currency, paymentCurrency)
-	}
-
-	// Idempotent reversal-ledger insert. A pending dispute observation may
-	// transition to succeeded when the money-moving provider event arrives;
-	// already-succeeded rows return no id and are treated as replays.
-	reversalID, err := queries.UpsertSucceededPaymentReversal(ctx, purserdb.UpsertSucceededPaymentReversalParams{
-		TenantID: tenantID, PaymentID: optionalSQLString(paymentID), PendingTopupID: pendingTopupID,
-		InvoiceID: optionalSQLString(invoiceID), Provider: in.provider, ReversalType: in.reversalType,
-		ProviderReversalID: in.providerReversalID, ProviderChargeID: optionalSQLString(in.providerChargeID),
-		AmountCents: in.amountCents, Currency: in.currency, Reason: optionalSQLString(in.reason),
+		// Apply money movement based on which side the reversal hits.
+		if paymentID != "" && invoiceID != "" {
+			if err := applyInvoicePaymentReversalTx(ctx, tx, paymentID, invoiceID, in.amountCents, in.currency); err != nil {
+				return err
+			}
+			// Operator credit clawback: marketplace cluster lines on this
+			// invoice need a reverses_ledger_id row pointing at the original
+			// accrual. The clawback runs in the same transaction as the
+			// invoice-side reversal so the ledger never disagrees with the
+			// invoice state.
+			if err := applyOperatorCreditClawbackTx(ctx, tx, invoiceID, reversalID, in.amountCents); err != nil {
+				return err
+			}
+		}
+		if pendingTopupID.Valid && tenantID != "" {
+			if err := s.applyPrepaidTopupReversalTx(ctx, tx, tenantID, pendingTopupID.String, reversalID, in.amountCents, in.currency, in.reason); err != nil {
+				return err
+			}
+		}
+		applied = true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		// Replay: row already existed, nothing more to do.
-		if commitErr := tx.Commit(); commitErr != nil {
-			return false, commitErr
-		}
-		committed = true
-		return false, nil
-	}
 	if err != nil {
-		return false, fmt.Errorf("insert reversal: %w", err)
+		return false, err
 	}
-
-	// Apply money movement based on which side the reversal hits.
-	if paymentID != "" && invoiceID != "" {
-		if err := applyInvoicePaymentReversalTx(ctx, tx, paymentID, invoiceID, in.amountCents, in.currency); err != nil {
-			return false, err
-		}
-		// Operator credit clawback: marketplace cluster lines on this
-		// invoice need a reverses_ledger_id row pointing at the original
-		// accrual. The clawback runs in the same transaction as the
-		// invoice-side reversal so the ledger never disagrees with the
-		// invoice state.
-		if err := applyOperatorCreditClawbackTx(ctx, tx, invoiceID, reversalID, in.amountCents); err != nil {
-			return false, err
-		}
-	}
-	if pendingTopupID.Valid && tenantID != "" {
-		if err := s.applyPrepaidTopupReversalTx(ctx, tx, tenantID, pendingTopupID.String, reversalID, in.amountCents, in.currency, in.reason); err != nil {
-			return false, err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit reversal tx: %w", err)
-	}
-	committed = true
-	return true, nil
+	return applied, nil
 }
 
 // applyInvoicePaymentReversalTx credits reversed_amount_cents on the
@@ -2288,174 +2268,167 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	ctx := context.Background()
 	method := invoicePaymentMethodForProvider(provider)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin invoice payment status transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				s.logger.WithError(rollbackErr).Warn("Failed to roll back invoice payment status transaction")
-			}
-		}
-	}()
+	webhookInvoiceID := invoiceID
+	updated, sendStatusEmail := false, false
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		invoiceID = webhookInvoiceID
+		updated, sendStatusEmail = false, false
 
-	queries := purserdb.New(tx)
-	payment, err := queries.GetBillingPaymentByProviderTransaction(ctx, purserdb.GetBillingPaymentByProviderTransactionParams{
-		TransactionID: optionalSQLString(txID), Method: method,
-	})
-	paymentID, foundInvoiceID := payment.PaymentID, payment.InvoiceID
-	paymentTenantID, paymentAmount, paymentCurrency := payment.TenantID, payment.Amount, payment.Currency
-	paymentStatus := payment.Status
-	if errors.Is(err, sql.ErrNoRows) {
-		if newStatus == "confirmed" {
-			return false, nil
+		queries := purserdb.New(tx)
+		payment, err := queries.GetBillingPaymentByProviderTransaction(ctx, purserdb.GetBillingPaymentByProviderTransactionParams{
+			TransactionID: optionalSQLString(txID), Method: method,
+		})
+		paymentID, foundInvoiceID := payment.PaymentID, payment.InvoiceID
+		paymentTenantID, paymentAmount, paymentCurrency := payment.TenantID, payment.Amount, payment.Currency
+		paymentStatus := payment.Status
+		if errors.Is(err, sql.ErrNoRows) {
+			if newStatus == "confirmed" {
+				return errTxReadOnlyExit
+			}
+			if invoiceID == "" {
+				return errTxReadOnlyExit
+			}
+			pendingPayment, pendingErr := queries.GetPendingBillingPaymentForInvoice(ctx, purserdb.GetPendingBillingPaymentForInvoiceParams{
+				InvoiceID: invoiceID, Method: method,
+			})
+			err = pendingErr
+			if errors.Is(err, sql.ErrNoRows) {
+				return errTxReadOnlyExit
+			}
+			paymentID, foundInvoiceID = pendingPayment.PaymentID, pendingPayment.InvoiceID
+			paymentTenantID, paymentAmount, paymentCurrency = pendingPayment.TenantID, pendingPayment.Amount, pendingPayment.Currency
+			paymentStatus = pendingPayment.Status
+		}
+		if err != nil {
+			return fmt.Errorf("failed to lookup payment: %w", err)
 		}
 		if invoiceID == "" {
-			return false, nil
+			invoiceID = foundInvoiceID
+		} else if foundInvoiceID != "" && foundInvoiceID != invoiceID {
+			return fmt.Errorf("provider payment %s is linked to invoice %s, not webhook invoice %s", txID, foundInvoiceID, invoiceID)
 		}
-		pendingPayment, pendingErr := queries.GetPendingBillingPaymentForInvoice(ctx, purserdb.GetPendingBillingPaymentForInvoiceParams{
-			InvoiceID: invoiceID, Method: method,
-		})
-		err = pendingErr
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+		if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
+			return fmt.Errorf("provider payment %s tenant mismatch", txID)
 		}
-		paymentID, foundInvoiceID = pendingPayment.PaymentID, pendingPayment.InvoiceID
-		paymentTenantID, paymentAmount, paymentCurrency = pendingPayment.TenantID, pendingPayment.Amount, pendingPayment.Currency
-		paymentStatus = pendingPayment.Status
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to lookup payment: %w", err)
-	}
-	if invoiceID == "" {
-		invoiceID = foundInvoiceID
-	} else if foundInvoiceID != "" && foundInvoiceID != invoiceID {
-		return false, fmt.Errorf("provider payment %s is linked to invoice %s, not webhook invoice %s", txID, foundInvoiceID, invoiceID)
-	}
-	if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
-		return false, fmt.Errorf("provider payment %s tenant mismatch", txID)
-	}
-	writeEvent := func() error {
-		if emitEvent == nil {
-			return nil
+		writeEvent := func() error {
+			if emitEvent == nil {
+				return nil
+			}
+			return emitEvent(ctx, tx, resolvedInvoicePayment{
+				PaymentID: paymentID, InvoiceID: invoiceID, TenantID: paymentTenantID,
+				Amount: paymentAmount, Currency: paymentCurrency,
+			})
 		}
-		return emitEvent(ctx, tx, resolvedInvoicePayment{
-			PaymentID: paymentID, InvoiceID: invoiceID, TenantID: paymentTenantID,
-			Amount: paymentAmount, Currency: paymentCurrency,
-		})
-	}
-	// Settlement below asks an aggregate question — do confirmed payments now
-	// cover the invoice? — over sibling rows that concurrent webhook handlers
-	// are confirming in their own transactions. At READ COMMITTED, and with no
-	// row lock (the UPDATE's subselect guard means a non-covering sum matches
-	// zero rows and locks nothing), two confirmations that overlap each see the
-	// other still pending, each concludes the invoice is not covered, and an
-	// invoice the customer paid in full is left unpaid with nothing scheduled to
-	// look again. This is the same lock the payment-creation path already takes
-	// for the same invoice, so creation and settlement serialize together.
-	if invoiceID != "" {
-		if lockErr := queries.LockInvoicePaymentCreation(ctx, invoiceID); lockErr != nil {
-			return false, fmt.Errorf("lock invoice %s for settlement: %w", invoiceID, lockErr)
-		}
-	}
-	if newStatus == "confirmed" {
-		if evidence.AmountCents <= 0 || strings.TrimSpace(evidence.Currency) == "" {
-			return false, fmt.Errorf("provider payment %s is missing settlement amount or currency", txID)
-		}
-		if !strings.EqualFold(paymentCurrency, evidence.Currency) {
-			return false, fmt.Errorf("provider payment %s currency mismatch: stored %s, received %s", txID, paymentCurrency, evidence.Currency)
-		}
-		expected, parseErr := decimal.NewFromString(paymentAmount)
-		if parseErr != nil {
-			return false, fmt.Errorf("parse stored payment amount: %w", parseErr)
-		}
-		received := decimal.New(evidence.AmountCents, int32(-currencyMinorUnitExponent(evidence.Currency)))
-		if !expected.Equal(received) {
-			return false, fmt.Errorf("provider payment %s amount mismatch: stored %s, received %s", txID, expected, received)
-		}
-	}
-	if paymentStatus == newStatus {
-		// A redelivered webhook for an already-confirmed payment is the one
-		// event that can rescue an invoice whose settlement was lost, so it
-		// re-runs the recompute rather than returning early. The recompute is
-		// idempotent: the UPDATE only matches an invoice still pending or
-		// overdue, and operator credits are only written when it changes a row.
-		if newStatus == "confirmed" && invoiceID != "" {
-			if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, time.Now()); settleErr != nil {
-				return false, settleErr
+		// Settlement below asks an aggregate question — do confirmed payments now
+		// cover the invoice? — over sibling rows that concurrent webhook handlers
+		// are confirming in their own transactions. At READ COMMITTED, and with no
+		// row lock (the UPDATE's subselect guard means a non-covering sum matches
+		// zero rows and locks nothing), two confirmations that overlap each see the
+		// other still pending, each concludes the invoice is not covered, and an
+		// invoice the customer paid in full is left unpaid with nothing scheduled to
+		// look again. This is the same lock the payment-creation path already takes
+		// for the same invoice, so creation and settlement serialize together.
+		if invoiceID != "" {
+			if lockErr := queries.LockInvoicePaymentCreation(ctx, invoiceID); lockErr != nil {
+				return fmt.Errorf("lock invoice %s for settlement: %w", invoiceID, lockErr)
 			}
 		}
-		if err = writeEvent(); err != nil {
-			return false, err
+		if newStatus == "confirmed" {
+			if evidence.AmountCents <= 0 || strings.TrimSpace(evidence.Currency) == "" {
+				return fmt.Errorf("provider payment %s is missing settlement amount or currency", txID)
+			}
+			if !strings.EqualFold(paymentCurrency, evidence.Currency) {
+				return fmt.Errorf("provider payment %s currency mismatch: stored %s, received %s", txID, paymentCurrency, evidence.Currency)
+			}
+			expected, parseErr := decimal.NewFromString(paymentAmount)
+			if parseErr != nil {
+				return fmt.Errorf("parse stored payment amount: %w", parseErr)
+			}
+			received := decimal.New(evidence.AmountCents, int32(-currencyMinorUnitExponent(evidence.Currency)))
+			if !expected.Equal(received) {
+				return fmt.Errorf("provider payment %s amount mismatch: stored %s, received %s", txID, expected, received)
+			}
 		}
-		if err = tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit idempotent invoice payment status transaction: %w", err)
+		if paymentStatus == newStatus {
+			// A redelivered webhook for an already-confirmed payment is the one
+			// event that can rescue an invoice whose settlement was lost, so it
+			// re-runs the recompute rather than returning early. The recompute is
+			// idempotent: the UPDATE only matches an invoice still pending or
+			// overdue, and operator credits are only written when it changes a row.
+			if newStatus == "confirmed" && invoiceID != "" {
+				if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, time.Now()); settleErr != nil {
+					return settleErr
+				}
+			}
+			if eventErr := writeEvent(); eventErr != nil {
+				return eventErr
+			}
+			updated = true
+			return nil
 		}
-		committed = true
-		return true, nil
-	}
-	if paymentStatus != "pending" {
-		return false, fmt.Errorf("provider payment %s cannot transition from %s to %s", txID, paymentStatus, newStatus)
-	}
+		if paymentStatus != "pending" {
+			return fmt.Errorf("provider payment %s cannot transition from %s to %s", txID, paymentStatus, newStatus)
+		}
 
-	now := time.Now()
-	confirmedAt := sql.NullTime{}
-	if newStatus == "confirmed" {
-		confirmedAt = sql.NullTime{Time: now, Valid: true}
-	}
+		now := time.Now()
+		confirmedAt := sql.NullTime{}
+		if newStatus == "confirmed" {
+			confirmedAt = sql.NullTime{Time: now, Valid: true}
+		}
 
-	err = queries.UpdateBillingPaymentProviderStatus(ctx, purserdb.UpdateBillingPaymentProviderStatusParams{
-		Status: newStatus, ConfirmedAt: confirmedAt,
-		TransactionID: optionalSQLString(txID), PaymentID: paymentID,
+		err = queries.UpdateBillingPaymentProviderStatus(ctx, purserdb.UpdateBillingPaymentProviderStatusParams{
+			Status: newStatus, ConfirmedAt: confirmedAt,
+			TransactionID: optionalSQLString(txID), PaymentID: paymentID,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update payment status: %w", err)
+		}
+		attemptStatus := newStatus
+		switch newStatus {
+		case "confirmed":
+			attemptStatus = "succeeded"
+		case "failed":
+			attemptStatus = "failed"
+		}
+		if err = queries.UpdateBillingPaymentAttemptProviderStatus(ctx, purserdb.UpdateBillingPaymentAttemptProviderStatusParams{
+			Status: attemptStatus, ProviderPaymentID: txID, PaymentID: paymentID, Provider: provider,
+		}); err != nil {
+			return fmt.Errorf("failed to update payment attempt status: %w", err)
+		}
+
+		if invoiceID == "" {
+			if eventErr := writeEvent(); eventErr != nil {
+				return eventErr
+			}
+			updated = true
+			return nil
+		}
+
+		if newStatus == "confirmed" {
+			if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, now); settleErr != nil {
+				return settleErr
+			}
+		}
+
+		if eventErr := writeEvent(); eventErr != nil {
+			return eventErr
+		}
+		updated = true
+		sendStatusEmail = newStatus == "confirmed" || newStatus == "failed"
+		return nil
 	})
+	if errors.Is(err, errTxReadOnlyExit) {
+		return false, nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("failed to update payment status: %w", err)
-	}
-	attemptStatus := newStatus
-	switch newStatus {
-	case "confirmed":
-		attemptStatus = "succeeded"
-	case "failed":
-		attemptStatus = "failed"
-	}
-	if err = queries.UpdateBillingPaymentAttemptProviderStatus(ctx, purserdb.UpdateBillingPaymentAttemptProviderStatusParams{
-		Status: attemptStatus, ProviderPaymentID: txID, PaymentID: paymentID, Provider: provider,
-	}); err != nil {
-		return false, fmt.Errorf("failed to update payment attempt status: %w", err)
-	}
-
-	if invoiceID == "" {
-		if err = writeEvent(); err != nil {
-			return false, err
-		}
-		if err = tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
-		}
-		committed = true
-		return true, nil
-	}
-
-	if newStatus == "confirmed" {
-		if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, now); settleErr != nil {
-			return false, settleErr
-		}
-	}
-
-	if err = writeEvent(); err != nil {
 		return false, err
 	}
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit invoice payment status transaction: %w", err)
-	}
-	committed = true
 
-	if newStatus == "confirmed" || newStatus == "failed" {
+	if sendStatusEmail {
 		s.sendPaymentStatusEmail(invoiceID, provider, newStatus)
 	}
 
-	return true, nil
+	return updated, nil
 }
 
 func invoicePaymentMethodForProvider(provider string) string {

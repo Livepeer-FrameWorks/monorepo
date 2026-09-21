@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
@@ -71,58 +72,56 @@ type allocatedDepositReversal struct {
 }
 
 func (cm *CryptoMonitor) reverseAllocatedDeposit(ctx context.Context, eventID, oldBlockHash, canonicalBlockHash string) error {
-	tx, err := cm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
+	var reversal allocatedDepositReversal
+	err := database.WithRetryablePostgresTx(ctx, cm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		row, err := queries.LockAllocatedDepositReversal(ctx, eventID)
+		if err != nil {
+			return err
+		}
+		reversal = allocatedDepositReversal{
+			network: row.Network, tenantID: row.TenantID, purpose: row.Purpose,
+			invoiceID:     sql.NullString{String: row.InvoiceID, Valid: row.InvoiceID != ""},
+			creditedCents: row.CreditedAmountCents, creditCurrency: row.CreditedAmountCurrency,
+			walletID: row.WalletID, txHash: row.TxHash,
+		}
+		if row.EventStatus != "allocated" || !row.Canonical {
+			return errTxReadOnlyExit
+		}
 
-	queries := purserdb.New(tx)
-	row, err := queries.LockAllocatedDepositReversal(ctx, eventID)
-	if err != nil {
-		return err
-	}
-	reversal := allocatedDepositReversal{
-		network: row.Network, tenantID: row.TenantID, purpose: row.Purpose,
-		invoiceID:     sql.NullString{String: row.InvoiceID, Valid: row.InvoiceID != ""},
-		creditedCents: row.CreditedAmountCents, creditCurrency: row.CreditedAmountCurrency,
-		walletID: row.WalletID, txHash: row.TxHash,
-	}
-	if row.EventStatus != "allocated" || !row.Canonical {
+		switch reversal.purpose {
+		case "prepaid":
+			if err := reverseCryptoPrepaidDepositTx(ctx, tx, eventID, oldBlockHash, canonicalBlockHash, reversal); err != nil {
+				return err
+			}
+		case "invoice":
+			if err := reverseCryptoInvoiceDepositTx(ctx, tx, eventID, oldBlockHash, canonicalBlockHash, reversal); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported crypto wallet purpose %q", reversal.purpose)
+		}
+
+		affected, err := queries.MarkAllocatedDepositReorged(ctx, eventID)
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("allocated deposit changed concurrently")
+		}
+		if err := queries.MarkReorgedCryptoWalletForReview(ctx, purserdb.MarkReorgedCryptoWalletForReviewParams{
+			WalletID: reversal.walletID, TenantID: reversal.tenantID,
+		}); err != nil {
+			return err
+		}
+		return emitBillingEventTx(ctx, tx, eventCryptoDepositReorg, reversal.tenantID, "crypto_deposit_event", eventID, &ipcpb.BillingEvent{
+			Status: "allocated deposit reorged and reversed", Provider: "crypto", TxHash: reversal.txHash.String,
+		})
+	})
+	if errors.Is(err, errTxReadOnlyExit) {
 		return nil
 	}
-
-	switch reversal.purpose {
-	case "prepaid":
-		if err := reverseCryptoPrepaidDepositTx(ctx, tx, eventID, oldBlockHash, canonicalBlockHash, reversal); err != nil {
-			return err
-		}
-	case "invoice":
-		if err := reverseCryptoInvoiceDepositTx(ctx, tx, eventID, oldBlockHash, canonicalBlockHash, reversal); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unsupported crypto wallet purpose %q", reversal.purpose)
-	}
-
-	affected, err := queries.MarkAllocatedDepositReorged(ctx, eventID)
 	if err != nil {
-		return err
-	}
-	if affected != 1 {
-		return fmt.Errorf("allocated deposit changed concurrently")
-	}
-	if err := queries.MarkReorgedCryptoWalletForReview(ctx, purserdb.MarkReorgedCryptoWalletForReviewParams{
-		WalletID: reversal.walletID, TenantID: reversal.tenantID,
-	}); err != nil {
-		return err
-	}
-	if err := emitBillingEventTx(ctx, tx, eventCryptoDepositReorg, reversal.tenantID, "crypto_deposit_event", eventID, &ipcpb.BillingEvent{
-		Status: "allocated deposit reorged and reversed", Provider: "crypto", TxHash: reversal.txHash.String,
-	}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
 		return err
 	}
 

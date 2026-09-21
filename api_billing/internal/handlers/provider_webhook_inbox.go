@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
 
@@ -58,45 +59,38 @@ func (s *providerWebhookInboxStore) ClaimBatch(ctx context.Context, batchSize in
 	if s.db == nil {
 		return nil, errors.New("claim provider webhooks: nil database")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
-		}
-	}()
-
-	queries := purserdb.New(tx)
-	candidates, err := queries.ClaimProviderWebhooks(ctx, purserdb.ClaimProviderWebhooksParams{
-		LeaseMilliseconds: lease.Milliseconds(),
-		BatchSize:         int32(batchSize),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("select provider webhook inbox: %w", err)
-	}
-
-	claims = make([]outbox.Claim[providerWebhookPayload], 0, len(candidates))
-	for _, item := range candidates {
-		leaseToken := uuid.NewString()
-		if err := queries.MarkProviderWebhookProcessing(ctx, purserdb.MarkProviderWebhookProcessingParams{
-			LeaseToken: leaseToken,
-			ID:         item.ID,
-		}); err != nil {
-			return nil, err
-		}
-		var headers map[string]string
-		if err := json.Unmarshal(item.Headers, &headers); err != nil {
-			return nil, fmt.Errorf("decode provider webhook headers: %w", err)
-		}
-		claims = append(claims, outbox.Claim[providerWebhookPayload]{
-			ID: webhookInboxClaimID(item.ID.String()), Attempts: int(item.Attempts), LeaseToken: leaseToken,
-			Payload: providerWebhookPayload{Provider: item.Provider, Headers: headers, Body: item.RawPayload},
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		candidates, err := queries.ClaimProviderWebhooks(ctx, purserdb.ClaimProviderWebhooksParams{
+			LeaseMilliseconds: lease.Milliseconds(),
+			BatchSize:         int32(batchSize),
 		})
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+		if err != nil {
+			return fmt.Errorf("select provider webhook inbox: %w", err)
+		}
+
+		claims = make([]outbox.Claim[providerWebhookPayload], 0, len(candidates))
+		for _, item := range candidates {
+			leaseToken := uuid.NewString()
+			if err := queries.MarkProviderWebhookProcessing(ctx, purserdb.MarkProviderWebhookProcessingParams{
+				LeaseToken: leaseToken,
+				ID:         item.ID,
+			}); err != nil {
+				return err
+			}
+			var headers map[string]string
+			if err := json.Unmarshal(item.Headers, &headers); err != nil {
+				return fmt.Errorf("decode provider webhook headers: %w", err)
+			}
+			claims = append(claims, outbox.Claim[providerWebhookPayload]{
+				ID: webhookInboxClaimID(item.ID.String()), Attempts: int(item.Attempts), LeaseToken: leaseToken,
+				Payload: providerWebhookPayload{Provider: item.Provider, Headers: headers, Body: item.RawPayload},
+			})
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
 	return claims, nil
 }

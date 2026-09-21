@@ -1346,34 +1346,36 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.Cre
 		periodEnd = req.GetBillingPeriodEnd().AsTime()
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
+	stage, txErr := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := purserdb.New(tx).InsertTenantSubscription(ctx, purserdb.InsertTenantSubscriptionParams{
+			ID: subUUID, TenantID: tenantID, TierID: tierID,
+			BillingEmail: sql.NullString{String: billingEmail, Valid: true}, BillingModel: billingModel,
+			Now: now, TrialEndsAt: trialEndsAt,
+			NextBillingDate:    sql.NullTime{Time: periodEnd, Valid: true},
+			BillingPeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+			BillingPeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
+			PaymentMethod:      req.GetPaymentMethod(), CustomFeatures: featuresJSON,
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to create subscription: %v", err)
+		}
 
-	if err = purserdb.New(tx).InsertTenantSubscription(ctx, purserdb.InsertTenantSubscriptionParams{
-		ID: subUUID, TenantID: tenantID, TierID: tierID,
-		BillingEmail: sql.NullString{String: billingEmail, Valid: true}, BillingModel: billingModel,
-		Now: now, TrialEndsAt: trialEndsAt,
-		NextBillingDate:    sql.NullTime{Time: periodEnd, Valid: true},
-		BillingPeriodStart: sql.NullTime{Time: periodStart, Valid: true},
-		BillingPeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
-		PaymentMethod:      req.GetPaymentMethod(), CustomFeatures: featuresJSON,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
-	}
-
-	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &ipcpb.BillingEvent{
-		SubscriptionId: subID,
-		Status:         "active",
-		Provider:       req.GetPaymentMethod(),
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue subscription_created: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscription create: %v", err)
+		if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &ipcpb.BillingEvent{
+			SubscriptionId: subID,
+			Status:         "active",
+			Provider:       req.GetPaymentMethod(),
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "enqueue subscription_created: %v", err)
+		}
+		return nil
+	})
+	switch {
+	case txErr == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", txErr)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "commit subscription create: %v", txErr)
+	default:
+		return nil, txErr
 	}
 
 	sub := &purserpb.TenantSubscription{
@@ -1480,36 +1482,38 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 		update.CustomFeatures = featuresJSON
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-
-	rows, err := purserdb.New(tx).UpdateTenantSubscriptionFields(ctx, update)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update subscription: %v", err)
-	}
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "subscription not found")
-	}
-	if overrideErr := s.applySubscriptionOverridesTx(ctx, tx, tenantID, req); overrideErr != nil {
-		return nil, overrideErr
-	}
-
-	if eventState, scanErr := purserdb.New(tx).GetUpdatedSubscriptionEventState(ctx, tenantID); scanErr == nil {
-		updatedSubID := eventState.ID.String()
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &ipcpb.BillingEvent{
-			SubscriptionId: updatedSubID,
-			Status:         eventState.Status,
-			Provider:       eventState.PaymentMethod,
-		}); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue subscription_updated: %v", enqErr)
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		rows, err := purserdb.New(tx).UpdateTenantSubscriptionFields(ctx, update)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to update subscription: %v", err)
 		}
-	}
+		if rows == 0 {
+			return status.Error(codes.NotFound, "subscription not found")
+		}
+		if overrideErr := s.applySubscriptionOverridesTx(ctx, tx, tenantID, req); overrideErr != nil {
+			return overrideErr
+		}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscription update: %v", commitErr)
+		if eventState, scanErr := purserdb.New(tx).GetUpdatedSubscriptionEventState(ctx, tenantID); scanErr == nil {
+			updatedSubID := eventState.ID.String()
+			if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &ipcpb.BillingEvent{
+				SubscriptionId: updatedSubID,
+				Status:         eventState.Status,
+				Provider:       eventState.PaymentMethod,
+			}); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue subscription_updated: %v", enqErr)
+			}
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "commit subscription update: %v", err)
+	default:
+		return nil, err
 	}
 
 	// When tier_id changes (upgrade / downgrade), invalidate downstream caches
@@ -1551,12 +1555,12 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 	queries := purserdb.New(tx)
 	subscriptionID, err := queries.GetActiveSubscriptionID(ctx, tenantID)
 	if err != nil {
-		return status.Errorf(codes.Internal, "lookup subscription id: %v", err)
+		return txStatusErrorf(err, codes.Internal, "lookup subscription id: %v", err)
 	}
 
 	if req.GetClearPricingOverrides() || len(req.GetPricingOverrides()) > 0 {
 		if err := queries.DeleteSubscriptionPricingOverrides(ctx, subscriptionID); err != nil {
-			return status.Errorf(codes.Internal, "clear pricing overrides: %v", err)
+			return txStatusErrorf(err, codes.Internal, "clear pricing overrides: %v", err)
 		}
 		for _, rule := range req.GetPricingOverrides() {
 			if err := validatePricingOverrideRule(rule); err != nil {
@@ -1567,14 +1571,14 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 				SubscriptionID: subscriptionID, Meter: rule.GetMeter(), Model: rule.GetModel(), Currency: currency,
 				IncludedQuantity: rule.GetIncludedQuantity(), UnitPrice: rule.GetUnitPrice(), Config: rule.GetConfigJson(),
 			}); err != nil {
-				return status.Errorf(codes.Internal, "upsert pricing override %q: %v", rule.GetMeter(), err)
+				return txStatusErrorf(err, codes.Internal, "upsert pricing override %q: %v", rule.GetMeter(), err)
 			}
 		}
 	}
 
 	if req.GetClearEntitlementOverrides() || len(req.GetEntitlementOverrides()) > 0 {
 		if err := queries.DeleteSubscriptionEntitlementOverrides(ctx, subscriptionID); err != nil {
-			return status.Errorf(codes.Internal, "clear entitlement overrides: %v", err)
+			return txStatusErrorf(err, codes.Internal, "clear entitlement overrides: %v", err)
 		}
 		for k, v := range req.GetEntitlementOverrides() {
 			if k == "" {
@@ -1586,7 +1590,7 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 			if err := queries.UpsertSubscriptionEntitlementOverride(ctx, purserdb.UpsertSubscriptionEntitlementOverrideParams{
 				SubscriptionID: subscriptionID, Key: k, Value: json.RawMessage(v),
 			}); err != nil {
-				return status.Errorf(codes.Internal, "upsert entitlement override %q: %v", k, err)
+				return txStatusErrorf(err, codes.Internal, "upsert entitlement override %q: %v", k, err)
 			}
 		}
 	}
@@ -1678,50 +1682,52 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.Can
 
 	userID := middleware.GetUserID(ctx)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-
-	queries := purserdb.New(tx)
-	subscriptionID, scanErr := queries.GetCancelableSubscriptionID(ctx, tenantID)
-	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "lookup subscription: %v", scanErr)
-	}
-
-	// A sub-floor balance is intentionally not customer-payable. On account
-	// closure, record the waiver explicitly before clearing it so the amount
-	// cannot disappear from financial reconciliation or strand a cancelled
-	// tenant with an unreachable carry balance.
-	if _, err = queries.RecordAccountClosureCollectionWriteoffs(ctx, tenantID); err != nil {
-		return nil, status.Errorf(codes.Internal, "record collection balance writeoff: %v", err)
-	}
-	if _, err = queries.ClearAccountClosureCollectionBalances(ctx, tenantID); err != nil {
-		return nil, status.Errorf(codes.Internal, "clear written-off collection balance: %v", err)
-	}
-
-	rows, err := queries.CancelTenantSubscriptions(ctx, tenantID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to cancel subscription: %v", err)
-	}
-
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "subscription not found")
-	}
-
-	if subscriptionID != uuid.Nil {
-		subscriptionIDText := subscriptionID.String()
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionIDText, &ipcpb.BillingEvent{
-			SubscriptionId: subscriptionIDText,
-			Status:         "cancelled",
-		}); enqErr != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue subscription_canceled: %v", enqErr)
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		subscriptionID, scanErr := queries.GetCancelableSubscriptionID(ctx, tenantID)
+		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return txStatusErrorf(scanErr, codes.Internal, "lookup subscription: %v", scanErr)
 		}
-	}
 
-	if err := tx.Commit(); err != nil {
+		// A sub-floor balance is intentionally not customer-payable. On account
+		// closure, record the waiver explicitly before clearing it so the amount
+		// cannot disappear from financial reconciliation or strand a cancelled
+		// tenant with an unreachable carry balance.
+		if _, err := queries.RecordAccountClosureCollectionWriteoffs(ctx, tenantID); err != nil {
+			return txStatusErrorf(err, codes.Internal, "record collection balance writeoff: %v", err)
+		}
+		if _, err := queries.ClearAccountClosureCollectionBalances(ctx, tenantID); err != nil {
+			return txStatusErrorf(err, codes.Internal, "clear written-off collection balance: %v", err)
+		}
+
+		rows, err := queries.CancelTenantSubscriptions(ctx, tenantID)
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to cancel subscription: %v", err)
+		}
+
+		if rows == 0 {
+			return status.Error(codes.NotFound, "subscription not found")
+		}
+
+		if subscriptionID != uuid.Nil {
+			subscriptionIDText := subscriptionID.String()
+			if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionIDText, &ipcpb.BillingEvent{
+				SubscriptionId: subscriptionIDText,
+				Status:         "cancelled",
+			}); enqErr != nil {
+				return txStatusErrorf(enqErr, codes.Internal, "enqueue subscription_canceled: %v", enqErr)
+			}
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	case stage == txStageCommit:
 		return nil, status.Errorf(codes.Internal, "commit subscription cancel: %v", err)
+	default:
+		return nil, err
 	}
 	if s.tierReconciler != nil {
 		if revokeErr := s.tierReconciler.RevokeDNSEntitlements(ctx, tenantID); revokeErr != nil {
@@ -2124,97 +2130,119 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 		return nil, status.Errorf(codes.Internal, "expire stale invoice payments: %v", err)
 	}
 
-	dbTx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	var (
+		balance   *invoiceBalance
+		existing  *activeInvoicePayment
+		paymentID string
+		resp      *purserpb.PaymentResponse
+		// The deposit quote is an external price fetch made under the invoice lock. A replay reuses it unless the
+		// locked balance it priced has changed.
+		quotedPlan    *cryptoPaymentPlan
+		quotedPlanKey string
+	)
+	stage, err := runRetryableTx(ctx, s.db, func(dbTx *sql.Tx) error {
+		existing = nil
+		if err := lockInvoicePaymentTx(ctx, dbTx, invoiceID); err != nil {
+			return txStatusErrorf(err, codes.Internal, "lock payment creation: %v", err)
+		}
+		var err error
+		balance, err = loadInvoiceBalanceTx(ctx, dbTx, invoiceID, ctxTenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "invoice not found or not payable")
+		}
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "load invoice balance: %v", err)
+		}
+
+		active, err := loadActiveInvoicePaymentTx(ctx, dbTx, invoiceID, ctxTenantID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return txStatusErrorf(err, codes.Internal, "load pending invoice payment: %v", err)
+		}
+		if err == nil {
+			if active.ActiveCount != 1 {
+				return status.Error(codes.FailedPrecondition, "invoice has multiple pending payments and requires reconciliation")
+			}
+			if active.Method != method {
+				return status.Errorf(codes.FailedPrecondition, "invoice already has a pending %s payment", active.Method)
+			}
+			if !active.Amount.Equal(balance.AmountDue) {
+				return status.Error(codes.FailedPrecondition, "pending payment no longer matches the invoice balance")
+			}
+			existing = active
+			return nil
+		}
+
+		if !balance.AmountDue.IsPositive() {
+			return status.Error(codes.FailedPrecondition, "invoice has no outstanding balance")
+		}
+
+		paymentID = uuid.New().String()
+		expiresAt := time.Now().Add(30 * time.Minute)
+		createdAt := time.Now()
+		var txID string
+		resp = &purserpb.PaymentResponse{
+			Id:        paymentID,
+			Amount:    decimalFloat(balance.AmountDue),
+			Currency:  balance.Currency,
+			Status:    "pending",
+			Method:    method,
+			ExpiresAt: timestamppb.New(expiresAt),
+			CreatedAt: timestamppb.New(createdAt),
+		}
+
+		if asset, ok := strings.CutPrefix(method, "crypto_"); ok {
+			planKey := strings.ToUpper(asset) + "|" + balance.AmountDue.String() + "|" + balance.Currency
+			if quotedPlan == nil || quotedPlanKey != planKey {
+				plan, planErr := s.prepareCryptoPayment(ctx, invoiceID, ctxTenantID, strings.ToUpper(asset), balance.AmountDue, balance.Currency, expiresAt)
+				if planErr != nil {
+					return status.Errorf(codes.Internal, "prepare crypto payment: %v", planErr)
+				}
+				quotedPlan, quotedPlanKey = plan, planKey
+			}
+			plan := *quotedPlan
+			plan.Params.ExpiresAt = expiresAt
+			details, walletErr := s.createCryptoPaymentTx(ctx, dbTx, &plan)
+			if walletErr != nil {
+				return txStatusErrorf(walletErr, codes.Internal, "create crypto payment: %v", walletErr)
+			}
+			details.apply(resp)
+			txID = details.WalletAddress
+		}
+
+		if err = purserdb.New(dbTx).CreatePendingInvoicePayment(ctx, purserdb.CreatePendingInvoicePaymentParams{
+			PaymentID: paymentID,
+			InvoiceID: invoiceID,
+			Method:    method,
+			Amount:    balance.AmountDue.StringFixed(2),
+			Currency:  balance.Currency,
+			TxID:      txID,
+			CreatedAt: sql.NullTime{Time: createdAt, Valid: true},
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "store pending payment: %v", err)
+		}
+		if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, ctxTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
+			PaymentId: paymentID,
+			InvoiceId: invoiceID,
+			Amount:    decimalFloat(balance.AmountDue),
+			Currency:  balance.Currency,
+			Provider:  method,
+			Status:    "pending",
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "enqueue payment_created: %v", err)
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
 		return nil, status.Errorf(codes.Internal, "begin payment transaction: %v", err)
-	}
-	defer dbTx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	if err = lockInvoicePaymentTx(ctx, dbTx, invoiceID); err != nil {
-		return nil, status.Errorf(codes.Internal, "lock payment creation: %v", err)
-	}
-	balance, err := loadInvoiceBalanceTx(ctx, dbTx, invoiceID, ctxTenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "invoice not found or not payable")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "load invoice balance: %v", err)
-	}
-
-	existing, err := loadActiveInvoicePaymentTx(ctx, dbTx, invoiceID, ctxTenantID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "load pending invoice payment: %v", err)
-	}
-	if err == nil {
-		if existing.ActiveCount != 1 {
-			return nil, status.Error(codes.FailedPrecondition, "invoice has multiple pending payments and requires reconciliation")
-		}
-		if existing.Method != method {
-			return nil, status.Errorf(codes.FailedPrecondition, "invoice already has a pending %s payment", existing.Method)
-		}
-		if !existing.Amount.Equal(balance.AmountDue) {
-			return nil, status.Error(codes.FailedPrecondition, "pending payment no longer matches the invoice balance")
-		}
-		if err = dbTx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "commit payment transaction: %v", err)
-		}
-		return s.resumeInvoicePayment(ctx, req, balance, existing)
-	}
-
-	if !balance.AmountDue.IsPositive() {
-		return nil, status.Error(codes.FailedPrecondition, "invoice has no outstanding balance")
-	}
-
-	paymentID := uuid.New().String()
-	expiresAt := time.Now().Add(30 * time.Minute)
-	createdAt := time.Now()
-	var txID string
-	resp := &purserpb.PaymentResponse{
-		Id:        paymentID,
-		Amount:    decimalFloat(balance.AmountDue),
-		Currency:  balance.Currency,
-		Status:    "pending",
-		Method:    method,
-		ExpiresAt: timestamppb.New(expiresAt),
-		CreatedAt: timestamppb.New(createdAt),
-	}
-
-	if asset, ok := strings.CutPrefix(method, "crypto_"); ok {
-		plan, planErr := s.prepareCryptoPayment(ctx, invoiceID, ctxTenantID, strings.ToUpper(asset), balance.AmountDue, balance.Currency, expiresAt)
-		if planErr != nil {
-			return nil, status.Errorf(codes.Internal, "prepare crypto payment: %v", planErr)
-		}
-		details, walletErr := s.createCryptoPaymentTx(ctx, dbTx, plan)
-		if walletErr != nil {
-			return nil, status.Errorf(codes.Internal, "create crypto payment: %v", walletErr)
-		}
-		details.apply(resp)
-		txID = details.WalletAddress
-	}
-
-	if err = purserdb.New(dbTx).CreatePendingInvoicePayment(ctx, purserdb.CreatePendingInvoicePaymentParams{
-		PaymentID: paymentID,
-		InvoiceID: invoiceID,
-		Method:    method,
-		Amount:    balance.AmountDue.StringFixed(2),
-		Currency:  balance.Currency,
-		TxID:      txID,
-		CreatedAt: sql.NullTime{Time: createdAt, Valid: true},
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "store pending payment: %v", err)
-	}
-	if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, ctxTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
-		PaymentId: paymentID,
-		InvoiceId: invoiceID,
-		Amount:    decimalFloat(balance.AmountDue),
-		Currency:  balance.Currency,
-		Provider:  method,
-		Status:    "pending",
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue payment_created: %v", err)
-	}
-	if err = dbTx.Commit(); err != nil {
+	case stage == txStageCommit:
 		return nil, status.Errorf(codes.Internal, "commit payment transaction: %v", err)
+	default:
+		return nil, err
+	}
+	if existing != nil {
+		return s.resumeInvoicePayment(ctx, req, balance, existing)
 	}
 
 	if method == "card" {
@@ -2607,35 +2635,30 @@ func (s *PurserServer) expireStaleInvoicePayments(ctx context.Context, invoiceID
 }
 
 func (s *PurserServer) expireStaleInvoiceCryptoPayments(ctx context.Context, invoiceID, tenantID, asset, method string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin expiration transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				s.logger.WithError(rollbackErr).Warn("Failed to roll back payment expiration transaction")
-			}
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		if err := queries.FailExpiredCryptoInvoicePayments(ctx, purserdb.FailExpiredCryptoInvoicePaymentsParams{
+			Method: method, InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
+		}); err != nil {
+			return fmt.Errorf("expire payment rows: %w", err)
 		}
-	}()
-
-	queries := purserdb.New(tx)
-	if err = queries.FailExpiredCryptoInvoicePayments(ctx, purserdb.FailExpiredCryptoInvoicePaymentsParams{
-		Method: method, InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
-	}); err != nil {
-		return fmt.Errorf("expire payment rows: %w", err)
-	}
-	if err = queries.ExpireCryptoInvoiceWallets(ctx, purserdb.ExpireCryptoInvoiceWalletsParams{
-		InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
-	}); err != nil {
-		return fmt.Errorf("expire wallet rows: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
+		if err := queries.ExpireCryptoInvoiceWallets(ctx, purserdb.ExpireCryptoInvoiceWalletsParams{
+			InvoiceID: invoiceID, TenantID: tenantID, Asset: asset,
+		}); err != nil {
+			return fmt.Errorf("expire wallet rows: %w", err)
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		return nil
+	case stage == txStageBegin:
+		return fmt.Errorf("begin expiration transaction: %w", err)
+	case stage == txStageCommit:
 		return fmt.Errorf("commit expiration transaction: %w", err)
+	default:
+		return err
 	}
-	committed = true
-	return nil
 }
 
 // prepareCryptoPayment locks the invoice's token quote before any database writes.
@@ -4586,45 +4609,47 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purser
 	now := time.Now()
 
 	// Use a transaction to create both subscription and balance atomically
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		// 1. Resolve default prepaid tier
+		queries := purserdb.New(tx)
+		defaultTier, err := queries.GetDefaultBillingTier(ctx, true)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.FailedPrecondition, "no default prepaid billing tier configured")
+		}
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to resolve default prepaid tier")
+			return txStatusErrorf(err, codes.Internal, "failed to resolve billing tier")
+		}
+
+		// 2. Create subscription with billing_model='prepaid', status='active'
+		_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
+			ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
+			BillingModel: "prepaid", Now: sql.NullTime{Time: now, Valid: true},
+		})
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to create prepaid subscription")
+			return txStatusErrorf(err, codes.Internal, "failed to create subscription")
+		}
+
+		// 3. Create prepaid balance with initial balance 0
+		_, err = queries.EnsureRuntimePrepaidBalance(ctx, purserdb.EnsureRuntimePrepaidBalanceParams{
+			ID: balanceID, TenantID: tenantID, Currency: currency,
+			Now: sql.NullTime{Time: now, Valid: true},
+		})
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to create prepaid balance")
+			return txStatusErrorf(err, codes.Internal, "failed to create prepaid balance")
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
 		return nil, status.Error(codes.Internal, "failed to start transaction")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	// 1. Resolve default prepaid tier
-	queries := purserdb.New(tx)
-	defaultTier, err := queries.GetDefaultBillingTier(ctx, true)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.FailedPrecondition, "no default prepaid billing tier configured")
-	}
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to resolve default prepaid tier")
-		return nil, status.Error(codes.Internal, "failed to resolve billing tier")
-	}
-
-	// 2. Create subscription with billing_model='prepaid', status='active'
-	_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
-		ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
-		BillingModel: "prepaid", Now: sql.NullTime{Time: now, Valid: true},
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create prepaid subscription")
-		return nil, status.Error(codes.Internal, "failed to create subscription")
-	}
-
-	// 3. Create prepaid balance with initial balance 0
-	_, err = queries.EnsureRuntimePrepaidBalance(ctx, purserdb.EnsureRuntimePrepaidBalanceParams{
-		ID: balanceID, TenantID: tenantID, Currency: currency,
-		Now: sql.NullTime{Time: now, Valid: true},
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create prepaid balance")
-		return nil, status.Error(codes.Internal, "failed to create prepaid balance")
-	}
-
-	if err = tx.Commit(); err != nil {
+	case stage == txStageCommit:
 		return nil, status.Error(codes.Internal, "failed to commit transaction")
+	default:
+		return nil, err
 	}
 
 	// An email and wallet signup may converge on the same tenant. Read the
@@ -4674,35 +4699,37 @@ func (s *PurserServer) EnsureFreeAccount(ctx context.Context, req *purserpb.Init
 	subscriptionID := uuid.New()
 	now := time.Now()
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to start transaction")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		// Resolve default postpaid tier
+		queries := purserdb.New(tx)
+		defaultTier, err := queries.GetDefaultBillingTier(ctx, false)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
+		}
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to resolve default postpaid tier")
+			return txStatusErrorf(err, codes.Internal, "failed to resolve billing tier")
+		}
 
-	// Resolve default postpaid tier
-	queries := purserdb.New(tx)
-	defaultTier, err := queries.GetDefaultBillingTier(ctx, false)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
-	}
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to resolve default postpaid tier")
-		return nil, status.Error(codes.Internal, "failed to resolve billing tier")
-	}
-
-	// Create subscription with billing_model='postpaid', status='active'
-	_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
-		ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
-		BillingModel: "postpaid", Now: sql.NullTime{Time: now, Valid: true},
+		// Create subscription with billing_model='postpaid', status='active'
+		_, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
+			ID: subscriptionID, TenantID: tenantID, TierID: defaultTier.ID,
+			BillingModel: "postpaid", Now: sql.NullTime{Time: now, Valid: true},
+		})
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to create postpaid subscription")
+			return txStatusErrorf(err, codes.Internal, "failed to create subscription")
+		}
+		return nil
 	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create postpaid subscription")
-		return nil, status.Error(codes.Internal, "failed to create subscription")
-	}
-
-	if err = tx.Commit(); err != nil {
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
+		return nil, status.Error(codes.Internal, "failed to start transaction")
+	case stage == txStageCommit:
 		return nil, status.Error(codes.Internal, "failed to commit transaction")
+	default:
+		return nil, err
 	}
 
 	// Read the winning subscription after ON CONFLICT. A concurrent wallet
@@ -4834,123 +4861,136 @@ func (s *PurserServer) recordBalanceTransaction(
 	if referenceID != nil && *referenceID != "" {
 		evidenceRef = sql.NullString{String: *referenceID, Valid: true}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to begin transaction")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	queries := purserdb.New(tx)
-	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{
-		TenantID: tenantID, Currency: currency,
-	}); err != nil {
-		s.logger.WithError(err).Error("Failed to ensure prepaid balance")
-		return nil, status.Error(codes.Internal, "failed to initialize balance")
-	}
-
 	txUUID := uuid.New()
 	txID := txUUID.String()
 	now := time.Now()
-	insertedWithReference := false
-
-	if referenceID != nil && referenceType != nil {
-		// Idempotency: use ON CONFLICT DO NOTHING so we can safely query in-tx
-		// without aborting the transaction.
-		_, insertErr := queries.InsertReferencedBalanceTransaction(ctx, purserdb.InsertReferencedBalanceTransactionParams{
-			ID: txUUID, TenantID: tenantID, AmountCents: amountCents, TransactionType: txType,
-			Description: sql.NullString{String: description, Valid: true}, ReferenceID: *referenceID,
-			ReferenceType: sql.NullString{String: *referenceType, Valid: true},
-			ActorKind:     sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
-			Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
-			CreatedAt: sql.NullTime{Time: now, Valid: true},
-		})
-		if insertErr != nil {
-			if !errors.Is(insertErr, sql.ErrNoRows) {
-				s.logger.WithError(insertErr).Error("Failed to insert balance transaction")
-				return nil, status.Error(codes.Internal, "failed to record transaction")
-			}
-
-			// Conflict: return the existing transaction (and do NOT mutate balance again).
-			existing, scanErr := queries.GetBalanceTransactionByReference(ctx, purserdb.GetBalanceTransactionByReferenceParams{
-				TenantID: tenantID, ReferenceType: sql.NullString{String: *referenceType, Valid: true}, ReferenceID: *referenceID,
-			})
-			if scanErr != nil {
-				if errors.Is(scanErr, sql.ErrNoRows) {
-					return nil, status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
-				}
-				s.logger.WithError(scanErr).Error("Failed to load existing balance transaction")
-				return nil, status.Error(codes.Internal, "failed to load existing transaction")
-			}
-
-			return balanceTransactionFromReferenceRow(existing), nil
+	var (
+		newBalance  int64
+		existingTxn *purserpb.BalanceTransaction
+	)
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		existingTxn = nil
+		queries := purserdb.New(tx)
+		if err := queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{
+			TenantID: tenantID, Currency: currency,
+		}); err != nil {
+			s.logger.WithError(err).Error("Failed to ensure prepaid balance")
+			return txStatusErrorf(err, codes.Internal, "failed to initialize balance")
 		}
 
-		insertedWithReference = true
-	}
+		insertedWithReference := false
 
-	// Update balance and get new balance in one query
-	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+		if referenceID != nil && referenceType != nil {
+			// Idempotency: use ON CONFLICT DO NOTHING so we can safely query in-tx
+			// without aborting the transaction.
+			_, insertErr := queries.InsertReferencedBalanceTransaction(ctx, purserdb.InsertReferencedBalanceTransactionParams{
+				ID: txUUID, TenantID: tenantID, AmountCents: amountCents, TransactionType: txType,
+				Description: sql.NullString{String: description, Valid: true}, ReferenceID: *referenceID,
+				ReferenceType: sql.NullString{String: *referenceType, Valid: true},
+				ActorKind:     sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
+				Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
+				CreatedAt: sql.NullTime{Time: now, Valid: true},
+			})
+			if insertErr != nil {
+				if !errors.Is(insertErr, sql.ErrNoRows) {
+					s.logger.WithError(insertErr).Error("Failed to insert balance transaction")
+					return txStatusErrorf(insertErr, codes.Internal, "failed to record transaction")
+				}
+
+				// Conflict: return the existing transaction (and do NOT mutate balance again).
+				existing, scanErr := queries.GetBalanceTransactionByReference(ctx, purserdb.GetBalanceTransactionByReferenceParams{
+					TenantID: tenantID, ReferenceType: sql.NullString{String: *referenceType, Valid: true}, ReferenceID: *referenceID,
+				})
+				if scanErr != nil {
+					if errors.Is(scanErr, sql.ErrNoRows) {
+						return status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
+					}
+					s.logger.WithError(scanErr).Error("Failed to load existing balance transaction")
+					return txStatusErrorf(scanErr, codes.Internal, "failed to load existing transaction")
+				}
+
+				// The balance-row ensure above must not persist on this path, so the
+				// sentinel makes the helper roll back instead of commit.
+				existingTxn = balanceTransactionFromReferenceRow(existing)
+				return errBalanceTransactionExists
+			}
+
+			insertedWithReference = true
+		}
+
+		// Update balance and get new balance in one query
+		var err error
+		newBalance, err = queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+			AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
+		}
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to update balance")
+			return txStatusErrorf(err, codes.Internal, "failed to update balance")
+		}
+
+		if insertedWithReference {
+			_, err = queries.SetBalanceTransactionResult(ctx, purserdb.SetBalanceTransactionResultParams{
+				BalanceAfterCents: newBalance, ID: txUUID,
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to update balance transaction")
+				return txStatusErrorf(err, codes.Internal, "failed to record transaction")
+			}
+		} else {
+			referenceIDValue := sql.NullString{}
+			if referenceID != nil && *referenceID != "" {
+				referenceIDValue = sql.NullString{String: *referenceID, Valid: true}
+			}
+			referenceTypeValue := sql.NullString{}
+			if referenceType != nil && *referenceType != "" {
+				referenceTypeValue = sql.NullString{String: *referenceType, Valid: true}
+			}
+			err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+				ID: txUUID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+				TransactionType: txType, Description: sql.NullString{String: description, Valid: true},
+				ReferenceID: referenceIDValue, ReferenceType: referenceTypeValue,
+				ActorKind: sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
+				Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
+				CreatedAt: sql.NullTime{Time: now, Valid: true},
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to insert transaction")
+				return txStatusErrorf(err, codes.Internal, "failed to record transaction")
+			}
+		}
+
+		if txType == "topup" && amountCents > 0 {
+			topupID := ""
+			if referenceID != nil {
+				topupID = *referenceID
+			}
+			if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &ipcpb.BillingEvent{
+				TopupId:  topupID,
+				Amount:   float64(amountCents) / 100.0,
+				Currency: currency,
+				Status:   "credited",
+			}); enqErr != nil {
+				s.logger.WithError(enqErr).Error("Failed to enqueue topup_credited event")
+				return txStatusErrorf(enqErr, codes.Internal, "failed to enqueue topup credited event")
+			}
+		}
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
-	}
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to update balance")
-		return nil, status.Error(codes.Internal, "failed to update balance")
+	switch {
+	case err == nil:
+	case errors.Is(err, errBalanceTransactionExists):
+		return existingTxn, nil
+	case stage == txStageBegin:
+		return nil, status.Error(codes.Internal, "failed to begin transaction")
+	case stage == txStageCommit:
+		return nil, status.Error(codes.Internal, "failed to commit transaction")
+	default:
+		return nil, err
 	}
 	previousBalance := newBalance - amountCents
-
-	if insertedWithReference {
-		_, err = queries.SetBalanceTransactionResult(ctx, purserdb.SetBalanceTransactionResultParams{
-			BalanceAfterCents: newBalance, ID: txUUID,
-		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to update balance transaction")
-			return nil, status.Error(codes.Internal, "failed to record transaction")
-		}
-	} else {
-		referenceIDValue := sql.NullString{}
-		if referenceID != nil && *referenceID != "" {
-			referenceIDValue = sql.NullString{String: *referenceID, Valid: true}
-		}
-		referenceTypeValue := sql.NullString{}
-		if referenceType != nil && *referenceType != "" {
-			referenceTypeValue = sql.NullString{String: *referenceType, Valid: true}
-		}
-		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-			ID: txUUID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
-			TransactionType: txType, Description: sql.NullString{String: description, Valid: true},
-			ReferenceID: referenceIDValue, ReferenceType: referenceTypeValue,
-			ActorKind: sql.NullString{String: actorKind, Valid: true}, ActorID: actorID,
-			Reason: sql.NullString{String: description, Valid: true}, EvidenceRef: evidenceRef,
-			CreatedAt: sql.NullTime{Time: now, Valid: true},
-		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to insert transaction")
-			return nil, status.Error(codes.Internal, "failed to record transaction")
-		}
-	}
-
-	if txType == "topup" && amountCents > 0 {
-		topupID := ""
-		if referenceID != nil {
-			topupID = *referenceID
-		}
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &ipcpb.BillingEvent{
-			TopupId:  topupID,
-			Amount:   float64(amountCents) / 100.0,
-			Currency: currency,
-			Status:   "credited",
-		}); enqErr != nil {
-			s.logger.WithError(enqErr).Error("Failed to enqueue topup_credited event")
-			return nil, status.Error(codes.Internal, "failed to enqueue topup credited event")
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Error(codes.Internal, "failed to commit transaction")
-	}
 
 	if s.thresholdEnforcer != nil {
 		if err := s.thresholdEnforcer.EnforcePrepaidThresholds(ctx, tenantID, previousBalance, newBalance); err != nil {
@@ -5146,63 +5186,68 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.Create
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create checkout session")
 		s.markProviderIntentFailed(ctx, providerIntentID, "checkout_session_create_failed", err)
-		failTx, beginErr := s.db.BeginTx(ctx, nil)
-		if beginErr != nil {
-			s.logger.WithError(beginErr).WithField("topup_id", topupID).Warn("Failed to begin tx for topup_failed")
-			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
-		}
-		defer failTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-		if _, markErr := purserdb.New(failTx).FailPendingCardTopup(ctx, topupID); markErr != nil {
-			s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
-			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
-		}
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, failTx, eventTopupFailed, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
-			TopupId:  topupID,
-			Amount:   float64(amountCents) / 100.0,
-			Currency: currency,
-			Provider: provider,
-			Status:   "failed",
-		}); enqErr != nil {
-			s.logger.WithError(enqErr).WithField("topup_id", topupID).Warn("Failed to enqueue topup_failed event")
-			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
-		}
-		if commitErr := failTx.Commit(); commitErr != nil {
-			s.logger.WithError(commitErr).WithField("topup_id", topupID).Warn("Failed to commit topup_failed tx")
+		failStage, failErr := runRetryableTx(ctx, s.db, func(failTx *sql.Tx) error {
+			if _, markErr := purserdb.New(failTx).FailPendingCardTopup(ctx, topupID); markErr != nil {
+				s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
+				return markErr
+			}
+			if _, enqErr := s.EnqueueBillingEventTx(ctx, failTx, eventTopupFailed, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
+				TopupId:  topupID,
+				Amount:   float64(amountCents) / 100.0,
+				Currency: currency,
+				Provider: provider,
+				Status:   "failed",
+			}); enqErr != nil {
+				s.logger.WithError(enqErr).WithField("topup_id", topupID).Warn("Failed to enqueue topup_failed event")
+				return enqErr
+			}
+			return nil
+		})
+		switch {
+		case failErr == nil:
+		case failStage == txStageBegin:
+			s.logger.WithError(failErr).WithField("topup_id", topupID).Warn("Failed to begin tx for topup_failed")
+		case failStage == txStageCommit:
+			s.logger.WithError(failErr).WithField("topup_id", topupID).Warn("Failed to commit topup_failed tx")
 		}
 		return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 	}
 
-	createdTx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin topup created tx: %v", err)
-	}
-	defer createdTx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-	createdQueries := purserdb.New(createdTx)
-	if err := createdQueries.OpenPrepaidTopupProviderIntent(ctx, purserdb.OpenPrepaidTopupProviderIntentParams{
-		SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
-		ExpiresAt: sql.NullTime{Time: result.ExpiresAt, Valid: true}, IntentID: providerIntentID,
-	}); err != nil {
-		s.logger.WithError(err).WithField("intent_id", providerIntentID).Error("Failed to attach provider session to top-up intent")
-		return nil, status.Error(codes.Internal, "failed to attach checkout to payment intent")
-	}
-	if _, err := createdQueries.AttachCheckoutToPendingTopup(ctx, purserdb.AttachCheckoutToPendingTopupParams{
-		SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
-		ExpiresAt: result.ExpiresAt, TopupID: topupID,
-	}); err != nil {
-		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
-		return nil, status.Error(codes.Internal, "failed to attach checkout to topup")
-	}
-	if _, err := s.EnqueueBillingEventTx(ctx, createdTx, eventTopupCreated, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
-		TopupId:  topupID,
-		Amount:   float64(amountCents) / 100.0,
-		Currency: currency,
-		Provider: provider,
-		Status:   "pending",
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue topup_created: %v", err)
-	}
-	if err := createdTx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit topup created tx: %v", err)
+	stage, txErr := runRetryableTx(ctx, s.db, func(createdTx *sql.Tx) error {
+		createdQueries := purserdb.New(createdTx)
+		if err := createdQueries.OpenPrepaidTopupProviderIntent(ctx, purserdb.OpenPrepaidTopupProviderIntentParams{
+			SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+			ExpiresAt: sql.NullTime{Time: result.ExpiresAt, Valid: true}, IntentID: providerIntentID,
+		}); err != nil {
+			s.logger.WithError(err).WithField("intent_id", providerIntentID).Error("Failed to attach provider session to top-up intent")
+			return txStatusErrorf(err, codes.Internal, "failed to attach checkout to payment intent")
+		}
+		if _, err := createdQueries.AttachCheckoutToPendingTopup(ctx, purserdb.AttachCheckoutToPendingTopupParams{
+			SessionID: sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+			ExpiresAt: result.ExpiresAt, TopupID: topupID,
+		}); err != nil {
+			s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
+			return txStatusErrorf(err, codes.Internal, "failed to attach checkout to topup")
+		}
+		if _, err := s.EnqueueBillingEventTx(ctx, createdTx, eventTopupCreated, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
+			TopupId:  topupID,
+			Amount:   float64(amountCents) / 100.0,
+			Currency: currency,
+			Provider: provider,
+			Status:   "pending",
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "enqueue topup_created: %v", err)
+		}
+		return nil
+	})
+	switch {
+	case txErr == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin topup created tx: %v", txErr)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "commit topup created tx: %v", txErr)
+	default:
+		return nil, txErr
 	}
 
 	return &purserpb.CreateCardTopupResponse{
@@ -5439,45 +5484,49 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.Crea
 	now := time.Now()
 	expiresAt := now.Add(24 * time.Hour)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin crypto topup tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort post-commit
-
-	walletID, address, err := s.hdwallet.GenerateDepositAddressTx(ctx, tx, handlers.DepositAddressParams{
-		TenantID:            tenantID,
-		Purpose:             "prepaid",
-		Asset:               assetStr,
-		Network:             networkName,
-		ExpiresAt:           expiresAt,
-		ExpectedAmountCents: &expectedAmountCents,
-		ClientIP:            req.GetClientIp(),
-		Quote:               quote,
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to generate deposit address")
-		return nil, status.Errorf(codes.Internal, "failed to generate deposit address: %v", err)
-	}
-
 	// Re-derive token amount from the ceiled base units so the displayed
 	// "send exactly X" matches what the monitor compares against.
 	expectedAmountToken := decimal.NewFromBigInt(expectedBaseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
 
-	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventTopupCreated, tenantID, userID, "topup", walletID, &ipcpb.BillingEvent{
-		TopupId:  walletID,
-		Amount:   float64(expectedAmountCents) / 100.0,
-		Currency: normalizedCurrency,
-		Provider: "crypto",
-		Status:   "pending",
-		Asset:    assetStr,
-		Network:  networkName,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue crypto topup_created: %v", err)
-	}
+	var walletID, address string
+	stage, txErr := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		var err error
+		walletID, address, err = s.hdwallet.GenerateDepositAddressTx(ctx, tx, handlers.DepositAddressParams{
+			TenantID:            tenantID,
+			Purpose:             "prepaid",
+			Asset:               assetStr,
+			Network:             networkName,
+			ExpiresAt:           expiresAt,
+			ExpectedAmountCents: &expectedAmountCents,
+			ClientIP:            req.GetClientIp(),
+			Quote:               quote,
+		})
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to generate deposit address")
+			return txStatusErrorf(err, codes.Internal, "failed to generate deposit address: %v", err)
+		}
 
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit crypto topup tx: %v", err)
+		if _, err := s.EnqueueBillingEventTx(ctx, tx, eventTopupCreated, tenantID, userID, "topup", walletID, &ipcpb.BillingEvent{
+			TopupId:  walletID,
+			Amount:   float64(expectedAmountCents) / 100.0,
+			Currency: normalizedCurrency,
+			Provider: "crypto",
+			Status:   "pending",
+			Asset:    assetStr,
+			Network:  networkName,
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "enqueue crypto topup_created: %v", err)
+		}
+		return nil
+	})
+	switch {
+	case txErr == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin crypto topup tx: %v", txErr)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "commit crypto topup tx: %v", txErr)
+	default:
+		return nil, txErr
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5596,69 +5645,72 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	queries := purserdb.New(tx)
-	subscription, err := queries.LockTenantSubscriptionForPromotion(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to lock subscription: %v", err)
-	}
-
-	requestedTierID := strings.TrimSpace(req.GetTierId())
-	if subscription.BillingModel == "postpaid" {
-		if requestedTierID != "" && requestedTierID != subscription.TierID {
-			return nil, status.Error(codes.FailedPrecondition, "already postpaid on a different tier; use changeBillingTier")
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		subscription, err := queries.LockTenantSubscriptionForPromotion(ctx, tenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "no subscription found for tenant")
 		}
-		requestedTierID = subscription.TierID
-	}
-
-	tier, err := queries.GetPostpaidPromotionTier(ctx, purserdb.GetPostpaidPromotionTierParams{
-		HasRequestedTier: requestedTierID != "", RequestedTierID: requestedTierID,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		if requestedTierID != "" {
-			return nil, status.Error(codes.NotFound, "tier not found")
-		}
-		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to resolve tier: %v", err)
-	}
-	if !tier.IsActive.Bool || tier.IsDefaultPrepaid.Bool || tier.TierLevel.Int32 < 1 {
-		return nil, status.Error(codes.FailedPrecondition, "tier is not active and postpaid-eligible")
-	}
-	if !strings.EqualFold(tier.TierName, "free") {
-		address := scanBillingAddress(subscription.BillingAddress)
-		profileComplete := subscription.BillingName.Valid && strings.TrimSpace(subscription.BillingName.String) != "" &&
-			subscription.BillingEmail.Valid && strings.TrimSpace(subscription.BillingEmail.String) != "" && address != nil &&
-			address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
-		if !profileComplete {
-			return nil, status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required for this operation")
-		}
-		providerReady := subscription.PaymentMethod.String == "stripe" && subscription.StripeSubscriptionID.Valid && subscription.StripeSubscriptionID.String != "" ||
-			subscription.PaymentMethod.String == "mollie" && subscription.MollieSubscriptionID.Valid && subscription.MollieSubscriptionID.String != ""
-		if !providerReady {
-			return nil, status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before enabling paid postpaid billing")
-		}
-	}
-
-	if subscription.BillingModel == "prepaid" {
-		_, err = queries.PromotePrepaidTenantSubscription(ctx, purserdb.PromotePrepaidTenantSubscriptionParams{
-			TierID: tier.ID, TenantID: tenantID,
-		})
 		if err != nil {
-			return nil, status.Errorf(codes.Aborted, "subscription changed during promotion: %v", err)
+			return txStatusErrorf(err, codes.Internal, "failed to lock subscription: %v", err)
 		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+
+		requestedTierID := strings.TrimSpace(req.GetTierId())
+		if subscription.BillingModel == "postpaid" {
+			if requestedTierID != "" && requestedTierID != subscription.TierID {
+				return status.Error(codes.FailedPrecondition, "already postpaid on a different tier; use changeBillingTier")
+			}
+			requestedTierID = subscription.TierID
+		}
+
+		tier, err := queries.GetPostpaidPromotionTier(ctx, purserdb.GetPostpaidPromotionTierParams{
+			HasRequestedTier: requestedTierID != "", RequestedTierID: requestedTierID,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			if requestedTierID != "" {
+				return status.Error(codes.NotFound, "tier not found")
+			}
+			return status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
+		}
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "failed to resolve tier: %v", err)
+		}
+		if !tier.IsActive.Bool || tier.IsDefaultPrepaid.Bool || tier.TierLevel.Int32 < 1 {
+			return status.Error(codes.FailedPrecondition, "tier is not active and postpaid-eligible")
+		}
+		if !strings.EqualFold(tier.TierName, "free") {
+			address := scanBillingAddress(subscription.BillingAddress)
+			profileComplete := subscription.BillingName.Valid && strings.TrimSpace(subscription.BillingName.String) != "" &&
+				subscription.BillingEmail.Valid && strings.TrimSpace(subscription.BillingEmail.String) != "" && address != nil &&
+				address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
+			if !profileComplete {
+				return status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required for this operation")
+			}
+			providerReady := subscription.PaymentMethod.String == "stripe" && subscription.StripeSubscriptionID.Valid && subscription.StripeSubscriptionID.String != "" ||
+				subscription.PaymentMethod.String == "mollie" && subscription.MollieSubscriptionID.Valid && subscription.MollieSubscriptionID.String != ""
+			if !providerReady {
+				return status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before enabling paid postpaid billing")
+			}
+		}
+
+		if subscription.BillingModel == "prepaid" {
+			_, err = queries.PromotePrepaidTenantSubscription(ctx, purserdb.PromotePrepaidTenantSubscriptionParams{
+				TierID: tier.ID, TenantID: tenantID,
+			})
+			if err != nil {
+				return txStatusErrorf(err, codes.Aborted, "subscription changed during promotion: %v", err)
+			}
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	default:
+		return nil, err
 	}
 
 	canonical, err := purserdb.New(s.db).GetCanonicalPromotedSubscription(ctx, purserdb.GetCanonicalPromotedSubscriptionParams{
@@ -5718,72 +5770,135 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and tier_id are required")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tier change: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	queries := purserdb.New(tx)
-	current, err := queries.LockTenantSubscriptionForTierChange(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "load subscription: %v", err)
-	}
-	if current.BillingModel != "postpaid" {
-		return nil, status.Error(codes.FailedPrecondition, "ChangeBillingTier requires postpaid billing; use PromoteToPaid for prepaid → postpaid")
-	}
-
-	target, err := queries.GetTierForBillingChange(ctx, targetTierID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "target tier not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "load target tier: %v", err)
-	}
-	if !target.IsActive.Bool {
-		return nil, status.Error(codes.FailedPrecondition, "target tier is inactive")
-	}
-	if target.IsDefaultPrepaid.Bool || target.TierLevel.Int32 < 1 {
-		return nil, status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
-	}
-	if !strings.EqualFold(target.TierName, "free") {
-		collection, collectionErr := queries.GetPostpaidCollectionSetup(ctx, tenantID)
-		if collectionErr != nil {
-			return nil, status.Errorf(codes.Internal, "verify postpaid collection setup: %v", collectionErr)
+	const (
+		tierChangeUnchanged = iota
+		tierChangeUpgrade
+		tierChangeDowngrade
+	)
+	var (
+		current   purserdb.LockTenantSubscriptionForTierChangeRow
+		target    purserdb.GetTierForBillingChangeRow
+		outcome   int
+		effective time.Time
+	)
+	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		var err error
+		current, err = queries.LockTenantSubscriptionForTierChange(ctx, tenantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "no subscription found for tenant")
 		}
-		address := scanBillingAddress(collection.BillingAddress)
-		profileComplete := collection.BillingName.Valid && strings.TrimSpace(collection.BillingName.String) != "" &&
-			collection.BillingEmail.Valid && strings.TrimSpace(collection.BillingEmail.String) != "" && address != nil &&
-			address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
-		if !profileComplete {
-			return nil, status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required before selecting a paid tier")
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "load subscription: %v", err)
 		}
-		collectionReady := collection.PaymentMethod.String == "stripe" && collection.StripeSubscriptionID.Valid && collection.StripeSubscriptionID.String != "" ||
-			collection.PaymentMethod.String == "mollie" && collection.MollieSubscriptionID.Valid && collection.MollieSubscriptionID.String != ""
-		if !collectionReady {
-			return nil, status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before selecting a paid tier")
+		if current.BillingModel != "postpaid" {
+			return status.Error(codes.FailedPrecondition, "ChangeBillingTier requires postpaid billing; use PromoteToPaid for prepaid → postpaid")
 		}
-	}
 
-	now := time.Now()
-	resolvedPeriodStart, resolvedPeriodEnd, periodErr := resolveBillingPeriod(ctx, tx, tenantID, current.BillingPeriodStart, current.BillingPeriodEnd, now)
-	if periodErr != nil {
-		return nil, status.Errorf(codes.Internal, "resolve billing period: %v", periodErr)
-	}
+		target, err = queries.GetTierForBillingChange(ctx, targetTierID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Error(codes.NotFound, "target tier not found")
+		}
+		if err != nil {
+			return txStatusErrorf(err, codes.Internal, "load target tier: %v", err)
+		}
+		if !target.IsActive.Bool {
+			return status.Error(codes.FailedPrecondition, "target tier is inactive")
+		}
+		if target.IsDefaultPrepaid.Bool || target.TierLevel.Int32 < 1 {
+			return status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
+		}
+		if !strings.EqualFold(target.TierName, "free") {
+			collection, collectionErr := queries.GetPostpaidCollectionSetup(ctx, tenantID)
+			if collectionErr != nil {
+				return txStatusErrorf(collectionErr, codes.Internal, "verify postpaid collection setup: %v", collectionErr)
+			}
+			address := scanBillingAddress(collection.BillingAddress)
+			profileComplete := collection.BillingName.Valid && strings.TrimSpace(collection.BillingName.String) != "" &&
+				collection.BillingEmail.Valid && strings.TrimSpace(collection.BillingEmail.String) != "" && address != nil &&
+				address.Street != "" && address.City != "" && address.PostalCode != "" && address.Country != ""
+			if !profileComplete {
+				return status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required before selecting a paid tier")
+			}
+			collectionReady := collection.PaymentMethod.String == "stripe" && collection.StripeSubscriptionID.Valid && collection.StripeSubscriptionID.String != "" ||
+				collection.PaymentMethod.String == "mollie" && collection.MollieSubscriptionID.Valid && collection.MollieSubscriptionID.String != ""
+			if !collectionReady {
+				return status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before selecting a paid tier")
+			}
+		}
 
-	if targetTierID == current.TierID {
-		if periodUpdateErr := queries.BackfillTenantBillingPeriod(ctx, purserdb.BackfillTenantBillingPeriodParams{
+		now := time.Now()
+		resolvedPeriodStart, resolvedPeriodEnd, periodErr := resolveBillingPeriod(ctx, tx, tenantID, current.BillingPeriodStart, current.BillingPeriodEnd, now)
+		if periodErr != nil {
+			return txStatusErrorf(periodErr, codes.Internal, "resolve billing period: %v", periodErr)
+		}
+
+		if targetTierID == current.TierID {
+			outcome = tierChangeUnchanged
+			if periodUpdateErr := queries.BackfillTenantBillingPeriod(ctx, purserdb.BackfillTenantBillingPeriodParams{
+				PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
+				PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
+			}); periodUpdateErr != nil {
+				return txStatusErrorf(periodUpdateErr, codes.Internal, "backfill billing period: %v", periodUpdateErr)
+			}
+			return nil
+		}
+
+		if target.TierLevel.Int32 >= current.TierLevel.Int32 {
+			// UPGRADE — apply immediately. Cluster reconcile + cache invalidation
+			// happen after the DB transaction commits.
+			outcome = tierChangeUpgrade
+			if err := queries.ApplyTenantTierUpgrade(ctx, purserdb.ApplyTenantTierUpgradeParams{
+				TierID:      targetTierID,
+				PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
+				PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
+			}); err != nil {
+				return txStatusErrorf(err, codes.Internal, "update subscription tier: %v", err)
+			}
+			return nil
+		}
+
+		// DOWNGRADE — stage for end of period. The post-commit applier in
+		// jobs.go flips tier_id and reconciles after the period's invoice clears.
+		outcome = tierChangeDowngrade
+		if current.StripeCurrentPeriodEnd.Valid {
+			effective = current.StripeCurrentPeriodEnd.Time
+		} else if current.BillingPeriodEnd.Valid {
+			effective = current.BillingPeriodEnd.Time
+		} else {
+			effective = resolvedPeriodEnd
+		}
+		if effective.IsZero() {
+			return status.Error(codes.FailedPrecondition, "subscription has no billing_period_end; cannot schedule downgrade")
+		}
+		if !resolvedPeriodStart.Before(effective) {
+			resolvedPeriodStart = effective.AddDate(0, -1, 0)
+		}
+
+		if err := queries.ScheduleTenantTierDowngrade(ctx, purserdb.ScheduleTenantTierDowngradeParams{
+			TierID: targetTierID, EffectiveAt: sql.NullTime{Time: effective, Valid: true},
 			PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
-			PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
-		}); periodUpdateErr != nil {
-			return nil, status.Errorf(codes.Internal, "backfill billing period: %v", periodUpdateErr)
+			PeriodEnd:   sql.NullTime{Time: effective, Valid: true}, TenantID: tenantID,
+		}); err != nil {
+			return txStatusErrorf(err, codes.Internal, "schedule downgrade: %v", err)
 		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "commit unchanged tier: %v", err)
-		}
+		return nil
+	})
+	switch {
+	case err == nil:
+	case stage == txStageBegin:
+		return nil, status.Errorf(codes.Internal, "begin tier change: %v", err)
+	case stage == txStageCommit && outcome == tierChangeUnchanged:
+		return nil, status.Errorf(codes.Internal, "commit unchanged tier: %v", err)
+	case stage == txStageCommit && outcome == tierChangeUpgrade:
+		return nil, status.Errorf(codes.Internal, "commit tier upgrade: %v", err)
+	case stage == txStageCommit:
+		return nil, status.Errorf(codes.Internal, "commit scheduled downgrade: %v", err)
+	default:
+		return nil, err
+	}
+
+	if outcome == tierChangeUnchanged {
 		eligibleClusters, primaryCluster, clusterErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID)
 		if clusterErr != nil {
 			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access for unchanged tier")
@@ -5802,20 +5917,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		}, nil
 	}
 
-	if target.TierLevel.Int32 >= current.TierLevel.Int32 {
-		// UPGRADE — apply immediately. Cluster reconcile + cache invalidation
-		// happen after the DB transaction commits.
-		if err := queries.ApplyTenantTierUpgrade(ctx, purserdb.ApplyTenantTierUpgradeParams{
-			TierID:      targetTierID,
-			PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
-			PeriodEnd:   sql.NullTime{Time: resolvedPeriodEnd, Valid: true}, TenantID: tenantID,
-		}); err != nil {
-			return nil, status.Errorf(codes.Internal, "update subscription tier: %v", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "commit tier upgrade: %v", err)
-		}
-
+	if outcome == tierChangeUpgrade {
 		eligibleClusters, primaryCluster, clusterErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID)
 		if clusterErr != nil {
 			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access after tier change")
@@ -5840,34 +5942,6 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			EligibleClusterIds: eligibleClusters,
 			PrimaryClusterId:   primaryCluster,
 		}, nil
-	}
-
-	// DOWNGRADE — stage for end of period. The post-commit applier in
-	// jobs.go flips tier_id and reconciles after the period's invoice clears.
-	var effective time.Time
-	if current.StripeCurrentPeriodEnd.Valid {
-		effective = current.StripeCurrentPeriodEnd.Time
-	} else if current.BillingPeriodEnd.Valid {
-		effective = current.BillingPeriodEnd.Time
-	} else {
-		effective = resolvedPeriodEnd
-	}
-	if effective.IsZero() {
-		return nil, status.Error(codes.FailedPrecondition, "subscription has no billing_period_end; cannot schedule downgrade")
-	}
-	if !resolvedPeriodStart.Before(effective) {
-		resolvedPeriodStart = effective.AddDate(0, -1, 0)
-	}
-
-	if err := queries.ScheduleTenantTierDowngrade(ctx, purserdb.ScheduleTenantTierDowngradeParams{
-		TierID: targetTierID, EffectiveAt: sql.NullTime{Time: effective, Valid: true},
-		PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
-		PeriodEnd:   sql.NullTime{Time: effective, Valid: true}, TenantID: tenantID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "schedule downgrade: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "commit scheduled downgrade: %v", err)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5899,6 +5973,53 @@ func derefString(s *string) string {
 	}
 	return *s
 }
+
+// txStage names the step of a retrying transaction that produced its final
+// error, so RPC handlers keep distinct begin, body, and commit failure messages.
+type txStage int
+
+const (
+	txStageBegin txStage = iota
+	txStageBody
+	txStageCommit
+)
+
+// runRetryableTx runs fn through fwdb.WithRetryablePostgresTxWithHook. fn may
+// run more than once, so it must only touch the database through tx.
+func runRetryableTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) (txStage, error) {
+	stage := txStageBegin
+	err := fwdb.WithRetryablePostgresTxWithHook(ctx, db, nil, func(error, int) {
+		stage = txStageBegin
+	}, func(tx *sql.Tx) error {
+		stage = txStageBody
+		if err := fn(tx); err != nil {
+			return err
+		}
+		stage = txStageCommit
+		return nil
+	})
+	return stage, err
+}
+
+// txStatusError is a gRPC status that still unwraps to its database cause, so
+// fwdb.IsRetryablePostgresError can classify failures raised inside a
+// retrying transaction body.
+type txStatusError struct {
+	st    *status.Status
+	cause error
+}
+
+func (e *txStatusError) Error() string              { return e.st.Err().Error() }
+func (e *txStatusError) GRPCStatus() *status.Status { return e.st }
+func (e *txStatusError) Unwrap() error              { return e.cause }
+
+func txStatusErrorf(cause error, code codes.Code, format string, args ...any) error {
+	return &txStatusError{st: status.Newf(code, format, args...), cause: cause}
+}
+
+// errBalanceTransactionExists rolls back recordBalanceTransaction when its
+// reference already has a recorded transaction.
+var errBalanceTransactionExists = errors.New("balance transaction reference already recorded")
 
 func currentBillingPeriod(now time.Time) (time.Time, time.Time) {
 	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())

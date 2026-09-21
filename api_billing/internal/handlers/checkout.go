@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -828,156 +829,158 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 
 	now := time.Now()
 
-	// Start transaction
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	var (
+		alreadyProcessedStatus string
+		awaitingSettlement     bool
+		currentBalance         int64
+		txID                   uuid.UUID
+	)
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		alreadyProcessedStatus, awaitingSettlement = "", false
 
-	// 1. Lock the pending_topup row so concurrent webhook deliveries serialize
-	//    on the idempotency check below.
-	queries := purserdb.New(tx)
-	topup, err := queries.LockPendingTopupForCheckout(ctx, topupID)
-	if err != nil {
-		return fmt.Errorf("failed to find pending topup: %w", err)
-	}
-	if topup.TenantID != tenantID {
-		s.logger.WithFields(logging.Fields{
-			"topup_id":         topupID,
-			"tenant_id":        tenantID,
-			"stored_tenant_id": topup.TenantID,
-		}).Warn("Pending top-up tenant mismatch")
-		return fmt.Errorf("pending top-up tenant mismatch")
-	}
-	if topup.Provider != string(provider) {
-		return fmt.Errorf("pending top-up provider mismatch: stored %s, received %s", topup.Provider, provider)
-	}
-	if topup.AmountCents != amountCents || amountCents <= 0 {
-		return fmt.Errorf("pending top-up amount mismatch: stored %d, received %d", topup.AmountCents, amountCents)
-	}
-	if !strings.EqualFold(topup.Currency, currency) || strings.TrimSpace(currency) == "" {
-		return fmt.Errorf("pending top-up currency mismatch: stored %s, received %s", topup.Currency, currency)
-	}
-	// Providers report currency in their own casing (Stripe sends "eur") while
-	// balance rows are keyed by the uppercase ISO code that admission, burn, and
-	// invoice credit read. Every write below uses the stored top-up currency.
-	currency = strings.ToUpper(topup.Currency)
-	if strings.TrimSpace(sessionID) == "" {
-		return fmt.Errorf("pending top-up provider session is missing")
-	}
-	if topup.CheckoutID.Valid && topup.CheckoutID.String != sessionID {
-		return fmt.Errorf("pending top-up checkout identity mismatch")
-	}
-	if topup.ProviderPaymentID.Valid && topup.ProviderPaymentID.String != providerPaymentID {
-		return fmt.Errorf("pending top-up payment identity mismatch")
-	}
-	if settled && strings.TrimSpace(providerPaymentID) == "" {
-		return fmt.Errorf("settled pending top-up provider payment identity is missing")
+		// 1. Lock the pending_topup row so concurrent webhook deliveries serialize
+		//    on the idempotency check below.
+		queries := purserdb.New(tx)
+		topup, err := queries.LockPendingTopupForCheckout(ctx, topupID)
+		if err != nil {
+			return fmt.Errorf("failed to find pending topup: %w", err)
+		}
+		if topup.TenantID != tenantID {
+			s.logger.WithFields(logging.Fields{
+				"topup_id":         topupID,
+				"tenant_id":        tenantID,
+				"stored_tenant_id": topup.TenantID,
+			}).Warn("Pending top-up tenant mismatch")
+			return fmt.Errorf("pending top-up tenant mismatch")
+		}
+		if topup.Provider != string(provider) {
+			return fmt.Errorf("pending top-up provider mismatch: stored %s, received %s", topup.Provider, provider)
+		}
+		if topup.AmountCents != amountCents || amountCents <= 0 {
+			return fmt.Errorf("pending top-up amount mismatch: stored %d, received %d", topup.AmountCents, amountCents)
+		}
+		if !strings.EqualFold(topup.Currency, currency) || strings.TrimSpace(currency) == "" {
+			return fmt.Errorf("pending top-up currency mismatch: stored %s, received %s", topup.Currency, currency)
+		}
+		// Providers report currency in their own casing (Stripe sends "eur") while
+		// balance rows are keyed by the uppercase ISO code that admission, burn, and
+		// invoice credit read. Every write below uses the stored top-up currency.
+		currency = strings.ToUpper(topup.Currency)
+		if strings.TrimSpace(sessionID) == "" {
+			return fmt.Errorf("pending top-up provider session is missing")
+		}
+		if topup.CheckoutID.Valid && topup.CheckoutID.String != sessionID {
+			return fmt.Errorf("pending top-up checkout identity mismatch")
+		}
+		if topup.ProviderPaymentID.Valid && topup.ProviderPaymentID.String != providerPaymentID {
+			return fmt.Errorf("pending top-up payment identity mismatch")
+		}
+		if settled && strings.TrimSpace(providerPaymentID) == "" {
+			return fmt.Errorf("settled pending top-up provider payment identity is missing")
+		}
+
+		if topup.Status != "pending" {
+			alreadyProcessedStatus = topup.Status
+			return errTxReadOnlyExit
+		}
+
+		attached, attachErr := queries.AttachProviderPaymentToPendingTopup(ctx, purserdb.AttachProviderPaymentToPendingTopupParams{
+			ProviderPaymentID: providerPaymentID, SessionID: sessionID, TopupID: topupID,
+			TenantID: tenantID, Provider: string(provider), AmountCents: amountCents, Currency: currency,
+		})
+		if attachErr != nil {
+			return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
+		}
+		if attached != 1 {
+			return fmt.Errorf("pending top-up evidence changed before provider payment attachment")
+		}
+
+		// Async methods complete the Checkout Session before funds settle; persist
+		// the linkage but do not credit until async_payment_succeeded arrives.
+		if !settled {
+			awaitingSettlement = true
+			return nil
+		}
+
+		// 2. Credit prepaid balance.
+		if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency}); err != nil {
+			return fmt.Errorf("failed to ensure prepaid balance: %w", err)
+		}
+		currentBalance, err = queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+			AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update prepaid balance: %w", err)
+		}
+
+		// 3. Create balance transaction. reference_type='topup' activates the
+		//    partial unique index at purser.sql:idx_balance_transactions_idempotency
+		//    so replayed webhooks cannot double-credit.
+		txID = uuid.New()
+		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+			ID: txID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: currentBalance,
+			TransactionType: "topup",
+			Description:     sql.NullString{String: fmt.Sprintf("Card top-up via %s", provider), Valid: true},
+			ReferenceID:     sql.NullString{String: topupID, Valid: true},
+			ReferenceType:   sql.NullString{String: "topup", Valid: true},
+			ActorKind:       sql.NullString{String: "webhook", Valid: true},
+			Reason:          sql.NullString{String: fmt.Sprintf("%s checkout completed", provider), Valid: true},
+			EvidenceRef:     sql.NullString{String: sessionID, Valid: true},
+			CreatedAt:       sql.NullTime{Time: now, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create balance transaction: %w", err)
+		}
+
+		// 4. Update pending_topup to completed
+		err = queries.CompletePendingTopup(ctx, purserdb.CompletePendingTopupParams{
+			CompletedAt: sql.NullTime{Time: now, Valid: true}, BalanceTransactionID: txID.String(), TopupID: topupID,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update pending topup: %w", err)
+		}
+		if err = queries.CompletePendingTopupProviderIntent(ctx, purserdb.CompletePendingTopupProviderIntentParams{
+			ProviderPaymentID: providerPaymentID, SessionID: sessionID,
+			CompletedAt: sql.NullTime{Time: now, Valid: true}, TopupID: topupID,
+		}); err != nil {
+			return fmt.Errorf("failed to update topup provider intent: %w", err)
+		}
+
+		// 5. If tenant was suspended due to balance, unsuspend. A tenant that was not suspended matches no row.
+		if _, err = queries.ReactivateFundedSubscription(ctx, tenantID); err != nil {
+			return fmt.Errorf("reactivate funded subscription: %w", err)
+		}
+
+		return emitBillingEventTx(ctx, tx, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
+			TopupId:  topupID,
+			Amount:   float64(amountCents) / 100.0,
+			Currency: currency,
+			Provider: string(provider),
+			Status:   "credited",
+		})
+	})
+	if err != nil && !errors.Is(err, errTxReadOnlyExit) {
+		return err
 	}
 
-	if topup.Status != "pending" {
+	if alreadyProcessedStatus != "" {
 		s.logger.WithFields(logging.Fields{
 			"topup_id": topupID,
-			"status":   topup.Status,
+			"status":   alreadyProcessedStatus,
 		}).Info("Top-up already processed, skipping")
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return fmt.Errorf("release completed top-up lock: %w", rollbackErr)
-		}
-		if topup.Status == "completed" && s.convergeTenantEntitlements != nil {
+		if alreadyProcessedStatus == "completed" && s.convergeTenantEntitlements != nil {
 			if convergeErr := s.convergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
 				return fmt.Errorf("converge tenant entitlements after completed top-up: %w", convergeErr)
 			}
 		}
 		return nil
 	}
-
-	attached, attachErr := queries.AttachProviderPaymentToPendingTopup(ctx, purserdb.AttachProviderPaymentToPendingTopupParams{
-		ProviderPaymentID: providerPaymentID, SessionID: sessionID, TopupID: topupID,
-		TenantID: tenantID, Provider: string(provider), AmountCents: amountCents, Currency: currency,
-	})
-	if attachErr != nil {
-		return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
-	}
-	if attached != 1 {
-		return fmt.Errorf("pending top-up evidence changed before provider payment attachment")
-	}
-
-	// Async methods complete the Checkout Session before funds settle; persist
-	// the linkage but do not credit until async_payment_succeeded arrives.
-	if !settled {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return fmt.Errorf("commit pending top-up linkage: %w", commitErr)
-		}
+	if awaitingSettlement {
 		s.logger.WithFields(logging.Fields{
 			"topup_id":  topupID,
 			"tenant_id": tenantID,
 		}).Info("Prepaid top-up pending async settlement; awaiting async_payment_succeeded")
 		return nil
-	}
-
-	// 2. Credit prepaid balance.
-	if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency}); err != nil {
-		return fmt.Errorf("failed to ensure prepaid balance: %w", err)
-	}
-	currentBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update prepaid balance: %w", err)
-	}
-
-	// 3. Create balance transaction. reference_type='topup' activates the
-	//    partial unique index at purser.sql:idx_balance_transactions_idempotency
-	//    so replayed webhooks cannot double-credit.
-	txID := uuid.New()
-	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: txID, TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: currentBalance,
-		TransactionType: "topup",
-		Description:     sql.NullString{String: fmt.Sprintf("Card top-up via %s", provider), Valid: true},
-		ReferenceID:     sql.NullString{String: topupID, Valid: true},
-		ReferenceType:   sql.NullString{String: "topup", Valid: true},
-		ActorKind:       sql.NullString{String: "webhook", Valid: true},
-		Reason:          sql.NullString{String: fmt.Sprintf("%s checkout completed", provider), Valid: true},
-		EvidenceRef:     sql.NullString{String: sessionID, Valid: true},
-		CreatedAt:       sql.NullTime{Time: now, Valid: true},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create balance transaction: %w", err)
-	}
-
-	// 4. Update pending_topup to completed
-	err = queries.CompletePendingTopup(ctx, purserdb.CompletePendingTopupParams{
-		CompletedAt: sql.NullTime{Time: now, Valid: true}, BalanceTransactionID: txID.String(), TopupID: topupID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update pending topup: %w", err)
-	}
-	if err = queries.CompletePendingTopupProviderIntent(ctx, purserdb.CompletePendingTopupProviderIntentParams{
-		ProviderPaymentID: providerPaymentID, SessionID: sessionID,
-		CompletedAt: sql.NullTime{Time: now, Valid: true}, TopupID: topupID,
-	}); err != nil {
-		return fmt.Errorf("failed to update topup provider intent: %w", err)
-	}
-
-	// 5. If tenant was suspended due to balance, unsuspend
-	_, err = queries.ReactivateFundedSubscription(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).Warn("Failed to unsuspend tenant (may not have been suspended)")
-	}
-
-	if err := emitBillingEventTx(ctx, tx, eventTopupCredited, tenantID, "topup", topupID, &ipcpb.BillingEvent{
-		TopupId:  topupID,
-		Amount:   float64(amountCents) / 100.0,
-		Currency: currency,
-		Provider: string(provider),
-		Status:   "credited",
-	}); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	s.logger.WithFields(logging.Fields{

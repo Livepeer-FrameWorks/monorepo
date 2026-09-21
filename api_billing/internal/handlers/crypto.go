@@ -19,6 +19,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -447,6 +448,10 @@ func (cm *CryptoMonitor) markConfirming(wallet PendingWallet, tx CryptoTransacti
 	cm.logger.WithFields(logging.Fields{"wallet_id": wallet.ID, "tx_hash": tx.Hash, "confirmations": tx.Confirmations}).Debug("Wallet marked confirming")
 }
 
+// errCryptoConfirmationAbandoned rolls back a payment confirmation whose
+// guarded update found the wallet or deposit event already claimed.
+var errCryptoConfirmationAbandoned = errors.New("crypto payment confirmation abandoned")
+
 // confirmPayment processes a confirmed crypto payment.
 // Invoice and prepaid wallets both validate the on-chain receipt against the
 // locked base-unit quote persisted when the address was created; prepaid
@@ -477,13 +482,6 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		"confirmations": tx.Confirmations,
 	}).Info("Confirming crypto payment")
 
-	dbTx, err := cm.db.BeginTx(ctx, nil)
-	if err != nil {
-		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to begin transaction")
-		return
-	}
-	defer dbTx.Rollback() //nolint:errcheck // rollback is best-effort
-
 	now := time.Now()
 
 	var creditedCents int64
@@ -492,65 +490,92 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	var overpaymentCurrency string
 	var invoicePayment *confirmedInvoicePayment
 
-	switch wallet.Purpose {
-	case "invoice":
-		invoicePayment, err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
-		if err == nil {
-			overpaymentCents, overpaymentCurrency, err = cm.creditInvoiceOverpaymentTx(ctx, dbTx, wallet, txBaseUnits, now)
+	// logFailure reports the step that ended the last attempt. A begin failure
+	// never enters the closure; a commit failure follows a completed body.
+	logFailure := func(err error) {
+		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to begin transaction")
+	}
+	err := database.WithRetryablePostgresTx(ctx, cm.db, nil, func(dbTx *sql.Tx) error {
+		creditedCents, creditedCurrency = 0, ""
+		overpaymentCents, overpaymentCurrency = 0, ""
+		invoicePayment = nil
+
+		var err error
+		switch wallet.Purpose {
+		case "invoice":
+			invoicePayment, err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
+			if err == nil {
+				overpaymentCents, overpaymentCurrency, err = cm.creditInvoiceOverpaymentTx(ctx, dbTx, wallet, txBaseUnits, now)
+			}
+		case "prepaid":
+			creditedCents, creditedCurrency, err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txBaseUnits, now)
+		default:
+			err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
 		}
-	case "prepaid":
-		creditedCents, creditedCurrency, err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txBaseUnits, now)
-	default:
-		err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
-	}
 
-	if err != nil {
-		cm.logger.WithFields(logging.Fields{
-			"error":     err,
-			"wallet_id": wallet.ID,
-			"purpose":   wallet.Purpose,
-		}).Error("Failed to confirm payment")
-		return
-	}
+		if err != nil {
+			logFailure = func(err error) {
+				cm.logger.WithFields(logging.Fields{
+					"error":     err,
+					"wallet_id": wallet.ID,
+					"purpose":   wallet.Purpose,
+				}).Error("Failed to confirm payment")
+			}
+			return err
+		}
 
-	// Persist the exact on-chain receipt in base units; no float round-trip.
-	queries := purserdb.New(dbTx)
-	rowsAffected, err := queries.CompleteCryptoWallet(ctx, purserdb.CompleteCryptoWalletParams{
-		TxHash: sql.NullString{String: tx.Hash, Valid: tx.Hash != ""}, ReceivedAmountBaseUnits: txBaseUnits.String(),
-		BlockNumber: sql.NullInt64{Int64: tx.BlockNumber, Valid: true}, Confirmations: int32(tx.Confirmations),
-		CompletedAt: sql.NullTime{Time: now, Valid: true}, WalletID: wallet.ID, TenantID: wallet.TenantID,
+		// Persist the exact on-chain receipt in base units; no float round-trip.
+		queries := purserdb.New(dbTx)
+		rowsAffected, err := queries.CompleteCryptoWallet(ctx, purserdb.CompleteCryptoWalletParams{
+			TxHash: sql.NullString{String: tx.Hash, Valid: tx.Hash != ""}, ReceivedAmountBaseUnits: txBaseUnits.String(),
+			BlockNumber: sql.NullInt64{Int64: tx.BlockNumber, Valid: true}, Confirmations: int32(tx.Confirmations),
+			CompletedAt: sql.NullTime{Time: now, Valid: true}, WalletID: wallet.ID, TenantID: wallet.TenantID,
+		})
+		if err != nil {
+			logFailure = func(err error) {
+				cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to update wallet status")
+			}
+			return err
+		}
+		if rowsAffected == 0 {
+			logFailure = func(error) {
+				cm.logger.WithFields(logging.Fields{
+					"wallet_id": wallet.ID,
+					"tenant_id": wallet.TenantID,
+				}).Error("Wallet completion update matched no tenant-scoped row")
+			}
+			return errCryptoConfirmationAbandoned
+		}
+		if tx.EventID != "" {
+			eventRows, eventErr := queries.AllocateCryptoDepositEvent(ctx, purserdb.AllocateCryptoDepositEventParams{
+				WalletID: wallet.ID, EventID: tx.EventID,
+			})
+			if eventErr != nil {
+				logFailure = func(err error) {
+					cm.logger.WithError(err).WithField("event_id", tx.EventID).Error("Failed to allocate crypto deposit event")
+				}
+				return eventErr
+			}
+			if eventRows != 1 {
+				logFailure = func(error) {
+					cm.logger.WithField("event_id", tx.EventID).Error("Crypto deposit event was already allocated")
+				}
+				return errCryptoConfirmationAbandoned
+			}
+		}
+		if err = enqueueCryptoPaymentEventsTx(ctx, dbTx, wallet, tx, invoicePayment, creditedCents, creditedCurrency, overpaymentCents, overpaymentCurrency); err != nil {
+			logFailure = func(err error) {
+				cm.logger.WithError(err).WithField("wallet_id", wallet.ID).Error("Failed to enqueue crypto payment billing events")
+			}
+			return err
+		}
+		logFailure = func(err error) {
+			cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to commit payment confirmation")
+		}
+		return nil
 	})
 	if err != nil {
-		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to update wallet status")
-		return
-	}
-	if rowsAffected == 0 {
-		cm.logger.WithFields(logging.Fields{
-			"wallet_id": wallet.ID,
-			"tenant_id": wallet.TenantID,
-		}).Error("Wallet completion update matched no tenant-scoped row")
-		return
-	}
-	if tx.EventID != "" {
-		eventRows, eventErr := queries.AllocateCryptoDepositEvent(ctx, purserdb.AllocateCryptoDepositEventParams{
-			WalletID: wallet.ID, EventID: tx.EventID,
-		})
-		if eventErr != nil {
-			cm.logger.WithError(eventErr).WithField("event_id", tx.EventID).Error("Failed to allocate crypto deposit event")
-			return
-		}
-		if eventRows != 1 {
-			cm.logger.WithField("event_id", tx.EventID).Error("Crypto deposit event was already allocated")
-			return
-		}
-	}
-	if err = enqueueCryptoPaymentEventsTx(ctx, dbTx, wallet, tx, invoicePayment, creditedCents, creditedCurrency, overpaymentCents, overpaymentCurrency); err != nil {
-		cm.logger.WithError(err).WithField("wallet_id", wallet.ID).Error("Failed to enqueue crypto payment billing events")
-		return
-	}
-
-	if err = dbTx.Commit(); err != nil {
-		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to commit payment confirmation")
+		logFailure(err)
 		return
 	}
 	if wallet.Purpose == "prepaid" && cm.taxInvoices != nil {
@@ -573,12 +598,18 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		}
 	}
 
-	cm.logger.WithFields(logging.Fields{
+	fields := logging.Fields{
 		"wallet_id": wallet.ID,
 		"tenant_id": wallet.TenantID,
 		"purpose":   wallet.Purpose,
 		"tx_hash":   tx.Hash,
-	}).Info("Crypto payment confirmed successfully")
+	}
+	if wallet.Purpose == "prepaid" {
+		fields["credited_cents"] = creditedCents
+		fields["credited_currency"] = creditedCurrency
+		fields["asset"] = wallet.Asset
+	}
+	cm.logger.WithFields(fields).Info("Crypto payment confirmed successfully")
 }
 
 // enqueueCryptoPaymentEventsTx writes the billing events for a confirmed
@@ -908,15 +939,6 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 	if rowsAffected == 0 {
 		return 0, "", fmt.Errorf("credited wallet update matched no tenant-scoped row")
 	}
-
-	cm.logger.WithFields(logging.Fields{
-		"tenant_id":    wallet.TenantID,
-		"amount_cents": amountCents,
-		"currency":     currency,
-		"new_balance":  newBalance,
-		"asset":        wallet.Asset,
-		"tx_hash":      tx.Hash,
-	}).Info("Prepaid balance credited")
 
 	return amountCents, currency, nil
 }

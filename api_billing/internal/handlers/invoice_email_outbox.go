@@ -11,6 +11,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/google/uuid"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
 
@@ -77,54 +78,47 @@ func (s *invoiceEmailOutboxStore) ClaimBatch(ctx context.Context, batchSize int,
 	if s.db == nil {
 		return nil, errors.New("claim invoice emails: nil database")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
+	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		candidates, err := queries.ClaimInvoiceEmailCandidates(ctx, purserdb.ClaimInvoiceEmailCandidatesParams{
+			LeaseMilliseconds: lease.Milliseconds(),
+			BatchSize:         int32(batchSize),
+		})
+		if err != nil {
+			return fmt.Errorf("select invoice email outbox: %w", err)
 		}
-	}()
 
-	queries := purserdb.New(tx)
-	candidates, err := queries.ClaimInvoiceEmailCandidates(ctx, purserdb.ClaimInvoiceEmailCandidatesParams{
-		LeaseMilliseconds: lease.Milliseconds(),
-		BatchSize:         int32(batchSize),
+		claims = make([]outbox.Claim[invoiceEmailPayload], 0, len(candidates))
+		for _, candidate := range candidates {
+			leaseToken := uuid.New()
+			affected, leaseErr := queries.LeaseInvoiceEmail(ctx, purserdb.LeaseInvoiceEmailParams{
+				LeaseToken: uuid.NullUUID{UUID: leaseToken, Valid: true},
+				ID:         candidate.ID,
+				TenantID:   candidate.TenantID,
+			})
+			if leaseErr != nil {
+				return fmt.Errorf("lease invoice email outbox: %w", leaseErr)
+			}
+			if affected != 1 {
+				return errors.New("lease invoice email outbox: selected row disappeared")
+			}
+			claims = append(claims, outbox.Claim[invoiceEmailPayload]{
+				ID:         invoiceEmailClaimID(candidate.TenantID.String(), candidate.ID.String()),
+				Attempts:   int(candidate.Attempts),
+				LeaseToken: leaseToken.String(),
+				Payload: invoiceEmailPayload{
+					InvoiceID:        candidate.InvoiceID.String(),
+					TenantID:         candidate.TenantID.String(),
+					Recipient:        candidate.Recipient,
+					NotificationType: candidate.NotificationType,
+					ReminderStage:    int(candidate.ReminderStage),
+				},
+			})
+		}
+		return nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("select invoice email outbox: %w", err)
-	}
-
-	claims = make([]outbox.Claim[invoiceEmailPayload], 0, len(candidates))
-	for _, candidate := range candidates {
-		leaseToken := uuid.New()
-		affected, leaseErr := queries.LeaseInvoiceEmail(ctx, purserdb.LeaseInvoiceEmailParams{
-			LeaseToken: uuid.NullUUID{UUID: leaseToken, Valid: true},
-			ID:         candidate.ID,
-			TenantID:   candidate.TenantID,
-		})
-		if leaseErr != nil {
-			return nil, fmt.Errorf("lease invoice email outbox: %w", leaseErr)
-		}
-		if affected != 1 {
-			return nil, errors.New("lease invoice email outbox: selected row disappeared")
-		}
-		claims = append(claims, outbox.Claim[invoiceEmailPayload]{
-			ID:         invoiceEmailClaimID(candidate.TenantID.String(), candidate.ID.String()),
-			Attempts:   int(candidate.Attempts),
-			LeaseToken: leaseToken.String(),
-			Payload: invoiceEmailPayload{
-				InvoiceID:        candidate.InvoiceID.String(),
-				TenantID:         candidate.TenantID.String(),
-				Recipient:        candidate.Recipient,
-				NotificationType: candidate.NotificationType,
-				ReminderStage:    int(candidate.ReminderStage),
-			},
-		})
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+	if txErr != nil {
+		return nil, txErr
 	}
 	return claims, nil
 }

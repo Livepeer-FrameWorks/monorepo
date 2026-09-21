@@ -18,6 +18,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
 )
@@ -337,36 +338,34 @@ func (cm *CryptoMonitor) scanUSDCLogShard(ctx context.Context, network NetworkCo
 }
 
 func (cm *CryptoMonitor) commitScanBatch(ctx context.Context, network string, from, to, safeHead int64, lastHash string, events []observedDeposit) error {
-	tx, err := cm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := purserdb.New(tx)
-	for _, event := range events {
-		err := queries.UpsertObservedCryptoDeposit(ctx, purserdb.UpsertObservedCryptoDepositParams{
-			Network: network, Asset: event.Asset, TxHash: event.TxHash, LogIndex: event.LogIndex,
-			BlockNumber: event.BlockNumber, BlockHash: event.BlockHash,
-			FromAddress: sql.NullString{String: event.From, Valid: event.From != ""},
-			ToAddress:   event.To, AmountBaseUnits: event.Amount,
+	err := database.WithRetryablePostgresTx(ctx, cm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		for _, event := range events {
+			err := queries.UpsertObservedCryptoDeposit(ctx, purserdb.UpsertObservedCryptoDepositParams{
+				Network: network, Asset: event.Asset, TxHash: event.TxHash, LogIndex: event.LogIndex,
+				BlockNumber: event.BlockNumber, BlockHash: event.BlockHash,
+				FromAddress: sql.NullString{String: event.From, Valid: event.From != ""},
+				ToAddress:   event.To, AmountBaseUnits: event.Amount,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		rows, err := queries.AdvanceCryptoScanCursor(ctx, purserdb.AdvanceCryptoScanCursorParams{
+			LastScannedBlock:     to,
+			LastScannedBlockHash: sql.NullString{String: lastHash, Valid: true},
+			SafeHeadBlock:        safeHead,
+			Network:              network, ExpectedNextBlock: from,
 		})
 		if err != nil {
 			return err
 		}
-	}
-	rows, err := queries.AdvanceCryptoScanCursor(ctx, purserdb.AdvanceCryptoScanCursorParams{
-		LastScannedBlock:     to,
-		LastScannedBlockHash: sql.NullString{String: lastHash, Valid: true},
-		SafeHeadBlock:        safeHead,
-		Network:              network, ExpectedNextBlock: from,
+		if rows != 1 {
+			return fmt.Errorf("crypto scan cursor changed concurrently")
+		}
+		return nil
 	})
 	if err != nil {
-		return err
-	}
-	if rows != 1 {
-		return fmt.Errorf("crypto scan cursor changed concurrently")
-	}
-	if err := tx.Commit(); err != nil {
 		return err
 	}
 	if cm.metrics != nil && cm.metrics.CryptoScannerBlocks != nil {
@@ -376,19 +375,13 @@ func (cm *CryptoMonitor) commitScanBatch(ctx context.Context, network string, fr
 }
 
 func (cm *CryptoMonitor) rewindScanCursor(ctx context.Context, network string, block int64) error {
-	tx, err := cm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := purserdb.New(tx)
-	if err := queries.MarkCryptoDepositsReorgedFromBlock(ctx, purserdb.MarkCryptoDepositsReorgedFromBlockParams{Network: network, BlockNumber: block}); err != nil {
-		return err
-	}
-	if err := queries.RewindCryptoScanCursor(ctx, purserdb.RewindCryptoScanCursorParams{BlockNumber: block, Network: network}); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, cm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		if err := queries.MarkCryptoDepositsReorgedFromBlock(ctx, purserdb.MarkCryptoDepositsReorgedFromBlockParams{Network: network, BlockNumber: block}); err != nil {
+			return err
+		}
+		return queries.RewindCryptoScanCursor(ctx, purserdb.RewindCryptoScanCursorParams{BlockNumber: block, Network: network})
+	})
 }
 
 func (cm *CryptoMonitor) rpcBlockNumber(ctx context.Context, network NetworkConfig) (int64, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cryptosweep"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
@@ -551,56 +552,60 @@ func (s *PurserServer) PlanCryptoSweep(ctx context.Context, req *purserpb.PlanCr
 		return nil, status.Errorf(codes.Internal, "encode sweep manifest: %v", err)
 	}
 	if !req.GetDryRun() {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "begin sweep plan: %v", err)
-		}
-		defer tx.Rollback() //nolint:errcheck
-		queries := purserdb.New(tx)
-		if err := queries.InsertCryptoSweepBatch(ctx, purserdb.InsertCryptoSweepBatchParams{
-			ID: manifest.BatchID, ManifestVersion: int32(manifest.Version), Network: manifest.Network,
-			TreasuryAddress: manifest.TreasuryAddress, SnapshotBlock: manifest.SnapshotBlock,
-			SnapshotBlockHash: manifest.SnapshotBlockHash, ManifestChecksum: manifest.Checksum,
-			ExpiresAt: manifest.ExpiresAt, CreatedBy: ctxkeys.GetUserID(ctx),
-		}); err != nil {
-			return nil, status.Errorf(codes.Internal, "insert sweep batch: %v", err)
-		}
-		for _, item := range manifest.Items {
-			candidate := itemsByID[item.ItemID]
-			wallet := ""
-			if candidate.walletID.Valid {
-				wallet = candidate.walletID.String
-			}
-			if err := queries.InsertCryptoSweepItem(ctx, purserdb.InsertCryptoSweepItemParams{
-				ID: item.ItemID, BatchID: manifest.BatchID, CustodyAddressID: candidate.custodyID, WalletID: wallet,
-				Network: manifest.Network, Asset: item.Asset, SourceAddress: item.SourceAddress,
-				DerivationIndex: int32(item.DerivationIndex), DestinationAddress: item.DestinationAddress,
-				AmountBaseUnits: item.AmountBaseUnits, ChainID: manifest.ChainID, AssetContract: item.AssetContract,
-				SourceNonce:          sql.NullInt64{Int64: int64(item.SourceNonce), Valid: item.Asset == "ETH"},
-				MaxFeePerGas:         sql.NullString{String: item.MaxFeePerGas, Valid: item.MaxFeePerGas != ""},
-				MaxPriorityFeePerGas: sql.NullString{String: item.MaxPriorityFeePerGas, Valid: item.MaxPriorityFeePerGas != ""},
-				GasLimit:             sql.NullInt64{Int64: int64(item.GasLimit), Valid: item.GasLimit != 0},
-				AuthorizationNonce:   item.AuthorizationNonce, AuthorizationAfter: item.AuthorizationAfter,
-				AuthorizationBefore: item.AuthorizationBefore,
+		stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+			queries := purserdb.New(tx)
+			if err := queries.InsertCryptoSweepBatch(ctx, purserdb.InsertCryptoSweepBatchParams{
+				ID: manifest.BatchID, ManifestVersion: int32(manifest.Version), Network: manifest.Network,
+				TreasuryAddress: manifest.TreasuryAddress, SnapshotBlock: manifest.SnapshotBlock,
+				SnapshotBlockHash: manifest.SnapshotBlockHash, ManifestChecksum: manifest.Checksum,
+				ExpiresAt: manifest.ExpiresAt, CreatedBy: ctxkeys.GetUserID(ctx),
 			}); err != nil {
-				return nil, status.Errorf(codes.Internal, "insert sweep item: %v", err)
+				return txStatusErrorf(err, codes.Internal, "insert sweep batch: %v", err)
 			}
-			for _, source := range candidate.sources {
-				if err := queries.InsertCryptoSweepSource(ctx, purserdb.InsertCryptoSweepSourceParams{
-					ItemID: item.ItemID, SourceType: source.typeName, SourceID: source.id,
-					AmountBaseUnits: source.amount.String(), ClaimedBy: ctxkeys.GetUserID(ctx),
+			for _, item := range manifest.Items {
+				candidate := itemsByID[item.ItemID]
+				wallet := ""
+				if candidate.walletID.Valid {
+					wallet = candidate.walletID.String
+				}
+				if err := queries.InsertCryptoSweepItem(ctx, purserdb.InsertCryptoSweepItemParams{
+					ID: item.ItemID, BatchID: manifest.BatchID, CustodyAddressID: candidate.custodyID, WalletID: wallet,
+					Network: manifest.Network, Asset: item.Asset, SourceAddress: item.SourceAddress,
+					DerivationIndex: int32(item.DerivationIndex), DestinationAddress: item.DestinationAddress,
+					AmountBaseUnits: item.AmountBaseUnits, ChainID: manifest.ChainID, AssetContract: item.AssetContract,
+					SourceNonce:          sql.NullInt64{Int64: int64(item.SourceNonce), Valid: item.Asset == "ETH"},
+					MaxFeePerGas:         sql.NullString{String: item.MaxFeePerGas, Valid: item.MaxFeePerGas != ""},
+					MaxPriorityFeePerGas: sql.NullString{String: item.MaxPriorityFeePerGas, Valid: item.MaxPriorityFeePerGas != ""},
+					GasLimit:             sql.NullInt64{Int64: int64(item.GasLimit), Valid: item.GasLimit != 0},
+					AuthorizationNonce:   item.AuthorizationNonce, AuthorizationAfter: item.AuthorizationAfter,
+					AuthorizationBefore: item.AuthorizationBefore,
 				}); err != nil {
-					return nil, status.Errorf(codes.Aborted, "claim sweep source: %v", err)
+					return txStatusErrorf(err, codes.Internal, "insert sweep item: %v", err)
+				}
+				for _, source := range candidate.sources {
+					if err := queries.InsertCryptoSweepSource(ctx, purserdb.InsertCryptoSweepSourceParams{
+						ItemID: item.ItemID, SourceType: source.typeName, SourceID: source.id,
+						AmountBaseUnits: source.amount.String(), ClaimedBy: ctxkeys.GetUserID(ctx),
+					}); err != nil {
+						return txStatusErrorf(err, codes.Aborted, "claim sweep source: %v", err)
+					}
 				}
 			}
-		}
-		if err := queries.InsertCryptoSweepPlannedEvent(ctx, purserdb.InsertCryptoSweepPlannedEventParams{
-			BatchID: manifest.BatchID, ActorID: ctxkeys.GetUserID(ctx), Checksum: manifest.Checksum, ItemCount: int32(len(manifest.Items)),
-		}); err != nil {
-			return nil, status.Errorf(codes.Internal, "record sweep plan event: %v", err)
-		}
-		if err := tx.Commit(); err != nil {
+			if err := queries.InsertCryptoSweepPlannedEvent(ctx, purserdb.InsertCryptoSweepPlannedEventParams{
+				BatchID: manifest.BatchID, ActorID: ctxkeys.GetUserID(ctx), Checksum: manifest.Checksum, ItemCount: int32(len(manifest.Items)),
+			}); err != nil {
+				return txStatusErrorf(err, codes.Internal, "record sweep plan event: %v", err)
+			}
+			return nil
+		})
+		switch {
+		case err == nil:
+		case stage == txStageBegin:
+			return nil, status.Errorf(codes.Internal, "begin sweep plan: %v", err)
+		case stage == txStageCommit:
 			return nil, status.Errorf(codes.Internal, "commit sweep plan: %v", err)
+		default:
+			return nil, err
 		}
 	}
 	return &purserpb.PlanCryptoSweepResponse{
@@ -712,83 +717,82 @@ func (s *PurserServer) reserveRelayerTransaction(ctx context.Context, network ha
 	if err != nil {
 		return "", "", err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", "", err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := purserdb.New(tx)
-	row, err := queries.LockCryptoSweepRelayItem(ctx, item.ItemID)
-	if err != nil {
-		return "", "", err
-	}
-	if row.RelayTransaction.Valid && row.TxHash.Valid {
-		if err := tx.Commit(); err != nil {
-			return "", "", err
+	// Chain reads and relayer signing run under the item and relayer nonce locks, and the signed transaction is stored
+	// before anything is broadcast, so a replay re-reads the nonce and re-signs.
+	err = fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		rawHex, txHash = "", ""
+		queries := purserdb.New(tx)
+		row, err := queries.LockCryptoSweepRelayItem(ctx, item.ItemID)
+		if err != nil {
+			return err
 		}
-		return row.RelayTransaction.String, row.TxHash.String, nil
-	}
-	if row.Status != "planned" && row.Status != "signed" {
-		return "", "", fmt.Errorf("sweep item is %s without a replayable relay transaction", row.Status)
-	}
-	var chainNonceHex string
-	if err := s.rpcClient.Call(ctx, network, "eth_getTransactionCount", []any{relayer.Hex(), "pending"}, &chainNonceHex); err != nil {
-		return "", "", err
-	}
-	chainNonce, err := parseSweepHex(chainNonceHex)
-	if err != nil || !chainNonce.IsUint64() {
-		return "", "", fmt.Errorf("invalid relayer nonce")
-	}
-	if err := queries.EnsureCryptoSweepRelayerNonce(ctx, purserdb.EnsureCryptoSweepRelayerNonceParams{
-		Network: network.Name, ChainNonce: chainNonce.Int64(),
-	}); err != nil {
-		return "", "", err
-	}
-	storedNonce, err := queries.ReserveCryptoSweepRelayerNonce(ctx, purserdb.ReserveCryptoSweepRelayerNonceParams{
-		ChainNonce: chainNonce.Int64(), Network: network.Name,
+		if row.RelayTransaction.Valid && row.TxHash.Valid {
+			rawHex, txHash = row.RelayTransaction.String, row.TxHash.String
+			return nil
+		}
+		if row.Status != "planned" && row.Status != "signed" {
+			return fmt.Errorf("sweep item is %s without a replayable relay transaction", row.Status)
+		}
+		var chainNonceHex string
+		if err := s.rpcClient.Call(ctx, network, "eth_getTransactionCount", []any{relayer.Hex(), "pending"}, &chainNonceHex); err != nil {
+			return err
+		}
+		chainNonce, err := parseSweepHex(chainNonceHex)
+		if err != nil || !chainNonce.IsUint64() {
+			return fmt.Errorf("invalid relayer nonce")
+		}
+		if err := queries.EnsureCryptoSweepRelayerNonce(ctx, purserdb.EnsureCryptoSweepRelayerNonceParams{
+			Network: network.Name, ChainNonce: chainNonce.Int64(),
+		}); err != nil {
+			return err
+		}
+		storedNonce, err := queries.ReserveCryptoSweepRelayerNonce(ctx, purserdb.ReserveCryptoSweepRelayerNonceParams{
+			ChainNonce: chainNonce.Int64(), Network: network.Name,
+		})
+		if err != nil {
+			return err
+		}
+		var latest sweepRPCBlock
+		if err := s.rpcClient.Call(ctx, network, "eth_getBlockByNumber", []any{"latest", false}, &latest); err != nil {
+			return err
+		}
+		tip, maxFee, err := s.sweepFees(ctx, network, latest)
+		if err != nil {
+			return err
+		}
+		approvedTip, okTip := new(big.Int).SetString(item.MaxPriorityFeePerGas, 10)
+		approvedMaxFee, okMax := new(big.Int).SetString(item.MaxFeePerGas, 10)
+		if !okTip || !okMax || tip.Cmp(approvedTip) > 0 || maxFee.Cmp(approvedMaxFee) > 0 {
+			return fmt.Errorf("current relayer fee exceeds signed manifest ceiling")
+		}
+		gasLimit := item.GasLimit
+		if gasLimit < 100_000 {
+			gasLimit = 150_000
+		}
+		transaction := types.NewTx(&types.DynamicFeeTx{
+			ChainID: big.NewInt(network.ChainID), Nonce: uint64(storedNonce),
+			GasTipCap: tip, GasFeeCap: maxFee, Gas: gasLimit,
+			To: ptrAddress(common.HexToAddress(item.AssetContract)), Data: data,
+		})
+		signed, err := types.SignTx(transaction, types.LatestSignerForChainID(big.NewInt(network.ChainID)), privateKey)
+		if err != nil {
+			return err
+		}
+		raw, err := signed.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		signedRaw, signedHash := "0x"+hex.EncodeToString(raw), signed.Hash().Hex()
+		if err := queries.MarkUSDCryptoSweepItemBroadcast(ctx, purserdb.MarkUSDCryptoSweepItemBroadcastParams{
+			SignedPayload: sql.NullString{String: signatureHex, Valid: true}, RelayTransaction: sql.NullString{String: signedRaw, Valid: true},
+			TxHash: sql.NullString{String: signedHash, Valid: true}, ItemID: item.ItemID,
+		}); err != nil {
+			return err
+		}
+		rawHex, txHash = signedRaw, signedHash
+		return nil
 	})
 	if err != nil {
-		return "", "", err
-	}
-	var latest sweepRPCBlock
-	if err := s.rpcClient.Call(ctx, network, "eth_getBlockByNumber", []any{"latest", false}, &latest); err != nil {
-		return "", "", err
-	}
-	tip, maxFee, err := s.sweepFees(ctx, network, latest)
-	if err != nil {
-		return "", "", err
-	}
-	approvedTip, okTip := new(big.Int).SetString(item.MaxPriorityFeePerGas, 10)
-	approvedMaxFee, okMax := new(big.Int).SetString(item.MaxFeePerGas, 10)
-	if !okTip || !okMax || tip.Cmp(approvedTip) > 0 || maxFee.Cmp(approvedMaxFee) > 0 {
-		return "", "", fmt.Errorf("current relayer fee exceeds signed manifest ceiling")
-	}
-	gasLimit := item.GasLimit
-	if gasLimit < 100_000 {
-		gasLimit = 150_000
-	}
-	transaction := types.NewTx(&types.DynamicFeeTx{
-		ChainID: big.NewInt(network.ChainID), Nonce: uint64(storedNonce),
-		GasTipCap: tip, GasFeeCap: maxFee, Gas: gasLimit,
-		To: ptrAddress(common.HexToAddress(item.AssetContract)), Data: data,
-	})
-	signed, err := types.SignTx(transaction, types.LatestSignerForChainID(big.NewInt(network.ChainID)), privateKey)
-	if err != nil {
-		return "", "", err
-	}
-	raw, err := signed.MarshalBinary()
-	if err != nil {
-		return "", "", err
-	}
-	rawHex = "0x" + hex.EncodeToString(raw)
-	txHash = signed.Hash().Hex()
-	if err := queries.MarkUSDCryptoSweepItemBroadcast(ctx, purserdb.MarkUSDCryptoSweepItemBroadcastParams{
-		SignedPayload: sql.NullString{String: signatureHex, Valid: true}, RelayTransaction: sql.NullString{String: rawHex, Valid: true},
-		TxHash: sql.NullString{String: txHash, Valid: true}, ItemID: item.ItemID,
-	}); err != nil {
-		return "", "", err
-	}
-	if err := tx.Commit(); err != nil {
 		return "", "", err
 	}
 	return rawHex, txHash, nil
@@ -956,22 +960,17 @@ func (s *PurserServer) ReconcileCryptoSweep(ctx context.Context, req *purserpb.R
 		}
 		response.ConfirmedItems++
 		if !req.GetDryRun() {
-			tx, err := s.db.BeginTx(ctx, nil)
-			if err != nil {
-				return nil, err
-			}
-			queries := purserdb.New(tx)
-			if err = queries.MarkCryptoSweepItemConfirmed(ctx, itemID); err == nil {
-				err = queries.ConsumeCryptoSweepSources(ctx, itemID)
-			}
-			if err == nil && walletID != "" {
-				err = queries.MarkSweptCryptoWallet(ctx, walletID)
-			}
-			if err != nil {
-				_ = tx.Rollback()
-				return nil, err
-			}
-			if err := tx.Commit(); err != nil {
+			if err := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+				queries := purserdb.New(tx)
+				err := queries.MarkCryptoSweepItemConfirmed(ctx, itemID)
+				if err == nil {
+					err = queries.ConsumeCryptoSweepSources(ctx, itemID)
+				}
+				if err == nil && walletID != "" {
+					err = queries.MarkSweptCryptoWallet(ctx, walletID)
+				}
+				return err
+			}); err != nil {
 				return nil, err
 			}
 		}
@@ -1191,60 +1190,53 @@ func (s *PurserServer) releaseSweepBatch(ctx context.Context, batchID, reason st
 		if dryRun || decision.action == "blocked" {
 			continue
 		}
-		tx, txErr := s.db.BeginTx(ctx, nil)
-		if txErr != nil {
-			return nil, txErr
-		}
-		queries := purserdb.New(tx)
-		locked, txErr := queries.LockCryptoSweepReleaseItem(ctx, item.id)
-		unchanged := txErr == nil && locked.Status == item.status &&
-			locked.SignedPayload.Valid == item.signedPayload.Valid && locked.SignedPayload.String == item.signedPayload.String &&
-			locked.RelayTransaction.Valid == item.relayTransaction.Valid && locked.RelayTransaction.String == item.relayTransaction.String &&
-			locked.TxHash.Valid == item.txHash.Valid && locked.TxHash.String == item.txHash.String &&
-			locked.BroadcastAt.Valid == item.broadcastAt.Valid
-		if unchanged && locked.BroadcastAt.Valid {
-			unchanged = locked.BroadcastAt.Time.Equal(item.broadcastAt.Time)
-		}
-		if txErr != nil || !unchanged {
-			_ = tx.Rollback()
+		if err := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			queries := purserdb.New(tx)
+			locked, txErr := queries.LockCryptoSweepReleaseItem(ctx, item.id)
+			unchanged := txErr == nil && locked.Status == item.status &&
+				locked.SignedPayload.Valid == item.signedPayload.Valid && locked.SignedPayload.String == item.signedPayload.String &&
+				locked.RelayTransaction.Valid == item.relayTransaction.Valid && locked.RelayTransaction.String == item.relayTransaction.String &&
+				locked.TxHash.Valid == item.txHash.Valid && locked.TxHash.String == item.txHash.String &&
+				locked.BroadcastAt.Valid == item.broadcastAt.Valid
+			if unchanged && locked.BroadcastAt.Valid {
+				unchanged = locked.BroadcastAt.Time.Equal(item.broadcastAt.Time)
+			}
 			if txErr != nil {
-				return nil, txErr
+				return txErr
 			}
-			return nil, status.Errorf(codes.Aborted, "sweep item %s changed during release evaluation; retry the dry run", item.id)
-		}
-		itemStatus := "expired"
-		sourceStatus := "released"
-		eventType := "claim_released"
-		if decision.action == "quarantined" {
-			itemStatus = "quarantined"
-			sourceStatus = "quarantined"
-			eventType = "claim_quarantined"
-		}
-		affected, txErr := queries.ReleaseCryptoSweepSources(ctx, purserdb.ReleaseCryptoSweepSourcesParams{
-			SourceStatus: sourceStatus, ReleasedBy: ctxkeys.GetUserID(ctx),
-			ReleaseReason: sql.NullString{String: reason + ": " + decision.reason, Valid: true}, ItemID: item.id,
-		})
-		if txErr == nil {
-			if affected == 0 {
-				txErr = fmt.Errorf("sweep item %s no longer has active source claims", item.id)
+			if !unchanged {
+				return status.Errorf(codes.Aborted, "sweep item %s changed during release evaluation; retry the dry run", item.id)
 			}
-		}
-		if txErr == nil {
-			txErr = queries.UpdateReleasedCryptoSweepItem(ctx, purserdb.UpdateReleasedCryptoSweepItemParams{
-				ItemStatus: itemStatus, FailureReason: sql.NullString{String: decision.reason, Valid: true}, ItemID: item.id,
+			itemStatus := "expired"
+			sourceStatus := "released"
+			eventType := "claim_released"
+			if decision.action == "quarantined" {
+				itemStatus = "quarantined"
+				sourceStatus = "quarantined"
+				eventType = "claim_quarantined"
+			}
+			affected, txErr := queries.ReleaseCryptoSweepSources(ctx, purserdb.ReleaseCryptoSweepSourcesParams{
+				SourceStatus: sourceStatus, ReleasedBy: ctxkeys.GetUserID(ctx),
+				ReleaseReason: sql.NullString{String: reason + ": " + decision.reason, Valid: true}, ItemID: item.id,
 			})
-		}
-		if txErr == nil {
-			txErr = queries.InsertCryptoSweepReleaseEvent(ctx, purserdb.InsertCryptoSweepReleaseEventParams{
-				BatchID: batchID, ItemID: item.id, EventType: eventType, ActorID: ctxkeys.GetUserID(ctx),
-				Reason: reason, Evidence: decision.reason,
-			})
-		}
-		if txErr != nil {
-			_ = tx.Rollback()
-			return nil, txErr
-		}
-		if err := tx.Commit(); err != nil {
+			if txErr == nil {
+				if affected == 0 {
+					txErr = fmt.Errorf("sweep item %s no longer has active source claims", item.id)
+				}
+			}
+			if txErr == nil {
+				txErr = queries.UpdateReleasedCryptoSweepItem(ctx, purserdb.UpdateReleasedCryptoSweepItemParams{
+					ItemStatus: itemStatus, FailureReason: sql.NullString{String: decision.reason, Valid: true}, ItemID: item.id,
+				})
+			}
+			if txErr == nil {
+				txErr = queries.InsertCryptoSweepReleaseEvent(ctx, purserdb.InsertCryptoSweepReleaseEventParams{
+					BatchID: batchID, ItemID: item.id, EventType: eventType, ActorID: ctxkeys.GetUserID(ctx),
+					Reason: reason, Evidence: decision.reason,
+				})
+			}
+			return txErr
+		}); err != nil {
 			return nil, err
 		}
 	}

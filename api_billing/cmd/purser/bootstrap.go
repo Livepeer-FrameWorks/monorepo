@@ -46,6 +46,10 @@ func runBootstrapCommand(args []string) int {
 	return runBootstrapApply(args)
 }
 
+// errBootstrapDryRun makes the retrying transaction helper roll back a
+// successful dry-run reconcile.
+var errBootstrapDryRun = errors.New("purser bootstrap dry-run")
+
 func runBootstrapApply(args []string) int {
 	fs := flag.NewFlagSet("purser bootstrap", flag.ContinueOnError)
 	file := fs.String("file", "", "path to the rendered bootstrap desired-state YAML")
@@ -106,16 +110,30 @@ func runBootstrapApply(args []string) int {
 	}
 
 	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "purser bootstrap: begin tx: %v\n", err)
-		return 1
-	}
 	var qmIface bootstrap.QMBootstrapClient
 	if qm != nil {
 		qmIface = qm
 	}
-	out, err := bootstrap.Reconcile(ctx, tx, desired.Purser, embedded, qmIface)
+	// Reconcile only writes through tx and reads Quartermaster, so a replayed
+	// attempt is safe; its output is printed once, after the final attempt.
+	var (
+		out          *bootstrap.Sections
+		reconcileErr error
+		reconciled   bool
+	)
+	txErr := database.WithRetryablePostgresTxWithHook(ctx, db, nil, func(error, int) {
+		out, reconcileErr, reconciled = nil, nil, false
+	}, func(tx *sql.Tx) error {
+		out, reconcileErr = bootstrap.Reconcile(ctx, tx, desired.Purser, embedded, qmIface)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
+		reconciled = true
+		if *dryRun {
+			return errBootstrapDryRun
+		}
+		return nil
+	})
 	if out != nil {
 		printPurserSection("billing_tier_catalog", out.BillingTierCatalog)
 		printPurserSection("cluster_pricing", out.ClusterPricing)
@@ -123,24 +141,21 @@ func runBootstrapApply(args []string) int {
 			printPurserSection("customer_billing", out.CustomerBilling)
 		}
 	}
-	if err != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
-		fmt.Fprintf(os.Stderr, "purser bootstrap: %v\n", err)
+	switch {
+	case reconcileErr != nil:
+		fmt.Fprintf(os.Stderr, "purser bootstrap: %v\n", reconcileErr)
 		return 1
-	}
-	if *dryRun {
-		if err := tx.Rollback(); err != nil {
-			fmt.Fprintf(os.Stderr, "purser bootstrap [dry-run] rollback: %v\n", err)
-			return 1
-		}
+	case errors.Is(txErr, errBootstrapDryRun):
 		fmt.Fprintln(os.Stdout, "purser bootstrap [dry-run] rolled back; no changes persisted")
 		for _, op := range out.PostCommit {
 			fmt.Fprintf(os.Stdout, "purser bootstrap [dry-run] would: %s tenant=%s cluster=%s\n", op.Kind, op.Alias, op.ClusterID)
 		}
 		return 0
-	}
-	if err := tx.Commit(); err != nil {
-		fmt.Fprintf(os.Stderr, "purser bootstrap: commit: %v\n", err)
+	case txErr != nil && !reconciled:
+		fmt.Fprintf(os.Stderr, "purser bootstrap: begin tx: %v\n", txErr)
+		return 1
+	case txErr != nil:
+		fmt.Fprintf(os.Stderr, "purser bootstrap: commit: %v\n", txErr)
 		return 1
 	}
 	if len(out.PostCommit) > 0 {
