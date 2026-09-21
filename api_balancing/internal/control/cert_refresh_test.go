@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
@@ -443,6 +444,78 @@ func TestClusterTLSBundleLookupMatchesNavigatorClusterSlug(t *testing.T) {
 	}
 	if wildcard != "*.media-eu-1.frameworks.network" {
 		t.Fatalf("wildcard = %q, want *.media-eu-1.frameworks.network", wildcard)
+	}
+}
+
+func TestDesiredClusterTLSBundleLookupUsesQuartermasterBundleID(t *testing.T) {
+	oldGetCluster := getClusterFn
+	oldListTLSBundles := listTLSBundlesFn
+	defer func() {
+		getClusterFn = oldGetCluster
+		listTLSBundlesFn = oldListTLSBundles
+	}()
+
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{ClusterName: "Staging Media EU"}, nil
+	}
+	listTLSBundlesFn = func(_ context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+		if clusterID != "staging-media-eu" {
+			t.Fatalf("cluster ID = %q", clusterID)
+		}
+		if pagination.GetFirst() != 100 {
+			t.Fatalf("page size = %d", pagination.GetFirst())
+		}
+		return &quartermasterpb.ListTLSBundlesResponse{Bundles: []*quartermasterpb.TLSBundle{
+			{BundleId: "wildcard-staging-frameworks-network", Domains: []string{"staging.frameworks.network", "*.staging.frameworks.network"}},
+			{BundleId: "wildcard-staging-media-eu-staging-frameworks-network", Domains: []string{"staging-media-eu.staging.frameworks.network", "*.staging-media-eu.staging.frameworks.network"}},
+		}}, nil
+	}
+
+	bundleID, wildcard, ok, err := desiredClusterTLSBundleLookup("staging-media-eu", "staging.frameworks.network")
+	if err != nil {
+		t.Fatalf("lookup failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected desired bundle lookup to succeed")
+	}
+	if bundleID != "wildcard-staging-media-eu-staging-frameworks-network" {
+		t.Fatalf("bundle ID = %q", bundleID)
+	}
+	if wildcard != "*.staging-media-eu.staging.frameworks.network" {
+		t.Fatalf("wildcard = %q", wildcard)
+	}
+}
+
+func TestDesiredClusterTLSBundleLookupFallsBackToLegacyBundleID(t *testing.T) {
+	oldGetCluster := getClusterFn
+	oldListTLSBundles := listTLSBundlesFn
+	defer func() {
+		getClusterFn = oldGetCluster
+		listTLSBundlesFn = oldListTLSBundles
+	}()
+
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{ClusterName: "Media EU 1"}, nil
+	}
+	listTLSBundlesFn = func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+		return &quartermasterpb.ListTLSBundlesResponse{}, nil
+	}
+
+	bundleID, wildcard, ok, err := desiredClusterTLSBundleLookup("media-eu-1", "frameworks.network")
+	if err != nil || !ok {
+		t.Fatalf("lookup = (%q, %q, %v, %v)", bundleID, wildcard, ok, err)
+	}
+	if bundleID != "cluster:media-eu-1" {
+		t.Fatalf("bundle ID = %q, want cluster:media-eu-1", bundleID)
+	}
+}
+
+func TestTLSBundleCoversDomainNormalizesCaseAndTrailingDot(t *testing.T) {
+	if !tlsBundleCoversDomain([]string{"  *.MEDIA-EU.EXAMPLE.TEST. "}, "*.media-eu.example.test") {
+		t.Fatal("expected normalized wildcard domain to match")
+	}
+	if tlsBundleCoversDomain([]string{"*.media-us.example.test"}, "*.media-eu.example.test") {
+		t.Fatal("unexpected different wildcard domain match")
 	}
 }
 

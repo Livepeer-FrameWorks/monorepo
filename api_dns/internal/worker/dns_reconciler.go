@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type DNSReconciler struct {
 	acmeEmail          string
 	serviceTypes       []string
 	healthStaleSeconds int
+	dnsRecordsEnabled  bool
 }
 
 type quartermasterClient interface {
@@ -42,7 +44,16 @@ func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManag
 		acmeEmail:          acmeEmail,
 		serviceTypes:       serviceTypes,
 		healthStaleSeconds: healthStaleSeconds,
+		dnsRecordsEnabled:  true,
 	}
+}
+
+// SetDNSRecordsEnabled controls public record, zone, alias, and physical
+// endpoint reconciliation. Desired TLS bundles are reconciled regardless so a
+// private cluster can use ACME DNS-01 certificates without publishing its
+// private service addresses.
+func (r *DNSReconciler) SetDNSRecordsEnabled(enabled bool) {
+	r.dnsRecordsEnabled = enabled
 }
 
 func (r *DNSReconciler) Start(ctx context.Context) {
@@ -64,46 +75,49 @@ func (r *DNSReconciler) Start(ctx context.Context) {
 }
 
 func (r *DNSReconciler) reconcile(ctx context.Context) {
-	for _, serviceType := range r.serviceTypes {
-		switch pkgdns.ProviderForServiceType(serviceType) {
-		case pkgdns.ProviderBunny:
-			if pkgdns.IsClusterScopedServiceType(serviceType) {
-				clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
-				if clusterErr != nil {
-					r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
+	if r.dnsRecordsEnabled {
+		for _, serviceType := range r.serviceTypes {
+			switch pkgdns.ProviderForServiceType(serviceType) {
+			case pkgdns.ProviderBunny:
+				if pkgdns.IsClusterScopedServiceType(serviceType) {
+					clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
+					if clusterErr != nil {
+						r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
+					}
+					if len(clusterPartialErrors) > 0 {
+						r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
+					}
 				}
-				if len(clusterPartialErrors) > 0 {
-					r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
+				// Global root entrypoint publish: code-owned media labels
+				// get smart record sets at {label}.{root} populated from
+				// platform_official cluster nodes.
+				if isGlobalServiceZone(serviceType) {
+					if _, err := r.dnsManager.SyncBunnyRootService(ctx, serviceType); err != nil {
+						r.logger.WithError(err).WithField("service_type", serviceType).Warn("Global root DNS reconciliation failed")
+					}
 				}
-			}
-			// Global root entrypoint publish: code-owned media labels
-			// get smart record sets at {label}.{root} populated from
-			// platform_official cluster nodes.
-			if isGlobalServiceZone(serviceType) {
-				if _, err := r.dnsManager.SyncBunnyRootService(ctx, serviceType); err != nil {
-					r.logger.WithError(err).WithField("service_type", serviceType).Warn("Global root DNS reconciliation failed")
+			case pkgdns.ProviderCloudflare:
+				partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
+				if err != nil {
+					r.logger.WithError(err).WithField("service_type", serviceType).Error("DNS reconciliation failed")
 				}
+				if len(partialErrors) > 0 {
+					r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
+				}
+			default:
+				r.logger.WithField("service_type", serviceType).Debug("Skipping service with no public DNS provider")
 			}
-		case pkgdns.ProviderCloudflare:
-			partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
-			if err != nil {
-				r.logger.WithError(err).WithField("service_type", serviceType).Error("DNS reconciliation failed")
-			}
-			if len(partialErrors) > 0 {
-				r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
-			}
-		default:
-			r.logger.WithField("service_type", serviceType).Debug("Skipping service with no public DNS provider")
 		}
+
+		r.ensureClusterWildcardCerts(ctx)
+		r.ensureGlobalPlatformCerts(ctx)
+		r.ensureInfraZone(ctx)
+		r.syncPhysicalInstanceEndpoints(ctx)
+		r.processPendingTenantAliases(ctx)
+		r.processPendingCustomDomains(ctx)
 	}
 
-	r.ensureClusterWildcardCerts(ctx)
-	r.ensureGlobalPlatformCerts(ctx)
-	r.ensureInfraZone(ctx)
 	r.ensureTLSBundles(ctx)
-	r.syncPhysicalInstanceEndpoints(ctx)
-	r.processPendingTenantAliases(ctx)
-	r.processPendingCustomDomains(ctx)
 }
 
 // ensureInfraZone delegates the infra Bunny zone before ensureTLSBundles issues
@@ -399,7 +413,7 @@ func (r *DNSReconciler) ensureTLSBundles(ctx context.Context) {
 		return
 	}
 
-	for _, bundle := range resp.GetBundles() {
+	for _, bundle := range prioritizeTLSBundles(resp.GetBundles()) {
 		if strings.TrimSpace(bundle.GetBundleId()) == "" || len(bundle.GetDomains()) == 0 {
 			continue
 		}
@@ -418,5 +432,26 @@ func (r *DNSReconciler) ensureTLSBundles(ctx context.Context) {
 			"expires_at": result.ExpiresAt,
 			"cluster_id": bundle.GetClusterId(),
 		}).Debug("Ensured tls bundle")
+	}
+}
+
+func prioritizeTLSBundles(bundles []*quartermasterpb.TLSBundle) []*quartermasterpb.TLSBundle {
+	ordered := append([]*quartermasterpb.TLSBundle(nil), bundles...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return tlsBundleIssuancePriority(ordered[i].GetBundleId()) < tlsBundleIssuancePriority(ordered[j].GetBundleId())
+	})
+	return ordered
+}
+
+func tlsBundleIssuancePriority(bundleID string) int {
+	switch {
+	case strings.HasPrefix(bundleID, "wildcard-"):
+		// Media cells need their wildcard before Foghorn can expose its
+		// external control listener during a greenfield provision.
+		return 0
+	case strings.HasPrefix(bundleID, "physical-"):
+		return 2
+	default:
+		return 1
 	}
 }

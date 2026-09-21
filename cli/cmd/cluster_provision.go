@@ -118,6 +118,7 @@ save a default, or pass them explicitly.`,
 	}
 
 	cmd.Flags().StringVar(&only, "only", "all", "Phase to provision (infrastructure|applications|interfaces|all)")
+	cmd.Flags().StringSlice("only-services", nil, "limit provisioning to these service names or deploy types (comma-separated; dependencies must already be running)")
 	cmd.Flags().StringVar(&version, "version", "", "Target release (stable, candidate, rc, v1.2.3); defaults to the cluster channel")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show plan without executing")
 	cmd.Flags().BoolVar(&force, "force", false, "Force re-provision even if exists")
@@ -244,6 +245,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	if err != nil {
 		return fmt.Errorf("failed to create execution plan: %w", err)
 	}
+	fullPlan := plan
 
 	// A clean provision does NOT run the reconciliation-transition DAG (Check→Apply→Verify) — Quartermaster's
 	// desired-state bootstrap establishes the relevant invariants (e.g. the storage descriptor) as part of install,
@@ -256,8 +258,17 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	if tErr != nil {
 		return tErr
 	}
-	if satErr := assertProvisionSatisfiesTransitions(provGitops.PlatformVersion, plannedDeployNames(plan, manifest), provTransitions); satErr != nil {
+	if satErr := assertProvisionSatisfiesTransitions(provGitops.PlatformVersion, plannedDeployNames(fullPlan, manifest), provTransitions); satErr != nil {
 		return satErr
+	}
+
+	onlyServices := stringSliceFlag(cmd, "only-services")
+	if len(onlyServices) > 0 {
+		plan, err = filterProvisionPlan(plan, onlyServices)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Target services: %s\n\n", strings.Join(onlyServices, ", "))
 	}
 
 	// Artifact preflight for the FrameWorks SERVICE tier: every planned service artifact must RESOLVE (mode-aware —
@@ -396,6 +407,56 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 
 	renderProvisionSummary(ctx, cmd, manifest, only, initRan, seedsRan)
 	return nil
+}
+
+func filterProvisionPlan(plan *orchestrator.ExecutionPlan, selectors []string) (*orchestrator.ExecutionPlan, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("provision plan is required")
+	}
+	wanted := make(map[string]struct{}, len(selectors))
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector != "" {
+			wanted[selector] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return plan, nil
+	}
+
+	matched := make(map[string]struct{}, len(wanted))
+	filtered := &orchestrator.ExecutionPlan{Manifest: plan.Manifest}
+	for _, batch := range plan.Batches {
+		selectedBatch := make([]*orchestrator.Task, 0, len(batch))
+		for _, task := range batch {
+			selected := false
+			for _, key := range []string{task.ServiceID, task.Type, task.Name} {
+				if _, ok := wanted[key]; ok {
+					matched[key] = struct{}{}
+					selected = true
+				}
+			}
+			if selected {
+				selectedBatch = append(selectedBatch, task)
+				filtered.AllTasks = append(filtered.AllTasks, task)
+			}
+		}
+		if len(selectedBatch) > 0 {
+			filtered.Batches = append(filtered.Batches, selectedBatch)
+		}
+	}
+
+	missing := make([]string, 0)
+	for selector := range wanted {
+		if _, ok := matched[selector]; !ok {
+			missing = append(missing, selector)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("requested service(s) are not enabled in the selected phase: %s", strings.Join(missing, ", "))
+	}
+	return filtered, nil
 }
 
 func phaseRunsPostProvisionInit(phase orchestrator.Phase) bool {

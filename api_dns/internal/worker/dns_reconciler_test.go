@@ -15,6 +15,7 @@ import (
 
 type trackingQMClient struct {
 	listClustersCount int
+	listBundlesCount  int
 }
 
 func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ int, _ string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
@@ -35,6 +36,7 @@ func (t *trackingQMClient) GetCluster(_ context.Context, _ string) (*quartermast
 }
 
 func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+	t.listBundlesCount++
 	return &quartermasterpb.ListTLSBundlesResponse{}, nil
 }
 
@@ -80,5 +82,62 @@ func TestUsesBunnyClusterDNSOnlyForEdgeClusters(t *testing.T) {
 	}
 	if usesBunnyClusterDNS(&quartermasterpb.InfrastructureCluster{ClusterType: "central"}) {
 		t.Fatal("expected central cluster to stay out of Bunny DNS")
+	}
+}
+
+func TestReconciler_DNSDisabledStillReconcilesDesiredTLSBundles(t *testing.T) {
+	qm := &trackingQMClient{}
+	logger := logrus.New()
+	logger.SetLevel(logrus.FatalLevel)
+
+	dnsManager := logic.NewDNSManager(nil, qm, logger, "example.com", 60, 60, 5*time.Minute, logic.MonitorConfig{})
+	reconciler := NewDNSReconciler(
+		dnsManager,
+		logic.NewCertManager(nil),
+		qm,
+		logger,
+		time.Hour,
+		"example.com",
+		"ops@example.com",
+		[]string{"foghorn", "bridge"},
+		300,
+	)
+	reconciler.SetDNSRecordsEnabled(false)
+
+	reconciler.reconcile(context.Background())
+
+	if qm.listClustersCount != 0 {
+		t.Fatalf("disabled DNS reconciliation queried clusters %d times", qm.listClustersCount)
+	}
+	if qm.listBundlesCount != 1 {
+		t.Fatalf("desired TLS bundles queried %d times, want 1", qm.listBundlesCount)
+	}
+}
+
+func TestPrioritizeTLSBundles_WildcardsBeforePhysicalEndpoints(t *testing.T) {
+	bundles := []*quartermasterpb.TLSBundle{
+		{BundleId: "physical-livepeer-gateway-node-infra-example-com"},
+		{BundleId: "apex-example-com"},
+		{BundleId: "wildcard-media-eu-example-com"},
+		{BundleId: "explicit-custom"},
+		{BundleId: "wildcard-media-us-example-com"},
+	}
+
+	ordered := prioritizeTLSBundles(bundles)
+	got := make([]string, 0, len(ordered))
+	for _, bundle := range ordered {
+		got = append(got, bundle.GetBundleId())
+	}
+	want := []string{
+		"wildcard-media-eu-example-com",
+		"wildcard-media-us-example-com",
+		"apex-example-com",
+		"explicit-custom",
+		"physical-livepeer-gateway-node-infra-example-com",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("bundle order = %v, want %v", got, want)
+		}
 	}
 }

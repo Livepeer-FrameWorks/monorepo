@@ -1024,6 +1024,48 @@ func TestPlan_FoghornWaitsForEveryCommodoreReplica(t *testing.T) {
 	}
 }
 
+func TestPlan_FoghornWaitsForNavigator(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core":  {Roles: []string{"control"}},
+			"media": {Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"navigator":   {Enabled: true, Host: "core"},
+			"chandler-eu": {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "media"},
+			"foghorn-eu":  {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "media"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var foghorn *Task
+	for _, task := range plan.AllTasks {
+		if task.Name == "foghorn-eu" {
+			foghorn = task
+			break
+		}
+	}
+	if foghorn == nil {
+		t.Fatal("expected foghorn-eu task")
+	}
+	if !slices.Contains(foghorn.DependsOn, "navigator") {
+		t.Fatalf("foghorn must start after Navigator can supply its external TLS bundle, got %v", foghorn.DependsOn)
+	}
+	batchOf := map[string]int{}
+	for batchIndex, batch := range plan.Batches {
+		for _, task := range batch {
+			batchOf[task.Name] = batchIndex
+		}
+	}
+	if batchOf["foghorn-eu"] <= batchOf["navigator"] {
+		t.Fatalf("foghorn batch %d must follow Navigator batch %d", batchOf["foghorn-eu"], batchOf["navigator"])
+	}
+}
+
 // A Foghorn whose cluster has no Chandler is rejected even if a Chandler exists in a DIFFERENT cluster.
 func TestPlan_FoghornChandlerDifferentClusterFails(t *testing.T) {
 	manifest := &inventory.Manifest{

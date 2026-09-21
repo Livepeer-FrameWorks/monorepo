@@ -686,6 +686,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if commodoreErr != nil {
 		return commodoreErr
 	}
+	navigatorTasks, navigatorErr := p.taskNamesForDeploy("navigator")
+	if navigatorErr != nil {
+		return navigatorErr
+	}
 	purserTasks, purserErr := p.taskNamesForDeploy("purser")
 	if purserErr != nil {
 		return purserErr
@@ -735,6 +739,11 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			}
 			if deploy == "foghorn" {
 				task.DependsOn = append(task.DependsOn, commodoreTasks...)
+				// Foghorn obtains the certificates for its external gRPC listener
+				// from Navigator during startup. Existing clusters usually have a
+				// warm Navigator, but a greenfield provision must start Navigator
+				// first or Foghorn exhausts its certificate wait and exits.
+				task.DependsOn = append(task.DependsOn, navigatorTasks...)
 			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {

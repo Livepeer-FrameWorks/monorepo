@@ -179,9 +179,9 @@ func main() {
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
 	dnsRecordsEnabled := config.GetEnvBool("NAVIGATOR_DNS_RECORDS_ENABLED", true)
-	if dnsRecordsEnabled {
-		go reconciler.Start(context.Background())
-	} else {
+	reconciler.SetDNSRecordsEnabled(dnsRecordsEnabled)
+	go reconciler.Start(context.Background())
+	if !dnsRecordsEnabled {
 		logger.Info("Public DNS record reconciliation disabled; certificate management remains active")
 	}
 

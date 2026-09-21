@@ -581,6 +581,13 @@ func IsPlatformSharedCluster(id string) bool {
 
 var quartermasterClient *qmclient.GRPCClient
 
+var listTLSBundlesFn = func(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+	if quartermasterClient == nil {
+		return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
+	}
+	return quartermasterClient.ListTLSBundles(ctx, clusterID, pagination)
+}
+
 // servedClustersAPI is the narrow Quartermaster surface LoadServedClusters
 // needs. The concrete *qmclient.GRPCClient satisfies it; tests supply a stub.
 type servedClustersAPI interface {
@@ -9720,7 +9727,10 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSC
 	if navigatorClient == nil {
 		return nil, false, errors.New("cluster TLS authority is unavailable")
 	}
-	bundleID, wildcardDomain, ok := clusterTLSBundleLookup(clusterID, rootDomain)
+	bundleID, wildcardDomain, ok, lookupErr := desiredClusterTLSBundleLookup(clusterID, rootDomain)
+	if lookupErr != nil {
+		return nil, false, lookupErr
+	}
 	if !ok {
 		return nil, false, fmt.Errorf("cluster %q has no valid TLS bundle identity", clusterID)
 	}
@@ -9874,6 +9884,59 @@ func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool)
 	}
 	wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
 	return "cluster:" + slug, wildcardDomain, true
+}
+
+func desiredClusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool, error) {
+	legacyBundleID, wildcardDomain, ok := clusterTLSBundleLookup(clusterID, rootDomain)
+	if !ok {
+		return "", "", false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	after := ""
+	for {
+		pagination := &commonpb.CursorPaginationRequest{First: 100}
+		if after != "" {
+			pagination.After = &after
+		}
+		resp, err := listTLSBundlesFn(ctx, strings.TrimSpace(clusterID), pagination)
+		if err != nil {
+			return "", "", false, fmt.Errorf("list desired TLS bundles for cluster %q: %w", clusterID, err)
+		}
+		for _, bundle := range resp.GetBundles() {
+			if tlsBundleCoversDomain(bundle.GetDomains(), wildcardDomain) {
+				bundleID := strings.TrimSpace(bundle.GetBundleId())
+				if bundleID == "" {
+					return "", "", false, fmt.Errorf("desired TLS bundle for cluster %q and domain %q has an empty bundle ID", clusterID, wildcardDomain)
+				}
+				return bundleID, wildcardDomain, true, nil
+			}
+		}
+
+		page := resp.GetPagination()
+		if page == nil || !page.GetHasNextPage() {
+			break
+		}
+		next := strings.TrimSpace(page.GetEndCursor())
+		if next == "" || next == after {
+			return "", "", false, fmt.Errorf("list desired TLS bundles for cluster %q returned invalid pagination", clusterID)
+		}
+		after = next
+	}
+
+	return legacyBundleID, wildcardDomain, true, nil
+}
+
+func tlsBundleCoversDomain(domains []string, target string) bool {
+	target = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(target)), ".")
+	for _, domain := range domains {
+		if strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".") == target {
+			return true
+		}
+	}
+	return false
 }
 
 func tlsBundleState(bundle *ipcpb.TLSCertBundle) string {

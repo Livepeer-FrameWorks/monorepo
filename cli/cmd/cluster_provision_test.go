@@ -1487,6 +1487,34 @@ func TestTLSBundleIDIsAlwaysSafe(t *testing.T) {
 	}
 }
 
+func TestFilterProvisionPlanSelectsAliasesWithoutDependencies(t *testing.T) {
+	navigator := orchestrator.NewServiceTask("navigator", "navigator", "", "core", orchestrator.PhaseApplications)
+	foghorn := orchestrator.NewServiceTask("foghorn", "foghorn-eu", "eu-1", "eu-1", orchestrator.PhaseApplications)
+	chandler := orchestrator.NewServiceTask("chandler", "chandler-eu", "eu-1", "eu-1", orchestrator.PhaseApplications)
+	chandler.DependsOn = []string{foghorn.Name}
+	plan := &orchestrator.ExecutionPlan{
+		Batches:  [][]*orchestrator.Task{{navigator}, {foghorn}, {chandler}},
+		AllTasks: []*orchestrator.Task{navigator, foghorn, chandler},
+	}
+
+	filtered, err := filterProvisionPlan(plan, []string{"chandler-eu"})
+	if err != nil {
+		t.Fatalf("filter plan: %v", err)
+	}
+	if len(filtered.Batches) != 1 || len(filtered.AllTasks) != 1 || filtered.AllTasks[0] != chandler {
+		t.Fatalf("filtered plan = %+v", filtered)
+	}
+}
+
+func TestFilterProvisionPlanRejectsUnknownService(t *testing.T) {
+	plan := &orchestrator.ExecutionPlan{AllTasks: []*orchestrator.Task{
+		orchestrator.NewServiceTask("navigator", "navigator", "", "core", orchestrator.PhaseApplications),
+	}}
+	if _, err := filterProvisionPlan(plan, []string{"missing"}); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected missing service error, got %v", err)
+	}
+}
+
 func TestApplyProxySiteIngressTLSDefaultsSafeID(t *testing.T) {
 	site := map[string]any{}
 	applyProxySiteIngressTLSDefaults(site, "wildcard-frameworks-network")
