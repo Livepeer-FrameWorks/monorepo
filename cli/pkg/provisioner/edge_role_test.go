@@ -70,3 +70,37 @@ func TestEdgeRoleVarsPassHelmsmanEnvContract(t *testing.T) {
 		t.Fatalf("edge_image_env = %#v, want %v", vars["edge_image_env"], templates.EdgeImageEnv())
 	}
 }
+
+func TestEdgeRoleVarsPrivateTelemetryResolution(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:             "container",
+		Version:          "vtest",
+		TelemetryURL:     "https://telemetry.media-eu.example.com/api/v1/write",
+		TelemetryAddress: "192.168.10.17",
+	}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	if got := vars["edge_telemetry_address"]; got != "192.168.10.17" {
+		t.Fatalf("edge_telemetry_address = %#v", got)
+	}
+	if got := vars["edge_telemetry_hostname"]; got != "telemetry.media-eu.example.com" {
+		t.Fatalf("edge_telemetry_hostname = %#v", got)
+	}
+}
+
+func TestEdgeRoleVarsPrivateTelemetryRequiresHTTPSURL(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	_, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:             "container",
+		Version:          "vtest",
+		TelemetryURL:     "http://telemetry.media-eu.example.com/api/v1/write",
+		TelemetryAddress: "192.168.10.17",
+	}, "linux", "amd64")
+	if err == nil {
+		t.Fatal("expected private telemetry resolution with an HTTP URL to fail")
+	}
+}

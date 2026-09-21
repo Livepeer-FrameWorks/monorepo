@@ -30,6 +30,9 @@ argument_specs:
       edge_foghorn_grpc_addr:
         type: str
         required: true
+      edge_foghorn_grpc_tls_server_name:
+        type: str
+        required: false
       edge_enrollment_token:
         type: str
         required: true
@@ -56,5 +59,11 @@ argument_specs:
         type: str
         required: false
       edge_telemetry_token:
+        type: str
+        required: false
+      edge_telemetry_address:
+        type: str
+        required: false
+      edge_telemetry_hostname:
         type: str
         required: false

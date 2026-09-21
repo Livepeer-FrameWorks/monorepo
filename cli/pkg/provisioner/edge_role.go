@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,22 +155,40 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	if err != nil {
 		return nil, fmt.Errorf("edge: generate MistServer API password: %w", err)
 	}
+	telemetryAddress := strings.TrimSpace(config.TelemetryAddress)
+	telemetryHostname := ""
+	if telemetryAddress != "" {
+		if net.ParseIP(telemetryAddress) == nil {
+			return nil, fmt.Errorf("edge: telemetry_address must be an IP address, got %q", telemetryAddress)
+		}
+		parsedTelemetryURL, parseErr := url.Parse(strings.TrimSpace(config.TelemetryURL))
+		if parseErr != nil || parsedTelemetryURL.Hostname() == "" {
+			return nil, fmt.Errorf("edge: telemetry_address requires a valid telemetry HTTPS URL")
+		}
+		if parsedTelemetryURL.Scheme != "https" {
+			return nil, fmt.Errorf("edge: telemetry_address requires an HTTPS telemetry URL")
+		}
+		telemetryHostname = parsedTelemetryURL.Hostname()
+	}
 
 	vars := map[string]any{
-		"edge_mode":              mode,
-		"edge_node_id":           config.NodeID,
-		"edge_cluster_id":        config.ClusterID,
-		"edge_region":            config.Region,
-		"edge_domain":            config.primaryDomain(),
-		"edge_acme_email":        config.Email,
-		"edge_foghorn_grpc_addr": config.FoghornGRPCAddr,
-		"edge_enrollment_token":  config.EnrollmentToken,
+		"edge_mode":                         mode,
+		"edge_node_id":                      config.NodeID,
+		"edge_cluster_id":                   config.ClusterID,
+		"edge_region":                       config.Region,
+		"edge_domain":                       config.primaryDomain(),
+		"edge_acme_email":                   config.Email,
+		"edge_foghorn_grpc_addr":            config.FoghornGRPCAddr,
+		"edge_foghorn_grpc_tls_server_name": config.FoghornGRPCTLSServerName,
+		"edge_enrollment_token":             config.EnrollmentToken,
 		// Write-once bootstrap files (enrollment token env, bootstrap
 		// Caddyfile) are only re-rendered on an explicit re-enroll.
 		"edge_force_reenroll":             config.ForceReenroll,
 		"edge_force_bootstrap_caddyfile":  config.ForceReenroll,
 		"edge_telemetry_url":              config.TelemetryURL,
 		"edge_telemetry_token":            config.TelemetryToken,
+		"edge_telemetry_address":          telemetryAddress,
+		"edge_telemetry_hostname":         telemetryHostname,
 		"edge_cert_pem":                   config.CertPEM,
 		"edge_key_pem":                    config.KeyPEM,
 		"edge_ca_bundle_pem":              config.CABundlePEM,
@@ -301,10 +321,10 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	vars["edge_caddy_artifact_url"] = caddyURL
 	vars["edge_caddy_artifact_checksum"] = caddySum
 
-	// vmagent is both-or-nothing on URL + token (same contract as the role
-	// and the compose renderers); URL alone must not pull in a vmagent
-	// release artifact the role will never install.
-	if strings.TrimSpace(config.TelemetryURL) != "" && strings.TrimSpace(config.TelemetryToken) != "" {
+	// A fresh node receives URL + token together. An enrolled node keeps its
+	// token on disk, so reruns with the URL alone must still resolve and
+	// reconcile vmagent.
+	if strings.TrimSpace(config.TelemetryURL) != "" {
 		artifact, err := resolveInfraArtifactFromChannel("vmagent", arch, config.Version, nil)
 		if err != nil {
 			return nil, fmt.Errorf("edge: resolve vmagent artifact: %w", err)

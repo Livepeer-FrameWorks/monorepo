@@ -16,6 +16,7 @@ edge_region: ""
 edge_domain: ""
 edge_acme_email: ""
 edge_foghorn_grpc_addr: ""
+edge_foghorn_grpc_tls_server_name: ""
 edge_enrollment_token: ""
 
 # Re-enrollment knobs. The bootstrap Caddyfile and the enrollment-token env
@@ -39,6 +40,11 @@ edge_ca_bundle_pem: ""
 # and token are set, vmagent is installed alongside the edge services.
 edge_telemetry_url: ""
 edge_telemetry_token: ""
+# Optional private resolution for the hostname in edge_telemetry_url. The
+# hostname remains in the URL so HTTP Host and TLS SNI/certificate checks stay
+# correct; only its address selection is private.
+edge_telemetry_address: ""
+edge_telemetry_hostname: ""
 
 # Optional node capacity and capability controls. Capabilities default to
 # Helmsman's built-in all-enabled behavior when left empty.

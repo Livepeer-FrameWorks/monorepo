@@ -36,17 +36,15 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
-	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
 const (
-	minDiskFreeBytes                = 20 * 1024 * 1024 * 1024
+	minDiskFreeBytes                = 10 * 1024 * 1024 * 1024
 	minDiskFreePercent              = 10.0
 	darwinLogDir                    = "/usr/local/var/log/frameworks"
 	edgeProvisionEnrollmentTokenTTL = "2h"
@@ -65,7 +63,7 @@ type edgePreRegisterClient interface {
 // node registration. *quartermaster.GRPCClient satisfies it structurally.
 type edgeRegisterQMClient interface {
 	CheckHealth(ctx context.Context) error
-	CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error)
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
 }
 
@@ -1046,7 +1044,7 @@ Multi-node manifest example:
 			if registerNode || fetchCert {
 				epConfig.BeforeInstall = func(ctx context.Context, cfg *provisioner.EdgeProvisionConfig) error {
 					if registerNode {
-						fmt.Fprintln(cmd.OutOrStdout(), "  - Registering node in Quartermaster")
+						fmt.Fprintln(cmd.OutOrStdout(), "  - Preparing Quartermaster enrollment")
 						externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, "")
 						mintedToken, errRegister := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region)
 						if errRegister != nil {
@@ -1271,7 +1269,8 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				nodeVersion = cliVersion
 			}
 			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
-			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
+			foghornAddr := firstNonEmpty(n.FoghornAddr, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID))
+			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -1512,10 +1511,20 @@ func edgeFoghornUsesInternalCA(addr string) bool {
 		host = h
 	}
 	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if net.ParseIP(host) != nil {
+		return true
+	}
 	if host == "foghorn.internal" || strings.HasSuffix(host, ".internal") || host == "foghorn" {
 		return true
 	}
 	return false
+}
+
+func edgeFoghornEndpointUsesInternalCA(addr, tlsServerName string) bool {
+	if strings.TrimSpace(tlsServerName) != "" {
+		return edgeFoghornUsesInternalCA(tlsServerName)
+	}
+	return edgeFoghornUsesInternalCA(addr)
 }
 
 func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
@@ -1559,7 +1568,7 @@ func applyEdgePreRegistrationConfig(cfg *provisioner.EdgeProvisionConfig, resp *
 	if cfg.FoghornGRPCAddr == "" {
 		cfg.FoghornGRPCAddr = resp.GetFoghornGrpcAddr()
 	}
-	if cfg.CABundlePEM == "" && edgeFoghornUsesInternalCA(cfg.FoghornGRPCAddr) {
+	if cfg.CABundlePEM == "" && edgeFoghornEndpointUsesInternalCA(cfg.FoghornGRPCAddr, cfg.FoghornGRPCTLSServerName) {
 		cfg.CABundlePEM = string(resp.GetInternalCaBundle())
 	}
 	if telemetry := resp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
@@ -1598,7 +1607,7 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "    Pre-registering edge via Foghorn")
 		}
-		resp, err = preRegisterEdge(ctx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		resp, err = preRegisterEdgeWithCA(ctx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP, cfg.CABundlePEM, cfg.FoghornGRPCTLSServerName)
 	}
 	if err != nil {
 		return fmt.Errorf("pre-registration failed: %w", err)
@@ -1614,7 +1623,7 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 // knownExternalIP, when non-empty, is the canonical IP from the manifest's
 // hosts inventory; it bypasses the remote ifconfig.me probe in both the
 // preregistration and Quartermaster registration paths.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, onnxProfile, foghornGRPCAddr, caBundlePEM, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, onnxProfile, foghornGRPCAddr, foghornGRPCTLSServerName, caBundlePEM, telemetryURL, telemetryToken, telemetryAddress string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
 	// Already-enrolled detection: reuse the identity a completed install
 	// left on the host instead of re-running PreRegisterEdge (Foghorn
 	// resolves enrolled nodes by fingerprint; a re-presented token only
@@ -1703,37 +1712,39 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 
 	foghornAddr := firstNonEmpty(preRegFoghornAddr, foghornGRPCAddr, cliCtx.Endpoints.FoghornGRPCAddr)
 	edgeCABundlePEM := firstNonEmpty(preRegCABundle, caBundlePEM)
-	if !edgeFoghornUsesInternalCA(foghornAddr) {
+	if !edgeFoghornEndpointUsesInternalCA(foghornAddr, foghornGRPCTLSServerName) {
 		edgeCABundlePEM = ""
 	}
 
 	// Build EdgeProvisionConfig
 	config := provisioner.EdgeProvisionConfig{
-		Mode:            mode,
-		NodeName:        nodeName,
-		NodeDomain:      nodeDomain,
-		PoolDomain:      poolDomain,
-		ClusterID:       clusterID,
-		Region:          region,
-		Email:           email,
-		EnrollmentToken: enrollmentToken,
-		FoghornGRPCAddr: foghornAddr,
-		NodeID:          firstNonEmpty(enrolledNodeID, canonicalEdgeNodeID(nodeName), nodeName),
-		CABundlePEM:     edgeCABundlePEM,
-		TelemetryURL:    telemetryURL,
-		TelemetryToken:  telemetryToken,
-		Capabilities:    capabilities,
-		BandwidthMbps:   bandwidthMbps,
-		MaxTranscodes:   maxTranscodes,
-		StorageBytes:    storageCapacityBytes,
-		SkipPreflight:   skipPreflight,
-		ApplyTuning:     applyTuning,
-		Timeout:         timeout,
-		Version:         version,
-		ONNXProfile:     onnxProfile,
-		DryRun:          dryRun,
-		AlreadyEnrolled: enrollment != nil,
-		ForceReenroll:   forceReenroll,
+		Mode:                     mode,
+		NodeName:                 nodeName,
+		NodeDomain:               nodeDomain,
+		PoolDomain:               poolDomain,
+		ClusterID:                clusterID,
+		Region:                   region,
+		Email:                    email,
+		EnrollmentToken:          enrollmentToken,
+		FoghornGRPCAddr:          foghornAddr,
+		FoghornGRPCTLSServerName: foghornGRPCTLSServerName,
+		NodeID:                   firstNonEmpty(enrolledNodeID, canonicalEdgeNodeID(nodeName), nodeName),
+		CABundlePEM:              edgeCABundlePEM,
+		TelemetryURL:             telemetryURL,
+		TelemetryToken:           telemetryToken,
+		TelemetryAddress:         telemetryAddress,
+		Capabilities:             capabilities,
+		BandwidthMbps:            bandwidthMbps,
+		MaxTranscodes:            maxTranscodes,
+		StorageBytes:             storageCapacityBytes,
+		SkipPreflight:            skipPreflight,
+		ApplyTuning:              applyTuning,
+		Timeout:                  timeout,
+		Version:                  version,
+		ONNXProfile:              onnxProfile,
+		DryRun:                   dryRun,
+		AlreadyEnrolled:          enrollment != nil,
+		ForceReenroll:            forceReenroll,
 	}
 	if registerNode || fetchCert {
 		config.BeforeInstall = func(ctx context.Context, cfg *provisioner.EdgeProvisionConfig) error {
@@ -1741,7 +1752,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 				if dryRun {
 					fmt.Fprintf(cmd.OutOrStdout(), "  - Would register node %s in cluster %s\n", nodeName, clusterID)
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  - Registering node %s in cluster %s via Quartermaster\n", nodeName, clusterID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  - Preparing Quartermaster enrollment for node %s in cluster %s\n", nodeName, clusterID)
 					externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, knownExternalIP)
 					mintedToken, err := registerEdgeNode(cmd, cliCtx, sshKey, nodeName, clusterID, externalIP, region)
 					if err != nil {
@@ -1844,13 +1855,27 @@ func edgePreRegisterGRPCConfig(foghornAddr string, logger *logrus.Logger) foghor
 }
 
 func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*foghornpb.PreRegisterEdgeResponse, error) {
+	return preRegisterEdgeWithCA(ctx, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP, "", "")
+}
+
+func preRegisterEdgeWithCA(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP, caBundlePEM, tlsServerName string) (*foghornpb.PreRegisterEdgeResponse, error) {
 	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, edgeExternalIPDiscoveryTimeout)
 	externalIP := resolveEdgeExternalIP(discoveryCtx, sshTarget, sshKey, knownExternalIP)
 	discoveryCancel()
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	client, err := foghorn.NewGRPCClient(edgePreRegisterGRPCConfig(foghornAddr, logger))
+	grpcConfig := edgePreRegisterGRPCConfig(foghornAddr, logger)
+	if strings.TrimSpace(tlsServerName) != "" {
+		grpcConfig.ServerName = strings.TrimSpace(tlsServerName)
+	}
+	if edgeFoghornEndpointUsesInternalCA(foghornAddr, tlsServerName) {
+		grpcConfig.CACertPEM = caBundlePEM
+		if grpcConfig.ServerName == "" {
+			grpcConfig.ServerName = foghorn.InternalServerName
+		}
+	}
+	client, err := foghorn.NewGRPCClient(grpcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Foghorn at %s: %w", foghornAddr, err)
 	}
@@ -1963,10 +1988,10 @@ func getRemoteExternalIP(ctx context.Context, sshTarget, sshKey string) (string,
 	return "", fmt.Errorf("could not detect external IP via any method")
 }
 
-// registerEdgeNode registers an edge node in Quartermaster.
-// Platform-admin direct path — uses the gitops-sourced SERVICE_TOKEN for
-// Quartermaster auth. The normal edge bootstrap flow (Bridge +
-// enrollment token) does not need this function.
+// registerEdgeNode mints the enrollment token that lets Helmsman register the
+// edge node atomically in Quartermaster. It deliberately does not call
+// CreateNode: a pre-created row has no identity binding and BootstrapEdgeNode
+// must reject attaching an unproven identity to it.
 func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName, clusterID, externalIP, region string) (string, error) {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 90*time.Second)
 	defer cancel()
@@ -1988,11 +2013,10 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	return runEdgeRegisterNode(ctx, cmd.OutOrStdout(), qmClient, qmAddr, nodeName, clusterID, externalIP, region)
 }
 
-// runEdgeRegisterNode runs the Quartermaster registration RPC sequence against
-// an already-dialed client: health check, CreateNode, then mint an enrollment
-// token. The thin caller owns token resolution, dial, and Close. Returns the
-// minted enrollment token.
-func runEdgeRegisterNode(ctx context.Context, w io.Writer, cli edgeRegisterQMClient, qmAddr, nodeName, clusterID, externalIP, region string) (string, error) {
+// runEdgeRegisterNode runs the Quartermaster bootstrap-token sequence against
+// an already-dialed client. The thin caller owns token resolution, dial, and
+// Close. Helmsman's first authenticated control connection creates the node.
+func runEdgeRegisterNode(ctx context.Context, w io.Writer, cli edgeRegisterQMClient, qmAddr, nodeName, clusterID, _externalIP, _region string) (string, error) {
 	fmt.Fprintln(w, "    Checking Quartermaster gRPC health")
 	healthCtx, healthCancel := context.WithTimeout(ctx, 10*time.Second)
 	if healthErr := cli.CheckHealth(healthCtx); healthErr != nil {
@@ -2001,42 +2025,19 @@ func runEdgeRegisterNode(ctx context.Context, w io.Writer, cli edgeRegisterQMCli
 	}
 	healthCancel()
 
-	nodeID := canonicalEdgeNodeID(nodeName)
-	if nodeID == "" {
-		nodeID = uuid.New().String()
-	}
-	fmt.Fprintf(w, "    Upserting node id=%s external_ip=%s region=%s\n", nodeID, firstNonEmpty(externalIP, "<unset>"), firstNonEmpty(region, "<unset>"))
-
-	req := &quartermasterpb.CreateNodeRequest{
-		NodeId:    nodeID,
-		ClusterId: clusterID,
-		NodeName:  nodeName,
-		NodeType:  infra.NodeTypeEdge, // This triggers DNS sync for "edge" service type
-	}
-	if externalIP != "" {
-		req.ExternalIp = &externalIP
-	}
-	if region != "" {
-		req.Region = &region
-	}
-
-	fmt.Fprintln(w, "    Calling Quartermaster CreateNode (deadline 30s)")
-	createCtx, createCancel := context.WithTimeout(ctx, 30*time.Second)
-	resp, err := cli.CreateNode(createCtx, req)
-	createCancel()
+	fmt.Fprintf(w, "    Resolving owner for cluster %s\n", clusterID)
+	clusterCtx, clusterCancel := context.WithTimeout(ctx, 15*time.Second)
+	resp, err := cli.GetCluster(clusterCtx, clusterID)
+	clusterCancel()
 	if err != nil {
-		return "", fmt.Errorf("failed to create node via Quartermaster at %s: %w", qmAddr, err)
+		return "", fmt.Errorf("failed to resolve cluster %s via Quartermaster at %s: %w", clusterID, qmAddr, err)
 	}
-
-	ux.Success(w, fmt.Sprintf("Node registered: %s (ID: %s)", nodeName, resp.GetNode().GetNodeId()))
-	ux.Success(w, "Node registered (DNS will be synced by Navigator reconciler)")
-
-	tokenTenantID := strings.TrimSpace(resp.GetNode().GetOwnerTenantId())
+	tokenTenantID := strings.TrimSpace(resp.GetCluster().GetOwnerTenantId())
 	if tokenTenantID == "" {
-		return "", fmt.Errorf("node %s is in cluster %s, but Quartermaster returned no cluster owner_tenant_id for enrollment token binding", nodeID, clusterID)
+		return "", fmt.Errorf("cluster %s has no owner_tenant_id for enrollment token binding", clusterID)
 	}
 	enrollmentReq := edgeEnrollmentTokenRequest(clusterID, nodeName, tokenTenantID)
-	fmt.Fprintln(w, "    Minting short-lived enrollment token")
+	fmt.Fprintf(w, "    Minting short-lived enrollment token for %s\n", firstNonEmpty(nodeName, "edge node"))
 	tokenCtx, tokenCancel := context.WithTimeout(ctx, 15*time.Second)
 	tokenResp, err := cli.CreateEnrollmentToken(tokenCtx, enrollmentReq)
 	tokenCancel()

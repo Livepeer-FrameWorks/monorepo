@@ -290,8 +290,9 @@ func TestNativeVMAgentUnitDoesNotTemplateRestartIntoBearerTokenPath(t *testing.T
 	}
 	if !strings.Contains(content, "edge_vmagent_bearer_token_arg: >-") ||
 		!strings.Contains(content, "-remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token") ||
+		!strings.Contains(content, "edge_existing_telemetry_token.stat.exists | default(false)") ||
 		!strings.Contains(content, "-remoteWrite.url={{ edge_telemetry_url }}{{ edge_vmagent_bearer_token_arg }}") {
-		t.Fatalf("vmagent unit should build the bearer token flag outside the systemd content and append only the variable in ExecStart:\n%s", content)
+		t.Fatalf("vmagent unit should use new or preserved bearer tokens and append the flag variable in ExecStart:\n%s", content)
 	}
 }
 

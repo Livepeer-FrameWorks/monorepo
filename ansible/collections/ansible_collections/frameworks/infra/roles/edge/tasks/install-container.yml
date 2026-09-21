@@ -85,14 +85,14 @@
   when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0
   no_log: true
 
-# Telemetry requires BOTH url and token (single contract with the compose
-# template and the Go renderer).
+# prepare.yml accepts either a newly issued token or the token preserved by an
+# already-enrolled node.
 - name: Render vmagent scrape config (when telemetry enabled)
   ansible.builtin.template:
     src: vmagent-edge.yml.j2
     dest: "{{ edge_base_dir }}/vmagent-edge.yml"
     mode: "0644"
-  when: edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0
+  when: edge_telemetry_url | length > 0
 
 # 0644: .edge.env carries no secrets (the enrollment token lives in the
 # write-once .edge-enroll.env, the Mist password in .edge-secrets.env), and

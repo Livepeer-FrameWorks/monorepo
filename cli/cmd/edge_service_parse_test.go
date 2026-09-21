@@ -107,6 +107,7 @@ func TestEdgeFoghornUsesInternalCA(t *testing.T) {
 		want bool
 	}{
 		{addr: "foghorn.internal:18019", want: true},
+		{addr: "192.168.10.17:18019", want: true},
 		{addr: "foghorn.media-eu-1.frameworks.network:18019", want: false},
 		{addr: "foghorn.media-eu-1.frameworks.network:18029", want: false},
 		{addr: "foghorn.frameworks.network:18019", want: false},
@@ -118,6 +119,20 @@ func TestEdgeFoghornUsesInternalCA(t *testing.T) {
 		if got := edgeFoghornUsesInternalCA(tt.addr); got != tt.want {
 			t.Fatalf("edgeFoghornUsesInternalCA(%q) = %v, want %v", tt.addr, got, tt.want)
 		}
+	}
+}
+
+func TestEdgeFoghornEndpointUsesInternalCA(t *testing.T) {
+	t.Parallel()
+
+	if edgeFoghornEndpointUsesInternalCA("192.168.10.17:18029", "foghorn.staging-media-eu.staging.frameworks.network") {
+		t.Fatal("private route with a public TLS server name must use the system trust store")
+	}
+	if !edgeFoghornEndpointUsesInternalCA("192.168.10.17:18019", "") {
+		t.Fatal("private route without an override must use the internal CA")
+	}
+	if !edgeFoghornEndpointUsesInternalCA("192.168.10.17:18019", "foghorn.internal") {
+		t.Fatal("explicit internal TLS server name must use the internal CA")
 	}
 }
 

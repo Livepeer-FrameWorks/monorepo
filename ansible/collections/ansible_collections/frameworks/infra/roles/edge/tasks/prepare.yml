@@ -13,6 +13,36 @@
     - "{{ edge_conf_dir }}/pki"
     - "{{ edge_cert_dir }}"
 
+- name: Pin private edge telemetry resolution on native Linux
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} FRAMEWORKS EDGE TELEMETRY"
+    block: "{{ edge_telemetry_address }} {{ edge_telemetry_hostname }}"
+  when:
+    - edge_mode == 'native'
+    - ansible_facts.os_family != 'Darwin'
+    - edge_telemetry_address | length > 0
+    - edge_telemetry_hostname | length > 0
+
+- name: Check preserved edge telemetry token
+  ansible.builtin.stat:
+    path: >-
+      {{ edge_conf_dir ~ '/telemetry/token'
+         if edge_mode == 'native'
+         else edge_base_dir ~ '/telemetry/token' }}
+  register: edge_existing_telemetry_token
+  when: edge_telemetry_url | length > 0
+
+- name: Require a new or preserved edge telemetry token
+  ansible.builtin.assert:
+    that:
+      - edge_telemetry_token | length > 0 or edge_existing_telemetry_token.stat.exists | default(false)
+    fail_msg: >-
+      Edge telemetry is enabled but no bearer token was supplied and no
+      previously enrolled token exists on the host.
+    quiet: true
+  when: edge_telemetry_url | length > 0
+
 - name: Read existing native MistServer env
   ansible.builtin.slurp:
     src: "{{ edge_conf_dir }}/mistserver.env"

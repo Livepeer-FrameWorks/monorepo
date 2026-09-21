@@ -94,16 +94,18 @@ services:
         sysctl -w net.ipv4.tcp_congestion_control=bbr || true
     restart: "no"
 {% endif %}
-{# vmagent requires BOTH url and token (matching the Go renderer and the
-   role defaults contract) — tokenless remote-write is not a supported
-   shape. #}
-{% if edge_telemetry_url | length > 0 and edge_telemetry_token | length > 0 %}
+{# prepare.yml proves that a new or preserved bearer token exists. #}
+{% if edge_telemetry_url | length > 0 %}
 
   vmagent:
     image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
 {% if edge_container_flavor | default('linux') != 'darwin' %}
     network_mode: host
+{% endif %}
+{% if edge_telemetry_address | length > 0 and edge_telemetry_hostname | length > 0 %}
+    extra_hosts:
+      - "{{ edge_telemetry_hostname }}:{{ edge_telemetry_address }}"
 {% endif %}
     command:
 {# Loopback: with host networking this would otherwise expose vmagent's

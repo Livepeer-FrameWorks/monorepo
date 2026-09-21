@@ -69,7 +69,7 @@
   ansible.builtin.set_fact:
     edge_vmagent_bearer_token_arg: >-
       {{ ' -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token'
-         if edge_telemetry_token | length > 0
+         if edge_telemetry_token | length > 0 or edge_existing_telemetry_token.stat.exists | default(false)
          else '' }}
 
 - name: Render vmagent systemd unit

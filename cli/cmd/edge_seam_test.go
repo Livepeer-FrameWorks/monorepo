@@ -69,9 +69,9 @@ func TestRunEdgePreRegister(t *testing.T) {
 type fakeEdgeRegisterQM struct {
 	healthErr error
 
-	gotCreate  *quartermasterpb.CreateNodeRequest
-	createResp *quartermasterpb.NodeResponse
-	createErr  error
+	gotClusterID string
+	clusterResp  *quartermasterpb.ClusterResponse
+	clusterErr   error
 
 	gotToken  *quartermasterpb.CreateEnrollmentTokenRequest
 	tokenResp *quartermasterpb.CreateBootstrapTokenResponse
@@ -80,9 +80,9 @@ type fakeEdgeRegisterQM struct {
 
 func (f *fakeEdgeRegisterQM) CheckHealth(_ context.Context) error { return f.healthErr }
 
-func (f *fakeEdgeRegisterQM) CreateNode(_ context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error) {
-	f.gotCreate = req
-	return f.createResp, f.createErr
+func (f *fakeEdgeRegisterQM) GetCluster(_ context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
+	f.gotClusterID = clusterID
+	return f.clusterResp, f.clusterErr
 }
 
 func (f *fakeEdgeRegisterQM) CreateEnrollmentToken(_ context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
@@ -92,11 +92,8 @@ func (f *fakeEdgeRegisterQM) CreateEnrollmentToken(_ context.Context, req *quart
 
 func okEdgeRegisterQM() *fakeEdgeRegisterQM {
 	return &fakeEdgeRegisterQM{
-		createResp: &quartermasterpb.NodeResponse{
-			Node: &quartermasterpb.InfrastructureNode{
-				NodeId:        "edge-us-east-1",
-				OwnerTenantId: strptr("tenant-7"),
-			},
+		clusterResp: &quartermasterpb.ClusterResponse{
+			Cluster: &quartermasterpb.InfrastructureCluster{ClusterId: "cluster-a", OwnerTenantId: strptr("tenant-7")},
 		},
 		tokenResp: &quartermasterpb.CreateBootstrapTokenResponse{
 			Token: &quartermasterpb.BootstrapToken{Token: "enroll-xyz"},
@@ -115,14 +112,8 @@ func TestRunEdgeRegisterNode(t *testing.T) {
 		if token != "enroll-xyz" {
 			t.Fatalf("expected token enroll-xyz, got %q", token)
 		}
-		if f.gotCreate == nil {
-			t.Fatal("CreateNode not called")
-		}
-		if f.gotCreate.GetClusterId() != "cluster-a" || f.gotCreate.GetNodeName() != "edge-us-east-1" {
-			t.Fatalf("CreateNode request not forwarded: %+v", f.gotCreate)
-		}
-		if f.gotCreate.GetExternalIp() != "203.0.113.4" || f.gotCreate.GetRegion() != "us-east-1" {
-			t.Fatalf("optional fields not set: %+v", f.gotCreate)
+		if f.gotClusterID != "cluster-a" {
+			t.Fatalf("GetCluster ID = %q", f.gotClusterID)
 		}
 		if f.gotToken == nil || f.gotToken.GetClusterId() != "cluster-a" {
 			t.Fatalf("enrollment token request not forwarded: %+v", f.gotToken)
@@ -130,20 +121,6 @@ func TestRunEdgeRegisterNode(t *testing.T) {
 		out := buf.String()
 		if !strings.Contains(out, "edge-us-east-1") {
 			t.Fatalf("output missing node id render: %q", out)
-		}
-	})
-
-	t.Run("optional fields omitted when empty", func(t *testing.T) {
-		f := okEdgeRegisterQM()
-		var buf bytes.Buffer
-		if _, err := runEdgeRegisterNode(context.Background(), &buf, f, "qm:9000", "edge-1", "cluster-a", "", ""); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if f.gotCreate.ExternalIp != nil {
-			t.Fatalf("expected nil ExternalIp, got %v", f.gotCreate.ExternalIp)
-		}
-		if f.gotCreate.Region != nil {
-			t.Fatalf("expected nil Region, got %v", f.gotCreate.Region)
 		}
 	})
 
@@ -158,26 +135,26 @@ func TestRunEdgeRegisterNode(t *testing.T) {
 		if !strings.Contains(err.Error(), "health check failed") {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if f.gotCreate != nil {
-			t.Fatal("CreateNode should not be called after health failure")
+		if f.gotClusterID != "" {
+			t.Fatal("GetCluster should not be called after health failure")
 		}
 	})
 
-	t.Run("CreateNode error is wrapped", func(t *testing.T) {
+	t.Run("GetCluster error is wrapped", func(t *testing.T) {
 		f := okEdgeRegisterQM()
-		f.createResp = nil
-		f.createErr = errors.New("rpc boom")
+		f.clusterResp = nil
+		f.clusterErr = errors.New("rpc boom")
 		var buf bytes.Buffer
 		_, err := runEdgeRegisterNode(context.Background(), &buf, f, "qm:9000", "edge-1", "cluster-a", "", "")
-		if err == nil || !strings.Contains(err.Error(), "failed to create node") {
-			t.Fatalf("expected create-node error, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "failed to resolve cluster") {
+			t.Fatalf("expected get-cluster error, got %v", err)
 		}
 	})
 
 	t.Run("missing owner tenant id rejected", func(t *testing.T) {
 		f := okEdgeRegisterQM()
-		f.createResp = &quartermasterpb.NodeResponse{
-			Node: &quartermasterpb.InfrastructureNode{NodeId: "edge-1"},
+		f.clusterResp = &quartermasterpb.ClusterResponse{
+			Cluster: &quartermasterpb.InfrastructureCluster{ClusterId: "cluster-a"},
 		}
 		var buf bytes.Buffer
 		_, err := runEdgeRegisterNode(context.Background(), &buf, f, "qm:9000", "edge-1", "cluster-a", "", "")

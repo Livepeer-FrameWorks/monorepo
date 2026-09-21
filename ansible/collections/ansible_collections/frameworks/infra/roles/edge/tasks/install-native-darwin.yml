@@ -203,6 +203,7 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      FOGHORN_GRPC_TLS_SERVER_NAME: "{{ edge_foghorn_grpc_tls_server_name }}"
       MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
       RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
       RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
@@ -242,6 +243,7 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      FOGHORN_GRPC_TLS_SERVER_NAME: "{{ edge_foghorn_grpc_tls_server_name }}"
       MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
       RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
       RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
@@ -282,6 +284,7 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      FOGHORN_GRPC_TLS_SERVER_NAME: "{{ edge_foghorn_grpc_tls_server_name }}"
       MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
       RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
       RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
@@ -348,6 +351,7 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      FOGHORN_GRPC_TLS_SERVER_NAME: "{{ edge_foghorn_grpc_tls_server_name }}"
       MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
       RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
       RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"

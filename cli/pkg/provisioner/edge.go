@@ -46,24 +46,26 @@ func NewEdgeProvisioner(pool *ssh.Pool) *EdgeProvisioner {
 type EdgeProvisionConfig struct {
 	Mode string // "container" | "native" ("docker" is a deprecated alias for container)
 
-	NodeName        string
-	NodeDomain      string
-	PoolDomain      string
-	ClusterID       string
-	Region          string
-	Email           string
-	EnrollmentToken string
-	FoghornGRPCAddr string
-	NodeID          string
-	CertPEM         string
-	KeyPEM          string
-	CABundlePEM     string
-	TelemetryURL    string
-	TelemetryToken  string
-	Capabilities    []string
-	BandwidthMbps   int
-	MaxTranscodes   int
-	StorageBytes    uint64
+	NodeName                 string
+	NodeDomain               string
+	PoolDomain               string
+	ClusterID                string
+	Region                   string
+	Email                    string
+	EnrollmentToken          string
+	FoghornGRPCAddr          string
+	FoghornGRPCTLSServerName string
+	NodeID                   string
+	CertPEM                  string
+	KeyPEM                   string
+	CABundlePEM              string
+	TelemetryURL             string
+	TelemetryToken           string
+	TelemetryAddress         string
+	Capabilities             []string
+	BandwidthMbps            int
+	MaxTranscodes            int
+	StorageBytes             uint64
 
 	SkipPreflight bool
 	ApplyTuning   bool
@@ -299,7 +301,10 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 	if remoteOS == "darwin" {
 		portCheckCmd = "lsof -iTCP:80 -iTCP:443 -sTCP:LISTEN -P -n 2>/dev/null"
 	} else {
-		portCheckCmd = "ss -tlnp | grep -E ':80 |:443 '"
+		// Unprivileged ss hides process metadata for root-owned listeners.
+		// Prefer the same passwordless sudo path Ansible uses so a resumed
+		// native install can prove that frameworks-caddy owns these ports.
+		portCheckCmd = "(sudo -n ss -tlnp 2>/dev/null || ss -tlnp) | grep -E ':80 |:443 '"
 	}
 	result, err := e.RunCommand(ctx, host, portCheckCmd)
 	if err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != "" {
@@ -308,7 +313,7 @@ func (e *EdgeProvisioner) runPreflight(ctx context.Context, host inventory.Host,
 		}
 	}
 
-	const minDiskFreeBytes = 20 * 1024 * 1024 * 1024
+	const minDiskFreeBytes = 10 * 1024 * 1024 * 1024
 	const minDiskFreePercent = 10.0
 	diskPaths := []string{"/", "/var/lib"}
 	if remoteOS == "darwin" {
