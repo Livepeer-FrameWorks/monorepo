@@ -2,6 +2,51 @@
 # Delegates install + config rendering + service start to geerlingguy.postgresql.
 # We map our vars onto its variable surface so there is a single source of
 # truth: the FrameWorks manifest.
+- name: Postgres | install PGDG repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-debian
+    state: present
+  when: ansible_facts.os_family == "Debian"
+
+- name: Postgres | install PGDG repository signing key
+  ansible.builtin.get_url:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    dest: /usr/share/keyrings/postgresql-pgdg.asc
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_facts.os_family == "Debian"
+
+- name: Postgres | configure PGDG repository
+  ansible.builtin.deb822_repository:
+    name: postgresql-pgdg
+    types: [deb]
+    uris: https://apt.postgresql.org/pub/repos/apt
+    suites: ["{{ ansible_facts.distribution_release }}-pgdg"]
+    components: [main]
+    signed_by: /usr/share/keyrings/postgresql-pgdg.asc
+    state: present
+  register: frameworks_postgres_pgdg_repository
+  when: ansible_facts.os_family == "Debian"
+
+- name: Postgres | refresh apt cache after PGDG repository change
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - ansible_facts.os_family == "Debian"
+    - frameworks_postgres_pgdg_repository.changed
+
+- name: Postgres | pin requested PGDG major-version packages
+  ansible.builtin.set_fact:
+    postgresql_packages:
+      - "postgresql-{{ postgres_version }}"
+      - "postgresql-client-{{ postgres_version }}"
+      - "postgresql-contrib-{{ postgres_version }}"
+      - libpq-dev
+  when: ansible_facts.os_family == "Debian"
+
 - name: Postgres | compute effective OS paths for geerlingguy.postgresql
   ansible.builtin.set_fact:
     frameworks_postgres_data_dir: "{{ (postgres_arch_pgroot + '/data') if ansible_facts.os_family == 'Archlinux' else postgres_data_dir }}"
@@ -71,7 +116,11 @@
     postgresql_config_path: "{{ frameworks_postgres_config_dir }}"
     postgresql_bin_path: "{{ frameworks_postgres_bin_path }}"
     postgresql_port: "{{ postgres_port }}"
-    postgresql_restarted_state: "reloaded"
+    # Settings such as listen_addresses are postmaster parameters and only
+    # take effect after a restart. The upstream role uses this value for its
+    # configuration-change handler, so a reload leaves fresh installs bound
+    # to the package default (localhost) even though the file says "*".
+    postgresql_restarted_state: "restarted"
     postgresql_global_config_options:
       - option: unix_socket_directories
         value: "{{ postgresql_unix_socket_directories | join(',') }}"

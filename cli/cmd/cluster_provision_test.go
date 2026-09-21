@@ -528,6 +528,23 @@ func TestRunProvisionPhaseReportsParentInterruption(t *testing.T) {
 	}
 }
 
+func TestPostgresInstanceBatchDoesNotInitializeYugabytePrimaryEarly(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{Engine: "yugabyte"},
+		},
+	}
+	batch := []*orchestrator.Task{{Type: "postgres", InstanceID: "support"}}
+	if shouldInitializePrimaryPostgresAfterBatch(manifest, batch, nil) {
+		t.Fatal("standalone PostgreSQL instance batch must not initialize the Yugabyte primary")
+	}
+
+	manifest.Infrastructure.Postgres.Engine = "postgres"
+	if !shouldInitializePrimaryPostgresAfterBatch(manifest, batch, nil) {
+		t.Fatal("final vanilla PostgreSQL batch should initialize the primary")
+	}
+}
+
 func newTestCommandWithOutput(out *bytes.Buffer) *cobra.Command {
 	cmd := &cobra.Command{Use: "test"}
 	cmd.SetOut(out)
@@ -3437,6 +3454,15 @@ func TestInfrastructureInitializeDeferralIncludesKafka(t *testing.T) {
 	}
 	if deferInfrastructureInitialize("clickhouse") {
 		t.Fatal("did not expect clickhouse initialization to be deferred")
+	}
+}
+
+func TestPostgresInitializeDoesNotTrustCheckMode(t *testing.T) {
+	if infrastructureInitializePrecheckReliable("postgres") {
+		t.Fatal("postgres init check mode skips database mutations and cannot prove initialized state")
+	}
+	if !infrastructureInitializePrecheckReliable("clickhouse") {
+		t.Fatal("clickhouse should retain its initialize no-op precheck")
 	}
 }
 

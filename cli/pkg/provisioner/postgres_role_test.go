@@ -33,6 +33,25 @@ func TestPostgresRoleSuppliesArchVarsMissingFromGalaxyRole(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleUsesPGDGForRequestedDebianMajorVersion(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/install.yml")
+	for _, want := range []string{
+		"Postgres | configure PGDG repository",
+		"ansible.builtin.deb822_repository:",
+		"https://apt.postgresql.org/pub/repos/apt",
+		`["{{ ansible_facts.distribution_release }}-pgdg"]`,
+		"Postgres | pin requested PGDG major-version packages",
+		`"postgresql-{{ postgres_version }}"`,
+		`"postgresql-client-{{ postgres_version }}"`,
+		`"postgresql-contrib-{{ postgres_version }}"`,
+		`when: ansible_facts.os_family == "Debian"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("postgres role should install the requested major version from PGDG on Debian; missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestPostgresRoleAllowsDockerBridgeClients(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/defaults/main.yml")
 	for _, want := range []string{
@@ -43,6 +62,13 @@ func TestPostgresRoleAllowsDockerBridgeClients(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("postgres role should allow Docker bridge clients with password auth; missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestPostgresRoleRestartsForPostmasterSettings(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/install.yml")
+	if !strings.Contains(content, `postgresql_restarted_state: "restarted"`) {
+		t.Fatalf("postgres role must restart after changing postmaster settings such as listen_addresses:\n%s", content)
 	}
 }
 

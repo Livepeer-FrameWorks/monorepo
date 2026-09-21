@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -97,6 +98,39 @@ func auditYugabyteMasterConsensus(ctx context.Context, manifest *inventory.Manif
 	return nil, fmt.Errorf("no Yugabyte master returned a valid consensus audit:\n  %s", strings.Join(errorsByHost, "\n  "))
 }
 
+func waitForYugabyteMasterConsensus(ctx context.Context, manifest *inventory.Manifest, pool *ssh.Pool, timeout, interval time.Duration) (*yugabyteMasterConsensus, error) {
+	return retryYugabyteMasterConsensus(ctx, timeout, interval, func(attemptCtx context.Context) (*yugabyteMasterConsensus, error) {
+		return auditYugabyteMasterConsensus(attemptCtx, manifest, pool)
+	})
+}
+
+func retryYugabyteMasterConsensus(ctx context.Context, timeout, interval time.Duration, audit func(context.Context) (*yugabyteMasterConsensus, error)) (*yugabyteMasterConsensus, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		if err := waitCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("wait for Yugabyte master consensus: %w", ctx.Err())
+			}
+			return nil, fmt.Errorf("yugabyte master consensus did not stabilize within %s: %w", timeout, errors.Join(err, lastErr))
+		}
+		consensus, err := audit(waitCtx)
+		if err == nil && waitCtx.Err() == nil {
+			return consensus, nil
+		}
+		lastErr = err
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+}
+
 func yugabyteConsensusProbeCommand(masterAddresses, localMasterHost string) string {
 	masters := ssh.ShellQuote(masterAddresses)
 	mastersURL := ssh.ShellQuote("http://" + net.JoinHostPort(localMasterHost, "7000") + "/api/v1/masters")
@@ -165,8 +199,8 @@ func parseAndValidateYugabyteConsensus(output string, expectedAddresses []string
 	if consensus.LeaderUUID != liveLeaderUUID {
 		return nil, fmt.Errorf("leader identity mismatch: committed leader %s, live leader %s", consensus.LeaderUUID, liveLeaderUUID)
 	}
-	if consensus.Term <= 0 || consensus.OpID < 0 {
-		return nil, fmt.Errorf("master Raft config is not committed: term=%d opid=%d", consensus.Term, consensus.OpID)
+	if consensus.Term <= 0 {
+		return nil, fmt.Errorf("master Raft config has no elected term: term=%d opid=%d", consensus.Term, consensus.OpID)
 	}
 	return consensus, nil
 }

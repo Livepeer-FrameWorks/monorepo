@@ -1007,11 +1007,11 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			}
 		}
 
-		// Vanilla PostgreSQL: standalone Postgres initializes its schema HERE, so a postgres-backed application never
-		// starts against an uninitialized schema. Matched by task TYPE ("postgres") so it never double-fires for a
-		// Yugabyte manifest (Yugabyte shares ServiceID "postgres" but has its own deferred init above). initPostgres
-		// resolves the vanilla path for a non-Yugabyte manifest.
-		if batchContainsTaskType(batch, "postgres") && !remainingBatchesContainTaskType(plan.Batches[batchNum+1:], "postgres") {
+		// Vanilla primary PostgreSQL initializes its schema HERE, so a postgres-backed application never starts against
+		// an uninitialized schema. A Yugabyte primary may still declare standalone PostgreSQL instances; those tasks run
+		// their own idempotent initialization in provisionTask and must not trigger initPostgres against Yugabyte before
+		// the Yugabyte batches have run.
+		if shouldInitializePrimaryPostgresAfterBatch(manifest, batch, plan.Batches[batchNum+1:]) {
 			fmt.Fprintln(cmd.OutOrStdout(), "")
 			if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("PostgreSQL initialization failed: %v", err))
@@ -1398,6 +1398,13 @@ func remainingBatchesContainTaskType(batches [][]*orchestrator.Task, taskType st
 	return false
 }
 
+func shouldInitializePrimaryPostgresAfterBatch(manifest *inventory.Manifest, batch []*orchestrator.Task, remaining [][]*orchestrator.Task) bool {
+	if manifest == nil || manifest.Infrastructure.Postgres == nil || manifest.Infrastructure.Postgres.IsYugabyte() {
+		return false
+	}
+	return batchContainsTaskType(batch, "postgres") && !remainingBatchesContainTaskType(remaining, "postgres")
+}
+
 func verifyYugabyteCluster(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
@@ -1473,7 +1480,7 @@ done
 		return fmt.Errorf("%d node(s) failed Yugabyte verification:\n  %s", len(failures), strings.Join(failures, "\n  "))
 	}
 
-	consensus, err := auditYugabyteMasterConsensus(ctx, manifest, pool)
+	consensus, err := waitForYugabyteMasterConsensus(ctx, manifest, pool, 60*time.Second, 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("master consensus verification failed: %w", err)
 	}
@@ -6146,7 +6153,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	if task.Phase == orchestrator.PhaseInfrastructure {
 		if !deferInfrastructureInitialize(task.Type) {
 			initSkipped := false
-			if !force {
+			if !force && infrastructureInitializePrecheckReliable(task.Type) {
 				wouldInitChange, checkErr := provisionWouldChange(ctx, prov, host, config, []string{"init"})
 				if checkErr != nil {
 					return nil, fmt.Errorf("%s initialize precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
@@ -6283,6 +6290,15 @@ func deferInfrastructureInitialize(taskType string) bool {
 	default:
 		return false
 	}
+}
+
+// PostgreSQL's init tasks intentionally do not mutate roles or databases in
+// Ansible check mode. A check-only run therefore cannot distinguish a fully
+// initialized instance from a fresh server and would incorrectly skip the real
+// Initialize call. The PostgreSQL modules are idempotent, so always run init
+// for both primary and named standalone instances.
+func infrastructureInitializePrecheckReliable(taskType string) bool {
+	return taskType != "postgres"
 }
 
 func automaticRollbackAllowed(task *orchestrator.Task) bool {
