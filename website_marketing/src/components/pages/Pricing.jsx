@@ -150,7 +150,8 @@ const payAsYouGo = {
 const processingFeatureMatrix = [
   {
     feature: "Transcoding",
-    description: "Real-time video transcoding to multiple formats and bitrates.",
+    description:
+      "Real-time transcoding on FrameWorks edges for SLA-backed capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
     tiers: {
       free: "Powered by Livepeer network",
       supporter: "Powered by Livepeer network",
@@ -226,6 +227,11 @@ const deploymentModes = [
 
 export const PRICING_FAQS = [
   {
+    question: "Why can FrameWorks price video differently from hyperscaler-based platforms?",
+    answer:
+      "Our team develops the core MistServer media engine and can operate the live path directly on infrastructure including bare metal. For processing, use FrameWorks edges when you need SLA-backed capacity, Livepeer when you want low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+  },
+  {
     question: "What does beta pricing include?",
     answer:
       "Generous allowances, transparent overages, and shared processing capacity. As we scale, pricing may adjust, but you keep the allowances you signed up for throughout beta.",
@@ -233,7 +239,7 @@ export const PRICING_FAQS = [
   {
     question: "Can I mix self-hosted and hosted workloads?",
     answer:
-      "Yes. Every tier includes self-hosting. Supporter and above add hosted load balancers and advanced processing on demand. You can operate your own edge while tapping FrameWorks or Livepeer compute as you need it.",
+      "Yes. Every tier includes self-hosting. You can process on your own edge with no FrameWorks processing charge, use Livepeer for low-cost capacity that is quick to scale, or move SLA-sensitive workloads onto FrameWorks edges.",
   },
   {
     question: "When should I upgrade to Production?",
@@ -332,9 +338,9 @@ const pricingHeroHighlights = [
     icon: HomeIcon,
   },
   {
-    title: "Agent-native by default",
+    title: "No rebuild between models",
     description:
-      "Open discovery, wallet auth, x402 payments, and full MCP access included in every tier and Pay-As-You-Go.",
+      "Move from hosted to hybrid or self-hosted without changing the application or APIs built on top.",
     tone: "accent",
     icon: CpuChipIcon,
   },
@@ -429,7 +435,7 @@ const Pricing = () => {
             pricing
           </>
         }
-        description="Start hosted, go hybrid, or run everything yourself. Every tier supports self-hosting; higher tiers add hosted services, reserved pools, and advanced processing."
+        description="Start on FrameWorks infrastructure, connect your own edges, or deploy the full stack yourself. The media engine, APIs, and operational model stay consistent, and the costs stay visible."
         support={
           <IconList
             items={pricingHeroHighlights.map((highlight) => {
@@ -516,8 +522,8 @@ const Pricing = () => {
             >
               <HeadlineStack
                 eyebrow="Paid tiers"
-                title="Scale beyond free"
-                subtitle="Add hosted services, advanced processing, and enterprise capabilities as your workloads scale."
+                title="Add managed infrastructure without changing stacks"
+                subtitle="Move workloads onto FrameWorks infrastructure, reserve capacity, and add operational support while keeping the same media engine and APIs."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -663,7 +669,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="AI workloads (transcription, V2V, highlights) and multi-stream compositing are in pilot. Request access via Contact. Standard transcoding is bundled in delivered minutes."
+                subtitle="Run processing on FrameWorks edges for SLA-backed capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing remain in pilot."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -693,11 +699,12 @@ const Pricing = () => {
             >
               <HeadlineStack
                 eyebrow="Operating models"
-                title="SaaS to Hybrid to Fully self-hosted"
+                title="Hosted, hybrid, or fully self-hosted"
                 subtitle={
                   <>
-                    Choose the level of control you want: fully hosted, self-hosted edge, or the
-                    video and control-plane stack. <SovereigntyNote />
+                    Choose where each part of the video path runs. FrameWorks can operate the
+                    complete service, combine our control plane with your edges, or run entirely in
+                    your footprint. <SovereigntyNote />
                   </>
                 }
                 align="left"

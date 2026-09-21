@@ -29,9 +29,9 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
   {
     id: "home",
     path: "/",
-    title: "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
+    title: "FrameWorks - Independent Video Cloud, Hosted or Self-Hosted",
     description:
-      "FrameWorks is a live streaming platform and API for sovereign video operations: MistServer delivery, Livepeer-backed transcoding, and real-time analytics. Start hosted, go hybrid, or run the whole stack self-hosted on your own infrastructure.",
+      "A complete live video cloud built by the team behind MistServer. Ingest, process, route, deliver, record, and analyze video on our infrastructure, your own, or both.",
   },
   {
     id: "analytics",
@@ -43,16 +43,16 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
   {
     id: "pricing",
     path: "/pricing",
-    title: "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Streaming",
+    title: "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud",
     description:
-      "Compare FrameWorks beta pricing for free, supporter, production, and enterprise streaming deployments with transparent allowances, hosted load balancing, and pay-as-you-go usage.",
+      "Transparent pricing for a complete video cloud. Use FrameWorks hosted infrastructure, connect your own edges, or self-host the full media and control-plane stack.",
   },
   {
     id: "about",
     path: "/about",
-    title: "About FrameWorks - The Team Behind Sovereign Live Streaming",
+    title: "About FrameWorks - Built by the Team Behind MistServer",
     description:
-      "Learn how FrameWorks builds sovereign live video infrastructure around MistServer, Livepeer, open operations, and self-hosted edge clusters.",
+      "FrameWorks is a complete video cloud built on more than 15 years of MistServer media engineering, with hosted, hybrid, and fully self-hosted deployment.",
   },
   {
     id: "contact",

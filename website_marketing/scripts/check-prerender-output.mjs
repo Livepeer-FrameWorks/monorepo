@@ -6,13 +6,13 @@ const clientDir = join(process.cwd(), "build", "client");
 const routes = [
   [
     "index.html",
-    "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
+    "FrameWorks - Independent Video Cloud, Hosted or Self-Hosted",
     "Run the whole live video path",
   ],
   // Snippet stops before "QoE & Geo" because the built title HTML-encodes the ampersand.
   ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],
-  ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Streaming"],
-  ["about/index.html", "About FrameWorks - The Team Behind Sovereign Live Streaming"],
+  ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud"],
+  ["about/index.html", "About FrameWorks - Built by the Team Behind MistServer"],
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   ["status/index.html", "FrameWorks Status - Live Streaming Network Health"],
   ["privacy/index.html", "FrameWorks Privacy Policy"],

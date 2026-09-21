@@ -13,6 +13,7 @@ import {
   MarketingCTAButton,
   MarketingComparisonGrid,
   MarketingComparisonCard,
+  MarketingFeatureWall,
   MarketingHero,
   MarketingGridSplit,
   IconList,
@@ -151,7 +152,7 @@ function MediaControlPreview() {
         </div>
       </div>
       <div className="media-control-preview__footer">
-        <span>FrameWorks places, authorizes, observes, and automates the workflow.</span>
+        <span>FrameWorks carries and operates the media path, not just the API around it.</span>
       </div>
     </div>
   );
@@ -161,12 +162,12 @@ export const HOME_FAQS = [
   {
     question: "What is FrameWorks?",
     answer:
-      "FrameWorks is sovereign live video infrastructure for teams that need hosted, hybrid, or self-hosted streaming without giving up operational control. It combines MistServer delivery, Livepeer-backed processing, GraphQL APIs, QoE analytics, and agent-accessible operations in one platform.",
+      "FrameWorks is a complete live video cloud built by the team behind MistServer. It covers ingest, protocol handling, processing, routing, delivery, recording, playback, analytics, and operations through one platform. Use our hosted infrastructure, attach your own edges, or run the full stack yourself.",
   },
   {
-    question: "How is FrameWorks different from cloud video platforms?",
+    question: "How is FrameWorks different from other cloud video platforms?",
     answer:
-      "FrameWorks lets you keep the streaming control plane and edge infrastructure in your own footprint while still using hosted load balancing, shared processing, or managed support when you want it. Cloud-only platforms abstract operations away; FrameWorks exposes the machinery so operators can inspect, route, automate, and self-host it.",
+      "FrameWorks is not a resale of a hyperscaler's managed video APIs. Our team develops the MistServer media engine at its core and operates the platform around it. This gives you one system from ingest through playback, predictable infrastructure economics, and the freedom to move between hosted, hybrid, and self-hosted deployments.",
   },
   {
     question: "Can FrameWorks run fully self-hosted?",
@@ -176,7 +177,7 @@ export const HOME_FAQS = [
   {
     question: "What do MistServer and Livepeer do in FrameWorks?",
     answer:
-      "MistServer powers low-latency ingest, protocol handling, and delivery at the edge, while Livepeer provides decentralized video processing capacity for workloads such as transcoding. FrameWorks adds tenancy, routing, analytics, billing, automation, and a developer API around those video primitives.",
+      "FrameWorks and MistServer are developed by the same team. MistServer is the media engine at the heart of FrameWorks, handling ingest, protocol translation, delivery, recording, and playback. Processing can run on FrameWorks edges with SLA-backed capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
   },
   {
     question: "Who should use sovereign streaming infrastructure?",
@@ -321,6 +322,33 @@ const LandingPage = () => {
     },
   ];
 
+  const nativeCloudProof = [
+    {
+      title: "Media-native core",
+      description:
+        "MistServer, developed by our team for more than 15 years, handles ingest, protocol conversion, low-latency delivery, recording, and playback.",
+      tone: "accent",
+    },
+    {
+      title: "Operated infrastructure",
+      description:
+        "Use FrameWorks as a hosted service on infrastructure we operate, including bare metal, without assembling a chain of separate cloud-media products.",
+      tone: "green",
+    },
+    {
+      title: "Portable by design",
+      description:
+        "Move between hosted, hybrid, and self-hosted deployments without changing APIs or rebuilding the product on top.",
+      tone: "yellow",
+    },
+    {
+      title: "Processing on your terms",
+      description:
+        "Use FrameWorks edges for SLA-backed capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+      tone: "cyan",
+    },
+  ];
+
   const multistreamPoints = [
     {
       id: "push",
@@ -362,7 +390,7 @@ const LandingPage = () => {
     {
       id: "free",
       tone: "green",
-      badge: "Backed by Livepeer",
+      badge: "Complete Open Stack",
       name: "Free Tier",
       price: "Free",
       period: "",
@@ -402,7 +430,7 @@ const LandingPage = () => {
       price: "€50+",
       period: "/month",
       description:
-        "Advanced processing like AI workloads and multi-stream compositing, plus hosted services and enterprise support.",
+        "Run on FrameWorks infrastructure, connect your own edges, or combine both. Add reserved capacity, advanced analytics, and hands-on support as you scale.",
       features: paidPlanHighlights,
       ctaType: "internal",
       ctaLabel: "Compare paid tiers",
@@ -457,9 +485,10 @@ const LandingPage = () => {
         className="landing-hero"
         surface="gradient"
         accents={landingHeroAccents}
+        eyebrow="The independent video cloud"
         title="Run the whole live video path"
-        description="Bring video in, shape it live, route it to the right edge, play it securely, keep every moment, and understand what happened. All through one open control plane."
-        support="MistServer media. Federated delivery. Built-in viewer telemetry. Hosted, hybrid, or on your own edges."
+        description="Ingest, process, route, deliver, record, and analyze live video on media-server technology we have developed for more than 15 years. Run it on our infrastructure, your own, or both."
+        support="MistServer at the core. Bare-metal capacity. Open APIs. Hosted, hybrid, or fully self-hosted."
         primaryAction={{
           label: "Start Free",
           href: config.appUrl,
@@ -473,7 +502,7 @@ const LandingPage = () => {
           className: "cta-motion",
           variant: "secondary",
         }}
-        footnote="Start with the workflow you have. Keep the infrastructure options open."
+        footnote="Not a resale of hyperscaler media APIs. One video stack, operated your way."
         mediaSurface="none"
         media={
           <motion.div
@@ -681,6 +710,39 @@ const LandingPage = () => {
       <SectionDivider />
 
       <div className="flex flex-col">
+        <Section id="why-frameworks" className="bg-brand-surface landing-section--proof">
+          <SectionContainer>
+            <MarketingBand preset="foundation" texturePattern="pinlines" textureNoise="film">
+              <HeadlineStack
+                eyebrow="Why FrameWorks"
+                title="The media layer is ours. The deployment choice is yours."
+                subtitle="FrameWorks is a complete video platform, not an API stitched across separate managed-media products."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to="/about#architecture"
+                      label="See how FrameWorks is built"
+                    />
+                  </CTACluster>
+                }
+              />
+              <MarketingFeatureWall
+                items={nativeCloudProof}
+                columns={4}
+                stackAt="md"
+                hover="subtle"
+                stripe
+              />
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
         <Section id="journey" className="bg-brand-surface-muted landing-section--journey">
           <SectionContainer>
             <MarketingBand
@@ -722,7 +784,7 @@ const LandingPage = () => {
               <HeadlineStack
                 eyebrow="01 · Bring it in / Shape it"
                 title="The media path starts with the signal you already have"
-                subtitle="Connect contribution equipment, browsers, upstream streams, and files. MistServer keeps the live signal close while FrameWorks places, authorizes, and observes the work around it."
+                subtitle="Connect contribution equipment, browsers, upstream streams, and files. At the core of FrameWorks, MistServer handles the live signal while the platform places, authorizes, routes, and observes it from ingest through playback."
                 align="left"
                 underlineAlign="start"
               />
@@ -744,7 +806,7 @@ const LandingPage = () => {
                         {
                           title: "Process where it makes sense",
                           description:
-                            "Use the media edge for lightweight work and Livepeer-backed compute for heavier transcoding and AI workloads.",
+                            "Use FrameWorks edges for SLA-backed processing, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
                         },
                         {
                           title: "Grow into physical production",
@@ -1160,7 +1222,7 @@ const LandingPage = () => {
             <MarketingFinalCTA
               eyebrow="Next steps"
               title="Three ways to ship"
-              description="Deploy the full stack yourself, point your agent at skill.json, or let us run everything. Your call."
+              description="Use our hosted video cloud, connect your own edge capacity, or deploy the full stack yourself. The same media engine and APIs follow you."
               variant="band"
               primaryAction={{
                 label: "Start Free",

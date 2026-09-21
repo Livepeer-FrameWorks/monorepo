@@ -31,7 +31,7 @@ const About = () => {
       name: "MistServer Team",
       role: "Video Infrastructure Pioneers",
       description:
-        "The team behind MistServer, the media server powering streaming infrastructure worldwide. Over a decade of experience building reliable video technology.",
+        "The same team building FrameWorks has developed MistServer for more than 15 years. It is the media engine at the core of FrameWorks, not a third-party service hidden behind our API.",
       avatar: "/mist.svg",
       href: "https://www.mistserver.com/",
     },
@@ -39,7 +39,7 @@ const About = () => {
       name: "Livepeer Network",
       role: "Decentralized Video Infrastructure",
       description:
-        "A decentralized video network processing millions of minutes daily. Their backing enables FrameWorks to offer a free tier and feature-rich supporter tier.",
+        "Livepeer provides decentralized processing capacity and ecosystem backing, helping FrameWorks offer accessible transcoding, burst capacity, and a generous free tier.",
       avatar: "/livepeer-light.svg",
       href: "https://livepeer.org/",
     },
@@ -47,13 +47,27 @@ const About = () => {
 
   const timeline = [
     {
+      year: "15+ years",
+      title: "Building the media engine",
+      subtitle: "MistServer foundations",
+      icon: FilmIcon,
+      badges: ["Media Server", "Production Proven"],
+      summary:
+        "Our team develops MistServer, the media engine that now sits at the heart of FrameWorks.",
+      points: [
+        "Low-latency ingest, delivery, recording, and playback.",
+        "Broad protocol support across broadcast, contribution, and web workflows.",
+        "Production use by streaming operators around the world.",
+      ],
+    },
+    {
       year: "Sep 2025",
-      title: "IBC Demo Milestone",
+      title: "From media server to video cloud",
       subtitle: "Amsterdam launch window (Sep 12–15)",
       icon: FilmIcon,
       badges: ["IBC 2025", "Live Demos"],
       summary:
-        "FrameWorks ships the first public demo environment and onboarding flow in time for IBC Amsterdam.",
+        "FrameWorks brings a multi-tenant control plane, routing, analytics, billing, and automation to the proven MistServer media layer.",
       points: [
         "IBC showcase highlights CDN + hosted processing pipelines with telemetry.",
         "Sales-engineering loop; from demo interest into structured pilots.",
@@ -105,39 +119,67 @@ const About = () => {
 
   const missionHighlights = [
     {
-      title: "Developer-First",
+      title: "Media-Native Core",
       description:
-        "Typed SDKs over a GraphQL API. Player and StreamCrafter components for React and Svelte.",
+        "MistServer carries the live media itself, with broad protocol support and more than 15 years of development behind it.",
       icon: null,
       tone: "accent",
     },
     {
-      title: "End-to-End Analytics",
+      title: "One Operational System",
       description:
-        "Routing decisions, QoE metrics, and player telemetry show why viewer X connected to edge Y.",
+        "Ingest, routing, playback, recording, analytics, access, and billing share one tenant-aware platform.",
       icon: null,
       tone: "green",
     },
     {
-      title: "Sovereignty Without Pain",
+      title: "Deployment Sovereignty",
       description:
-        "Run the whole stack on your own hardware. No licensing fees. Switch to hybrid for burst capacity or extra geo coverage.",
+        "Run on our infrastructure, your own hardware, or both. Change the deployment without rebuilding your application.",
       icon: null,
       tone: "yellow",
     },
     {
-      title: "Agent-Native",
+      title: "Open to People and Agents",
       description:
-        "MCP server, wallet auth, x402 payments. AI agents operate autonomously; or call Skipper when you hit a video roadblock.",
+        "Operate through the dashboard, CLI, SDKs, GraphQL, or MCP. Human operators and autonomous tooling use the same platform capabilities.",
       icon: null,
       tone: "cyan",
     },
   ];
 
   const missionStoryCopy = [
-    "We're building the streaming infrastructure that doesn't lock you in. Need custom features? Build them yourself or let us help. Switch providers? Your infrastructure comes with you. Cloud bills spiraling? Run it yourself with our open source stack.",
-    "Built by the MistServer team and backed by Livepeer, we make production-grade video infrastructure accessible without handing control to cloud vendors.",
-    "Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.",
+    "FrameWorks exists because live video should not require surrendering the media path to a chain of managed services.",
+    "Our team has spent more than 15 years developing MistServer, the media engine at the heart of FrameWorks. It handles ingest, protocol translation, low-latency delivery, recording, and playback without forcing every workflow through a proprietary video service.",
+    "FrameWorks adds the cloud platform around that proven engine: tenancy, routing, authorization, analytics, billing, automation, and developer APIs.",
+    "Use it as a hosted video cloud, connect your own edges, or run the complete stack yourself. The operating model changes; the product you build against does not.",
+  ];
+
+  const architectureProofs = [
+    {
+      title: "We develop the media engine",
+      description:
+        "MistServer is not an interchangeable upstream vendor. It is developed by the same team building FrameWorks and forms the core of the live media path.",
+      tone: "accent",
+    },
+    {
+      title: "We operate real infrastructure",
+      description:
+        "Hosted FrameWorks workloads run on infrastructure we operate, including bare metal. We control how streams are placed, routed, delivered, and observed.",
+      tone: "green",
+    },
+    {
+      title: "Processing has three paths",
+      description:
+        "Use FrameWorks edges for SLA-backed capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+      tone: "cyan",
+    },
+    {
+      title: "You can take the stack with you",
+      description:
+        "The video layer, control plane, analytics, and operational model can run in your footprint. Storage and DNS remain external integrations today.",
+      tone: "yellow",
+    },
   ];
 
   const pipelineFeatures = [
@@ -296,13 +338,14 @@ const About = () => {
       <MarketingHero
         seed="/about"
         className="about-hero"
-        title="About FrameWorks"
-        description="The streaming platform that combines self-hosted video operations with hosted processing - own your video stack, burst into ours."
+        eyebrow="Our foundation"
+        title="A new video cloud built on 15+ years of media engineering"
+        description="FrameWorks turns MistServer's proven media engine into a complete hosted, hybrid, and self-hosted platform for live video."
         align="center"
         surface="gradient"
         surfaceTone="accent"
         surfaceIntensity="raised"
-        support="Open stack. Live video processing. Flexible deployments."
+        support="We build the media server. We operate the cloud. You keep the option to run it yourself."
         accents={aboutHeroAccents}
       />
 
@@ -366,7 +409,7 @@ const About = () => {
                         <div className="mission-pillars__body">
                           <h3>
                             {highlight.title}{" "}
-                            {highlight.title === "Sovereignty Without Pain" ? (
+                            {highlight.title === "Deployment Sovereignty" ? (
                               <SovereigntyNote />
                             ) : null}
                           </h3>
@@ -382,6 +425,45 @@ const About = () => {
               </motion.div>
             </MarketingGridSplit>
           </MarketingBand>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section id="architecture" className="bg-brand-surface-muted">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="pinlines"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
+            >
+              <HeadlineStack
+                eyebrow="Architecture"
+                title="Not another API over someone else's video cloud"
+                subtitle="FrameWorks uses external infrastructure where it makes sense, but the video product itself is not a resale of hyperscaler media services. You get cloud convenience without making a hyperscaler's product or pricing model the foundation of yours."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+              />
+              <MarketingFeatureWall
+                items={architectureProofs}
+                columns={4}
+                stackAt="md"
+                hover="subtle"
+                stripe
+              />
+            </MarketingBand>
+          </motion.div>
         </SectionContainer>
       </Section>
 
@@ -438,14 +520,15 @@ const About = () => {
             <MarketingBand preset="foundation">
               <HeadlineStack
                 eyebrow="Technology"
-                title="What's under the hood"
+                title="What runs the video cloud"
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
               >
                 <p className="marketing-tech__intro">
-                  Components from ingest through analytics, used in production by MistServer
-                  operators and on the Livepeer network.
+                  At the core is MistServer, developed by our team for more than 15 years.
+                  FrameWorks adds the distributed control plane, routing, analytics, billing, and
+                  automation. Processing can run on our edges, on Livepeer, or on your own edge.
                 </p>
               </HeadlineStack>
               <MarketingGridSeam columns={1} className="marketing-tech-rows">
@@ -529,9 +612,9 @@ const About = () => {
           >
             <MarketingPartnerSurface
               partners={team}
-              headline="Powered by MistServer and Livepeer"
-              eyebrow="Partners"
-              subtitle="Video infrastructure expertise backed by the Livepeer treasury"
+              headline="Built by the MistServer team. Backed by Livepeer."
+              eyebrow="Foundation and ecosystem"
+              subtitle="A proven media engine, an open cloud platform, and additional processing capacity when workloads need it."
               variant="flush"
               surface="panel"
               surfaceTone="steel"
