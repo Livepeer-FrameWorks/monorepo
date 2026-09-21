@@ -39,6 +39,12 @@
     checksum: "{{ helmsman_artifact_checksum }}"
     mode: "0644"
     timeout: 300
+    headers:
+      Cache-Control: no-cache
+  register: helmsman_download
+  until: helmsman_download is succeeded
+  retries: 4
+  delay: 3
 
 - name: Set install sentinel path
   ansible.builtin.set_fact:
