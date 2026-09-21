@@ -1,4 +1,19 @@
 ---
+- name: Discover Privateer for ingress TLS reconciliation
+  listen: reconcile privateer ingress tls
+  ansible.builtin.service_facts:
+  when: not ansible_check_mode
+
+- name: Restart Privateer after creating ingress TLS paths
+  listen: reconcile privateer ingress tls
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - "'frameworks-privateer.service' in ansible_facts.services"
+    - ansible_facts.services['frameworks-privateer.service'].state == 'running'
+
 - name: Reload nginx
   listen: nginx reload
   ansible.builtin.systemd:

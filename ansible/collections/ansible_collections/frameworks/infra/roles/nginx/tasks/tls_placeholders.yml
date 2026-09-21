@@ -38,6 +38,7 @@
   when:
     - not ansible_check_mode
     - nginx_ingress_tls_bundles | length > 0
+  notify: reconcile privateer ingress tls
 
 - name: Ensure per-bundle ingress TLS directories
   ansible.builtin.file:
@@ -52,6 +53,7 @@
   when:
     - not ansible_check_mode
     - nginx_ingress_tls_bundles | length > 0
+  notify: reconcile privateer ingress tls
 
 - name: Stat existing ingress TLS cert files
   ansible.builtin.stat:
