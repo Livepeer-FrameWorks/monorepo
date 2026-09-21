@@ -8625,7 +8625,7 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 		expectedPeerIPs := privateerExpectedPeerIPs(manifest, hostName)
 		if len(expectedPeerIPs) > 0 {
-			peerCmd := "wg show wg0 allowed-ips 2>/dev/null || true"
+			peerCmd := meshAllowedIPsCommand()
 			peerResult, peerErr := base.RunCommand(ctx, hostInfo, peerCmd)
 			if peerErr != nil {
 				detail := strings.TrimSpace(routeResultOutput(peerResult))
@@ -8667,6 +8667,10 @@ func verifyMeshHealth(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 	ux.Success(cmd.OutOrStdout(), "Mesh healthy on all privateer hosts")
 	return nil
+}
+
+func meshAllowedIPsCommand() string {
+	return `if [ "$(id -u)" = 0 ]; then wg show wg0 allowed-ips; else sudo -n wg show wg0 allowed-ips; fi`
 }
 
 func privateerExpectedPeerIPs(manifest *inventory.Manifest, hostName string) map[string]string {
