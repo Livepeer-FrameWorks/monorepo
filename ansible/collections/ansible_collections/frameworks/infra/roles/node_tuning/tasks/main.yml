@@ -41,4 +41,7 @@
 
     - name: Node_tuning | verify convergence
       ansible.builtin.import_tasks: verify.yml
+      # Check mode predicts file/unit changes without applying them, so runtime
+      # probes would inspect the old state and falsely fail on a fresh host.
+      when: not ansible_check_mode
       tags: [verify]
