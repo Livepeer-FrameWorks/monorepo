@@ -482,6 +482,62 @@ func TestPlan_ClickHouseDependsOnSameHostYugabyte(t *testing.T) {
 	}
 }
 
+func TestPlan_YugabyteCohortPrecedesColocatedRedis(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"yuga-1": {ExternalIP: "10.0.0.1"},
+			"yuga-2": {ExternalIP: "10.0.0.2"},
+			"yuga-3": {ExternalIP: "10.0.0.3"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes: []inventory.PostgresNode{
+					{Host: "yuga-1", ID: 1},
+					{Host: "yuga-2", ID: 2},
+					{Host: "yuga-3", ID: 3},
+				},
+			},
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{{
+					Name: "foghorn",
+					Host: "yuga-1",
+				}},
+			},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseInfrastructure})
+	if err != nil {
+		t.Fatalf("Plan() failed: %v", err)
+	}
+
+	yugabyteBatch := -1
+	redisBatch := -1
+	for batchIndex, batch := range plan.Batches {
+		yugabyteCount := 0
+		for _, task := range batch {
+			if task.Type == "yugabyte" {
+				yugabyteCount++
+			}
+			if task.Type == "redis" {
+				redisBatch = batchIndex
+			}
+		}
+		if yugabyteCount > 0 {
+			if yugabyteCount != 3 {
+				t.Fatalf("Yugabyte bootstrap cohort split across batches: %+v", plan.Batches)
+			}
+			yugabyteBatch = batchIndex
+		}
+	}
+	if yugabyteBatch < 0 || redisBatch <= yugabyteBatch {
+		t.Fatalf("expected colocated Redis after complete Yugabyte cohort, yugabyte=%d redis=%d", yugabyteBatch, redisBatch)
+	}
+}
+
 // TestPlan_DatabaseConsumerOrderedAfterVanillaPostgres pins the DB-ordering invariant the data-migration gate relies
 // on: a database-backed application task is planned into a strictly LATER batch than the database infrastructure task it
 // depends on — for vanilla PostgreSQL, not just Yugabyte (which TestPlan_ClickHouseDependsOnSameHostYugabyte covers).

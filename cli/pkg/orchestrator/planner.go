@@ -474,6 +474,7 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 	}
 
 	// Add Postgres / YugabyteDB
+	var yugabyteTaskNames []string
 	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
@@ -481,6 +482,7 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 				task.Name = "yugabyte-node-" + strconv.Itoa(node.ID)
 				task.DependsOn = withMesh(task.DependsOn)
 				graph.AddTask(task)
+				yugabyteTaskNames = append(yugabyteTaskNames, task.Name)
 				hostDatabaseDeps[node.Host] = append(hostDatabaseDeps[node.Host], task.Name)
 			}
 		} else {
@@ -505,6 +507,10 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
 			task := NewTask("redis", "redis", instance.Name, instance.Host, PhaseInfrastructure)
 			task.Name = redisPrimaryTaskName(instance)
+			// On a fresh colocated cluster, schedule the complete Yugabyte master
+			// cohort before Redis takes one of those hosts. Yugabyte masters must
+			// enter their first bootstrap together to establish quorum.
+			task.DependsOn = append(task.DependsOn, yugabyteTaskNames...)
 			task.DependsOn = withMesh(task.DependsOn)
 			task.ClusterID = instance.Cluster
 			task.Metadata = map[string]any{"redis_role": "primary"}
