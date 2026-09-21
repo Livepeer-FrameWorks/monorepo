@@ -111,10 +111,10 @@ func TestGeoIPTargetHostsAcceptsAliasedServiceName(t *testing.T) {
 	}
 }
 
-func TestGeoIPRemoteTempPathStaysBesideTarget(t *testing.T) {
+func TestGeoIPRemoteTempPathUsesUnprivilegedDirectory(t *testing.T) {
 	got := geoIPRemoteTempPath("/usr/share/GeoIP/GeoLite2-City.mmdb", "regional/eu 1")
-	if !strings.HasPrefix(got, "/usr/share/GeoIP/.GeoLite2-City.mmdb.regional-eu-1.") {
-		t.Fatalf("temp path %q is not beside target with sanitized host", got)
+	if !strings.HasPrefix(got, "/tmp/frameworks-GeoLite2-City.mmdb.regional-eu-1.") {
+		t.Fatalf("temp path %q is not in the unprivileged upload directory", got)
 	}
 	if !strings.HasSuffix(got, ".tmp") {
 		t.Fatalf("temp path %q missing .tmp suffix", got)
@@ -123,13 +123,19 @@ func TestGeoIPRemoteTempPathStaysBesideTarget(t *testing.T) {
 
 func TestAtomicGeoIPPublishCommandMovesTempIntoPlace(t *testing.T) {
 	got := atomicGeoIPPublishCommand(
-		"/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp",
+		"/tmp/frameworks-GeoLite2-City.mmdb.tmp",
 		"/usr/share/GeoIP/GeoLite2-City.mmdb",
 		0644,
 	)
 	for _, want := range []string{
-		"chmod 644 '/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp'",
-		"mv -f '/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/GeoLite2-City.mmdb'",
+		`if [ "$(id -u)" = 0 ]`,
+		"install -d -m 0755 '/usr/share/GeoIP'",
+		"install -m 644 '/tmp/frameworks-GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/.frameworks-GeoLite2-City.mmdb.tmp'",
+		"mv -f '/usr/share/GeoIP/.frameworks-GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/GeoLite2-City.mmdb'",
+		"sudo -n install -d -m 0755 '/usr/share/GeoIP'",
+		"sudo -n install -m 644 '/tmp/frameworks-GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/.frameworks-GeoLite2-City.mmdb.tmp'",
+		"sudo -n mv -f '/usr/share/GeoIP/.frameworks-GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/GeoLite2-City.mmdb'",
+		"rm -f '/tmp/frameworks-GeoLite2-City.mmdb.tmp'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("publish command %q missing %q", got, want)

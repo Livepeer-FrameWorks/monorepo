@@ -342,9 +342,6 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 
 		fmt.Fprintf(out, "Uploading GeoIP MMDB to %s (%s)...\n", hostName, host.ExternalIP)
-		if _, err := pool.Run(ctx, connCfg, fmt.Sprintf("mkdir -p %s", ssh.ShellQuote(filepath.Dir(remotePath)))); err != nil {
-			return uploaded, fmt.Errorf("prepare geoip directory on %s: %w", hostName, err)
-		}
 		remoteTmpPath := geoIPRemoteTempPath(remotePath, hostName)
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
 			LocalPath:  mmdbPath,
@@ -355,7 +352,8 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 		publishCmd := atomicGeoIPPublishCommand(remoteTmpPath, remotePath, 0644)
 		if _, err := pool.Run(ctx, connCfg, publishCmd); err != nil {
-			if _, cleanupErr := pool.Run(ctx, connCfg, fmt.Sprintf("rm -f %s", ssh.ShellQuote(remoteTmpPath))); cleanupErr != nil {
+			cleanupCmd := geoIPCleanupCommand(remoteTmpPath, remotePath)
+			if _, cleanupErr := pool.Run(ctx, connCfg, cleanupCmd); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to clean up remote GeoIP temp file %s: %v\n", remoteTmpPath, cleanupErr)
 			}
 			return uploaded, fmt.Errorf("publish GeoIP MMDB on %s:%s: %w", hostName, remotePath, err)
@@ -394,19 +392,51 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 }
 
 func geoIPRemoteTempPath(remotePath, hostName string) string {
-	dir := filepath.Dir(remotePath)
 	base := filepath.Base(remotePath)
 	hostPart := strings.NewReplacer("/", "-", " ", "-").Replace(hostName)
-	return filepath.Join(dir, fmt.Sprintf(".%s.%s.%d.tmp", base, hostPart, time.Now().UnixNano()))
+	return filepath.Join("/tmp", fmt.Sprintf("frameworks-%s.%s.%d.tmp", base, hostPart, time.Now().UnixNano()))
 }
 
 func atomicGeoIPPublishCommand(tmpPath, remotePath string, mode uint32) string {
-	return fmt.Sprintf(
-		"chmod %o %s && mv -f %s %s",
+	dir := filepath.Dir(remotePath)
+	stagingPath := geoIPRemoteStagingPath(tmpPath, remotePath)
+	rootCommands := fmt.Sprintf(
+		"install -d -m 0755 %s && install -m %o %s %s && mv -f %s %s",
+		ssh.ShellQuote(dir),
 		mode,
 		ssh.ShellQuote(tmpPath),
-		ssh.ShellQuote(tmpPath),
+		ssh.ShellQuote(stagingPath),
+		ssh.ShellQuote(stagingPath),
 		ssh.ShellQuote(remotePath),
+	)
+	sudoCommands := fmt.Sprintf(
+		"sudo -n install -d -m 0755 %s && sudo -n install -m %o %s %s && sudo -n mv -f %s %s",
+		ssh.ShellQuote(dir),
+		mode,
+		ssh.ShellQuote(tmpPath),
+		ssh.ShellQuote(stagingPath),
+		ssh.ShellQuote(stagingPath),
+		ssh.ShellQuote(remotePath),
+	)
+	return fmt.Sprintf(
+		"if [ \"$(id -u)\" = 0 ]; then %s; else %s; fi && rm -f %s",
+		rootCommands,
+		sudoCommands,
+		ssh.ShellQuote(tmpPath),
+	)
+}
+
+func geoIPRemoteStagingPath(tmpPath, remotePath string) string {
+	return filepath.Join(filepath.Dir(remotePath), "."+filepath.Base(tmpPath))
+}
+
+func geoIPCleanupCommand(tmpPath, remotePath string) string {
+	stagingPath := geoIPRemoteStagingPath(tmpPath, remotePath)
+	return fmt.Sprintf(
+		"rm -f %s; if [ \"$(id -u)\" = 0 ]; then rm -f %s; else sudo -n rm -f %s; fi",
+		ssh.ShellQuote(tmpPath),
+		ssh.ShellQuote(stagingPath),
+		ssh.ShellQuote(stagingPath),
 	)
 }
 
