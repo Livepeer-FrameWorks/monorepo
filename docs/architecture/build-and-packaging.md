@@ -176,16 +176,27 @@ Web interface hashes include the interface context, root pnpm manifests and lock
 
 Every external `COPY` input in an interface Dockerfile must be covered by the root inputs, automatic GraphQL inputs, or that interface's `extra_hash_paths`. This prevents a changed SDK from being carried forward inside an older Chartroom or Foredeck bundle.
 
-### Baseline resolution (track-aware)
+### Baseline resolution
 
-Releases live on two tracks: `stable` (e.g. `v0.2.39`) and `rc` (e.g. `v0.2.40-rc1`). The baseline lookup respects the new tag's track:
+Platform tags are `vX.Y.Z` or lowercase `vX.Y.Z-rcN` (for example,
+`v0.3.11-rc1`). Uppercase `-RC1` and dotted `-rc.1` are not release-pipeline
+spellings. Run `make release-preflight RELEASE_VERSION=v0.3.11-rc1` after
+committing the release inputs and before tagging. The catalog and migration
+directories remain on the base `v0.3.11`; its minimum CLI version must allow
+the first RC (`v0.3.11-rc1`), not demand the later GA binary.
 
-1. **stable → stable**: most recent stable strictly earlier than the new tag.
-2. **rc → rc**: most recent rc strictly earlier than the new tag.
-3. **rc → stable promotion** (`v0.2.40` after `v0.2.40-rc3`): baseline is the most recent rc with the same major.minor.patch. A no-op promotion skips the entire build matrix.
-4. **stable → rc** (first rc on a new MMR): falls back to the most recent stable. Source-hash comparisons catch actually-changed components.
+Stable and RC tags form one semantic-version lineage. The baseline is always the newest
+released tag strictly before the new tag, regardless of channel. This makes the latest RC
+the natural baseline for its GA promotion, while preventing an old RC from displacing a
+newer stable release when the next RC is built.
 
-`tools/release-plan/baseline.go` implements these rules and records each step in the output's `baseline_lineage` so operators can see why a particular release was chosen.
+`tools/release-plan/baseline.go` records the selected predecessor in the output's
+`baseline_lineage` so operators can audit the choice.
+
+Release publication advances `candidate` for every tag, `stable` only for GA tags, and
+the legacy `rc` pointer only for RC tags. Pointer updates compare semantic versions and
+refuse to move backward. Production clusters track `stable`; staging and release-like
+development clusters track `candidate`.
 
 ### Atomic BOM carry-forward
 

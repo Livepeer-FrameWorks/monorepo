@@ -44,9 +44,16 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 `FOGHORN_STATE_ENCRYPTION_KEY`, `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, `JWT_SECRET`,
 `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`,
 `TELEMETRY_TOKEN_SECRET`, `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
-`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, and `MEDIA_AUTHORITY_TRUST_SET`. The renderer derives
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`, and the edge-telemetry
+ES256 signer. The renderer derives
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
 input.
+
+Non-development clusters also need a managed internal service CA. Generate it once with
+`frameworks cluster secrets generate-internal-ca --out /secure/path/internal-ca.env`, import all
+three values into the same SOPS store, and remove the plaintext fragment. Treat rotation as a trust
+domain change: the command intentionally does not retain the root signing key after it signs the
+Navigator intermediate.
 
 During the v0.3.0 application-field migration, preserve an outgoing
 `JWT_SECRET` in the JSON array `FIELD_ENCRYPTION_LEGACY_SECRETS` before rotating
@@ -107,11 +114,38 @@ request covered by ready local authority must not increment it, except for inges
 single bounded Commodore live-claim check. A static alert on every central RPC would be wrong during
 normal connected operation. New management mutations and new x402 settlement remain online-only.
 
-Authority work queues use range-sharded due-time indexes on YugabyteDB. If Commodore repeatedly logs
-`Failed to observe media authority delivery backlog` or `Failed to claim short-lease media authority
-delivery`, verify the v0.3.10 expand and postdeploy migrations before increasing worker timeouts. The
-normal retention jobs preserve all current and retryable authority while bounding completed inbox rows
-and expired terminal history; operators should not delete those tables manually.
+Rejected-delivery alerts and `cluster doctor` distinguish unresolved live copies from historical
+rejections. An expired correction still needs attention if a cell can hold an older valid copy;
+once all such copies expire, the alert resolves without deleting the rejection history.
+Normal delivery lag during a Foghorn restart does not trigger a full authority replay. A genuine
+restore remains fenced until a matching summary or fresh per-authority fetch confirms what it holds;
+an old delivery arriving late cannot clear that fence. Failed database enumeration during
+`cluster restore postgres` fails the restore rather than reporting that fencing succeeded.
+
+Authority work queues use range-sharded due-time indexes on YugabyteDB, and short-lease deliveries are
+claimed through their own `short_lease` index. If Commodore repeatedly logs `Failed to observe media
+authority delivery backlog` or `Failed to claim short-lease media authority delivery`, verify the
+v0.3.10 and v0.3.11 expand and postdeploy migrations before increasing worker timeouts. Refresh work is
+one obligation per authority, so it does not grow with event volume; the normal retention jobs preserve
+all current and retryable authority while bounding expired terminal history. Operators should not
+delete those tables manually.
+
+`frameworks cluster doctor` reports **Media authority convergence**. When it is not healthy, run
+`frameworks cluster diagnose media-authority`: it lists parked refresh targets with the reason they
+cannot compile, stuck or refused deliveries, and each cell's recent apply rejections. A parked target
+is not an operator task to clear: it is retried when its source state changes and once per hourly
+reconcile, so fix the state its `park_reason` names (for example `seal_recipient_missing`: a serving
+cell with no sealing key configured in Commodore).
+
+A compiler or key-configuration failure does not revoke already valid signed access. If a commercial
+quote describes newer entitlements than the signed tenant, the object waits for a refreshed tenant
+instead of treating the mismatch as a policy denial. Explicit access revocations still propagate even
+when unrelated billing or processing dependencies are unavailable.
+
+Removed target cells receive corrections only until the fixed expiry horizon of their previous
+copies. They are not renewed indefinitely, and expired retired target rows are pruned automatically
+without removing version counters or recovery fences. v0.3.11 includes the retirement column and its
+range-sharded cleanup index; let the release workflow run both expand and postdeploy validation.
 
 ## Quick Start
 

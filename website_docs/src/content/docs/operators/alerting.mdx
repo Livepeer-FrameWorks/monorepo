@@ -19,6 +19,11 @@ each group three ways:
   your heartbeat provider to alarm when those pings stop; that detects a dead vmalert or
   Alertmanager.
 
+Set `ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED=false` for an internal-only staging environment.
+Alertmanager continues sending actionable alerts to Lookout, while it discards `Watchdog` and does
+not configure the heartbeat or direct-email receivers. Lookout's own email, Slack, and Discord
+channels remain independently controlled by their optional destination variables.
+
 Lookout notifies operator channels only for platform incidents. Critical incidents go to every
 configured channel; other severities go to Slack and Discord. Notifications are sent when an
 incident opens and when it resolves.
@@ -40,6 +45,10 @@ example in `secrets/production.env`; Alertmanager needs no env file of its own.
 | `ALERTMANAGER_EMAIL_TO`                | Yes      | Recipient for the direct critical email fallback                |
 | `SMTP_HOST`, `SMTP_PORT`, `FROM_EMAIL` | Yes      | Platform SMTP server and sender the fallback email is sent with |
 | `SMTP_USER`, `SMTP_PASSWORD`           | No       | Platform SMTP credentials, used when set                        |
+
+The heartbeat, direct-email recipient, and SMTP fields are required only when
+`ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED` is true (the default). The Lookout token is always
+required.
 
 The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTHOST`,
 `ALERTMANAGER_SMTP_FROM`, `ALERTMANAGER_SMTP_AUTH_USERNAME`, `ALERTMANAGER_SMTP_AUTH_PASSWORD` and
@@ -84,6 +93,24 @@ Activity selection and enqueue outcomes are recorded in
 `lookout_operator_activity_events_total`.
 
 ## Verify
+
+### Media authority access checks
+
+`MediaAuthorityRevocationCheckFailed` is critical: Commodore could not finish an
+access-change check after compilation failed, or could not publish the required
+deny. A previous signed allow may remain usable until retry or expiry. Check
+Commodore logs for `authority_id` and `stage`, then run
+`frameworks cluster diagnose media-authority`. The stages distinguish reading the
+previous authority, decoding it, reading playback or placement configuration, and
+publishing the deny. No policy secrets are included in the metric labels.
+
+The alert fires on a counter increase within ten minutes and clears when that
+window contains no further failures. This is separate from
+`MediaAuthorityRefreshParked`, which warns after a compile target has remained
+parked for fifteen minutes. A missing dependency alone does not revoke unchanged
+playback access.
+
+### Notification delivery
 
 1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
    Alertmanager.

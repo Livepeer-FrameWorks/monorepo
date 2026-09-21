@@ -16,7 +16,7 @@
                 <path d="M850,68L850,152C850,156.415 846.415,160 842,160L58,160C53.585,160 50,156.415 50,152L50,68C50,63.585 53.585,60 58,60L842,60C846.415,60 850,63.585 850,68Z" style="fill:rgb(227,242,253);stroke:rgb(33,150,243);stroke-width:2px;"/>
             </g>
             <g id="Foghorn-Decklog" transform="matrix(433.97,228.907,-232.219,-83.4912,-94815.5,-55880.6)">
-                <path d="M360,250L380,240" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.31px;"/>
+                <path d="M360,250C370.905,271.594 390.05,305.315 391.714,301.897C393.081,299.09 379.287,264.641 368.29,234.274C362.32,217.788 382.078,250.269 380,240" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.31px;"/>
             </g>
             <g id="Network---Trust---Infrastructure-Plane--contents-" serif:id="Network &amp; Trust / Infrastructure Plane (contents)" transform="matrix(1,0,0,1,-222.708,-1862.7)">
                 <g id="Caddy" transform="matrix(19.5757,0,0,30.8642,-3351.89,905.291)">
@@ -173,6 +173,9 @@
                 <g id="Kafka-PeriscopeRead" transform="matrix(163.604,13.8029,-81.8019,27.6058,-30331,-4514.76)">
                     <path d="M360,250L380,240" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.83px;"/>
                 </g>
+                <g id="Kafka-Bosun" transform="matrix(67.8186,91.1027,3.93049,62.64,-6380.04,-24076.3)">
+                    <path d="M178.631,250.736C176.083,279.256 179.962,267.393 204.4,233.746" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.45px;"/>
+                </g>
                 <g id="Decklog-Kafka" transform="matrix(134.476,-13.7072,67.2132,27.6537,-35297.6,3186.16)">
                     <path d="M180,240L200,250" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.38px;"/>
                 </g>
@@ -189,6 +192,19 @@
                     </g>
                     <g transform="matrix(1,0,0,1,639.338,252)">
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Real-time Events</text>
+                    </g>
+                </g>
+                <g id="Bosun" transform="matrix(30.8642,0,0,30.8642,-11111,1779.5)">
+                    <path d="M720,225L720,255C720,257.76 717.76,260 715,260L625,260C622.24,260 620,257.76 620,255L620,225C620,222.24 622.24,220 625,220L715,220C717.76,220 720,222.24 720,225Z" style="fill:white;stroke:rgb(255,152,0);stroke-width:1.17px;"/>
+                    <g transform="matrix(1,0,0,1,646.375,238)">
+                        <g transform="matrix(10,0,0,10,28.3545,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(51,51,51);">Bosun</text>
+                    </g>
+                    <g transform="matrix(1,0,0,1,639.338,252)">
+                        <g transform="matrix(8,0,0,8,75.0195,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Outbound W<tspan x="44.773px 49.223px " y="0px 0px ">eb</tspan>hooks</text>
                     </g>
                 </g>
                 <g id="Postgres1" serif:id="Postgres" transform="matrix(30.8642,0,0,30.8642,3703.8,-80.5643)">
@@ -245,11 +261,13 @@
                     </g>
                 </g>
                 <g id="Kafka" transform="matrix(30.8642,0,0,30.8642,0.088889,-51.3159)">
-                    <path d="M360,228L360,272C360,276.415 356.415,280 352,280L208,280C203.585,280 200,276.415 200,272L200,228C200,223.585 203.585,220 208,220L352,220C356.415,220 360,223.585 360,228Z" style="fill:rgb(76,175,80);stroke:rgb(46,125,50);stroke-width:1.75px;"/>
-                    <g transform="matrix(1,0,0,1,262.296,245)">
+                    <g transform="matrix(1,0,0,0.847217,3.55271e-15,33.6123)">
+                        <path d="M360,228L360,272C360,276.415 356.415,280 352,280L208,280C203.585,280 200,276.415 200,272L200,228C200,223.585 203.585,220 208,220L352,220C356.415,220 360,223.585 360,228Z" style="fill:rgb(76,175,80);stroke:rgb(46,125,50);stroke-width:1.89px;"/>
+                    </g>
+                    <g transform="matrix(1,0,0,1,263.456,242.547)">
                         <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:13px;fill:white;">Kafka</text>
                     </g>
-                    <g transform="matrix(1,0,0,1,243.586,260)">
+                    <g transform="matrix(1,0,0,1,244.746,257.547)">
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:white;">Event Backbone</text>
                     </g>
                 </g>
@@ -326,21 +344,6 @@
                 <g transform="matrix(20,0,0,20,368.281,0)">
                 </g>
                 <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:20px;fill:white;">Multi-Plane Microservices <tspan x="250.469px 264.912px " y="0px 0px ">Ar</tspan>chitecture</text>
-            </g>
-            <g id="Livepeer-Signer" transform="matrix(30.8642,0,0,30.8642,3733.75,-1914.01)">
-                <g transform="matrix(1,0,0,1,-25.023,0)">
-                    <path d="M560,105L560,135C560,137.76 557.76,140 555,140L425,140C422.24,140 420,137.76 420,135L420,105C420,102.24 422.24,100 425,100L555,100C557.76,100 560,102.24 560,105Z" style="fill:white;stroke:rgb(33,150,243);stroke-width:1.17px;"/>
-                </g>
-                <g transform="matrix(1,0,0,1,426.098,118.089)">
-                    <g transform="matrix(11,0,0,11,77.0483,0)">
-                    </g>
-                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Livepeer Signer</text>
-                </g>
-                <g transform="matrix(1,0,0,1,440.299,132)">
-                    <g transform="matrix(8,0,0,8,49.4925,0)">
-                    </g>
-                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Gateway <tspan x="33.355px 38.371px " y="0px 0px ">Au</tspan>th</text>
-                </g>
             </g>
             <g transform="matrix(-1.73654,0,0,1.73654,24802.4,6110.69)">
                 <g transform="matrix(1,0,0,1,-960,-960)">
@@ -774,10 +777,10 @@
             </g>
             <g id="Metabase" transform="matrix(19.8511,0,0,30.8642,6995.05,2641.75)">
                 <path d="M570,518L570,532C570,533.656 568.656,535 567,535L483,535C481.344,535 480,533.656 480,532L480,518C480,516.344 481.344,515 483,515L567,515C568.656,515 570,516.344 570,518Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.39px;"/>
-                <g transform="matrix(1.55479,0,0,1,499.705,527.893)">
-                    <g transform="matrix(9,0,0,9,42.0249,0)">
+                <g transform="matrix(1.55479,0,0,1,492.118,528.149)">
+                    <g transform="matrix(9,0,0,9,39.5244,0)">
                     </g>
-                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:9px;fill:rgb(51,51,51);">Metabaste</text>
+                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:9px;fill:rgb(51,51,51);">Metabase</text>
                 </g>
             </g>
             <g id="Support--contents-" serif:id="Support (contents)" transform="matrix(1,0,0,1,12351.8,1862.73)">
@@ -826,12 +829,6 @@
                 <path d="M850,488L850,532C850,536.415 846.415,540 842,540L58,540C53.585,540 50,536.415 50,532L50,488C50,483.585 53.585,480 58,480L842,480C846.415,480 850,483.585 850,488Z" style="fill:rgb(243,229,245);stroke:rgb(156,39,176);stroke-width:2px;"/>
             </g>
             <g id="Support--contents-1" serif:id="Support (contents)" transform="matrix(1,0,0,1,-234.699,1862.73)">
-                <g id="Studio" transform="matrix(14.6198,0,0,30.8642,-4748.4,918.036)">
-                    <path d="M570,518L570,532C570,533.656 568.656,535 567,535L483,535C481.344,535 480,533.656 480,532L480,518C480,516.344 481.344,515 483,515L567,515C568.656,515 570,516.344 570,518Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.49px;"/>
-                    <g transform="matrix(2.11113,0,0,1,497.225,527.527)">
-                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:9px;fill:rgb(51,51,51);">Studio</text>
-                    </g>
-                </g>
                 <g id="CLI" transform="matrix(11.3159,0,0,30.8642,-1616.7,86.7424)">
                     <path d="M570,518L570,532C570,533.656 568.656,535 567,535L483,535C481.344,535 480,533.656 480,532L480,518C480,516.344 481.344,515 483,515L567,515C568.656,515 570,516.344 570,518Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.55px;"/>
                     <g transform="matrix(2.72752,0,0,1,504.806,527.968)">
@@ -881,6 +878,19 @@
                         <g transform="matrix(8,0,0,8,47.5742,0)">
                         </g>
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Docs website</text>
+                    </g>
+                </g>
+                <g id="StreamCrafter" transform="matrix(23.5986,0,0,30.8642,4271.47,4083.78)">
+                    <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.31px;"/>
+                    <g id="StreamCrafter1" serif:id="StreamCrafter" transform="matrix(1.30789,0,0,1,107.15,418.488)">
+                        <g transform="matrix(11,0,0,11,69.0723,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">StreamCrafter</text>
+                    </g>
+                    <g transform="matrix(1.30789,0,0,1,114.35,431.028)">
+                        <g transform="matrix(8,0,0,8,54.2461,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Browser Studio</text>
                     </g>
                 </g>
                 <g id="Title6" serif:id="Title" transform="matrix(30.8642,0,0,30.8642,2160.59,15535.1)">

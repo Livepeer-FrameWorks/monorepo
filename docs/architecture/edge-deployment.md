@@ -102,7 +102,7 @@ startup, so cross-cell key placement is rejected before media serving begins.
 
 Quartermaster owns the release catalog and cluster target:
 
-- `quartermaster.edge_releases` stores release-track/version rows with the per-component release manifest. Valid tracks are `stable` and `rc`; `edge` is the component family, not a track.
+- `quartermaster.edge_releases` stores release-track/version rows with the per-component release manifest. Valid tracks are `stable`, `candidate`, and legacy `rc`; `edge` is the component family, not a track.
 - `quartermaster.cluster_release_targets` stores the target track/version, pause/resume state, and operational rollout plan for each cluster.
 
 Foghorn owns runtime state:

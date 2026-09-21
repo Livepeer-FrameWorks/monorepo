@@ -150,7 +150,8 @@ Host edge-eu-01
 
 ### User Permissions
 
-The CLI user needs sudo privileges for:
+The CLI user needs non-interactive sudo privileges for the complete set of
+Ansible and direct-SSH operations used by the selected manifest, including:
 
 - Installing packages
 - Managing systemd services
@@ -161,9 +162,16 @@ The CLI user needs sudo privileges for:
 # Add user to docker group (Docker deployments)
 sudo usermod -aG docker admin
 
-# Or configure passwordless sudo for specific commands
-admin ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker
+# Verify that automation does not pause for a password prompt
+sudo -n true
 ```
+
+Grant this to a dedicated automation account reached only through your management VPN and SSH
+keys. A policy limited to only `systemctl` and `docker` is insufficient: provisioning also manages
+packages, users, files under `/etc` and `/var/lib`, network state, databases, and commands run as
+service accounts. If you maintain a command allowlist instead of `NOPASSWD: ALL`, derive and test it
+against the exact pinned playbooks in `ansible/playbooks/` and the selected roles; update it whenever
+those tasks change. The CLI has no interactive become-password flow.
 
 ## External Services
 

@@ -18,6 +18,11 @@ schema phases, platform artifact upgrades, live gates, and any declared one-off
 reconciliation into one resumable operation. `cluster migrate` and `cluster upgrade`
 remain explicit recovery/debugging primitives.
 
+Production manifests should use `channel: stable`. Staging and release-like development
+manifests should use `channel: candidate`, which follows the newest tag whether it is GA
+or RC. The explicit selector `latest` is an alias for `candidate`; legacy `rc` remains
+available when an RC-only track is specifically required.
+
 The first release step creates any service database the manifest declares but the cluster does not
 have yet (a database introduced by this release), with its owner and runtime roles and current
 baseline, before expand migrations and before any service that owns it deploys. The static plan

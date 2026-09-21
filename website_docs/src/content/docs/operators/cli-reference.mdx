@@ -327,7 +327,7 @@ Database initialization (baseline schema + expand migrations, behind the baselin
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
-- `--version string` - Target release (`stable`, `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
+- `--version string` - Target release (`stable`, `candidate`, legacy `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -567,6 +567,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag.                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster secrets generate-internal-ca --out <file>`     | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                              |
 | `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -578,7 +579,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
@@ -1176,10 +1177,39 @@ frameworks cluster restore <component> [flags]
 
 **Components:**
 
-- `postgres` - Restore from SQL dump
+- `postgres` - Restore from SQL dump. Every restored Foghorn database gets its
+  media-authority restore fence raised: the cell decides on its restored media
+  authority only after Commodore has confirmed or re-sent it, and cannot serve
+  it while Commodore is unreachable. The fence lowers by itself once the cell
+  and Commodore agree on what it holds.
 - `clickhouse` - Restore from TSV directory
 - `volumes` - Restore from tar.gz archive
 - `config` - Restore configuration files
+
+For a native PostgreSQL or Yugabyte restore, use the complete cluster manifest
+containing **every Foghorn replica** sharing those databases:
+
+```bash
+frameworks cluster restore-fence prepare --yes
+# Perform the database-native restore and apply the target release's migrations.
+frameworks cluster restore-fence complete --yes
+frameworks cluster doctor
+```
+
+`prepare` stops and verifies every replica before fencing. `complete` refuses
+while any replica is running, fences every restored cell database, and only then
+starts the replicas. Failure before fencing completes leaves them stopped.
+Use the same manifest for both commands. Do not restart replicas between these
+steps or clear a fence to bypass an unreachable core. The `postgres` dump restore
+command only supports Docker PostgreSQL; it refuses native PostgreSQL and
+Yugabyte before stopping services. Use the fenced native workflow above for
+current native deployments.
+
+Authority recovery requires matching core/cell protocol support. Upgrade
+Commodore before Foghorn within the coordinated release. An unsupported core
+logs an upgrade requirement and is retried without requiring a Foghorn restart.
+Valid local authority stays usable on ordinary restart; a durable restore fence
+stays raised until recovery succeeds. There is no legacy replay fallback.
 
 **Flags:**
 
@@ -1339,6 +1369,67 @@ frameworks cluster diagnose media --output json
 single structured report containing every host's services, stdout, stderr, exit
 code, and connection/probe error. A missing host, SSH failure, or non-zero probe
 causes a non-zero command exit instead of a silent partial report.
+
+---
+
+### frameworks cluster diagnose media-authority
+
+Trace the media-authority pipeline end to end: Quartermaster and Purser refresh
+outboxes, Commodore's refresh obligations, issued versions, delivery queue and
+compile fences, and each cell's apply audit.
+
+```bash
+frameworks cluster diagnose media-authority [flags]
+frameworks cluster diagnose media-authority --window-hours 6 --since "1 hour ago"
+frameworks cluster diagnose media-authority --output json
+```
+
+Two kinds of probe run, both read-only:
+
+- **Journals** run on each service's own host (one host per manifest service
+  entry) and print its authority log lines with timestamps and IDs normalized,
+  so a line repeated a thousand times reads as one line with a count.
+- **SQL** runs on the database host through the same connection path as
+  `cluster snapshot`, in a session forced read-only with a 20-second statement
+  timeout. Service hosts carry no SQL client, and each Foghorn cell has its own
+  database (`foghorn_eu`, `foghorn_us`), which only this path enumerates.
+
+`--window-hours` sets the database lookback (default `24`, max `720`); `--since`
+sets the journal window. JSON output is one report with every probe's stdout,
+stderr, exit code, and error. A failed probe makes the command exit non-zero.
+
+The Commodore section answers the questions that matter during an authority
+incident:
+
+- **Version churn** — versions per authority per hour, how many re-signs carried
+  an identical payload, and how many were issued within 60 seconds of their
+  predecessor (two compiles racing for the same authority).
+- **What is stuck** — refresh obligations by lane and status, how far behind each
+  lane is, parked targets with the reason they cannot compile, retrying targets,
+  and current authorities that have no renewal scheduled.
+- **What is in use** — authorities by renewal state, with `dormant` meaning nobody
+  has used the object for thirty days so it is no longer renewed or kept in
+  cells; the authorities still in use whose version ran out (there should be
+  none); recorded use; and what each cell attested.
+- **Delivery health** — deliveries waiting per cell, split into fresh and replayed,
+  unacknowledged deliveries against the current version, index validity, and the
+  measured plan of the short-lease claim predicate.
+
+Each cell section shows apply outcomes, rejections per hour, the most recent
+rejections next to the version the cell actually holds, and how many held
+authorities are past `refresh_after` or past their validity, by lifecycle. A cell
+holding an expired authority is not by itself a fault: an object nobody uses runs
+out there, is fetched again on its next use, and is forgotten thirty days after
+it was issued.
+
+`frameworks cluster doctor` runs the pass/fail form of the same state as its
+**Media authority convergence** check: unhealthy when a refresh target is parked,
+a refresh or a current delivery has been stuck for more than five minutes, a cell
+refuses the current version, or an authority that is still in use is past its
+validity. A fan-out backlog older than an hour and a cell that is not forgetting
+expired authorities are warnings. It probes Commodore and every cell's Foghorn
+database; a database or a count it could not read is reported as degraded, never
+as healthy.
 
 ---
 

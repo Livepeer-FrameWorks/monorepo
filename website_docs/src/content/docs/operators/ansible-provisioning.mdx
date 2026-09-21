@@ -77,7 +77,9 @@ jobs:
 - Approved merges run `frameworks cluster provision --gitops-dir . --cluster <name>`.
 
 CI must provide SSH access, SOPS/age material when encrypted files are used, and
-the same manifest source operators use locally. Keep workflow YAML in the
+the same manifest source operators use locally. Its dedicated SSH account must also be able to run
+the selected roles through non-interactive sudo; the CLI does not prompt for an Ansible become
+password. Keep workflow YAML in the
 GitOps repo, where branch names, environments, approvals, and cache paths can
 match that repository's policy.
 

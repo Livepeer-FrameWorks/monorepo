@@ -5041,7 +5041,8 @@ query ResolveViewerDestination($contentId: String!) {
 
 This is a requirement before selection, not a preference to apply after choosing a node. `WHEP`
 and `WEBRTC` are distinct; `HLS_CMAF` requests an HLS manifest, while `DASH` requests MPD. Omit
-the argument for automatic negotiation. The low-level player `GatewayClient` also accepts
+the argument to place against any browser-playable Mist output and receive the selected node's full
+output catalog. The low-level player `GatewayClient` also accepts
 `protocol: "HLS"` (typed as `ViewerProtocol`). It rejects a mismatched result and does not retry
 without the requirement when an older GraphQL endpoint rejects the argument.
 
@@ -5078,14 +5079,18 @@ are not converted into query parameters; your client must attach them to request
 edge. Do not assume a browser forwards authorization across an edge redirect. This live-URL behavior
 does not apply to object-storage signed URLs.
 
-The player keeps Gateway/provided playback URLs authoritative while using the selected Mist edge
-for tracks and status. Metadata hydration, polling and cold recovery cannot silently add a different
-edge or an unprepared format. Direct-Mist mode still discovers its playback sources from Mist.
+Gateway/Foghorn chooses the serving MistServer node; it does not choose the player's protocol.
+An unqualified resolution returns that node's complete advertised output catalog rather than a
+single format selected by the control plane.
+The player fetches stream info from that selected MistServer and uses Mist's source list as the
+authoritative catalog of protocols, URLs, tokens and capabilities. It can therefore fall back among
+HLS, DASH, WebRTC and other formats without re-running placement for each format. The selected edge's
+normal playback trigger still admits every actual media request. Direct-Mist mode uses the same Mist
+source discovery without the Gateway placement step.
 
-The player requests a new format-specific destination after exhausting compatible players on the
-selected URL, with at most three fresh resolutions per initialization. `viewerProtocol: "HLS"`
-pins the requirement and prevents automatic format changes; React/Svelte expose it through
-`options`, and the web component uses `viewer-protocol="HLS"`.
+`viewerProtocol: "HLS"` intentionally filters Mist's catalog when an application requires one
+format; React/Svelte expose it through `options`, and the web component uses
+`viewer-protocol="HLS"`.
 
 Changing those player request fields replaces the active controller, including when its previous
 resolution is still pending. Update supplied destinations by replacing the `endpoints` object,
@@ -13420,6 +13425,11 @@ each group three ways:
   your heartbeat provider to alarm when those pings stop; that detects a dead vmalert or
   Alertmanager.
 
+Set `ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED=false` for an internal-only staging environment.
+Alertmanager continues sending actionable alerts to Lookout, while it discards `Watchdog` and does
+not configure the heartbeat or direct-email receivers. Lookout's own email, Slack, and Discord
+channels remain independently controlled by their optional destination variables.
+
 Lookout notifies operator channels only for platform incidents. Critical incidents go to every
 configured channel; other severities go to Slack and Discord. Notifications are sent when an
 incident opens and when it resolves.
@@ -13442,24 +13452,31 @@ example in `secrets/production.env`; Alertmanager needs no env file of its own.
 | `SMTP_HOST`, `SMTP_PORT`, `FROM_EMAIL` | Yes      | Platform SMTP server and sender the fallback email is sent with |
 | `SMTP_USER`, `SMTP_PASSWORD`           | No       | Platform SMTP credentials, used when set                        |
 
+The heartbeat, direct-email recipient, and SMTP fields are required only when
+`ALERTMANAGER_EXTERNAL_NOTIFICATIONS_ENABLED` is true (the default). The Lookout token is always
+required.
+
 The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTHOST`,
 `ALERTMANAGER_SMTP_FROM`, `ALERTMANAGER_SMTP_AUTH_USERNAME`, `ALERTMANAGER_SMTP_AUTH_PASSWORD` and
 `ALERTMANAGER_WEBHOOK_URL` are not read.
 
 **Lookout:**
 
-| Key                                                    | Required  | Purpose                                                                  |
-| ------------------------------------------------------ | --------- | ------------------------------------------------------------------------ |
-| `LOOKOUT_ALERTMANAGER_TOKEN`                           | Yes       | Token Alertmanager must present; Lookout does not start without it       |
-| `LOOKOUT_NOTIFY_EMAIL_TO`                              | No        | Comma-separated operator recipients; enables email notifications         |
-| `LOOKOUT_SLACK_WEBHOOK_URL`                            | No        | Slack incoming webhook; enables Slack notifications                      |
-| `LOOKOUT_DISCORD_WEBHOOK_URL`                          | No        | Discord webhook; enables Discord notifications                           |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | For email | Shared SMTP settings                                                     |
-| `FROM_EMAIL`, `FROM_NAME`                              | No        | Sender address and display name                                          |
-| `WEBAPP_PUBLIC_URL`                                    | No        | Adds an "Open incident" link to `/admin/incidents/<id>` in notifications |
+| Key                                                    | Required  | Purpose                                                                      |
+| ------------------------------------------------------ | --------- | ---------------------------------------------------------------------------- |
+| `LOOKOUT_ALERTMANAGER_TOKEN`                           | Yes       | Token Alertmanager must present; Lookout does not start without it           |
+| `LOOKOUT_NOTIFY_EMAIL_TO`                              | No        | Comma-separated operator recipients; enables email notifications             |
+| `LOOKOUT_SLACK_WEBHOOK_URL`                            | No        | Slack incoming webhook; enables incident and operator-activity notifications |
+| `LOOKOUT_DISCORD_WEBHOOK_URL`                          | No        | Discord webhook; enables incident and operator-activity notifications        |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | For email | Shared SMTP settings                                                         |
+| `FROM_EMAIL`, `FROM_NAME`                              | No        | Sender address and display name                                              |
+| `WEBAPP_PUBLIC_URL`                                    | No        | Adds an "Open incident" link to `/admin/incidents/<id>` in notifications     |
 
 Each notification channel is active only while its key is set. Lookout re-reads these keys on
 every use, so an env reload changes routing without a restart.
+Slack and Discord also receive Lookout's fixed allowlist of direct signup,
+product, billing, support, and marketing activity events. These activity
+messages are separate from incidents and never page by email.
 
 <Aside type="caution">
   A webhook URL is a credential. Lookout never writes it to logs or delivery errors; keep it in
@@ -13475,11 +13492,31 @@ creates it. On an existing cluster, `frameworks cluster release apply` (or
 runtime roles and applies its baseline before Lookout deploys; `--dry-run` lists it without
 creating anything. `frameworks cluster upgrade lookout` refuses until the database exists.
 
-Delivered notification rows are deleted after 7 days. A delivery that keeps failing is abandoned
-after 20 attempts (about two hours), recorded as `lookout_deliveries_total{result="failed"}` with
-its last error, and deleted after 30 days.
+Delivered incident and activity rows are deleted after 7 days. A delivery that keeps failing is
+abandoned after 20 attempts (about two hours), recorded as
+`lookout_deliveries_total{result="failed"}` with its last error, and deleted after 30 days.
+Activity selection and enqueue outcomes are recorded in
+`lookout_operator_activity_events_total`.
 
 ## Verify
+
+### Media authority access checks
+
+`MediaAuthorityRevocationCheckFailed` is critical: Commodore could not finish an
+access-change check after compilation failed, or could not publish the required
+deny. A previous signed allow may remain usable until retry or expiry. Check
+Commodore logs for `authority_id` and `stage`, then run
+`frameworks cluster diagnose media-authority`. The stages distinguish reading the
+previous authority, decoding it, reading playback or placement configuration, and
+publishing the deny. No policy secrets are included in the metric labels.
+
+The alert fires on a counter increase within ten minutes and clears when that
+window contains no further failures. This is separate from
+`MediaAuthorityRefreshParked`, which warns after a compile target has remained
+parked for fifteen minutes. A missing dependency alone does not revoke unchanged
+playback access.
+
+### Notification delivery
 
 1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
    Alertmanager.
@@ -13591,7 +13628,9 @@ jobs:
 - Approved merges run `frameworks cluster provision --gitops-dir . --cluster <name>`.
 
 CI must provide SSH access, SOPS/age material when encrypted files are used, and
-the same manifest source operators use locally. Keep workflow YAML in the
+the same manifest source operators use locally. Its dedicated SSH account must also be able to run
+the selected roles through non-interactive sudo; the CLI does not prompt for an Ansible become
+password. Keep workflow YAML in the
 GitOps repo, where branch names, environments, approvals, and cache paths can
 match that repository's policy.
 
@@ -14525,7 +14564,7 @@ Database initialization (baseline schema + expand migrations, behind the baselin
 
 - Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
-- `--version string` - Target release (`stable`, `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
+- `--version string` - Target release (`stable`, `candidate`, legacy `rc`, or `vX.Y.Z`), resolved the same way as `cluster release apply --version`; defaults to the manifest channel
 - `--dry-run` - Show what would be deployed without actually deploying
 - `--force` - Force re-provision even if services exist
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
@@ -14765,6 +14804,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag.                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster secrets generate-internal-ca --out <file>`     | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                              |
 | `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
 | `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -14776,7 +14816,7 @@ viewer or ingest placement enforcement.
 | `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
@@ -15374,10 +15414,39 @@ frameworks cluster restore <component> [flags]
 
 **Components:**
 
-- `postgres` - Restore from SQL dump
+- `postgres` - Restore from SQL dump. Every restored Foghorn database gets its
+  media-authority restore fence raised: the cell decides on its restored media
+  authority only after Commodore has confirmed or re-sent it, and cannot serve
+  it while Commodore is unreachable. The fence lowers by itself once the cell
+  and Commodore agree on what it holds.
 - `clickhouse` - Restore from TSV directory
 - `volumes` - Restore from tar.gz archive
 - `config` - Restore configuration files
+
+For a native PostgreSQL or Yugabyte restore, use the complete cluster manifest
+containing **every Foghorn replica** sharing those databases:
+
+```bash
+frameworks cluster restore-fence prepare --yes
+# Perform the database-native restore and apply the target release's migrations.
+frameworks cluster restore-fence complete --yes
+frameworks cluster doctor
+```
+
+`prepare` stops and verifies every replica before fencing. `complete` refuses
+while any replica is running, fences every restored cell database, and only then
+starts the replicas. Failure before fencing completes leaves them stopped.
+Use the same manifest for both commands. Do not restart replicas between these
+steps or clear a fence to bypass an unreachable core. The `postgres` dump restore
+command only supports Docker PostgreSQL; it refuses native PostgreSQL and
+Yugabyte before stopping services. Use the fenced native workflow above for
+current native deployments.
+
+Authority recovery requires matching core/cell protocol support. Upgrade
+Commodore before Foghorn within the coordinated release. An unsupported core
+logs an upgrade requirement and is retried without requiring a Foghorn restart.
+Valid local authority stays usable on ordinary restart; a durable restore fence
+stays raised until recovery succeeds. There is no legacy replay fallback.
 
 **Flags:**
 
@@ -15506,14 +15575,98 @@ frameworks cluster diagnose kafka [flags]
 - Broker API version check
 - Cluster responsiveness
 
-The report covers topic listing, consumer groups, broker API reachability, and
-cluster responsiveness for the configured Kafka target.
+The report covers topic listing, consumer groups, a committed-offset lag
+snapshot, broker API reachability, and cluster responsiveness for one broker in
+every configured Kafka region. Native
+deployments use the tools under `/opt/kafka/bin`; an explicitly configured
+Docker deployment uses its Compose toolchain. Any failed probe makes the command
+exit non-zero and includes the remote command error.
 
 **Examples:**
 
 ```bash
 frameworks cluster diagnose kafka
 ```
+
+---
+
+### frameworks cluster diagnose media
+
+Capture read-only service state, listeners, TLS certificate details, recent
+errors, and Quartermaster media placement from every manifest host that runs a
+media/control-path service.
+
+```bash
+frameworks cluster diagnose media [flags]
+frameworks cluster diagnose media --stream-id <uuid> --tenant-id <uuid>
+frameworks cluster diagnose media --output json
+```
+
+`--since` controls the journal window (default `4 hours ago`). JSON output is a
+single structured report containing every host's services, stdout, stderr, exit
+code, and connection/probe error. A missing host, SSH failure, or non-zero probe
+causes a non-zero command exit instead of a silent partial report.
+
+---
+
+### frameworks cluster diagnose media-authority
+
+Trace the media-authority pipeline end to end: Quartermaster and Purser refresh
+outboxes, Commodore's refresh obligations, issued versions, delivery queue and
+compile fences, and each cell's apply audit.
+
+```bash
+frameworks cluster diagnose media-authority [flags]
+frameworks cluster diagnose media-authority --window-hours 6 --since "1 hour ago"
+frameworks cluster diagnose media-authority --output json
+```
+
+Two kinds of probe run, both read-only:
+
+- **Journals** run on each service's own host (one host per manifest service
+  entry) and print its authority log lines with timestamps and IDs normalized,
+  so a line repeated a thousand times reads as one line with a count.
+- **SQL** runs on the database host through the same connection path as
+  `cluster snapshot`, in a session forced read-only with a 20-second statement
+  timeout. Service hosts carry no SQL client, and each Foghorn cell has its own
+  database (`foghorn_eu`, `foghorn_us`), which only this path enumerates.
+
+`--window-hours` sets the database lookback (default `24`, max `720`); `--since`
+sets the journal window. JSON output is one report with every probe's stdout,
+stderr, exit code, and error. A failed probe makes the command exit non-zero.
+
+The Commodore section answers the questions that matter during an authority
+incident:
+
+- **Version churn** — versions per authority per hour, how many re-signs carried
+  an identical payload, and how many were issued within 60 seconds of their
+  predecessor (two compiles racing for the same authority).
+- **What is stuck** — refresh obligations by lane and status, how far behind each
+  lane is, parked targets with the reason they cannot compile, retrying targets,
+  and current authorities that have no renewal scheduled.
+- **What is in use** — authorities by renewal state, with `dormant` meaning nobody
+  has used the object for thirty days so it is no longer renewed or kept in
+  cells; the authorities still in use whose version ran out (there should be
+  none); recorded use; and what each cell attested.
+- **Delivery health** — deliveries waiting per cell, split into fresh and replayed,
+  unacknowledged deliveries against the current version, index validity, and the
+  measured plan of the short-lease claim predicate.
+
+Each cell section shows apply outcomes, rejections per hour, the most recent
+rejections next to the version the cell actually holds, and how many held
+authorities are past `refresh_after` or past their validity, by lifecycle. A cell
+holding an expired authority is not by itself a fault: an object nobody uses runs
+out there, is fetched again on its next use, and is forgotten thirty days after
+it was issued.
+
+`frameworks cluster doctor` runs the pass/fail form of the same state as its
+**Media authority convergence** check: unhealthy when a refresh target is parked,
+a refresh or a current delivery has been stuck for more than five minutes, a cell
+refuses the current version, or an authority that is still in use is past its
+validity. A fan-out backlog older than an hour and a cell that is not forgetting
+expired authorities are warnings. It probes Commodore and every cell's Foghorn
+database; a database or a count it could not read is reported as degraded, never
+as healthy.
 
 ---
 
@@ -15529,7 +15682,9 @@ Verify public DNS records match Quartermaster inventory.
 frameworks dns doctor --domain example.com
 ```
 
-Compares expected IPs from node inventory against actual DNS resolution. Useful for verifying Navigator has synced DNS records correctly.
+Validates Cloudflare-proxied names by resolution and Bunny smart records as a
+geographically selected subset of Quartermaster's healthy inventory. It checks
+both cluster-specific media names and platform-official global entrypoints.
 
 ---
 
@@ -17467,7 +17622,7 @@ The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAM
 version: v1
 type: cluster
 profile: production
-channel: stable # optional: stable (default) or rc
+channel: stable # optional: stable (default), candidate, or legacy rc
 root_domain: example.com # optional: used for Caddy routing and cookie domains
 env_files:
   - config/production.env
@@ -17535,12 +17690,14 @@ profile: production
 
 Release channel to track (optional). Defaults to `stable`.
 
-**Values:** `stable` (production-ready), `rc` (release candidate for staging/testing).
+**Values:** `stable` (latest production-ready release), `candidate` (newest release,
+including an RC), and legacy `rc` (newest RC only). Use `candidate` for staging and
+release-like development environments.
 
 **Example:**
 
 ```yaml
-channel: rc
+channel: candidate
 ```
 
 ---
@@ -18088,7 +18245,7 @@ on the `frameworks edge provision` command when an explicit key is needed.
 
 **Fields:**
 
-- `channel` (optional) - `stable`, `rc`, or an explicit version such as `v0.2.0-rc3`
+- `channel` (optional) - `stable`, `candidate`, legacy `rc`, or an explicit version such as `v0.2.0-rc3`
 - `root_domain` or `pool_domain` (at least one required)
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
@@ -18661,9 +18818,16 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 `FOGHORN_STATE_ENCRYPTION_KEY`, `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, `JWT_SECRET`,
 `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`,
 `TELEMETRY_TOKEN_SECRET`, `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
-`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, and `MEDIA_AUTHORITY_TRUST_SET`. The renderer derives
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`, and the edge-telemetry
+ES256 signer. The renderer derives
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
 input.
+
+Non-development clusters also need a managed internal service CA. Generate it once with
+`frameworks cluster secrets generate-internal-ca --out /secure/path/internal-ca.env`, import all
+three values into the same SOPS store, and remove the plaintext fragment. Treat rotation as a trust
+domain change: the command intentionally does not retain the root signing key after it signs the
+Navigator intermediate.
 
 During the v0.3.0 application-field migration, preserve an outgoing
 `JWT_SECRET` in the JSON array `FIELD_ENCRYPTION_LEGACY_SECRETS` before rotating
@@ -18723,6 +18887,39 @@ query `foghorn_media_request_central_rpcs_total{path,service,method}` before and
 request covered by ready local authority must not increment it, except for ingest endpoint discovery's
 single bounded Commodore live-claim check. A static alert on every central RPC would be wrong during
 normal connected operation. New management mutations and new x402 settlement remain online-only.
+
+Rejected-delivery alerts and `cluster doctor` distinguish unresolved live copies from historical
+rejections. An expired correction still needs attention if a cell can hold an older valid copy;
+once all such copies expire, the alert resolves without deleting the rejection history.
+Normal delivery lag during a Foghorn restart does not trigger a full authority replay. A genuine
+restore remains fenced until a matching summary or fresh per-authority fetch confirms what it holds;
+an old delivery arriving late cannot clear that fence. Failed database enumeration during
+`cluster restore postgres` fails the restore rather than reporting that fencing succeeded.
+
+Authority work queues use range-sharded due-time indexes on YugabyteDB, and short-lease deliveries are
+claimed through their own `short_lease` index. If Commodore repeatedly logs `Failed to observe media
+authority delivery backlog` or `Failed to claim short-lease media authority delivery`, verify the
+v0.3.10 and v0.3.11 expand and postdeploy migrations before increasing worker timeouts. Refresh work is
+one obligation per authority, so it does not grow with event volume; the normal retention jobs preserve
+all current and retryable authority while bounding expired terminal history. Operators should not
+delete those tables manually.
+
+`frameworks cluster doctor` reports **Media authority convergence**. When it is not healthy, run
+`frameworks cluster diagnose media-authority`: it lists parked refresh targets with the reason they
+cannot compile, stuck or refused deliveries, and each cell's recent apply rejections. A parked target
+is not an operator task to clear: it is retried when its source state changes and once per hourly
+reconcile, so fix the state its `park_reason` names (for example `seal_recipient_missing`: a serving
+cell with no sealing key configured in Commodore).
+
+A compiler or key-configuration failure does not revoke already valid signed access. If a commercial
+quote describes newer entitlements than the signed tenant, the object waits for a refreshed tenant
+instead of treating the mismatch as a policy denial. Explicit access revocations still propagate even
+when unrelated billing or processing dependencies are unavailable.
+
+Removed target cells receive corrections only until the fixed expiry horizon of their previous
+copies. They are not renewed indefinitely, and expired retired target rows are pruned automatically
+without removing version counters or recovery fences. v0.3.11 includes the retirement column and its
+range-sharded cleanup index; let the release workflow run both expand and postdeploy validation.
 
 ## Quick Start
 
@@ -18952,6 +19149,12 @@ Navigator (`api_dns`) automatically manages DNS based on node inventory from Qua
 4. Applies proxying rules (default set: `bridge`, `chartroom`, `chatwoot`, `foredeck`, `grafana`, `listmonk`, `logbook`, `metabase`, `steward`; override via `NAVIGATOR_PROXY_SERVICES`)
 5. Handles ACME certificate issuance via DNS-01 challenges
 
+Private staging deployments that use split DNS can set
+`NAVIGATOR_DNS_RECORDS_ENABLED=false`. This suppresses public A records, aliases, Bunny records,
+and Cloudflare load-balancer reconciliation while leaving certificate issuance and renewal active.
+Provider credentials are therefore still required for ACME DNS-01. Do not use the switch for a
+public production cluster.
+
 If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.
 
 ### Verifying DNS State
@@ -19042,6 +19245,13 @@ Quartermaster is the health source for desired DNS state. Navigator filters
 unhealthy or addressless nodes before reconciling records; provider-side health
 checks are an implementation detail of the authoritative provider integration.
 Use `frameworks dns doctor` to compare public DNS with Quartermaster inventory.
+The comparison is provider-aware: Bunny smart DNS may return any non-empty
+geographically selected subset of the healthy authoritative members, while a
+Cloudflare-proxied hostname is validated by successful resolution rather than
+by comparing Cloudflare anycast addresses with origin IPs. An NXDOMAIN response
+or a Bunny address outside Quartermaster's healthy inventory still fails the
+doctor check. Both per-cluster names and platform-official global Bunny
+entrypoints are checked.
 
 ### Wildcard TLS Certificates
 
@@ -19082,6 +19292,14 @@ below). Certificates: one pool-assigned multi-SAN cert for
 foghorn/chandler/livepeer; one platform-edge multi-SAN cert for the
 five edge-\* names. Both distributed via ConfigSeed only to
 platform-operated nodes.
+
+Livepeer gateways also have a stable physical identity at
+`livepeer-gateway.{node}.infra.{base}`. That record remains present for a
+provisioned running instance even while its process health is degraded; it is
+the HTTPS path Quartermaster uses to probe the loopback-only gateway through
+the node's ingress. Pooled `livepeer.*` membership remains health- and
+freshness-gated, so preserving physical identity does not route production
+traffic to an unhealthy gateway.
 
 **2. Cluster-concrete URLs — operator pin / debug**
 
@@ -20249,8 +20467,11 @@ to a publisher or viewer. Placement's coordinator-independent path resolves live
 management and preview interfaces report on it rather than switching it on. Foghorn installs the
 ingest and viewer placement adapters on both the HTTP and gRPC front doors before it accepts
 traffic, so every live resolution is an exact-node preparation. They return only the prepared
-destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
-requests cannot silently switch formats. This contract and its unit tests are not two-cell playback
+destination together with the selected node's complete advertised Mist output catalog. An
+unqualified request is placed once against “any browser playback output”; Foghorn does not choose a
+device protocol. The player refreshes that catalog from Mist after node selection, and subsequent protocol requests pass through normal
+`PLAY_REWRITE` admission on the serving edge. Explicit protocol requests cannot silently switch
+formats. This contract and its unit tests are not two-cell playback
 proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
 Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
 
@@ -21780,7 +22001,8 @@ Host edge-eu-01
 
 ### User Permissions
 
-The CLI user needs sudo privileges for:
+The CLI user needs non-interactive sudo privileges for the complete set of
+Ansible and direct-SSH operations used by the selected manifest, including:
 
 - Installing packages
 - Managing systemd services
@@ -21791,9 +22013,16 @@ The CLI user needs sudo privileges for:
 # Add user to docker group (Docker deployments)
 sudo usermod -aG docker admin
 
-# Or configure passwordless sudo for specific commands
-admin ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker
+# Verify that automation does not pause for a password prompt
+sudo -n true
 ```
+
+Grant this to a dedicated automation account reached only through your management VPN and SSH
+keys. A policy limited to only `systemctl` and `docker` is insufficient: provisioning also manages
+packages, users, files under `/etc` and `/var/lib`, network state, databases, and commands run as
+service accounts. If you maintain a command allowlist instead of `NOPASSWD: ALL`, derive and test it
+against the exact pinned playbooks in `ansible/playbooks/` and the selected roles; update it whenever
+those tasks change. The CLI has no interactive become-password flow.
 
 ## External Services
 
@@ -21840,6 +22069,11 @@ Use `frameworks cluster release apply` for a normal platform release. It compose
 schema phases, platform artifact upgrades, live gates, and any declared one-off
 reconciliation into one resumable operation. `cluster migrate` and `cluster upgrade`
 remain explicit recovery/debugging primitives.
+
+Production manifests should use `channel: stable`. Staging and release-like development
+manifests should use `channel: candidate`, which follows the newest tag whether it is GA
+or RC. The explicit selector `latest` is an alias for `candidate`; legacy `rc` remains
+available when an RC-only track is specifically required.
 
 The first release step creates any service database the manifest declares but the cluster does not
 have yet (a database introduced by this release), with its owner and runtime roles and current

@@ -145,7 +145,7 @@ Versions resolve through GitOps release manifests (`cli/pkg/gitops/`):
   the provisioner passes the checksum to the host-side download for verification.
 - Docker infrastructure components pin an OCI manifest **digest**, not a floating
   tag.
-- Channels (`stable`, `rc`) resolve to concrete versions at plan time; pinned
+- Channels (`stable`, `candidate`, and legacy `rc`) resolve to concrete versions at plan time; pinned
   versions are cached with a TTL/max-staleness policy so repeated runs don't
   re-fetch. A channel names a resolution rule, never a version.
 

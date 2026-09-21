@@ -20,7 +20,7 @@ The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAM
 version: v1
 type: cluster
 profile: production
-channel: stable # optional: stable (default) or rc
+channel: stable # optional: stable (default), candidate, or legacy rc
 root_domain: example.com # optional: used for Caddy routing and cookie domains
 env_files:
   - config/production.env
@@ -88,12 +88,14 @@ profile: production
 
 Release channel to track (optional). Defaults to `stable`.
 
-**Values:** `stable` (production-ready), `rc` (release candidate for staging/testing).
+**Values:** `stable` (latest production-ready release), `candidate` (newest release,
+including an RC), and legacy `rc` (newest RC only). Use `candidate` for staging and
+release-like development environments.
 
 **Example:**
 
 ```yaml
-channel: rc
+channel: candidate
 ```
 
 ---
@@ -641,7 +643,7 @@ on the `frameworks edge provision` command when an explicit key is needed.
 
 **Fields:**
 
-- `channel` (optional) - `stable`, `rc`, or an explicit version such as `v0.2.0-rc3`
+- `channel` (optional) - `stable`, `candidate`, legacy `rc`, or an explicit version such as `v0.2.0-rc3`
 - `root_domain` or `pool_domain` (at least one required)
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
