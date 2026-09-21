@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"database/sql/driver"
+	"github.com/lib/pq"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -386,6 +388,64 @@ func TestGetNewsletterStatus_ListmonkErrorReturnsUnsubscribed(t *testing.T) {
 	}
 	if resp.GetSubscribed() {
 		t.Fatal("expected unsubscribed when Listmonk status cannot be read")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// recordArg matches any value and remembers each one it saw.
+type recordArg struct{ seen *[]driver.Value }
+
+func (r recordArg) Match(v driver.Value) bool {
+	*r.seen = append(*r.seen, v)
+	return true
+}
+
+// TestRefreshToken_ReplayReturnsTheCommittedAttemptsToken proves a rotation whose commit fails with 40001 is replayed,
+// and the refresh token handed back is the one the committed attempt stored, not the aborted attempt's.
+func TestRefreshToken_ReplayReturnsTheCommittedAttemptsToken(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret-for-refresh-token")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	refreshToken := "refresh-token-raw"
+	var storedHashes []driver.Value
+	expectRotation := func(newID string) {
+		mock.ExpectBegin()
+		mock.ExpectQuery("FROM commodore.refresh_tokens").
+			WithArgs(hashToken(refreshToken)).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
+				AddRow("rt-1", "user-2", "tenant-2", false, nil, nil))
+		mock.ExpectQuery("FROM commodore.users WHERE id = \\$1 AND tenant_id = \\$2").
+			WithArgs("user-2", "tenant-2").
+			WillReturnRows(refreshTokenUserRows())
+		mock.ExpectQuery("INSERT INTO commodore.refresh_tokens").
+			WithArgs("tenant-2", "user-2", recordArg{seen: &storedHashes}, sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(newID))
+		mock.ExpectExec("UPDATE commodore.refresh_tokens").
+			WithArgs("rt-1", newID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	expectRotation("rt-2")
+	mock.ExpectCommit().WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access"})
+	expectRotation("rt-3")
+	mock.ExpectCommit()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(storedHashes) != 2 || storedHashes[0] == storedHashes[1] {
+		t.Fatalf("stored refresh token hashes = %v, want two distinct attempts", storedHashes)
+	}
+	if got := hashToken(resp.GetRefreshToken()); got != storedHashes[1] {
+		t.Fatalf("returned refresh token hashes to %v, want the committed attempt's %v", got, storedHashes[1])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"testing"
 	"time"
 
@@ -215,6 +216,52 @@ func TestUpdateStream(t *testing.T) {
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
 		// Trailing queryStream re-read.
+		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
+			WithArgs("s1", "u1", "t1").
+			WillReturnRows(pushFullRow().AddRow(
+				"s1", "live+abc", "key-1", "pb-1", "New Title", nil,
+				false, fixedTS, fixedTS, "push",
+				nil, nil, "{}", nil, false, nil, "{}", nil,
+				nil, nil, nil, nil, nil))
+		expectStreamPlacementRead(mock, nil)
+
+		stream, err := s.UpdateStream(ctxAs("u1", "t1", "owner"), &commodorepb.UpdateStreamRequest{
+			StreamId: "s1", Name: proto.String("New Title"),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if stream.GetTitle() != "New Title" {
+			t.Errorf("Title = %q, want New Title", stream.GetTitle())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet: %v", err)
+		}
+	})
+
+	// A serialization abort replays the update in a fresh transaction, and the change event is emitted once, after
+	// the commit, naming the fields of the committed attempt.
+	t.Run("title_update_replays_serialization_failure", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery("ingest_mode, is_recording_enabled").
+			WithArgs("s1", "u1", "t1").
+			WillReturnRows(sqlmock.NewRows([]string{"internal_name", "ingest_mode", "is_recording_enabled"}).
+				AddRow("live+abc", "push", false))
+		updateArgs := []driver.Value{
+			true, "New Title", false, nil, false, false,
+			false, nil, false, nil, false, nil,
+			"s1", "u1", "t1",
+		}
+		mock.ExpectBegin()
+		mock.ExpectExec("UPDATE commodore.streams SET").WithArgs(updateArgs...).
+			WillReturnError(serializationFailure())
+		mock.ExpectRollback()
+		mock.ExpectBegin()
+		mock.ExpectExec("UPDATE commodore.streams SET").WithArgs(updateArgs...).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		expectOutboxInsert(mock)
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
 			WithArgs("s1", "u1", "t1").
 			WillReturnRows(pushFullRow().AddRow(

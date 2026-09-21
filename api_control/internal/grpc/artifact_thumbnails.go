@@ -78,85 +78,80 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	// advisory lock serializes this against MintChapterPlaybackID so an absent-row race cannot recreate
 	// the asset between its marker check and its insert.
 	if req.GetDeleted() {
-		delTx, txErr := s.db.BeginTx(ctx, nil)
-		if txErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog delete begin: %v", txErr)
-		}
-		delCommitted := false
-		defer func() {
-			if !delCommitted {
-				delTx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-			}
-		}()
-		queries := commodoredb.New(delTx)
-		if lErr := queries.LockArtifactCreationIdentity(ctx, lockKey); lErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog delete lock: %v", lErr)
-		}
-		// Guard the LIVE business row BEFORE tombstoning or deleting it, under this transaction's advisory
-		// lock. The marker upsert below is monotonic only against an EXISTING marker; it does not protect a
-		// live row that a re-creation wrote after an earlier delete cleared the marker. Read the live row's
-		// origin + revision and reject two unsafe cases: a foreign origin deleting a row it does not own,
-		// and a delete whose revision is not strictly newer than the live row (a delayed delete that
-		// predates a re-creation). Revisions are cluster-local, so the revision compare is meaningful only
-		// for the same origin — the origin check runs first.
-		live, liveErr := getLiveArtifactCatalogStateForUpdate(ctx, queries, req.GetAssetType(), tenantID, assetKey)
-		switch {
-		case liveErr == nil:
-			if live.originCluster.Valid && live.originCluster.String != "" && live.originCluster.String != sourceCluster {
-				return nil, status.Errorf(codes.PermissionDenied,
-					"source cluster %q is not the origin cluster %q for live asset %s", sourceCluster, live.originCluster.String, assetKey)
-			}
-			if live.catalogRevision.Valid && req.GetSourceRevision() <= live.catalogRevision.Int64 {
-				// The live row is at an equal-or-newer revision: this delete is stale (it predates a
-				// re-creation). Leave the row intact and do NOT tombstone.
-				if commitErr := delTx.Commit(); commitErr != nil {
-					return nil, status.Errorf(codes.Internal, "catalog delete commit: %v", commitErr)
+		var delResp *commodorepb.UpdateArtifactCatalogSnapshotResponse
+		delErr := s.withStatusTx(ctx,
+			func(err error) error { return status.Errorf(codes.Internal, "catalog delete begin: %v", err) },
+			func(err error) error { return status.Errorf(codes.Internal, "catalog delete commit: %v", err) },
+			func(delTx *sql.Tx) error {
+				delResp = nil
+				queries := commodoredb.New(delTx)
+				if lErr := queries.LockArtifactCreationIdentity(ctx, lockKey); lErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "catalog delete lock: %v", lErr), lErr)
 				}
-				delCommitted = true
-				return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: live.catalogRevision.Int64}, nil
-			}
-		case errors.Is(liveErr, sql.ErrNoRows):
-			// No live row — a delete that lands before registration (or after an earlier removal) still
-			// records the tombstone below so the removal is representable.
-		default:
-			return nil, status.Errorf(codes.Internal, "catalog delete live-row read: %v", liveErr)
-		}
-		markerRevision, delErr := queries.UpsertArtifactCatalogTombstone(ctx, commodoredb.UpsertArtifactCatalogTombstoneParams{
-			TenantID: tenantID, Kind: kind, AssetKey: assetKey, OriginClusterID: sourceCluster,
-			DeletionRevision: req.GetSourceRevision(),
-		})
-		if delErr == nil {
-			// Marker durably present at markerRevision (>= source_revision). Remove the live business
-			// row so ordinary readers (absence = not live) stop returning it.
-			if rErr := deleteArtifactCatalogBusinessRow(ctx, queries, req.GetAssetType(), tenantID, assetKey); rErr != nil {
-				return nil, status.Errorf(codes.Internal, "catalog delete row: %v", rErr)
-			}
-			if kind == "vod" {
-				// Tenant-scoped delete: dvr_chapter_playback carries tenant_id as its ownership boundary. The
-				// artifact_hash is a globally-unique, opaque id (not a content hash), so scoping by tenant is an
-				// ownership proof for the delete, not a cross-tenant collision guard.
-				if pErr := queries.DeleteDVRChapterPlaybackByArtifact(ctx, commodoredb.DeleteDVRChapterPlaybackByArtifactParams{TenantID: tenantID, AssetKey: assetKey}); pErr != nil {
-					return nil, status.Errorf(codes.Internal, "delete chapter playback row: %v", pErr)
+				// Guard the LIVE business row BEFORE tombstoning or deleting it, under this transaction's advisory
+				// lock. The marker upsert below is monotonic only against an EXISTING marker; it does not protect a
+				// live row that a re-creation wrote after an earlier delete cleared the marker. Read the live row's
+				// origin + revision and reject two unsafe cases: a foreign origin deleting a row it does not own,
+				// and a delete whose revision is not strictly newer than the live row (a delayed delete that
+				// predates a re-creation). Revisions are cluster-local, so the revision compare is meaningful only
+				// for the same origin — the origin check runs first.
+				live, liveErr := getLiveArtifactCatalogStateForUpdate(ctx, queries, req.GetAssetType(), tenantID, assetKey)
+				switch {
+				case liveErr == nil:
+					if live.originCluster.Valid && live.originCluster.String != "" && live.originCluster.String != sourceCluster {
+						return status.Errorf(codes.PermissionDenied,
+							"source cluster %q is not the origin cluster %q for live asset %s", sourceCluster, live.originCluster.String, assetKey)
+					}
+					if live.catalogRevision.Valid && req.GetSourceRevision() <= live.catalogRevision.Int64 {
+						// The live row is at an equal-or-newer revision: this delete is stale (it predates a
+						// re-creation). Leave the row intact and do NOT tombstone.
+						delResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: live.catalogRevision.Int64}
+						return nil
+					}
+				case errors.Is(liveErr, sql.ErrNoRows):
+					// No live row — a delete that lands before registration (or after an earlier removal) still
+					// records the tombstone below so the removal is representable.
+				default:
+					return txStatus(status.Errorf(codes.Internal, "catalog delete live-row read: %v", liveErr), liveErr)
 				}
-			}
-			if commitErr := delTx.Commit(); commitErr != nil {
-				return nil, status.Errorf(codes.Internal, "catalog delete commit: %v", commitErr)
-			}
-			delCommitted = true
-			return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: markerRevision}, nil
+				markerRevision, upsertErr := queries.UpsertArtifactCatalogTombstone(ctx, commodoredb.UpsertArtifactCatalogTombstoneParams{
+					TenantID: tenantID, Kind: kind, AssetKey: assetKey, OriginClusterID: sourceCluster,
+					DeletionRevision: req.GetSourceRevision(),
+				})
+				if upsertErr == nil {
+					// Marker durably present at markerRevision (>= source_revision). Remove the live business
+					// row so ordinary readers (absence = not live) stop returning it.
+					if rErr := deleteArtifactCatalogBusinessRow(ctx, queries, req.GetAssetType(), tenantID, assetKey); rErr != nil {
+						return txStatus(status.Errorf(codes.Internal, "catalog delete row: %v", rErr), rErr)
+					}
+					if kind == "vod" {
+						// Tenant-scoped delete: dvr_chapter_playback carries tenant_id as its ownership boundary. The
+						// artifact_hash is a globally-unique, opaque id (not a content hash), so scoping by tenant is an
+						// ownership proof for the delete, not a cross-tenant collision guard.
+						if pErr := queries.DeleteDVRChapterPlaybackByArtifact(ctx, commodoredb.DeleteDVRChapterPlaybackByArtifactParams{TenantID: tenantID, AssetKey: assetKey}); pErr != nil {
+							return txStatus(status.Errorf(codes.Internal, "delete chapter playback row: %v", pErr), pErr)
+						}
+					}
+					delResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: markerRevision}
+					return nil
+				}
+				if !errors.Is(upsertErr, sql.ErrNoRows) {
+					return txStatus(status.Errorf(codes.Internal, "catalog delete marker failed: %v", upsertErr), upsertErr)
+				}
+				// 0 rows from the upsert means the ON CONFLICT guard rejected it: a marker already exists under a
+				// different origin cluster. Surface it as an authority denial so a non-origin caller never
+				// mistakes it for coverage. The readback runs through delTx so the decision stays in ONE tx.
+				markerOrigin, oErr := queries.GetArtifactCatalogTombstoneOrigin(ctx, commodoredb.GetArtifactCatalogTombstoneOriginParams{TenantID: tenantID, Kind: kind, AssetKey: assetKey})
+				if oErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "catalog delete marker readback failed: %v", oErr), oErr)
+				}
+				return status.Errorf(codes.PermissionDenied,
+					"source cluster %q is not the origin cluster %q for tombstone %s", sourceCluster, markerOrigin, assetKey)
+			})
+		if delErr != nil {
+			return nil, delErr
 		}
-		if !errors.Is(delErr, sql.ErrNoRows) {
-			return nil, status.Errorf(codes.Internal, "catalog delete marker failed: %v", delErr)
-		}
-		// 0 rows from the upsert means the ON CONFLICT guard rejected it: a marker already exists under a
-		// different origin cluster. Surface it as an authority denial so a non-origin caller never
-		// mistakes it for coverage. The readback runs through delTx so the decision stays in ONE tx.
-		markerOrigin, oErr := queries.GetArtifactCatalogTombstoneOrigin(ctx, commodoredb.GetArtifactCatalogTombstoneOriginParams{TenantID: tenantID, Kind: kind, AssetKey: assetKey})
-		if oErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog delete marker readback failed: %v", oErr)
-		}
-		return nil, status.Errorf(codes.PermissionDenied,
-			"source cluster %q is not the origin cluster %q for tombstone %s", sourceCluster, markerOrigin, assetKey)
+		return delResp, nil
 	}
 
 	// Non-delete projection: the marker guards resurrection. A marker at deletion_revision >= this
@@ -165,140 +160,129 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	// the obsolete snapshot. Only a STRICTLY-NEWER source_revision (a genuine re-creation) supersedes
 	// the marker: clear it, then apply the revive. The check + clear + revive run in ONE transaction
 	// under the per-artifact advisory lock, so a concurrent delete cannot interleave.
-	reviveTx, txErr := s.db.BeginTx(ctx, nil)
-	if txErr != nil {
-		return nil, status.Errorf(codes.Internal, "catalog snapshot begin: %v", txErr)
-	}
-	reviveCommitted := false
-	defer func() {
-		if !reviveCommitted {
-			reviveTx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-		}
-	}()
-	queries := commodoredb.New(reviveTx)
-	if lErr := queries.LockArtifactCreationIdentity(ctx, lockKey); lErr != nil {
-		return nil, status.Errorf(codes.Internal, "catalog snapshot lock: %v", lErr)
-	}
-	marker, mErr := queries.GetArtifactCatalogTombstoneForUpdate(ctx, commodoredb.GetArtifactCatalogTombstoneForUpdateParams{
-		TenantID: tenantID, Kind: kind, AssetKey: assetKey,
-	})
-	switch {
-	case mErr == nil:
-		// Revisions are cluster-LOCAL and incomparable across origins. A tombstone written by a
-		// DIFFERENT origin cluster can be neither superseded nor cleared by this snapshot — a foreign
-		// cluster's coincidentally-larger revision must NOT resurrect another origin's deleted asset.
-		// Reject BEFORE the revision comparison or any marker clear (fail closed). Enforced HERE, not
-		// only at the business-row UPDATE below, because an absent business row would otherwise let the
-		// marker clear commit as a benign not-found.
-		if marker.OriginClusterID != sourceCluster {
-			return nil, status.Errorf(codes.PermissionDenied,
-				"source cluster %q is not the tombstone origin %q for %s", sourceCluster, marker.OriginClusterID, assetKey)
-		}
-		if marker.DeletionRevision >= req.GetSourceRevision() {
-			if commitErr := reviveTx.Commit(); commitErr != nil {
-				return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
+	var reviveResp *commodorepb.UpdateArtifactCatalogSnapshotResponse
+	reviveErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "catalog snapshot begin: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "catalog snapshot commit: %v", err) },
+		func(reviveTx *sql.Tx) error {
+			reviveResp = nil
+			queries := commodoredb.New(reviveTx)
+			if lErr := queries.LockArtifactCreationIdentity(ctx, lockKey); lErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "catalog snapshot lock: %v", lErr), lErr)
 			}
-			reviveCommitted = true
-			return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: marker.DeletionRevision}, nil
-		}
-		if dErr := queries.ClearArtifactCatalogTombstone(ctx, commodoredb.ClearArtifactCatalogTombstoneParams{TenantID: tenantID, Kind: kind, AssetKey: assetKey}); dErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog snapshot clear marker: %v", dErr)
-		}
-	case errors.Is(mErr, sql.ErrNoRows):
-		// No marker → not deleted; proceed with the revive.
-	default:
-		return nil, status.Errorf(codes.Internal, "catalog snapshot marker check: %v", mErr)
-	}
+			marker, mErr := queries.GetArtifactCatalogTombstoneForUpdate(ctx, commodoredb.GetArtifactCatalogTombstoneForUpdateParams{
+				TenantID: tenantID, Kind: kind, AssetKey: assetKey,
+			})
+			switch {
+			case mErr == nil:
+				// Revisions are cluster-LOCAL and incomparable across origins. A tombstone written by a
+				// DIFFERENT origin cluster can be neither superseded nor cleared by this snapshot — a foreign
+				// cluster's coincidentally-larger revision must NOT resurrect another origin's deleted asset.
+				// Reject BEFORE the revision comparison or any marker clear (fail closed). Enforced HERE, not
+				// only at the business-row UPDATE below, because an absent business row would otherwise let the
+				// marker clear commit as a benign not-found.
+				if marker.OriginClusterID != sourceCluster {
+					return status.Errorf(codes.PermissionDenied,
+						"source cluster %q is not the tombstone origin %q for %s", sourceCluster, marker.OriginClusterID, assetKey)
+				}
+				if marker.DeletionRevision >= req.GetSourceRevision() {
+					reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: marker.DeletionRevision}
+					return nil
+				}
+				if dErr := queries.ClearArtifactCatalogTombstone(ctx, commodoredb.ClearArtifactCatalogTombstoneParams{TenantID: tenantID, Kind: kind, AssetKey: assetKey}); dErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "catalog snapshot clear marker: %v", dErr), dErr)
+				}
+			case errors.Is(mErr, sql.ErrNoRows):
+				// No marker → not deleted; proceed with the revive.
+			default:
+				return txStatus(status.Errorf(codes.Internal, "catalog snapshot marker check: %v", mErr), mErr)
+			}
 
-	tracksArg := sql.NullString{}
-	if req.GetTracksPresent() {
-		body, mErr := commodoreclient.MarshalMediaTracks(req.GetTracks())
-		if mErr != nil {
-			return nil, status.Errorf(codes.Internal, "marshal tracks: %v", mErr)
-		}
-		tracksArg = sql.NullString{String: string(body), Valid: true}
+			tracksArg := sql.NullString{}
+			if req.GetTracksPresent() {
+				body, mErr := commodoreclient.MarshalMediaTracks(req.GetTracks())
+				if mErr != nil {
+					return status.Errorf(codes.Internal, "marshal tracks: %v", mErr)
+				}
+				tracksArg = sql.NullString{String: string(body), Valid: true}
+			}
+			// Most fields are whole-state: an absent optional is written as NULL so the snapshot repairs
+			// stale values, not merely adds. Exceptions COALESCE to the stored value when absent —
+			// has_thumbnails and lifecycle_status (matching the proto's documented "absent preserves"
+			// contract) — and tracks are replaced only when tracks_present.
+			// Clip duration also preserves its required requested/measured value when absent.
+			// storage_cluster_id keeps its nullable semantics: NULL means "same as origin cluster"
+			// (ListStorageArtifacts falls back via COALESCE), so an absent value writes SQL NULL, not
+			// '', which would defeat the fallback and erase attribution.
+			//
+			// Source authority is assigned AND enforced in this one guarded write:
+			//   - origin_cluster_id IS NULL  → the artifact is unattributed; the writer CLAIMS ownership
+			//     (`origin_cluster_id = COALESCE(origin_cluster_id, $16)`), so a wrong first writer can no
+			//     longer leave the row perpetually clobberable.
+			//   - origin_cluster_id = $16    → the origin cluster; allowed.
+			//   - origin_cluster_id <> $16   → a non-origin cluster; the WHERE matches 0 rows and the
+			//     read-back below distinguishes this (PermissionDenied) from a mere revision-behind.
+			params := commodoredb.ApplyClipCatalogSnapshotParams{
+				SizeBytes: nullableInt64(req.SizeBytes), DurationMs: nullableInt64(req.DurationMs),
+				TracksPresent: req.GetTracksPresent(), Tracks: tracksArg,
+				SyncStatus: nullableString(req.SyncStatus), IsSynced: nullableBool(req.IsSynced), IsFinalized: nullableBool(req.IsFinalized),
+				StorageLocation: nullableString(req.StorageLocation), StorageClusterID: nullableString(req.StorageClusterId),
+				HasThumbnails: nullableBool(req.HasThumbnails), LifecycleStatus: nullableString(req.LifecycleStatus),
+				OriginClusterID: sql.NullString{String: sourceCluster, Valid: true}, RetentionUntilUnix: nullableInt64(req.RetentionUntilUnix),
+				ErrorMessage: nullableString(req.ErrorMessage), ThumbnailServingClusterID: nullableString(req.ThumbnailServingClusterId),
+				SourceRevision: req.GetSourceRevision(), TenantID: tenantID, AssetKey: assetKey,
+			}
+			newRevision, appliedServingCluster, execErr := applyArtifactCatalogSnapshot(ctx, queries, req.GetAssetType(), params)
+			if execErr == nil {
+				// Applied: the row's revision is now source_revision.
+				// Echo the STORED serving cluster so the caller can confirm a NEW Commodore applied field 21 (mixed-version ack).
+				reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: newRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(appliedServingCluster)}
+				return nil
+			}
+			if !errors.Is(execErr, sql.ErrNoRows) {
+				s.logger.WithError(execErr).WithFields(logging.Fields{
+					"tenant_id":  tenantID,
+					"asset_type": req.GetAssetType().String(),
+					"asset_key":  assetKey,
+				}).Error("UpdateArtifactCatalogSnapshot failed")
+				return txStatus(status.Errorf(codes.Internal, "update failed: %v", execErr), execErr)
+			}
+			// The guarded UPDATE matched no row: the artifact isn't registered yet, OR the guard rejected
+			// it (revision already >= source, OR a source-cluster/origin mismatch). Read origin_cluster_id
+			// + catalog_revision to DISTINGUISH an authority denial from a benign revision-behind: a
+			// non-origin caller must get an explicit PermissionDenied, never a false "covered". Any marker
+			// clear above is committed so a genuine re-creation is unblocked.
+			stored, qErr := getArtifactCatalogState(ctx, queries, req.GetAssetType(), tenantID, assetKey)
+			if errors.Is(qErr, sql.ErrNoRows) {
+				reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: false}
+				return nil
+			}
+			if qErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "revision read failed: %v", qErr), qErr)
+			}
+			// Authority denial: the row is owned by a different origin cluster. Surface it explicitly so
+			// the caller backs off rather than mistaking the stored revision for its own coverage.
+			if stored.originCluster.Valid && stored.originCluster.String != "" && stored.originCluster.String != sourceCluster {
+				return status.Errorf(codes.PermissionDenied,
+					"source cluster %q is not the origin cluster %q for %s", sourceCluster, stored.originCluster.String, assetKey)
+			}
+			// WRITE-ONCE CONFLICT: the serving cluster is stable (the tenant's official cluster). A stored non-null value that
+			// DIFFERS from a non-empty incoming one is a real invariant violation (a thumbnail re-projected to a different
+			// official cluster) — fail LOUDLY rather than silently loop or overwrite. A NULL→value fill already applied above.
+			if incoming := strings.TrimSpace(req.GetThumbnailServingClusterId()); incoming != "" &&
+				stored.servingCluster.Valid && stored.servingCluster.String != "" && stored.servingCluster.String != incoming {
+				return status.Errorf(codes.FailedPrecondition,
+					"thumbnail serving cluster conflict for %s: stored %q, incoming %q (write-once)", assetKey, stored.servingCluster.String, incoming)
+			}
+			// Echo the stored serving cluster here too, so a caller that is revision-behind (its projection already superseded)
+			// can still confirm the field is stored and advance without re-projecting forever.
+			reviveResp = &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: stored.catalogRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(stored.servingCluster)}
+			return nil
+		})
+	if reviveErr != nil {
+		return nil, reviveErr
 	}
-	// Most fields are whole-state: an absent optional is written as NULL so the snapshot repairs
-	// stale values, not merely adds. Exceptions COALESCE to the stored value when absent —
-	// has_thumbnails and lifecycle_status (matching the proto's documented "absent preserves"
-	// contract) — and tracks are replaced only when tracks_present.
-	// Clip duration also preserves its required requested/measured value when absent.
-	// storage_cluster_id keeps its nullable semantics: NULL means "same as origin cluster"
-	// (ListStorageArtifacts falls back via COALESCE), so an absent value writes SQL NULL, not
-	// '', which would defeat the fallback and erase attribution.
-	//
-	// Source authority is assigned AND enforced in this one guarded write:
-	//   - origin_cluster_id IS NULL  → the artifact is unattributed; the writer CLAIMS ownership
-	//     (`origin_cluster_id = COALESCE(origin_cluster_id, $16)`), so a wrong first writer can no
-	//     longer leave the row perpetually clobberable.
-	//   - origin_cluster_id = $16    → the origin cluster; allowed.
-	//   - origin_cluster_id <> $16   → a non-origin cluster; the WHERE matches 0 rows and the
-	//     read-back below distinguishes this (PermissionDenied) from a mere revision-behind.
-	params := commodoredb.ApplyClipCatalogSnapshotParams{
-		SizeBytes: nullableInt64(req.SizeBytes), DurationMs: nullableInt64(req.DurationMs),
-		TracksPresent: req.GetTracksPresent(), Tracks: tracksArg,
-		SyncStatus: nullableString(req.SyncStatus), IsSynced: nullableBool(req.IsSynced), IsFinalized: nullableBool(req.IsFinalized),
-		StorageLocation: nullableString(req.StorageLocation), StorageClusterID: nullableString(req.StorageClusterId),
-		HasThumbnails: nullableBool(req.HasThumbnails), LifecycleStatus: nullableString(req.LifecycleStatus),
-		OriginClusterID: sql.NullString{String: sourceCluster, Valid: true}, RetentionUntilUnix: nullableInt64(req.RetentionUntilUnix),
-		ErrorMessage: nullableString(req.ErrorMessage), ThumbnailServingClusterID: nullableString(req.ThumbnailServingClusterId),
-		SourceRevision: req.GetSourceRevision(), TenantID: tenantID, AssetKey: assetKey,
-	}
-	newRevision, appliedServingCluster, execErr := applyArtifactCatalogSnapshot(ctx, queries, req.GetAssetType(), params)
-	if execErr == nil {
-		// Applied: the row's revision is now source_revision.
-		if commitErr := reviveTx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
-		}
-		reviveCommitted = true
-		// Echo the STORED serving cluster so the caller can confirm a NEW Commodore applied field 21 (mixed-version ack).
-		return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: newRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(appliedServingCluster)}, nil
-	}
-	if !errors.Is(execErr, sql.ErrNoRows) {
-		s.logger.WithError(execErr).WithFields(logging.Fields{
-			"tenant_id":  tenantID,
-			"asset_type": req.GetAssetType().String(),
-			"asset_key":  assetKey,
-		}).Error("UpdateArtifactCatalogSnapshot failed")
-		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
-	}
-	// The guarded UPDATE matched no row: the artifact isn't registered yet, OR the guard rejected
-	// it (revision already >= source, OR a source-cluster/origin mismatch). Read origin_cluster_id
-	// + catalog_revision to DISTINGUISH an authority denial from a benign revision-behind: a
-	// non-origin caller must get an explicit PermissionDenied, never a false "covered". Any marker
-	// clear above is committed so a genuine re-creation is unblocked.
-	stored, qErr := getArtifactCatalogState(ctx, queries, req.GetAssetType(), tenantID, assetKey)
-	if errors.Is(qErr, sql.ErrNoRows) {
-		if commitErr := reviveTx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
-		}
-		reviveCommitted = true
-		return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: false}, nil
-	}
-	if qErr != nil {
-		return nil, status.Errorf(codes.Internal, "revision read failed: %v", qErr)
-	}
-	// Authority denial: the row is owned by a different origin cluster. Surface it explicitly so
-	// the caller backs off rather than mistaking the stored revision for its own coverage.
-	if stored.originCluster.Valid && stored.originCluster.String != "" && stored.originCluster.String != sourceCluster {
-		return nil, status.Errorf(codes.PermissionDenied,
-			"source cluster %q is not the origin cluster %q for %s", sourceCluster, stored.originCluster.String, assetKey)
-	}
-	// WRITE-ONCE CONFLICT: the serving cluster is stable (the tenant's official cluster). A stored non-null value that
-	// DIFFERS from a non-empty incoming one is a real invariant violation (a thumbnail re-projected to a different
-	// official cluster) — fail LOUDLY rather than silently loop or overwrite. A NULL→value fill already applied above.
-	if incoming := strings.TrimSpace(req.GetThumbnailServingClusterId()); incoming != "" &&
-		stored.servingCluster.Valid && stored.servingCluster.String != "" && stored.servingCluster.String != incoming {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"thumbnail serving cluster conflict for %s: stored %q, incoming %q (write-once)", assetKey, stored.servingCluster.String, incoming)
-	}
-	if commitErr := reviveTx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "catalog snapshot commit: %v", commitErr)
-	}
-	reviveCommitted = true
-	// Echo the stored serving cluster here too, so a caller that is revision-behind (its projection already superseded)
-	// can still confirm the field is stored and advance without re-projecting forever.
-	return &commodorepb.UpdateArtifactCatalogSnapshotResponse{Found: true, CurrentRevision: stored.catalogRevision.Int64, ThumbnailServingClusterId: nullStringToPtr(stored.servingCluster)}, nil
+	return reviveResp, nil
 }
 
 type artifactCatalogState struct {

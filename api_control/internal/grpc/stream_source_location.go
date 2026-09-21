@@ -165,7 +165,9 @@ func (s *CommodoreServer) prepareStreamPlacement(ctx context.Context, tenantID s
 // applyStreamPlacement writes the plan inside the stream write transaction. The
 // private-source rule is evaluated against the locked tenant policy and the
 // stream's resulting own rules, so a concurrent tenant change cannot slip
-// between validation and commit.
+// between validation and commit. A failure carries the mapped gRPC status with
+// the database cause still in its chain, so the retrying transaction replays
+// serialization aborts.
 func applyStreamPlacement(ctx context.Context, exec commodoredb.DBTX, tenantID, streamID, actorID string, plan *streamPlacementPlan) (placementpolicy.SystemApplyResult, error) {
 	result, err := placementpolicy.ApplySystem(ctx, exec, placementpolicy.SystemApplyInput{
 		Scope:   placementpolicy.Scope{TenantID: tenantID, Kind: "stream", ID: streamID},
@@ -187,7 +189,10 @@ func applyStreamPlacement(ctx context.Context, exec commodoredb.DBTX, tenantID, 
 			return nil
 		},
 	})
-	return result, streamPlacementError(err)
+	if err != nil {
+		return result, txStatus(streamPlacementError(err), err)
+	}
+	return result, nil
 }
 
 func streamPlacementError(err error) error {

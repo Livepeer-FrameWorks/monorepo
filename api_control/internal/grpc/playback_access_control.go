@@ -45,52 +45,57 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.Internal, "key generation failed")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("begin signing-key tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	var created commodoredb.CreateSigningKeyRow
+	txErr := s.withStatusTx(ctx,
+		func(err error) error {
+			s.logger.WithError(err).Error("begin signing-key tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(err error) error {
+			s.logger.WithError(err).Error("commit signing-key tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(tx *sql.Tx) error {
+			// Serialize concurrent CreateSigningKey for this tenant so the cap check
+			// and INSERT are atomic. Released on commit/rollback.
+			queries := commodoredb.New(tx)
+			if lockErr := queries.LockSigningKeyTenant(ctx, tenantID); lockErr != nil {
+				s.logger.WithError(lockErr).Error("advisory lock for signing-key create failed")
+				return txStatus(status.Errorf(codes.Internal, "database error"), lockErr)
+			}
 
-	// Serialize concurrent CreateSigningKey for this tenant so the cap check
-	// and INSERT are atomic. Released on commit/rollback.
-	queries := commodoredb.New(tx)
-	if lockErr := queries.LockSigningKeyTenant(ctx, tenantID); lockErr != nil {
-		s.logger.WithError(lockErr).Error("advisory lock for signing-key create failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
+			activeCount, cntErr := queries.CountActiveSigningKeys(ctx, tenantID)
+			if cntErr != nil {
+				s.logger.WithError(cntErr).Error("count active signing keys failed")
+				return txStatus(status.Errorf(codes.Internal, "database error"), cntErr)
+			}
+			if activeCount >= activeSigningKeyCap {
+				return status.Errorf(codes.ResourceExhausted, "tenant has reached the active signing-key cap (%d); revoke an existing key first", activeSigningKeyCap)
+			}
 
-	activeCount, cntErr := queries.CountActiveSigningKeys(ctx, tenantID)
-	if cntErr != nil {
-		s.logger.WithError(cntErr).Error("count active signing keys failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	if activeCount >= activeSigningKeyCap {
-		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached the active signing-key cap (%d); revoke an existing key first", activeSigningKeyCap)
-	}
+			var insErr error
+			created, insErr = queries.CreateSigningKey(ctx, commodoredb.CreateSigningKeyParams{
+				TenantID:     tenantID,
+				Kid:          kid,
+				Name:         name,
+				PublicKeyPem: publicPEM,
+			})
+			if insErr != nil {
+				s.logger.WithError(insErr).Error("insert signing key failed")
+				return txStatus(status.Errorf(codes.Internal, "database error"), insErr)
+			}
+			if !created.CreatedAt.Valid {
+				s.logger.Error("insert signing key returned NULL created_at")
+				return status.Errorf(codes.Internal, "database error")
+			}
 
-	created, insErr := queries.CreateSigningKey(ctx, commodoredb.CreateSigningKeyParams{
-		TenantID:     tenantID,
-		Kid:          kid,
-		Name:         name,
-		PublicKeyPem: publicPEM,
-	})
-	if insErr != nil {
-		s.logger.WithError(insErr).Error("insert signing key failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	if !created.CreatedAt.Valid {
-		s.logger.Error("insert signing key returned NULL created_at")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-
-	if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, kid, "create", userID, name); auditErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		s.logger.WithError(commitErr).Error("commit signing-key tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
+			if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, kid, "create", userID, name); auditErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error"), auditErr)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	return &commodorepb.CreateSigningKeyResponse{
@@ -190,43 +195,52 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *commodorepb
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("begin revoke signing-key tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+	var (
+		sk       *commodorepb.SigningKey
+		outboxID string
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error {
+			s.logger.WithError(err).Error("begin revoke signing-key tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(err error) error {
+			s.logger.WithError(err).Error("commit revoke signing-key tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(tx *sql.Tx) error {
+			revoked, revokeErr := commodoredb.New(tx).RevokeSigningKey(ctx, commodoredb.RevokeSigningKeyParams{ID: id, TenantID: tenantID})
+			if errors.Is(revokeErr, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "signing key not found or already revoked")
+			}
+			if revokeErr != nil {
+				s.logger.WithError(revokeErr).Error("revoke signing key failed")
+				return txStatus(status.Errorf(codes.Internal, "database error"), revokeErr)
+			}
+			var decodeErr error
+			sk, decodeErr = signingKeyProto(revoked.ID, revoked.Kid, revoked.Name, revoked.Algorithm, revoked.PublicKeyPem, revoked.Status, revoked.CreatedAt, revoked.LastUsedAt, revoked.RevokedAt)
+			if decodeErr != nil {
+				s.logger.WithError(decodeErr).Error("decode revoked signing key failed")
+				return status.Errorf(codes.Internal, "database error")
+			}
 
-	revoked, err := commodoredb.New(tx).RevokeSigningKey(ctx, commodoredb.RevokeSigningKeyParams{ID: id, TenantID: tenantID})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "signing key not found or already revoked")
-	}
-	if err != nil {
-		s.logger.WithError(err).Error("revoke signing key failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	sk, err := signingKeyProto(revoked.ID, revoked.Kid, revoked.Name, revoked.Algorithm, revoked.PublicKeyPem, revoked.Status, revoked.CreatedAt, revoked.LastUsedAt, revoked.RevokedAt)
-	if err != nil {
-		s.logger.WithError(err).Error("decode revoked signing key failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
+			// Empty internal_names = scope-all; Foghorn fans out across every protected
+			// stream the tenant currently owns. Snapshotting the list here would miss
+			// streams added between revoke and worker run, so we let Foghorn re-resolve.
+			var enqueueErr error
+			outboxID, enqueueErr = s.enqueueInvalidationOutbox(ctx, tx, tenantID, "key_revoked", nil)
+			if enqueueErr != nil {
+				s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting revoke")
+				return txStatus(status.Errorf(codes.Internal, "database error"), enqueueErr)
+			}
 
-	// Empty internal_names = scope-all; Foghorn fans out across every protected
-	// stream the tenant currently owns. Snapshotting the list here would miss
-	// streams added between revoke and worker run, so we let Foghorn re-resolve.
-	outboxID, enqueueErr := s.enqueueInvalidationOutbox(ctx, tx, tenantID, "key_revoked", nil)
-	if enqueueErr != nil {
-		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting revoke")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-
-	if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, sk.GetKid(), "revoke", userID, sk.GetName()); auditErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		s.logger.WithError(commitErr).Error("commit revoke signing-key tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
+			if auditErr := s.writeSigningKeyAudit(ctx, tx, tenantID, sk.GetKid(), "revoke", userID, sk.GetName()); auditErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error"), auditErr)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	s.tryDispatchInvalidationOutbox(ctx, outboxID, tenantID, "key_revoked", nil)
@@ -276,15 +290,12 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		return nil, err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("begin set-policy tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	// Encrypt webhook secret at validation time (and SSRF-validate the URL).
-	var webhookSecretEnc sql.NullString
+	requiresAuth := policyType != "public"
+	// Request-only work runs once, before the transaction, so a replay repeats no DNS lookup or encryption.
+	var (
+		newWebhookSecretEnc sql.NullString
+		reuseWebhookSecret  bool
+	)
 	if policyType == "webhook" {
 		wh := req.GetWebhook()
 		if wh == nil {
@@ -293,89 +304,102 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		if vErr := validateWebhookURL(ctx, wh.GetUrl()); vErr != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid webhook url: %v", vErr)
 		}
-		secret := strings.TrimSpace(wh.GetSecretPt())
-		if secret == "" {
-			existing, lookupErr := lookupExistingWebhookSecret(ctx, tx, target, tenantID)
-			if lookupErr != nil {
-				return nil, lookupErr
-			}
-			webhookSecretEnc = existing
+		if secret := strings.TrimSpace(wh.GetSecretPt()); secret == "" {
+			reuseWebhookSecret = true
 		} else {
 			enc, encErr := s.playbackWebhookEncryptor.Encrypt(secret)
 			if encErr != nil {
 				s.logger.WithError(encErr).Error("encrypt webhook secret failed")
 				return nil, status.Errorf(codes.Internal, "secret encryption failed")
 			}
-			webhookSecretEnc = sql.NullString{String: enc, Valid: true}
+			newWebhookSecretEnc = sql.NullString{String: enc, Valid: true}
 		}
 	}
-
-	requiresAuth := policyType != "public"
-
-	queries := commodoredb.New(tx)
-	var responseID string
-	switch target.kind {
-	case "stream":
-		responseID, err = queries.SetStreamPlaybackPolicy(ctx, commodoredb.SetStreamPlaybackPolicyParams{
-			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
-			TargetID: target.id, TenantID: tenantID,
-		})
-	case "vod_asset":
-		responseID, err = queries.SetVODPlaybackPolicy(ctx, commodoredb.SetVODPlaybackPolicyParams{
-			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
-			TargetID: target.id, TenantID: tenantID,
-		})
-	case "clip":
-		responseID, err = queries.SetClipPlaybackPolicy(ctx, commodoredb.SetClipPlaybackPolicyParams{
-			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
-			TargetID: target.id, TenantID: tenantID,
-		})
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		if target.kind == "vod_asset" {
-			isChapter, chapterErr := queries.IsDVRChapterPlaybackTarget(ctx, commodoredb.IsDVRChapterPlaybackTargetParams{
-				TargetID: target.id, TenantID: tenantID,
-			})
-			if chapterErr != nil {
-				s.logger.WithError(chapterErr).Error("classify DVR chapter playback target failed")
-				return nil, status.Error(codes.Internal, "database error")
-			}
-			if isChapter {
-				return nil, status.Error(codes.FailedPrecondition, "artifact is a DVR chapter; update playback policy on the recording")
-			}
-		}
-		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
-	}
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"target": target.kind,
-			"error":  err,
-		}).Error("update playback policy failed")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-
-	// Snapshot the changed object's internal_name so the worker can replay an
-	// invalidation for exactly the affected stream/asset/clip.
+	// Snapshot the changed object's internal_name so the worker can replay an invalidation for exactly the affected
+	// stream/asset/clip. The name does not depend on the policy being written.
 	scopedNames := s.scopeInternalNames(ctx, tenantID, protectedScopeForTarget(target))
-	outboxID, enqueueErr := s.enqueueInvalidationOutbox(ctx, tx, tenantID, "policy_change", scopedNames)
-	if enqueueErr != nil {
-		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	// Playback policy is snapshotted into every signed media-object authority and
-	// is no part of the tenant authority, so the refresh targets the tenant's
-	// objects directly. It is queued in the same transaction as the mutation so
-	// local playback cannot retain an older stream/DVR/chapter decision after
-	// commit.
-	if refreshErr := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaObjectsAuthorityTarget(tenantID), tenantID,
-		"tenant_media_objects:playback_policy_changed", "commodore", "playback-policy:"+outboxID); refreshErr != nil {
-		s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
-		return nil, status.Errorf(codes.Internal, "database error")
-	}
+	var (
+		responseID string
+		outboxID   string
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error {
+			s.logger.WithError(err).Error("begin set-policy tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(err error) error {
+			s.logger.WithError(err).Error("commit set-policy tx failed")
+			return status.Errorf(codes.Internal, "database error")
+		},
+		func(tx *sql.Tx) error {
+			webhookSecretEnc := newWebhookSecretEnc
+			if reuseWebhookSecret {
+				existing, lookupErr := lookupExistingWebhookSecret(ctx, tx, target, tenantID)
+				if lookupErr != nil {
+					return lookupErr
+				}
+				webhookSecretEnc = existing
+			}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		s.logger.WithError(commitErr).Error("commit set-policy tx failed")
-		return nil, status.Errorf(codes.Internal, "database error")
+			queries := commodoredb.New(tx)
+			var err error
+			switch target.kind {
+			case "stream":
+				responseID, err = queries.SetStreamPlaybackPolicy(ctx, commodoredb.SetStreamPlaybackPolicyParams{
+					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+					TargetID: target.id, TenantID: tenantID,
+				})
+			case "vod_asset":
+				responseID, err = queries.SetVODPlaybackPolicy(ctx, commodoredb.SetVODPlaybackPolicyParams{
+					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+					TargetID: target.id, TenantID: tenantID,
+				})
+			case "clip":
+				responseID, err = queries.SetClipPlaybackPolicy(ctx, commodoredb.SetClipPlaybackPolicyParams{
+					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+					TargetID: target.id, TenantID: tenantID,
+				})
+			}
+			if errors.Is(err, sql.ErrNoRows) {
+				if target.kind == "vod_asset" {
+					isChapter, chapterErr := queries.IsDVRChapterPlaybackTarget(ctx, commodoredb.IsDVRChapterPlaybackTargetParams{
+						TargetID: target.id, TenantID: tenantID,
+					})
+					if chapterErr != nil {
+						s.logger.WithError(chapterErr).Error("classify DVR chapter playback target failed")
+						return txStatus(status.Error(codes.Internal, "database error"), chapterErr)
+					}
+					if isChapter {
+						return status.Error(codes.FailedPrecondition, "artifact is a DVR chapter; update playback policy on the recording")
+					}
+				}
+				return status.Errorf(codes.NotFound, "%s not found", target.kind)
+			}
+			if err != nil {
+				s.logger.WithFields(logging.Fields{
+					"target": target.kind,
+					"error":  err,
+				}).Error("update playback policy failed")
+				return txStatus(status.Errorf(codes.Internal, "database error"), err)
+			}
+
+			var enqueueErr error
+			outboxID, enqueueErr = s.enqueueInvalidationOutbox(ctx, tx, tenantID, "policy_change", scopedNames)
+			if enqueueErr != nil {
+				s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
+				return txStatus(status.Errorf(codes.Internal, "database error"), enqueueErr)
+			}
+			// Playback policy belongs to media-object authority, not tenant authority.
+			// Queue the object refresh atomically with the policy mutation.
+			if refreshErr := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaObjectsAuthorityTarget(tenantID), tenantID,
+				"tenant_media_objects:playback_policy_changed", "commodore", "playback-policy:"+outboxID); refreshErr != nil {
+				s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
+				return txStatus(status.Errorf(codes.Internal, "database error"), refreshErr)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	s.tryDispatchInvalidationOutbox(ctx, outboxID, tenantID, "policy_change", scopedNames)
@@ -525,7 +549,7 @@ func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, target policyT
 		if errors.Is(err, sql.ErrNoRows) {
 			return existing, status.Errorf(codes.NotFound, "%s not found", target.kind)
 		}
-		return existing, status.Error(codes.Internal, "database error")
+		return existing, txStatus(status.Error(codes.Internal, "database error"), err)
 	}
 	if !existing.Valid || strings.TrimSpace(existing.String) == "" {
 		return existing, status.Error(codes.InvalidArgument, "webhook policy requires a non-empty secret")

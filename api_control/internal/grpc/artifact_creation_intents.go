@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -192,37 +193,36 @@ func (s *CommodoreServer) terminalizeCreationIntent(ctx context.Context, r creat
 	// expired, but this terminal transition must still commit durably.
 	ctx, cancel := settleDBContext(ctx)
 	defer cancel()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-
-	queries := commodoredb.New(tx)
-	var n int64
-	if leaseToken != "" {
-		n, err = queries.TerminalizeClaimedArtifactCreationIntent(ctx, commodoredb.TerminalizeClaimedArtifactCreationIntentParams{
-			NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
-			Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: leaseToken,
-		})
-	} else {
-		n, err = queries.TerminalizeArtifactCreationIntent(ctx, commodoredb.TerminalizeArtifactCreationIntentParams{
-			NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
-			Kind: r.kind, ArtifactHash: r.artifactHash,
-		})
-	}
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errIntentCASMiss
-	}
-	if mutate != nil {
-		if err := mutate(ctx, tx); err != nil {
+	return fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := commodoredb.New(tx)
+		var (
+			n   int64
+			err error
+		)
+		if leaseToken != "" {
+			n, err = queries.TerminalizeClaimedArtifactCreationIntent(ctx, commodoredb.TerminalizeClaimedArtifactCreationIntentParams{
+				NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
+				Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: leaseToken,
+			})
+		} else {
+			n, err = queries.TerminalizeArtifactCreationIntent(ctx, commodoredb.TerminalizeArtifactCreationIntentParams{
+				NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
+				Kind: r.kind, ArtifactHash: r.artifactHash,
+			})
+		}
+		if err != nil {
 			return err
 		}
-	}
-	return tx.Commit()
+		if n == 0 {
+			return errIntentCASMiss
+		}
+		if mutate != nil {
+			if err := mutate(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // commitCreationIntent terminalizes a pending intent to 'committed'. mutate writes
