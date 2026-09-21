@@ -11,6 +11,10 @@
   ansible.builtin.import_tasks: configure.yml
   tags: [configure]
 
+- name: Yugabyte | guard preexisting master state
+  ansible.builtin.import_tasks: state_guard.yml
+  tags: [configure, service]
+
 # Apply any notified restarts before the service + validate phases observe
 # cluster state — otherwise validate hits the pre-restart process.
 - name: Yugabyte | flush handlers before service
