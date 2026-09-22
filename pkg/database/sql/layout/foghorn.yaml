@@ -1,0 +1,69 @@
+# YugabyteDB placement for the foghorn database. Every table created by schema/foghorn.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: foghorn
+layout: colocated
+colocated_tables:
+  - foghorn.node_control_fence_counter
+  - foghorn.node_artifact_report_watermark
+  - foghorn.node_outputs
+  - foghorn.node_config_seeds
+  - foghorn.node_admissions
+  - foghorn.node_maintenance
+  - foghorn.node_lifecycle
+  - foghorn.node_components
+  - foghorn.node_update_state
+  - foghorn.billing_attribution_cursor
+  - foghorn.active_object_key_backfill_cursor
+  - foghorn.freeze_publication_ledger_cursor
+  - foghorn.cell_storage_identity
+  - foghorn.media_authority_restore_fence
+  - foghorn.tenant_authority_projection
+  - foghorn.tenant_authority_grants
+  - foghorn.control_replicas
+  - public._schema_baseline
+distributed_tables:
+  - foghorn.config_seed_apply_ack_outbox
+  - foghorn.signing_key_use_outbox
+  - foghorn.artifacts
+  - foghorn.artifact_nodes
+  - foghorn.artifact_node_deletion_watermark
+  - foghorn.dvr_segments
+  - foghorn.dvr_chapters
+  - foghorn.ingest_sessions
+  - foghorn.ingest_close_tombstones
+  - foghorn.source_projection_revision_counter
+  - foghorn.ingest_offline_effects
+  - foghorn.ingest_admission_effects
+  - foghorn.admission_push_target_revisions
+  - foghorn.node_admission_proof_nonces
+  - foghorn.push_target_status_outbox
+  - foghorn.managed_stream_active_cluster_outbox
+  - foghorn.staging_cleanup_queue
+  - foghorn.freeze_publication_ledger
+  - foghorn.thumbnail_claim_counter
+  - foghorn.thumbnail_task_assignment
+  - foghorn.thumbnail_task_object
+  - foghorn.thumbnail_active_pointer
+  - foghorn.stream_cleanup_obligation
+  - foghorn.vod_metadata
+  - foghorn.processing_jobs
+  - foghorn.artifact_node_copy_version_counter
+  - foghorn.artifact_event_outbox
+  - foghorn.domain_event_outbox
+  - foghorn.artifact_creation_commands
+  - foghorn.media_authorities
+  - foghorn.media_object_authority_projection
+  - foghorn.media_authority_apply_audit
+  - foghorn.managed_stream_placement_outbox
+retired_tables:
+  - foghorn.managed_stream_placement_outbox
+write_rate_benchmark:
+  - foghorn.node_control_fence_counter
+  - foghorn.node_artifact_report_watermark
+  - foghorn.node_admissions
+  - foghorn.node_lifecycle
+  - foghorn.node_components
+  - foghorn.node_update_state
+  - foghorn.control_replicas

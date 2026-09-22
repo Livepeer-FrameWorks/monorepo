@@ -6,6 +6,13 @@ yugabyte_artifact_url: ""
 yugabyte_artifact_checksum: ""
 yugabyte_version: ""
 
+# Which processes a restart touches: all, master, or tserver. cluster upgrade yugabyte restarts every master before
+# any tserver, as the YugabyteDB upgrade sequence requires; everything else restarts both.
+yugabyte_restart_scope: all
+# Only cluster upgrade yugabyte may change the engine of a node that already joined the universe, because only it
+# orders masters before tservers and finalizes the upgrade afterwards.
+yugabyte_allow_engine_change: false
+
 # Runtime layout.
 yugabyte_user: yugabyte
 yugabyte_group: yugabyte

@@ -21,6 +21,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -252,78 +253,80 @@ func (h *X402Handler) GetPlatformX402Address(ctx context.Context) (string, error
 // GetTenantDepositAddress returns the stable per-tenant receiving address used
 // by x402. These use HD indexes 1+ (index 0 is legacy platform recovery only).
 func (h *X402Handler) GetTenantDepositAddress(ctx context.Context, tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", 0, false, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	// A replay re-reads the tenant row and re-runs the next_index UPDATE inside
+	// the new transaction, so an aborted attempt neither skips nor reuses an
+	// HD derivation index.
+	err = database.WithRetryablePostgresTx(ctx, h.db, nil, func(tx *sql.Tx) error {
+		address, derivationIndex, newlyCreated = "", 0, false
 
-	// First check if tenant already has a deposit address index
-	queries := purserdb.New(tx)
-	existing, err := queries.LockTenantX402Address(ctx, tenantID)
+		// First check if tenant already has a deposit address index
+		queries := purserdb.New(tx)
+		existing, err := queries.LockTenantX402Address(ctx, tenantID)
 
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", 0, false, fmt.Errorf("failed to check existing deposit address: %w", err)
-	}
-
-	existingIndex, existingXpub := existing.X402AddressIndex, existing.X402AddressXpub
-	if existingIndex.Valid && existingIndex.Int32 > 0 {
-		// Derive address from existing index (must be > 0, index 0 is platform)
-		if !existingXpub.Valid || strings.TrimSpace(existingXpub.String) == "" {
-			return "", 0, false, fmt.Errorf("tenant x402 address is missing its derivation xpub")
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("failed to check existing deposit address: %w", err)
 		}
-		addr, addrErr := DeriveAddressFromXpub(existingXpub.String, uint32(existingIndex.Int32))
-		if addrErr != nil {
-			return "", 0, false, fmt.Errorf("failed to derive address: %w", addrErr)
-		}
-		if inventoryErr := h.ensureX402CustodyInventoryTx(ctx, tx, tenantID, strings.ToLower(addr), existingIndex.Int32, existingXpub.String); inventoryErr != nil {
-			return "", 0, false, inventoryErr
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return "", 0, false, fmt.Errorf("failed to commit: %w", commitErr)
-		}
-		return strings.ToLower(addr), existingIndex.Int32, false, nil
-	}
 
-	// Create new address - get next derivation index atomically
-	// The HD wallet starts at index 1 (index 0 is reserved for platform x402)
-	index, xpub, err := h.hdwallet.GetNextNonZeroDerivationIndexTx(ctx, tx)
-	if err != nil {
-		return "", 0, false, fmt.Errorf("failed to get derivation index: %w", err)
-	}
+		existingIndex, existingXpub := existing.X402AddressIndex, existing.X402AddressXpub
+		if existingIndex.Valid && existingIndex.Int32 > 0 {
+			// Derive address from existing index (must be > 0, index 0 is platform)
+			if !existingXpub.Valid || strings.TrimSpace(existingXpub.String) == "" {
+				return fmt.Errorf("tenant x402 address is missing its derivation xpub")
+			}
+			addr, addrErr := DeriveAddressFromXpub(existingXpub.String, uint32(existingIndex.Int32))
+			if addrErr != nil {
+				return fmt.Errorf("failed to derive address: %w", addrErr)
+			}
+			if inventoryErr := h.ensureX402CustodyInventoryTx(ctx, tx, tenantID, strings.ToLower(addr), existingIndex.Int32, existingXpub.String); inventoryErr != nil {
+				return inventoryErr
+			}
+			address, derivationIndex = strings.ToLower(addr), existingIndex.Int32
+			return nil
+		}
 
-	address, err = DeriveAddressFromXpub(xpub, index)
-	if err != nil {
-		return "", 0, false, fmt.Errorf("failed to derive address: %w", err)
-	}
-	address = strings.ToLower(address)
+		// Create new address - get next derivation index atomically
+		// The HD wallet starts at index 1 (index 0 is reserved for platform x402)
+		index, xpub, err := h.hdwallet.GetNextNonZeroDerivationIndexTx(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("failed to get derivation index: %w", err)
+		}
 
-	// Store the index on the tenant subscription
-	rowsAffected, err := queries.AssignTenantX402Address(ctx, purserdb.AssignTenantX402AddressParams{
-		AddressIndex: sql.NullInt32{Int32: int32(index), Valid: true}, AddressXpub: sql.NullString{String: xpub, Valid: true}, TenantID: tenantID,
+		newAddress, err := DeriveAddressFromXpub(xpub, index)
+		if err != nil {
+			return fmt.Errorf("failed to derive address: %w", err)
+		}
+		newAddress = strings.ToLower(newAddress)
+
+		// Store the index on the tenant subscription
+		rowsAffected, err := queries.AssignTenantX402Address(ctx, purserdb.AssignTenantX402AddressParams{
+			AddressIndex: sql.NullInt32{Int32: int32(index), Valid: true}, AddressXpub: sql.NullString{String: xpub, Valid: true}, TenantID: tenantID,
+		})
+
+		if err != nil {
+			return fmt.Errorf("failed to store deposit address index: %w", err)
+		}
+		if rowsAffected != 1 {
+			return fmt.Errorf("tenant subscription not found for address allocation")
+		}
+		if inventoryErr := h.ensureX402CustodyInventoryTx(ctx, tx, tenantID, newAddress, int32(index), xpub); inventoryErr != nil {
+			return inventoryErr
+		}
+		address, derivationIndex, newlyCreated = newAddress, int32(index), true
+		return nil
 	})
-
 	if err != nil {
-		return "", 0, false, fmt.Errorf("failed to store deposit address index: %w", err)
-	}
-	if rowsAffected != 1 {
-		return "", 0, false, fmt.Errorf("tenant subscription not found for address allocation")
-	}
-	if inventoryErr := h.ensureX402CustodyInventoryTx(ctx, tx, tenantID, address, int32(index), xpub); inventoryErr != nil {
-		return "", 0, false, inventoryErr
+		return "", 0, false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return "", 0, false, fmt.Errorf("failed to commit: %w", err)
+	if newlyCreated {
+		h.logger.WithFields(logging.Fields{
+			"tenant_id":        tenantID,
+			"address":          address,
+			"derivation_index": derivationIndex,
+		}).Info("Created deposit address for tenant")
 	}
 
-	h.logger.WithFields(logging.Fields{
-		"tenant_id":        tenantID,
-		"address":          address,
-		"derivation_index": index,
-	}).Info("Created deposit address for tenant")
-
-	return address, int32(index), true, nil
+	return address, derivationIndex, newlyCreated, nil
 }
 
 func (h *X402Handler) ensureX402CustodyInventoryTx(ctx context.Context, tx *sql.Tx, tenantID, address string, derivationIndex int32, derivationXpub string) error {
@@ -885,47 +888,41 @@ func (h *X402Handler) confirmAndCreditSettlement(ctx context.Context, tenantID s
 }
 
 func confirmAndCreditX402Settlement(ctx context.Context, db *sql.DB, tenantID string, amountCents int64, nonceID, txHash string, blockNumber, gasUsed int64) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	var newBalance int64
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		stored, err := queries.LockX402SettlementForConfirmation(ctx, nonceID)
+		if err != nil {
+			return err
+		}
+		if stored.TenantID != tenantID || stored.AmountCents != amountCents || !stored.TxHash.Valid || !strings.EqualFold(stored.TxHash.String, txHash) {
+			return fmt.Errorf("settlement identity changed while confirming")
+		}
+		if stored.Status == "failed" || stored.Status == "submitting" {
+			return fmt.Errorf("settlement is in non-confirmable state %q", stored.Status)
+		}
 
-	queries := purserdb.New(tx)
-	stored, err := queries.LockX402SettlementForConfirmation(ctx, nonceID)
-	if err != nil {
-		return 0, err
-	}
-	if stored.TenantID != tenantID || stored.AmountCents != amountCents || !stored.TxHash.Valid || !strings.EqualFold(stored.TxHash.String, txHash) {
-		return 0, fmt.Errorf("settlement identity changed while confirming")
-	}
-	if stored.Status == "failed" || stored.Status == "submitting" {
-		return 0, fmt.Errorf("settlement is in non-confirmable state %q", stored.Status)
-	}
-
-	newBalance, err := creditX402PrepaidBalanceTx(ctx, tx, tenantID, amountCents, nonceID, txHash, "x402 USDC payment")
-	if err != nil {
-		return 0, err
-	}
-	err = queries.ConfirmX402Settlement(ctx, purserdb.ConfirmX402SettlementParams{
-		BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, NonceID: nonceID,
+		newBalance, err = creditX402PrepaidBalanceTx(ctx, tx, tenantID, amountCents, nonceID, txHash, "x402 USDC payment")
+		if err != nil {
+			return err
+		}
+		err = queries.ConfirmX402Settlement(ctx, purserdb.ConfirmX402SettlementParams{
+			BlockNumber: sql.NullInt64{Int64: blockNumber, Valid: true}, GasUsed: sql.NullInt64{Int64: gasUsed, Valid: true}, NonceID: nonceID,
+		})
+		if err != nil {
+			return err
+		}
+		if err = queries.ConfirmX402SettlementAttempt(ctx, purserdb.ConfirmX402SettlementAttemptParams{NonceID: nonceID, TxHash: txHash}); err != nil {
+			return err
+		}
+		if err = queries.ConfirmX402PaymentQuoteForNonce(ctx, purserdb.ConfirmX402PaymentQuoteForNonceParams{
+			TxHash: sql.NullString{String: txHash, Valid: txHash != ""}, NonceID: nonceID,
+		}); err != nil {
+			return err
+		}
+		return queries.RecordX402SettlementConfirmedAfterQuoteExpiry(ctx, nonceID)
 	})
 	if err != nil {
-		return 0, err
-	}
-	if err = queries.ConfirmX402SettlementAttempt(ctx, purserdb.ConfirmX402SettlementAttemptParams{NonceID: nonceID, TxHash: txHash}); err != nil {
-		return 0, err
-	}
-	err = queries.ConfirmX402PaymentQuoteForNonce(ctx, purserdb.ConfirmX402PaymentQuoteForNonceParams{
-		TxHash: sql.NullString{String: txHash, Valid: txHash != ""}, NonceID: nonceID,
-	})
-	if err != nil {
-		return 0, err
-	}
-	if err = queries.RecordX402SettlementConfirmedAfterQuoteExpiry(ctx, nonceID); err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return newBalance, nil
@@ -1210,82 +1207,84 @@ func (h *X402Handler) submitDurableTransferWithAuthorization(ctx context.Context
 	return txHash, broadcastErr
 }
 
+// prepareEmbeddedSettlementAttempt signs the settlement transaction under the relayer nonce lock and stores the signed
+// attempt before anything is broadcast. Chain reads and signing run inside the transaction so the nonce cannot be
+// reused; the body leaves the process only through this transaction, so a replay re-reads the nonce and re-signs.
 func (h *X402Handler) prepareEmbeddedSettlementAttempt(ctx context.Context, settlementID string, network NetworkConfig, to string, data []byte) (string, error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin embedded settlement preparation: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback releases the advisory lock
 	lockKey := fmt.Sprintf("x402-relayer:%d:%s", network.ChainID, strings.ToLower(h.gasWalletAddress))
-	queries := purserdb.New(tx)
-	if err := queries.AcquireX402RelayerNonceLock(ctx, lockKey); err != nil {
-		return "", fmt.Errorf("acquire relayer nonce lock: %w", err)
-	}
-
-	existingHash, err := queries.GetFirstX402SettlementAttemptHash(ctx, settlementID)
-	if err == nil {
-		if err := tx.Commit(); err != nil {
-			return "", err
+	var txHash string
+	err := database.WithRetryablePostgresTx(ctx, h.db, nil, func(tx *sql.Tx) error {
+		txHash = ""
+		queries := purserdb.New(tx)
+		if err := queries.AcquireX402RelayerNonceLock(ctx, lockKey); err != nil {
+			return fmt.Errorf("acquire relayer nonce lock: %w", err)
 		}
-		return existingHash, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
 
-	chainNonce, err := h.getNonce(ctx, network, h.gasWalletAddress)
-	if err != nil {
-		return "", fmt.Errorf("read pending relayer nonce: %w", err)
-	}
-	if chainNonce > math.MaxInt64 {
-		return "", fmt.Errorf("pending relayer nonce exceeds durable database range")
-	}
-	durableNext, err := queries.GetNextDurableX402RelayerNonce(ctx, purserdb.GetNextDurableX402RelayerNonceParams{
-		Network: network.Name, RelayerAddress: h.gasWalletAddress,
+		existingHash, err := queries.GetFirstX402SettlementAttemptHash(ctx, settlementID)
+		if err == nil {
+			txHash = existingHash
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		chainNonce, err := h.getNonce(ctx, network, h.gasWalletAddress)
+		if err != nil {
+			return fmt.Errorf("read pending relayer nonce: %w", err)
+		}
+		if chainNonce > math.MaxInt64 {
+			return fmt.Errorf("pending relayer nonce exceeds durable database range")
+		}
+		durableNext, err := queries.GetNextDurableX402RelayerNonce(ctx, purserdb.GetNextDurableX402RelayerNonceParams{
+			Network: network.Name, RelayerAddress: h.gasWalletAddress,
+		})
+		if err != nil {
+			return fmt.Errorf("read durable relayer nonce: %w", err)
+		}
+		relayerNonce := chainNonce
+		if durableNext > int64(relayerNonce) {
+			relayerNonce = uint64(durableNext)
+		}
+
+		gasPrice, err := h.getGasPrice(ctx, network)
+		if err != nil {
+			return fmt.Errorf("read gas price: %w", err)
+		}
+		priorityFee, err := h.getPriorityFee(ctx, network)
+		if err != nil {
+			return fmt.Errorf("read priority fee: %w", err)
+		}
+		maxFee := new(big.Int).Mul(gasPrice, big.NewInt(2))
+		maxFee.Add(maxFee, priorityFee)
+		const gasLimit = uint64(150000)
+		rawTx, err := h.signDynamicFeeTransaction(relayerNonce, to, big.NewInt(0), gasLimit, maxFee, priorityFee, data, big.NewInt(network.ChainID))
+		if err != nil {
+			return err
+		}
+		signedHash := crypto.Keccak256Hash(rawTx).Hex()
+		if err := queries.InsertPreparedX402SettlementAttempt(ctx, purserdb.InsertPreparedX402SettlementAttemptParams{
+			SettlementID: settlementID, Network: network.Name, ChainID: network.ChainID,
+			RelayerAddress: h.gasWalletAddress, RelayerNonce: int64(relayerNonce), SignedRawTransaction: rawTx,
+			TransactionHash: signedHash, GasLimit: int64(gasLimit), MaxFeePerGas: maxFee.String(),
+			MaxPriorityFeePerGas: priorityFee.String(),
+		}); err != nil {
+			return fmt.Errorf("persist embedded settlement attempt: %w", err)
+		}
+		rows, err := queries.SetX402SettlementPrecomputedHash(ctx, purserdb.SetX402SettlementPrecomputedHashParams{
+			TxHash: signedHash, SettlementID: settlementID,
+		})
+		if err != nil {
+			return fmt.Errorf("persist precomputed settlement hash: %w", err)
+		}
+		if rows != 1 {
+			return fmt.Errorf("settlement claim changed before durable attempt commit")
+		}
+		txHash = signedHash
+		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("read durable relayer nonce: %w", err)
-	}
-	relayerNonce := chainNonce
-	if durableNext > int64(relayerNonce) {
-		relayerNonce = uint64(durableNext)
-	}
-
-	gasPrice, err := h.getGasPrice(ctx, network)
-	if err != nil {
-		return "", fmt.Errorf("read gas price: %w", err)
-	}
-	priorityFee, err := h.getPriorityFee(ctx, network)
-	if err != nil {
-		return "", fmt.Errorf("read priority fee: %w", err)
-	}
-	maxFee := new(big.Int).Mul(gasPrice, big.NewInt(2))
-	maxFee.Add(maxFee, priorityFee)
-	const gasLimit = uint64(150000)
-	rawTx, err := h.signDynamicFeeTransaction(relayerNonce, to, big.NewInt(0), gasLimit, maxFee, priorityFee, data, big.NewInt(network.ChainID))
-	if err != nil {
-		return "", err
-	}
-	txHash := crypto.Keccak256Hash(rawTx).Hex()
-	if err := queries.InsertPreparedX402SettlementAttempt(ctx, purserdb.InsertPreparedX402SettlementAttemptParams{
-		SettlementID: settlementID, Network: network.Name, ChainID: network.ChainID,
-		RelayerAddress: h.gasWalletAddress, RelayerNonce: int64(relayerNonce), SignedRawTransaction: rawTx,
-		TransactionHash: txHash, GasLimit: int64(gasLimit), MaxFeePerGas: maxFee.String(),
-		MaxPriorityFeePerGas: priorityFee.String(),
-	}); err != nil {
-		return "", fmt.Errorf("persist embedded settlement attempt: %w", err)
-	}
-	rows, err := queries.SetX402SettlementPrecomputedHash(ctx, purserdb.SetX402SettlementPrecomputedHashParams{
-		TxHash: txHash, SettlementID: settlementID,
-	})
-	if err != nil {
-		return "", fmt.Errorf("persist precomputed settlement hash: %w", err)
-	}
-	if rows != 1 {
-		return "", fmt.Errorf("settlement claim changed before durable attempt commit")
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit embedded settlement attempt: %w", err)
+		return "", fmt.Errorf("prepare embedded settlement attempt: %w", err)
 	}
 	return txHash, nil
 }
@@ -1323,30 +1322,24 @@ func (h *X402Handler) recordEmbeddedBroadcastOutcome(settlementID, state, detail
 func (h *X402Handler) markEmbeddedSettlementBroadcast(settlementID, txHash string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	queries := purserdb.New(tx)
-	if err := queries.MarkX402EmbeddedAttemptBroadcast(ctx, purserdb.MarkX402EmbeddedAttemptBroadcastParams{
-		SettlementID: settlementID, TxHash: txHash,
-	}); err != nil {
-		return err
-	}
-	rows, err := queries.MarkX402EmbeddedSettlementPending(ctx, purserdb.MarkX402EmbeddedSettlementPendingParams{
-		TxHash: txHash, SettlementID: settlementID,
+	return database.WithRetryablePostgresTx(ctx, h.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		if err := queries.MarkX402EmbeddedAttemptBroadcast(ctx, purserdb.MarkX402EmbeddedAttemptBroadcastParams{
+			SettlementID: settlementID, TxHash: txHash,
+		}); err != nil {
+			return err
+		}
+		rows, err := queries.MarkX402EmbeddedSettlementPending(ctx, purserdb.MarkX402EmbeddedSettlementPendingParams{
+			TxHash: txHash, SettlementID: settlementID,
+		})
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("settlement %s is not broadcastable", settlementID)
+		}
+		return queries.MarkX402EmbeddedQuoteSettling(ctx, settlementID)
 	})
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return fmt.Errorf("settlement %s is not broadcastable", settlementID)
-	}
-	if err := queries.MarkX402EmbeddedQuoteSettling(ctx, settlementID); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // waitForSettlementConfirmation waits until the transaction has a successful
@@ -1571,96 +1564,95 @@ func (h *X402Handler) generateCryptoTopupInvoice(ctx context.Context, tenantID s
 		taxValidationStatus = "vies_valid_domestic"
 	}
 
-	invoiceTx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin crypto tax-document transaction: %w", err)
-	}
-	defer invoiceTx.Rollback() //nolint:errcheck // rollback is best-effort
 	lockKey := tenantID + ":" + referenceType + ":" + strings.ToLower(referenceID)
-	queries := purserdb.New(invoiceTx)
-	if lockErr := queries.AcquireCryptoTaxDocumentLock(ctx, lockKey); lockErr != nil {
-		return "", fmt.Errorf("lock crypto tax-document reference: %w", lockErr)
-	}
-
-	existingInvoice, err := queries.GetExistingCryptoTaxDocumentNumber(ctx, purserdb.GetExistingCryptoTaxDocumentNumberParams{
-		TenantID: tenantID, DocumentReferenceType: referenceType, DocumentReferenceID: referenceID,
-	})
-	if err == nil {
-		if commitErr := invoiceTx.Commit(); commitErr != nil {
-			return "", commitErr
+	snapshotDocumentKind := documentKind
+	var invoiceNumber string
+	err = database.WithRetryablePostgresTx(ctx, h.db, nil, func(invoiceTx *sql.Tx) error {
+		documentKind = snapshotDocumentKind
+		queries := purserdb.New(invoiceTx)
+		if lockErr := queries.AcquireCryptoTaxDocumentLock(ctx, lockKey); lockErr != nil {
+			return fmt.Errorf("lock crypto tax-document reference: %w", lockErr)
 		}
-		return existingInvoice, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("check existing crypto tax document: %w", err)
-	}
 
-	prefix := "SI"
-	var invoiceSequence int64
-	if documentKind == "full" {
-		prefix = "INV"
-		invoiceSequence, err = queries.NextCryptoInvoiceNumber(ctx)
-	} else {
-		invoiceSequence, err = queries.NextSimplifiedInvoiceNumber(ctx)
-	}
-	if err != nil {
-		return "", fmt.Errorf("allocate crypto tax-document number: %w", err)
-	}
-
-	if reverseCharge {
-		prefix = "B2B"
-		documentKind = "full"
-	}
-	invoiceNumber := fmt.Sprintf("%s-%010d", prefix, invoiceSequence)
-	nullable := func(value string) sql.NullString {
-		return sql.NullString{String: value, Valid: value != ""}
-	}
-	if documentKind == "full" {
-		err = queries.InsertCryptoTopupInvoice(ctx, purserdb.InsertCryptoTopupInvoiceParams{
-			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
-			GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
-			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
-			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
-			TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
-			NetEurCents: netEURCents, VatEurCents: vatEURCents,
-			FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
-			FxRateSource:      nullable(taxSnapshot.FXRateSource),
-			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
-			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
-			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
-			EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
-			SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
-			SupplierRegistrationNumber: h.supplierRegistration, ServiceDescription: "FrameWorks prepaid usage credit",
-			ServiceQuantity: 1, CustomerEmail: profile.Email, CustomerName: profile.Name,
-			CustomerCompany: nullable(profile.Company), CustomerAddress: profile.Address,
-			CustomerVatNumber: nullable(profile.VATNumber), CustomerVatValidated: vatDecision.VIESValidated,
+		existingInvoice, err := queries.GetExistingCryptoTaxDocumentNumber(ctx, purserdb.GetExistingCryptoTaxDocumentNumberParams{
+			TenantID: tenantID, DocumentReferenceType: referenceType, DocumentReferenceID: referenceID,
 		})
-	} else {
-		err = queries.InsertSimplifiedCryptoTopupInvoice(ctx, purserdb.InsertSimplifiedCryptoTopupInvoiceParams{
-			InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
-			GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
-			VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
-			VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
-			TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
-			NetEurCents: netEURCents, VatEurCents: vatEURCents,
-			FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
-			FxRateSource:      nullable(taxSnapshot.FXRateSource),
-			FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
-			EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
-			EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
-			EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
-			SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
-			SupplierRegistrationNumber: nullable(h.supplierRegistration),
-			ServiceDescription:         nullable("FrameWorks prepaid usage credit"),
-			ServiceQuantity:            sql.NullInt32{Int32: 1, Valid: true},
-		})
-	}
+		if err == nil {
+			invoiceNumber = existingInvoice
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check existing crypto tax document: %w", err)
+		}
 
+		prefix := "SI"
+		var invoiceSequence int64
+		if documentKind == "full" {
+			prefix = "INV"
+			invoiceSequence, err = queries.NextCryptoInvoiceNumber(ctx)
+		} else {
+			invoiceSequence, err = queries.NextSimplifiedInvoiceNumber(ctx)
+		}
+		if err != nil {
+			return fmt.Errorf("allocate crypto tax-document number: %w", err)
+		}
+
+		if reverseCharge {
+			prefix = "B2B"
+			documentKind = "full"
+		}
+		invoiceNumber = fmt.Sprintf("%s-%010d", prefix, invoiceSequence)
+		nullable := func(value string) sql.NullString {
+			return sql.NullString{String: value, Valid: value != ""}
+		}
+		if documentKind == "full" {
+			err = queries.InsertCryptoTopupInvoice(ctx, purserdb.InsertCryptoTopupInvoiceParams{
+				InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
+				GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+				VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
+				VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
+				TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
+				NetEurCents: netEURCents, VatEurCents: vatEURCents,
+				FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
+				FxRateSource:      nullable(taxSnapshot.FXRateSource),
+				FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
+				EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
+				EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
+				EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
+				SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
+				SupplierRegistrationNumber: h.supplierRegistration, ServiceDescription: "FrameWorks prepaid usage credit",
+				ServiceQuantity: 1, CustomerEmail: profile.Email, CustomerName: profile.Name,
+				CustomerCompany: nullable(profile.Company), CustomerAddress: profile.Address,
+				CustomerVatNumber: nullable(profile.VATNumber), CustomerVatValidated: vatDecision.VIESValidated,
+			})
+		} else {
+			err = queries.InsertSimplifiedCryptoTopupInvoice(ctx, purserdb.InsertSimplifiedCryptoTopupInvoiceParams{
+				InvoiceNumber: invoiceNumber, TenantID: tenantID, ReferenceType: referenceType, ReferenceID: referenceID,
+				GrossAmountCents: document.OriginalMinor, NetAmountCents: netAmountCents, VatAmountCents: vatAmountCents,
+				VatRateBps: int32(vatRateBps), VatRateSource: nullable(vatDecision.Source),
+				VatRateTableCheckedOn: vatDecision.CheckedOn, VatRateEffectiveFrom: vatDecision.EffectiveFrom,
+				TaxValidationStatus: taxValidationStatus, Currency: document.OriginalCurrency, AmountEurCents: document.EURMinor,
+				NetEurCents: netEURCents, VatEurCents: vatEURCents,
+				FxUnitsPerEur: document.UnitsText(), FxReferenceDate: document.ReferenceDate,
+				FxRateSource:      nullable(taxSnapshot.FXRateSource),
+				FxRateObservedAt:  sql.NullTime{Time: taxSnapshot.FXRateObservedAt, Valid: true},
+				EvidenceIpCountry: nullable(ipCountry), EvidenceWalletNetwork: nullable(networkName),
+				EvidenceBillingCountry: nullable(billingCountry), EvidenceStatus: evidenceStatus,
+				EvidenceConflict: evidenceConflict, TaxPolicyRef: nullable(CryptoTopupTaxPolicyRef),
+				SupplierName: h.supplierName, SupplierAddress: h.supplierAddress, SupplierVatNumber: h.supplierVAT,
+				SupplierRegistrationNumber: nullable(h.supplierRegistration),
+				ServiceDescription:         nullable("FrameWorks prepaid usage credit"),
+				ServiceQuantity:            sql.NullInt32{Int32: 1, Valid: true},
+			})
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to insert crypto tax document: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("failed to insert crypto tax document: %w", err)
-	}
-	if err := invoiceTx.Commit(); err != nil {
-		return "", fmt.Errorf("commit crypto tax document: %w", err)
+		return "", err
 	}
 
 	return invoiceNumber, nil
@@ -1732,80 +1724,80 @@ func (h *X402Handler) finalizeConfirmedSettlementEffects(ctx context.Context, ro
 // and enqueues x402_settlement_confirmed in the same transaction. It reports
 // applied=false when the rollup was already applied.
 func (h *X402Handler) applyX402RollupOnce(ctx context.Context, tenantID, nonceID, txHash string, amountEurCents int64) (bool, error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	applied := false
+	err := database.WithRetryablePostgresTx(ctx, h.db, nil, func(tx *sql.Tx) error {
+		applied = false
+		queries := purserdb.New(tx)
+		settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
+		if err != nil {
+			return err
+		}
+		if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "confirmed" {
+			return fmt.Errorf("settlement identity changed while applying rollup")
+		}
+		if settlement.RollupAppliedAt.Valid && !settlement.RollupReversedAt.Valid {
+			return nil
+		}
 
-	queries := purserdb.New(tx)
-	settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
-	if err != nil {
-		return false, err
-	}
-	if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "confirmed" {
-		return false, fmt.Errorf("settlement identity changed while applying rollup")
-	}
-	if settlement.RollupAppliedAt.Valid && !settlement.RollupReversedAt.Valid {
-		return false, tx.Commit()
-	}
-
-	if err := queries.AddX402TenantBalanceRollup(ctx, purserdb.AddX402TenantBalanceRollupParams{
-		TenantID: tenantID, AmountEurCents: amountEurCents,
-	}); err != nil {
-		return false, err
-	}
-	if err := queries.MarkX402RollupApplied(ctx, nonceID); err != nil {
-		return false, err
-	}
-	if err := emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
-		Amount:   float64(amountEurCents) / 100,
-		Currency: billing.LedgerCurrency,
-		Status:   "confirmed",
-	}); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func reverseX402RollupOnce(ctx context.Context, db *sql.DB, tenantID, nonceID string, amountEurCents int64) (bool, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	queries := purserdb.New(tx)
-	settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
-	if err != nil {
-		return false, err
-	}
-	if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "failed" {
-		return false, fmt.Errorf("settlement identity changed while reversing rollup")
-	}
-	if !settlement.RollupAppliedAt.Valid || settlement.RollupReversedAt.Valid {
-		return false, tx.Commit()
-	}
-
-	rows, err := queries.SubtractX402TenantBalanceRollup(ctx, purserdb.SubtractX402TenantBalanceRollupParams{
-		AmountEurCents: amountEurCents, TenantID: tenantID,
+		if err := queries.AddX402TenantBalanceRollup(ctx, purserdb.AddX402TenantBalanceRollupParams{
+			TenantID: tenantID, AmountEurCents: amountEurCents,
+		}); err != nil {
+			return err
+		}
+		if err := queries.MarkX402RollupApplied(ctx, nonceID); err != nil {
+			return err
+		}
+		if err := emitBillingEventTx(ctx, tx, eventX402SettlementConfirm, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+			Amount:   float64(amountEurCents) / 100,
+			Currency: billing.LedgerCurrency,
+			Status:   "confirmed",
+		}); err != nil {
+			return err
+		}
+		applied = true
+		return nil
 	})
 	if err != nil {
 		return false, err
 	}
-	if rows != 1 {
-		return false, fmt.Errorf("x402 rollup is missing or inconsistent")
-	}
-	if err := queries.MarkX402RollupReversed(ctx, nonceID); err != nil {
+	return applied, nil
+}
+
+func reverseX402RollupOnce(ctx context.Context, db *sql.DB, tenantID, nonceID string, amountEurCents int64) (bool, error) {
+	reversed := false
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		reversed = false
+		queries := purserdb.New(tx)
+		settlement, err := queries.LockX402SettlementRollup(ctx, nonceID)
+		if err != nil {
+			return err
+		}
+		if settlement.TenantID != tenantID || settlement.AmountCents != amountEurCents || settlement.Status != "failed" {
+			return fmt.Errorf("settlement identity changed while reversing rollup")
+		}
+		if !settlement.RollupAppliedAt.Valid || settlement.RollupReversedAt.Valid {
+			return nil
+		}
+
+		rows, err := queries.SubtractX402TenantBalanceRollup(ctx, purserdb.SubtractX402TenantBalanceRollupParams{
+			AmountEurCents: amountEurCents, TenantID: tenantID,
+		})
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return fmt.Errorf("x402 rollup is missing or inconsistent")
+		}
+		if err := queries.MarkX402RollupReversed(ctx, nonceID); err != nil {
+			return err
+		}
+		reversed = true
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return reversed, nil
 }
 
 // Helper functions

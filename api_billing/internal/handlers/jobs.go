@@ -741,41 +741,35 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 }
 
 func (jm *JobManager) processWindowCompletion(ctx context.Context, summary models.UsageSummary) error {
-	tx, err := jm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin window completion: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
 	periodStart, periodEnd, _, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
 		return err
 	}
-	queries := purserdb.New(tx)
-	persistedRegion, err := queries.UpsertMeteringSource(ctx, purserdb.UpsertMeteringSourceParams{
-		SourceID: summary.SourceID, Region: summary.SourceRegion, ActiveFrom: periodStart,
+	return database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		persistedRegion, err := queries.UpsertMeteringSource(ctx, purserdb.UpsertMeteringSourceParams{
+			SourceID: summary.SourceID, Region: summary.SourceRegion, ActiveFrom: periodStart,
+		})
+		if err != nil {
+			return fmt.Errorf("register metering source: %w", err)
+		}
+		if strings.TrimSpace(persistedRegion) != strings.TrimSpace(summary.SourceRegion) {
+			return fmt.Errorf("metering source %q is registered in region %q, report says %q", summary.SourceID, persistedRegion, summary.SourceRegion)
+		}
+		if err := queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
+			ReportID: summary.ReportID, ReportKind: summary.ReportKind, SourceID: summary.SourceID,
+			SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
+			ClusterID: summary.ClusterID, PeriodStart: periodStart, PeriodEnd: periodEnd, Complete: true,
+		}); err != nil {
+			return fmt.Errorf("record window completion receipt: %w", err)
+		}
+		if err := queries.UpsertCompletedMeteringWindow(ctx, purserdb.UpsertCompletedMeteringWindowParams{
+			SourceID: summary.SourceID, PeriodStart: periodStart, PeriodEnd: periodEnd,
+		}); err != nil {
+			return fmt.Errorf("record metering window: %w", err)
+		}
+		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("register metering source: %w", err)
-	}
-	if strings.TrimSpace(persistedRegion) != strings.TrimSpace(summary.SourceRegion) {
-		return fmt.Errorf("metering source %q is registered in region %q, report says %q", summary.SourceID, persistedRegion, summary.SourceRegion)
-	}
-	if err := queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
-		ReportID: summary.ReportID, ReportKind: summary.ReportKind, SourceID: summary.SourceID,
-		SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
-		ClusterID: summary.ClusterID, PeriodStart: periodStart, PeriodEnd: periodEnd, Complete: true,
-	}); err != nil {
-		return fmt.Errorf("record window completion receipt: %w", err)
-	}
-	if err := queries.UpsertCompletedMeteringWindow(ctx, purserdb.UpsertCompletedMeteringWindowParams{
-		SourceID: summary.SourceID, PeriodStart: periodStart, PeriodEnd: periodEnd,
-	}); err != nil {
-		return fmt.Errorf("record metering window: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit window completion: %w", err)
-	}
-	return nil
 }
 
 func (jm *JobManager) processUsageReservation(ctx context.Context, summary models.UsageSummary) error {
@@ -849,39 +843,29 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 	if err != nil {
 		return fmt.Errorf("marshal reservation meters: %w", err)
 	}
-	tx, err := jm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin reservation transaction: %w", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			jm.logger.WithError(rollbackErr).Warn("Failed to roll back usage reservation transaction")
-		}
-	}()
 	_, usagePeriodEnd, _, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
 		return err
 	}
-	queries := purserdb.New(tx)
-	if err = queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
-		ReportID: summary.ReportID, ReportKind: "reservation", SourceID: summary.SourceID,
-		SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
-		ClusterID: summary.ClusterID, PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Complete: summary.Complete,
-	}); err != nil {
-		return fmt.Errorf("record reservation report: %w", err)
-	}
-	if err = queries.UpsertUsageReservation(ctx, purserdb.UpsertUsageReservationParams{
-		TenantID: summary.TenantID, SourceID: summary.SourceID, ClusterID: summary.ClusterID,
-		Sequence: int64(summary.Sequence), ReportID: summary.ReportID,
-		PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Meters: metersJSON,
-		ReservedAmountMicro: reservedMicro, Currency: currency,
-	}); err != nil {
-		return fmt.Errorf("upsert usage reservation: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit usage reservation: %w", err)
-	}
-	return nil
+	return database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		if err := queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
+			ReportID: summary.ReportID, ReportKind: "reservation", SourceID: summary.SourceID,
+			SourceRegion: summary.SourceRegion, Sequence: int64(summary.Sequence), TenantID: summary.TenantID,
+			ClusterID: summary.ClusterID, PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Complete: summary.Complete,
+		}); err != nil {
+			return fmt.Errorf("record reservation report: %w", err)
+		}
+		if err := queries.UpsertUsageReservation(ctx, purserdb.UpsertUsageReservationParams{
+			TenantID: summary.TenantID, SourceID: summary.SourceID, ClusterID: summary.ClusterID,
+			Sequence: int64(summary.Sequence), ReportID: summary.ReportID,
+			PeriodStart: usagePeriodStart, PeriodEnd: usagePeriodEnd, Meters: metersJSON,
+			ReservedAmountMicro: reservedMicro, Currency: currency,
+		}); err != nil {
+			return fmt.Errorf("upsert usage reservation: %w", err)
+		}
+		return nil
+	})
 }
 
 func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []rating.DimensionedQuantity, periodStart, periodEnd time.Time) (decimal.Decimal, error) {
@@ -1288,36 +1272,34 @@ const microPerCent = int64(10_000)
 func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, tenantID string, amountMicro int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
 	currency := billing.LedgerCurrency
 
-	tx, err := jm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	queries := purserdb.New(tx)
+	var previousBalance, newBalance int64
+	var applied bool
+	err := database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
 
-	if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
-		TenantID: tenantID,
-		Currency: currency,
-	}); insertErr != nil {
-		return 0, 0, false, insertErr
-	}
+		if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+			TenantID: tenantID,
+			Currency: currency,
+		}); insertErr != nil {
+			return insertErr
+		}
 
-	lockedBalance, scanErr := queries.LockPrepaidBalance(ctx, purserdb.LockPrepaidBalanceParams{
-		TenantID: tenantID,
-		Currency: currency,
+		lockedBalance, scanErr := queries.LockPrepaidBalance(ctx, purserdb.LockPrepaidBalanceParams{
+			TenantID: tenantID,
+			Currency: currency,
+		})
+		if scanErr != nil {
+			return scanErr
+		}
+		var applyErr error
+		previousBalance, newBalance, applied, applyErr = applyPrepaidBalanceForUsageMicroLocked(
+			ctx, queries, tenantID, amountMicro, description, referenceID,
+			lockedBalance.BalanceCents, lockedBalance.BalanceRemainderMicro,
+		)
+		return applyErr
 	})
-	if scanErr != nil {
-		return 0, 0, false, scanErr
-	}
-	previousBalance, newBalance, applied, err := applyPrepaidBalanceForUsageMicroLocked(
-		ctx, queries, tenantID, amountMicro, description, referenceID,
-		lockedBalance.BalanceCents, lockedBalance.BalanceRemainderMicro,
-	)
 	if err != nil {
 		return 0, 0, false, err
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return 0, 0, false, commitErr
 	}
 	return previousBalance, newBalance, applied, nil
 }
@@ -1371,64 +1353,61 @@ func applyPrepaidBalanceForUsageMicroLocked(
 
 // deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
 func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID string, amountCents int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
-	var newBalance int64
+	var currentBalance, newBalance int64
+	var applied bool
 	currency := billing.LedgerCurrency
 
-	tx, err := jm.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	queries := purserdb.New(tx)
+	err := database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
 
-	err = queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
-		TenantID: tenantID,
-		Currency: currency,
-	})
-	if err != nil {
-		return 0, 0, false, err
-	}
-
-	currentBalance, err := queries.LockPrepaidBalanceCents(ctx, purserdb.LockPrepaidBalanceCentsParams{
-		TenantID: tenantID,
-		Currency: currency,
-	})
-	if err != nil {
-		return 0, 0, false, err
-	}
-
-	newBalance = currentBalance - amountCents
-	rowsAffected, err := queries.InsertUsageBalanceTransaction(ctx, purserdb.InsertUsageBalanceTransactionParams{
-		TenantID:          tenantID,
-		AmountCents:       -amountCents,
-		BalanceAfterCents: newBalance,
-		Description:       sql.NullString{String: description, Valid: true},
-		ReferenceID:       referenceID.String(),
-	})
-	if err != nil {
-		return 0, 0, false, err
-	}
-	if rowsAffected == 0 {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return 0, 0, false, commitErr
+		err := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+			TenantID: tenantID,
+			Currency: currency,
+		})
+		if err != nil {
+			return err
 		}
-		return currentBalance, currentBalance, false, nil
-	}
 
-	err = queries.UpdatePrepaidBalance(ctx, purserdb.UpdatePrepaidBalanceParams{
-		BalanceCents: newBalance,
-		TenantID:     tenantID,
-		Currency:     currency,
+		currentBalance, err = queries.LockPrepaidBalanceCents(ctx, purserdb.LockPrepaidBalanceCentsParams{
+			TenantID: tenantID,
+			Currency: currency,
+		})
+		if err != nil {
+			return err
+		}
+
+		newBalance = currentBalance - amountCents
+		rowsAffected, err := queries.InsertUsageBalanceTransaction(ctx, purserdb.InsertUsageBalanceTransactionParams{
+			TenantID:          tenantID,
+			AmountCents:       -amountCents,
+			BalanceAfterCents: newBalance,
+			Description:       sql.NullString{String: description, Valid: true},
+			ReferenceID:       referenceID.String(),
+		})
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			newBalance, applied = currentBalance, false
+			return nil
+		}
+
+		err = queries.UpdatePrepaidBalance(ctx, purserdb.UpdatePrepaidBalanceParams{
+			BalanceCents: newBalance,
+			TenantID:     tenantID,
+			Currency:     currency,
+		})
+		if err != nil {
+			return err
+		}
+		applied = true
+		return nil
 	})
 	if err != nil {
 		return 0, 0, false, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, 0, false, err
-	}
-
-	return currentBalance, newBalance, true, nil
+	return currentBalance, newBalance, applied, nil
 }
 
 // getPrepaidBalance supports the retained idempotent invoice-credit recovery
@@ -1789,7 +1768,13 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 		// subscription pointing at the already-billed period.
 		var collectionDecision *invoiceCollectionDecision
 		var presentment fx.Record
+		generatedInvoiceID, initialStatus, initialUsageJSON := invoiceID, status, usageJSON
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
+			// withTx replays this closure after retryable failures; every
+			// value the body derives starts from its pre-transaction state.
+			invoiceID, status, usageJSON = generatedInvoiceID, initialStatus, initialUsageJSON
+			creditDec, totalDec, collectionDecision = decimal.Zero, grossDec, nil
+			delete(usageDetails, "collection")
 			queries := purserdb.New(tx)
 			var txErr error
 			if len(ratingResult.ManualReviewReasons) == 0 {

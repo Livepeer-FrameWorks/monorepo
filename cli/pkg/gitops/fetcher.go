@@ -104,9 +104,8 @@ func NewFetcher(opts FetchOptions) (*Fetcher, error) {
 	}, nil
 }
 
-// FetchFromRepositories tries each repository in order until one returns a
-// manifest. Callers can provide a preferred local/public gitops source first
-// and still fall back to the default upstream repository.
+// FetchFromRepositories tries remote repositories in order. A local repository
+// is authoritative: its errors must not select a different deployment source.
 func FetchFromRepositories(opts FetchOptions, repositories []string, channel, version string) (*Manifest, error) {
 	repos := dedupeRepositories(repositories)
 	if len(repos) == 0 {
@@ -124,13 +123,15 @@ func FetchFromRepositories(opts FetchOptions, repositories []string, channel, ve
 
 		fetcher, err := NewFetcher(repoOpts)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: create fetcher: %v", repo, err))
-			continue
+			return nil, fmt.Errorf("%s: create fetcher: %w", repo, err)
 		}
 
 		manifest, err := fetcher.Fetch(channel, version)
 		if err == nil {
 			return manifest, nil
+		}
+		if fetcher.isLocalPath(repo) {
+			return nil, fmt.Errorf("authoritative local gitops repository %s: %w", repo, err)
 		}
 		errs = append(errs, fmt.Sprintf("%s: %v", repo, err))
 	}
@@ -152,6 +153,22 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	version = normalizeVersion(version)
 
 	ttl, maxStale := f.cachePolicy(version)
+
+	// Local pins are read through. Only explicit offline mode may use their cache;
+	// malformed or missing local metadata must not silently deploy an older pin.
+	if f.isLocalPath(f.repository) && !f.offline {
+		manifest, err := f.fetchFromLocal(channel, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch from local path: %w", err)
+		}
+		if validationErr := manifest.ValidateServiceArtifacts(); validationErr != nil {
+			return nil, fmt.Errorf("invalid local release manifest: %w", validationErr)
+		}
+		if cacheSaveErr := f.saveToCache(channel, version, manifest); cacheSaveErr != nil {
+			fmt.Printf("Warning: failed to cache manifest: %v\n", cacheSaveErr)
+		}
+		return manifest, nil
+	}
 
 	// Check cache first
 	cached, cachedAt, cacheErr := f.loadFromCache(channel, version)
@@ -178,25 +195,6 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 
 	if f.offline {
 		return nil, fmt.Errorf("offline and no usable cache for %s/%s", channel, version)
-	}
-
-	// Check if repository is a local path
-	if f.isLocalPath(f.repository) {
-		manifest, errFetch := f.fetchFromLocal(channel, version)
-		if errFetch != nil {
-			if cacheErr == nil && time.Since(cachedAt) <= maxStale {
-				fmt.Printf("Warning: using stale cached manifest after local fetch failure: %v\n", errFetch)
-				return cached, nil
-			}
-			return nil, fmt.Errorf("failed to fetch from local path: %w", errFetch)
-		}
-		if err := manifest.ValidateServiceArtifacts(); err != nil {
-			return nil, fmt.Errorf("invalid local release manifest: %w", err)
-		}
-		if err := f.saveToCache(channel, version, manifest); err != nil {
-			fmt.Printf("Warning: failed to cache manifest: %v\n", err)
-		}
-		return manifest, nil
 	}
 
 	// Fetch from repository

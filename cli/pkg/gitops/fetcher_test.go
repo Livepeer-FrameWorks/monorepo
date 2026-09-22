@@ -288,7 +288,8 @@ func TestFetchLocalResolvesChannelPointer(t *testing.T) {
 func TestFetchFromRepositoriesFallsBackToSecondRepository(t *testing.T) {
 	t.Parallel()
 
-	firstRepo := t.TempDir()
+	first := httptest.NewServer(http.NotFoundHandler())
+	defer first.Close()
 	secondRepo := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(secondRepo, "channels"), 0755); err != nil {
 		t.Fatalf("mkdir channels: %v", err)
@@ -306,7 +307,7 @@ func TestFetchFromRepositoriesFallsBackToSecondRepository(t *testing.T) {
 	manifest, err := FetchFromRepositories(FetchOptions{
 		CacheDir:   t.TempDir(),
 		RetryCount: 1,
-	}, []string{firstRepo, secondRepo}, "rc", "latest")
+	}, []string{first.URL, secondRepo}, "rc", "latest")
 	if err != nil {
 		t.Fatalf("expected fallback fetch to succeed: %v", err)
 	}
@@ -600,5 +601,75 @@ func TestFetchUsesNormalizedVersionCacheKey(t *testing.T) {
 	}
 	if got.PlatformVersion != "v1.2.3" {
 		t.Fatalf("expected cached manifest, got %s", got.PlatformVersion)
+	}
+}
+
+func TestFetchLocalReadsAnEditedReleaseWithinTheCacheTTL(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "releases"), 0755)
+	release := filepath.Join(dir, "releases", "v0.3.10.yaml")
+	pin := func(engine string) {
+		body := "platform_version: v0.3.10\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure:\n" +
+			"  - name: yugabyte\n    version: \"" + engine + "\"\n"
+		if err := os.WriteFile(release, []byte(body), 0644); err != nil {
+			t.Fatalf("write release: %v", err)
+		}
+	}
+	pin("2026.1.1.2")
+
+	fetcher, err := NewFetcher(FetchOptions{Repository: dir, CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("failed to create fetcher: %v", err)
+	}
+	if _, fetchErr := fetcher.Fetch("stable", "v0.3.10"); fetchErr != nil {
+		t.Fatalf("first fetch: %v", fetchErr)
+	}
+
+	// A pinned release is cached for a day; the repository on disk still decides what this release pins.
+	pin("2025.2.3.0")
+	manifest, err := fetcher.Fetch("stable", "v0.3.10")
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	infra := manifest.GetInfrastructure("yugabyte")
+	if infra == nil {
+		t.Fatal("fetched manifest has no yugabyte entry")
+	}
+	if infra.Version != "2025.2.3.0" {
+		t.Fatalf("yugabyte version = %q, want the edited 2025.2.3.0", infra.Version)
+	}
+}
+
+func TestFetchLocalRequiresExplicitOfflineWhenTheRepositoryIsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cache := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "releases"), 0755)
+	release := filepath.Join(dir, "releases", "v1.0.0.yaml")
+	os.WriteFile(release, []byte("platform_version: v1.0.0\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n"), 0644)
+
+	fetcher, err := NewFetcher(FetchOptions{Repository: dir, CacheDir: cache})
+	if err != nil {
+		t.Fatalf("failed to create fetcher: %v", err)
+	}
+	if _, fetchErr := fetcher.Fetch("stable", "v1.0.0"); fetchErr != nil {
+		t.Fatalf("first fetch: %v", fetchErr)
+	}
+	if removeErr := os.Remove(release); removeErr != nil {
+		t.Fatalf("remove release: %v", removeErr)
+	}
+	if manifest, fetchErr := fetcher.Fetch("stable", "v1.0.0"); fetchErr == nil || manifest != nil {
+		t.Fatalf("live local fetch hid missing release: manifest=%v err=%v", manifest, fetchErr)
+	}
+	fetcher.offline = true
+	manifest, err := fetcher.Fetch("stable", "v1.0.0")
+	if err != nil {
+		t.Fatalf("expected the cached copy to serve the fetch: %v", err)
+	}
+	if manifest.PlatformVersion != "v1.0.0" {
+		t.Fatalf("platform version = %q, want v1.0.0", manifest.PlatformVersion)
 	}
 }

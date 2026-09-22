@@ -14,6 +14,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/fx"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/google/uuid"
 )
@@ -214,23 +215,18 @@ func (m *eurLedgerConversion) run(ctx context.Context, db datamigrate.DB, opts d
 		return datamigrate.Progress{}, fmt.Errorf("tenant %s: %w", tenantID, rateErr)
 	}
 
-	beginner, ok := db.(interface {
-		BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
-	})
+	beginner, ok := db.(database.PostgresTxBeginner)
 	if !ok {
 		return datamigrate.Progress{}, errors.New("EUR ledger conversion needs a database handle that starts transactions")
 	}
-	tx, err := beginner.BeginTx(ctx, nil)
+	var changed int64
+	err = database.WithRetryablePostgresTxBeginner(ctx, beginner, nil, func(tx *sql.Tx) error {
+		var applyErr error
+		changed, applyErr = applyTenantConversion(ctx, tx, tenantID)
+		return applyErr
+	})
 	if err != nil {
 		return datamigrate.Progress{}, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
-	changed, err := applyTenantConversion(ctx, tx, tenantID)
-	if err != nil {
-		return datamigrate.Progress{}, err
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return datamigrate.Progress{}, fmt.Errorf("commit tenant %s conversion: %w", tenantID, commitErr)
 	}
 	return datamigrate.Progress{Scanned: plan.scanned, Changed: changed, Done: true}, nil
 }

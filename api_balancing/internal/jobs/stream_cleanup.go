@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -186,61 +188,57 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 	windowSecs := int64(control.DeterministicCopyWindow.Seconds())
 	txCtx, txCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer txCancel()
-	tx, txErr := j.db.BeginTx(txCtx, nil)
-	if txErr != nil {
-		j.recordFailure(it, "settle tx begin: "+txErr.Error())
-		return false
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback backstop on any non-commit return
+	// The helper rolls back (releasing the row lock) before returning, so recordFailure's backoff write on a separate
+	// connection never blocks on that lock.
+	stage := "begin"
+	txErr := database.WithRetryablePostgresTxWithHook(txCtx, j.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		// Asset is the root lock for every thumbnail mutation. Take it before the
+		// obligation row below; RecordStreamCleanupObligation takes asset then
+		// inserts that row, so reversing the pair here would create a new ABBA.
+		if lErr := control.LockThumbnailAssetTx(txCtx, tx, it.assetKey); lErr != nil {
+			return fmt.Errorf("lock thumbnail asset: %w", lErr)
 		}
-	}()
-	// fail rolls the tx back (releasing the row lock) BEFORE the backoff, which runs on a separate connection and would
-	// otherwise block on that lock.
-	fail := func(msg string) bool {
-		tx.Rollback() //nolint:errcheck // best-effort; the deferred backstop also covers it
-		j.recordFailure(it, msg)
-		return false
-	}
-	// Asset is the root lock for every thumbnail mutation. Take it before the
-	// obligation row below; RecordStreamCleanupObligation takes asset then
-	// inserts that row, so reversing the pair here would create a new ABBA.
-	if lErr := control.LockThumbnailAssetTx(txCtx, tx, it.assetKey); lErr != nil {
-		return fail("lock thumbnail asset: " + lErr.Error())
-	}
 
-	// Finalize ONLY at/after the max-copy window (the resurrection-reclaiming SECOND sweep), token-fenced + DB-clock
-	// gated. A lost lease or a pre-window row matches 0 rows here.
-	n, fErr := foghorndb.New(tx).FinalizeStreamCleanupObligation(txCtx, foghorndb.FinalizeStreamCleanupObligationParams{
-		AssetKey: it.assetKey, LeaseToken: sql.NullString{String: it.token, Valid: true}, WindowSeconds: windowSecs,
+		// Finalize ONLY at/after the max-copy window (the resurrection-reclaiming SECOND sweep), token-fenced + DB-clock
+		// gated. A lost lease or a pre-window row matches 0 rows here.
+		n, fErr := foghorndb.New(tx).FinalizeStreamCleanupObligation(txCtx, foghorndb.FinalizeStreamCleanupObligationParams{
+			AssetKey: it.assetKey, LeaseToken: sql.NullString{String: it.token, Valid: true}, WindowSeconds: windowSecs,
+		})
+		if fErr != nil {
+			return fmt.Errorf("finalize obligation: %w", fErr)
+		}
+
+		if n > 0 {
+			// Finalized (second sweep done): drop the control rows IN THIS TX so bytes-gone + rows-gone + marked-cleaned
+			// commit together.
+			if dcErr := control.DeleteThumbnailControlRowsTx(txCtx, tx, it.tenantID, it.assetKey); dcErr != nil {
+				return fmt.Errorf("drop control rows: %w", dcErr)
+			}
+		} else {
+			// Pre-window (or lease lost): the first sweep is done. Arm the delayed second sweep at enqueued_at + window and
+			// release the lease. Token-fenced: a lost lease matches 0 rows here — harmless.
+			if rErr := foghorndb.New(tx).ArmStreamCleanupSecondSweep(txCtx, foghorndb.ArmStreamCleanupSecondSweepParams{
+				WindowSeconds: windowSecs, AssetKey: it.assetKey,
+				LeaseToken: sql.NullString{String: it.token, Valid: true},
+			}); rErr != nil {
+				return fmt.Errorf("arm second sweep: %w", rErr)
+			}
+		}
+		stage = "commit"
+		return nil
 	})
-	if fErr != nil {
-		return fail("finalize obligation: " + fErr.Error())
-	}
-
-	if n > 0 {
-		// Finalized (second sweep done): drop the control rows IN THIS TX so bytes-gone + rows-gone + marked-cleaned
-		// commit together.
-		if dcErr := control.DeleteThumbnailControlRowsTx(txCtx, tx, it.tenantID, it.assetKey); dcErr != nil {
-			return fail("drop control rows: " + dcErr.Error())
+	if txErr != nil {
+		switch stage {
+		case "begin":
+			j.recordFailure(it, "settle tx begin: "+txErr.Error())
+		case "commit":
+			j.recordFailure(it, "commit settlement: "+txErr.Error())
+		default:
+			j.recordFailure(it, txErr.Error())
 		}
-	} else {
-		// Pre-window (or lease lost): the first sweep is done. Arm the delayed second sweep at enqueued_at + window and
-		// release the lease. Token-fenced: a lost lease matches 0 rows here — harmless.
-		if rErr := foghorndb.New(tx).ArmStreamCleanupSecondSweep(txCtx, foghorndb.ArmStreamCleanupSecondSweepParams{
-			WindowSeconds: windowSecs, AssetKey: it.assetKey,
-			LeaseToken: sql.NullString{String: it.token, Valid: true},
-		}); rErr != nil {
-			return fail("arm second sweep: " + rErr.Error())
-		}
+		return false
 	}
-
-	if cErr := tx.Commit(); cErr != nil {
-		return fail("commit settlement: " + cErr.Error())
-	}
-	committed = true
 	return true
 }
 

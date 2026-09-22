@@ -137,15 +137,7 @@ func (s *CommodoreServer) withEventTx(ctx context.Context, fn func(tx *sql.Tx) e
 	if s.db == nil {
 		return errors.New("database not configured")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer s.rollbackTx(tx)
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, s.db, nil, fn)
 }
 
 // EnqueueServiceEventTx writes the legacy outbox row inside the caller's

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -293,6 +294,51 @@ func TestChangeBillingTier_FreeCannotActivatePaidTierWithoutCollection(t *testin
 	})
 	if err == nil {
 		t.Fatal("expected paid tier activation to require confirmed collection")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+// TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome proves a tier change whose commit fails with 40001 is
+// replayed against the current subscription. Attempt 1 stages a downgrade and aborts; by attempt 2 a concurrent change
+// moved the tenant below the target, so the replay upgrades immediately and nothing of the staged downgrade leaks into
+// the response.
+func TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+
+	periodEnd := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	periodStart := periodEnd.AddDate(0, -1, 0)
+	expectLoadSubscription(mock, tenantID, prodTierID, 4, "postpaid", periodStart, periodEnd)
+	expectLoadTargetTier(mock, paygTierID, 2, false, true)
+	expectCollectionReady(mock)
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = \$1`).
+		WithArgs(paygTierID, periodEnd, periodStart, periodEnd, tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access"})
+
+	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", periodStart, periodEnd)
+	expectLoadTargetTier(mock, paygTierID, 2, false, true)
+	expectCollectionReady(mock)
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
+		WithArgs(paygTierID, periodStart, periodEnd, tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
+		TenantId: tenantID,
+		TierId:   paygTierID,
+	})
+	if err != nil {
+		t.Fatalf("ChangeBillingTier: %v", err)
+	}
+	if resp.GetAppliedTierId() != paygTierID || resp.GetPendingTierId() != "" {
+		t.Fatalf("applied=%q pending=%q, want the committed upgrade only", resp.GetAppliedTierId(), resp.GetPendingTierId())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)

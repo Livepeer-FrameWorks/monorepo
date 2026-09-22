@@ -15,6 +15,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
@@ -206,20 +207,17 @@ func persistInvoiceLineItems(ctx context.Context, db purserdb.DBTX, invoiceID, t
 
 // withTx runs fn inside a single SQL transaction, committing on nil error and
 // rolling back otherwise. Used by invoice writes so totals and line items move
-// together.
+// together. The whole transaction is replayed on serialization, deadlock, and
+// Yugabyte schema-version conflicts, so fn must be safe to run more than once
+// and must keep effects outside the database until withTx returns.
 func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("rollback failed (%w) after error: %w", rbErr, err)
-		}
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, db, nil, fn)
 }
+
+// errTxReadOnlyExit ends a retryable transaction closure on an early exit that
+// wrote nothing, so the helper rolls back instead of committing. Callers clear
+// it with errors.Is after the helper returns.
+var errTxReadOnlyExit = errors.New("transaction closure exited without writes")
 
 // _ exists only to keep the billing import alive when build tags excise the
 // rest of the file. Refer to billing.EffectiveTier for the resolver context.

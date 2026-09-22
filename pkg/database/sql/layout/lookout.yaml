@@ -1,0 +1,6 @@
+# YugabyteDB placement for the lookout database. Incidents, their alerts and timeline
+# events, and both delivery outboxes grow with alert traffic; only cluster_scopes and the
+# baseline marker stay small. The database stays distributed and every table gets its own
+# tablets. Classification criteria live in docs/architecture/database-ha.md.
+database: lookout
+layout: distributed

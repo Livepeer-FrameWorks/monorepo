@@ -41,6 +41,7 @@ import (
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
@@ -1445,6 +1446,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	clipData := s.buildClipDeletedLifecycleData(ctx, req.ClipHash, nodeID, clipRow.SizeBytes, clipRow.RetentionUntil, clipRow.StreamInternalName, sql.NullString{String: clipRow.TenantID, Valid: true}, clipRow.UserID, "")
 	transitioned := false
 	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		transitioned = false
 		affected, execErr := foghorndb.New(tx).DeleteClipCatalog(ctx, foghorndb.DeleteClipCatalogParams{
 			ArtifactHash: req.ClipHash, TenantID: req.GetTenantId(),
 		})
@@ -2439,16 +2441,10 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 // withArtifactLifecycleTx runs fn inside a single transaction and commits it, so a durable state
 // transition and its lifecycle outbox row commit atomically (or not at all). The outbox drain
 // worker — not the producer — owns Decklog delivery, so this must never gate on decklogClient.
+// fn is replayed on retryable serialization/schema errors, so it must only write through tx and
+// reset any captured outputs before assigning them.
 func (s *FoghornGRPCServer) withArtifactLifecycleTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, s.db, nil, fn)
 }
 
 // DeleteDVR deletes a DVR recording and its files
@@ -4013,6 +4009,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	// leaves 0 rows affected, so we must NOT dispatch processing or overwrite a terminal state.
 	noTransition := false
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		noTransition = false
 		affected, execErr := foghorndb.New(tx).AdvanceVodToProcessing(ctx, foghorndb.AdvanceVodToProcessingParams{
 			S3Url: sql.NullString{String: s3URL, Valid: true}, ArtifactHash: artifactHash, TenantID: req.TenantId,
 			S3UploadID: sql.NullString{String: contract.UploadID, Valid: true},
@@ -4324,6 +4321,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	}
 	transitioned := false
 	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		transitioned = false
 		// Retire any outstanding freeze attempt on the terminal transition: a late completion for the
 		// abandoned attempt then matches nothing (its request/node is gone). sync_object_key is
 		// DELIBERATELY retained so the purge sweep can free an object whose PUT lands after deletion —

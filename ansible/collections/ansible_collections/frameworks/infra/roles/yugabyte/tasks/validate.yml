@@ -2,6 +2,7 @@
 - name: Confirm yb-master binary is present
   ansible.builtin.stat:
     path: "{{ yugabyte_bin_dir }}/yb-master"
+    follow: true
   register: yugabyte_master_bin
   check_mode: false
   changed_when: false

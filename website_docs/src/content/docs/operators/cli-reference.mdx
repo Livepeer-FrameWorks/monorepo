@@ -151,6 +151,10 @@ frameworks cluster doctor [flags]
 - **Observability:** Health endpoints for enabled observability services
 - **Database migrations:** Embedded PostgreSQL/YugabyteDB migrations compared
   against each configured database's `_migrations` ledger
+- **Yugabyte layout:** Declared and observed placement for every table and secondary
+  index of each platform database, with distinct tablets and tablet peers. A database
+  created before its colocated layout is reported as a warning; see
+  [YugabyteDB Physical Layout](/operators/yugabyte-layout)
 
 With `--deep`, doctor additionally executes every enabled database-backed binary's
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
@@ -909,7 +913,8 @@ frameworks cluster os update [flags]
 - `--apply` - Apply package upgrades, restart stale services, and reboot when needed
 - `--hosts string` - Comma-separated manifest host names to target
 - `--mode string` - Apt upgrade mode for apply: `safe` or `full` (default: `safe`)
-- `--serial int` - Number of hosts to process in parallel during apply (default: 1)
+- `--serial int` - Number of hosts to process in parallel during apply (default: 1). Yugabyte nodes
+  are always updated one at a time after the other hosts, through the same gate as `cluster provision`.
 - `--no-reboot` - Skip reboot even if `/var/run/reboot-required` exists
 - `--continue-on-error` - Continue after per-host failures during apply
 - `--json` - Emit one JSON object per host in check mode
@@ -945,6 +950,10 @@ frameworks cluster restart <service> [flags]
 2. Wait for shutdown
 3. Start service
 4. Validate health (if enabled)
+
+`frameworks cluster restart yugabyte` restarts every Yugabyte node, one at a time: nodes that are
+down first, each serving node only once the masters confirm the universe survives losing it, and the
+next node only after the restarted one has recovered. The first failure stops the restart.
 
 **Flags:**
 
@@ -992,7 +1001,13 @@ frameworks cluster upgrade <service> [flags]
    version (pull image or download binary), and validate health
 
 For an HA service, `upgrade` (and `--all`) moves every replica, not just the
-first — a partial failure aborts the sequence. The CLI does **not** write the
+first — a partial failure aborts the sequence. `upgrade yugabyte` moves every
+node one at a time through the Yugabyte gate described under `cluster restart`, in the order YugabyteDB requires:
+every node's master on the new engine first, then every tserver. Once every node serves and the universe is healthy,
+it finalizes the upgrade with `yb-admin finalize_upgrade` (promotes the new AutoFlags and upgrades the YSQL catalog).
+It is the only command that may change the engine of a node that already joined the universe; provisioning such a
+node with another engine fails and points here. After finalizing, nodes cannot go back to the previous Yugabyte binary. If finalizing
+fails, rerun the same upgrade: nodes already on the version are skipped and finalizing is retried. The CLI does **not** write the
 deployed version back to your local manifest (the resolved manifest carries
 SOPS-decrypted host inventory, so serializing it would leak host IPs/users/key
 paths). There is no durable "deployed version" record: your GitOps manifest holds
@@ -1117,6 +1132,45 @@ authoritative Quartermaster descriptor; deployed components enforce it as immuta
   in the embedded release catalog. A declared migration that the target service cannot report is
   treated as a blocker, not as completed.
 </Aside>
+
+### frameworks cluster yugabyte relayout
+
+Move one existing YugabyteDB database into the colocated layout declared in the repository. The
+database is copied from its own schema and data into a shadow database created with the layout,
+verified, and renamed into place. Services keep running; only during `cutover` can they not reach
+the database. Each step records its effect in a leased journal in the `yugabyte` admin database,
+renews the lease while it runs, and resumes from that record when re-run. The full procedure is in
+[YugabyteDB Physical Layout](/operators/yugabyte-layout).
+
+**Usage:**
+
+```bash
+frameworks cluster yugabyte relayout plan --database <name>
+frameworks cluster yugabyte relayout preflight --database <name>
+frameworks cluster yugabyte relayout prepare --database <name>
+frameworks cluster yugabyte relayout cutover --database <name> --yes
+frameworks cluster yugabyte relayout finish --database <name> --yes
+```
+
+| Step        | What it does                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`      | Read-only. Checks every tserver's local superuser YSQL, the YSQL Connection Manager, client binaries, and dump space, then shows placement, tablets and peers, affected services, journal state, and blockers.                     |
+| `preflight` | No downtime. Rehearses the copy into a scratch database in the order a relayout runs it, verifies it, reports the time of each phase and the estimated window, then drops the copy and dump.                                       |
+| `prepare`   | No downtime. Creates the shadow colocated with the source owner and restores the source's schema, including indexes, constraints, and triggers, rewritten for the layout; requires an equal schema.                                |
+| `cutover`   | Requires `--yes`. The window: revokes access and ends every session, copies the data, verifies the copy, renames the source aside and the shadow into place, and restores access. `--rollback` undoes it until access is restored. |
+| `finish`    | Requires `--yes`. Drops `<database>__pre_relayout` and the staged dump after a completed cutover.                                                                                                                                  |
+
+**Flags:**
+
+| Flag         | Default                        | Description                                                  |
+| ------------ | ------------------------------ | ------------------------------------------------------------ |
+| `--database` |                                | Physical database, such as `quartermaster` or `foghorn_eu`   |
+| `--dump-dir` | `/var/lib/frameworks/relayout` | Absolute directory on the Yugabyte node for the staged dump  |
+| `--dry-run`  | `false`                        | Print the step's actions without connecting                  |
+| `--rollback` | `false`                        | `cutover` only: return the original database instead         |
+| `--yes`      | `false`                        | `cutover` and `finish`: confirm the window or the final drop |
+
+Also inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
 ---
 

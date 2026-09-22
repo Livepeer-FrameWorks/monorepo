@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -743,57 +744,53 @@ func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, bl
 // recovery and concurrent/crash retries cannot double-credit; an existing
 // recovery row means its event was already committed, so nothing is written.
 func (r *X402Reconciler) recoverReversedBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash, network string) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
 	currency := billing.LedgerCurrency
 
-	queries := purserdb.New(tx)
-	recoveryExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
-		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true}, ReferenceID: nonceID,
+	err := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+		queries := purserdb.New(tx)
+		recoveryExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+			TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true}, ReferenceID: nonceID,
+		})
+		if err != nil {
+			return err
+		}
+		if recoveryExists {
+			return errTxReadOnlyExit
+		}
+
+		err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency})
+		if err != nil {
+			return err
+		}
+
+		newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+			AmountCents: amountCents, TenantID: tenantID, Currency: currency,
+		})
+		if err != nil {
+			return err
+		}
+
+		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+			ID: uuid.New(), TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
+			TransactionType: "topup", Description: sql.NullString{String: fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), Valid: true},
+			ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true},
+			CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		})
+		if err != nil {
+			return err
+		}
+
+		return emitBillingEventTx(ctx, tx, eventX402LateRecovery, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+			Amount:   float64(amountCents) / 100,
+			Currency: "EUR",
+			Status:   "late settlement recovered",
+			Provider: network,
+		})
 	})
-	if err != nil {
-		return err
-	}
-	if recoveryExists {
+	if errors.Is(err, errTxReadOnlyExit) {
 		return nil
 	}
-
-	err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: currency})
-	if err != nil {
-		return err
-	}
-
-	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: amountCents, TenantID: tenantID, Currency: currency,
-	})
-	if err != nil {
-		return err
-	}
-
-	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: uuid.New(), TenantID: tenantID, AmountCents: amountCents, BalanceAfterCents: newBalance,
-		TransactionType: "topup", Description: sql.NullString{String: fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), Valid: true},
-		ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_recovery", Valid: true},
-		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
-	})
-	if err != nil {
-		return err
-	}
-
-	if err := emitBillingEventTx(ctx, tx, eventX402LateRecovery, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
-		Amount:   float64(amountCents) / 100,
-		Currency: "EUR",
-		Status:   "late settlement recovered",
-		Provider: network,
-	}); err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	return err
 }
 
 // getTransactionReceipt fetches the transaction receipt from the network RPC
@@ -898,21 +895,80 @@ func (r *X402Reconciler) markFailedWithEvent(ctx context.Context, id, reason, ev
 
 // debitBalance reverses the balance credit for a failed settlement
 func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amountCents int64, nonceID, txHash string) bool {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to begin transaction for balance debit")
-		return false
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
 	currency := billing.LedgerCurrency
 
-	queries := purserdb.New(tx)
-	creditExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
-		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_payment", Valid: true}, ReferenceID: nonceID,
+	// The failure message names the step that failed; a begin failure never
+	// reaches the closure, and a commit failure follows a completed body.
+	failureMessage := "Failed to begin transaction for balance debit"
+	var creditExists, reversalExists bool
+	var newBalance int64
+	err := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+		creditExists, reversalExists = false, false
+		queries := purserdb.New(tx)
+		var err error
+		creditExists, err = queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+			TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_payment", Valid: true}, ReferenceID: nonceID,
+		})
+		if err != nil {
+			failureMessage = "Failed to check original x402 credit before debit"
+			return err
+		}
+		if !creditExists {
+			return errTxReadOnlyExit
+		}
+
+		reversalExists, err = queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
+			TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_failed", Valid: true}, ReferenceID: nonceID,
+		})
+		if err != nil {
+			failureMessage = "Failed to check existing x402 reversal before debit"
+			return err
+		}
+		if reversalExists {
+			return errTxReadOnlyExit
+		}
+
+		newBalance, err = queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+			AmountCents: -amountCents, TenantID: tenantID, Currency: currency,
+		})
+		if err != nil {
+			failureMessage = "Failed to get current balance for debit"
+			return err
+		}
+
+		// Record reversal transaction
+		err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+			ID: uuid.New(), TenantID: tenantID, AmountCents: -amountCents, BalanceAfterCents: newBalance,
+			TransactionType: "reversal", Description: sql.NullString{String: fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), Valid: true},
+			ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_failed", Valid: true},
+			CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		})
+		if err != nil {
+			failureMessage = "Failed to record reversal transaction"
+			return err
+		}
+
+		err = queries.InsertX402ReversalCreditNote(ctx, purserdb.InsertX402ReversalCreditNoteParams{
+			NonceID: nonceID, TxHash: txHash, TenantID: tenantID,
+		})
+		if err != nil {
+			failureMessage = "Failed to issue x402 reversal credit note"
+			return err
+		}
+
+		if err := emitBillingEventTx(ctx, tx, eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
+			Amount:   float64(amountCents) / 100,
+			Currency: billing.LedgerCurrency,
+			Status:   "failed",
+		}); err != nil {
+			failureMessage = "Failed to enqueue x402 settlement failed event"
+			return err
+		}
+		failureMessage = "Failed to commit balance debit transaction"
+		return nil
 	})
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to check original x402 credit before debit")
+	if err != nil && !errors.Is(err, errTxReadOnlyExit) {
+		r.logger.WithError(err).Error(failureMessage)
 		return false
 	}
 	if !creditExists {
@@ -923,58 +979,8 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		}).Warn("Skipping x402 debit: no original credit found")
 		return false
 	}
-
-	reversalExists, err := queries.CryptoReversalBalanceTransactionExists(ctx, purserdb.CryptoReversalBalanceTransactionExistsParams{
-		TenantID: tenantID, ReferenceType: sql.NullString{String: "x402_failed", Valid: true}, ReferenceID: nonceID,
-	})
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to check existing x402 reversal before debit")
-		return false
-	}
 	if reversalExists {
 		return true
-	}
-
-	newBalance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: -amountCents, TenantID: tenantID, Currency: currency,
-	})
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to get current balance for debit")
-		return false
-	}
-
-	// Record reversal transaction
-	err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: uuid.New(), TenantID: tenantID, AmountCents: -amountCents, BalanceAfterCents: newBalance,
-		TransactionType: "reversal", Description: sql.NullString{String: fmt.Sprintf("x402 settlement failed: %s", truncateTxHash(txHash)), Valid: true},
-		ReferenceID: sql.NullString{String: nonceID, Valid: true}, ReferenceType: sql.NullString{String: "x402_failed", Valid: true},
-		CreatedAt: sql.NullTime{Time: time.Now(), Valid: true},
-	})
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to record reversal transaction")
-		return false
-	}
-
-	err = queries.InsertX402ReversalCreditNote(ctx, purserdb.InsertX402ReversalCreditNoteParams{
-		NonceID: nonceID, TxHash: txHash, TenantID: tenantID,
-	})
-	if err != nil {
-		r.logger.WithError(err).Error("Failed to issue x402 reversal credit note")
-		return false
-	}
-
-	if err := emitBillingEventTx(ctx, tx, eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
-		Amount:   float64(amountCents) / 100,
-		Currency: billing.LedgerCurrency,
-		Status:   "failed",
-	}); err != nil {
-		r.logger.WithError(err).Error("Failed to enqueue x402 settlement failed event")
-		return false
-	}
-
-	if err := tx.Commit(); err != nil {
-		r.logger.WithError(err).Error("Failed to commit balance debit transaction")
-		return false
 	}
 
 	r.logger.WithFields(logging.Fields{

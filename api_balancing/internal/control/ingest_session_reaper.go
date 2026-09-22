@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/domainevents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
@@ -78,47 +79,47 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 	if sessionID == "" || tenantID == "" || internalName == "" {
 		return false, fmt.Errorf("retire ingest session missing scope: session=%q tenant=%q stream=%q", sessionID, tenantID, internalName)
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin retire ingest-session tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logger.WithError(rbErr).Warn("Failed to roll back retire ingest-session tx")
+	var claims []DVRStopClaim
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		claims, retired = nil, false
+		qtx := foghorndb.New(tx)
+		if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("lock ingest session retirement: %w", lockErr)
 		}
-	}()
-	qtx := foghorndb.New(tx)
-	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return false, fmt.Errorf("lock ingest session retirement: %w", lockErr)
-	}
-	retiredRow, err := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
-		EndedReason: reason, SessionID: sessionID, TenantID: tenantID, StreamInternalName: internalName,
+		retiredRow, retireErr := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
+			EndedReason: reason, SessionID: sessionID, TenantID: tenantID, StreamInternalName: internalName,
+		})
+		if errors.Is(retireErr, sql.ErrNoRows) {
+			return nil
+		}
+		if retireErr != nil {
+			return fmt.Errorf("end ingest session: %w", retireErr)
+		}
+		nodeID := retiredRow.NodeID
+		claimed, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
+		if claimErr != nil {
+			return fmt.Errorf("claim DVR stop on retire: %w", claimErr)
+		}
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+			return idleErr
+		}
+		revision, revErr := nextSourceRevision(ctx, tx, tenantID, internalName)
+		if revErr != nil {
+			return revErr
+		}
+		if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, sessionID, revision, OfflineEffectIntent{
+			SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+		}); enqueueErr != nil {
+			return enqueueErr
+		}
+		claims, retired = claimed, true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, tx.Commit()
-	}
-	if err != nil {
-		return false, fmt.Errorf("end ingest session: %w", err)
-	}
-	nodeID := retiredRow.NodeID
-	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
-	if err != nil {
-		return false, fmt.Errorf("claim DVR stop on retire: %w", err)
-	}
-	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
-		return false, idleErr
-	}
-	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return false, err
 	}
-	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, sessionID, revision, OfflineEffectIntent{
-		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-	}); err != nil {
-		return false, err
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, fmt.Errorf("commit retire ingest session: %w", commitErr)
+	if !retired {
+		return false, nil
 	}
 	DispatchDVRStops(claims, logger)
 	return true, nil
@@ -131,43 +132,51 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 	if db == nil {
 		return "", false, errors.New("retire ingest claim: no database configured")
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", false, err
-	}
-	defer rollbackQuiet(tx)
-	qtx := foghorndb.New(tx)
-	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return "", false, lockErr
-	}
-	retiredRow, err := qtx.RetireIngestSessionByClaim(ctx, foghorndb.RetireIngestSessionByClaimParams{
-		TenantID: tenantID, StreamInternalName: internalName, ClaimToken: claimToken,
+	var (
+		claims  []DVRStopClaim
+		nodeID  string
+		retired bool
+	)
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		claims, nodeID, retired = nil, "", false
+		qtx := foghorndb.New(tx)
+		if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return lockErr
+		}
+		retiredRow, err := qtx.RetireIngestSessionByClaim(ctx, foghorndb.RetireIngestSessionByClaimParams{
+			TenantID: tenantID, StreamInternalName: internalName, ClaimToken: claimToken,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("retire lost placement claim: %w", err)
+		}
+		sessionID := retiredRow.SessionID
+		claimed, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
+		if err != nil {
+			return err
+		}
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+			return idleErr
+		}
+		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
+		if err != nil {
+			return err
+		}
+		if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, retiredRow.NodeID, sessionID, revision, OfflineEffectIntent{
+			SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+		}); err != nil {
+			return err
+		}
+		claims, nodeID, retired = claimed, retiredRow.NodeID, true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, tx.Commit()
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("retire lost placement claim: %w", err)
-	}
-	sessionID, nodeID := retiredRow.SessionID, retiredRow.NodeID
-	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
 	if err != nil {
 		return "", false, err
 	}
-	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
-		return "", false, idleErr
-	}
-	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
-	if err != nil {
-		return "", false, err
-	}
-	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, sessionID, revision, OfflineEffectIntent{
-		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-	}); err != nil {
-		return "", false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", false, err
+	if !retired {
+		return "", false, nil
 	}
 	DispatchDVRStops(claims, logger)
 	return nodeID, true, nil
@@ -301,36 +310,37 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 	}
 	retired := 0
 	for _, candidate := range candidates {
-		retiredCandidate := false
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return retired, err
-		}
-		qtx := foghorndb.New(tx)
-		if err = qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(candidate.tenant, candidate.stream)); err == nil {
-			var ended foghorndb.RetireNeverProjectedIngestSessionRow
-			ended, err = qtx.RetireNeverProjectedIngestSession(ctx, foghorndb.RetireNeverProjectedIngestSessionParams{
+		retiredCandidate, began := false, false
+		err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+			retiredCandidate, began = false, true
+			qtx := foghorndb.New(tx)
+			if err := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(candidate.tenant, candidate.stream)); err != nil {
+				return err
+			}
+			ended, err := qtx.RetireNeverProjectedIngestSession(ctx, foghorndb.RetireNeverProjectedIngestSessionParams{
 				SessionID: candidate.id, TenantID: candidate.tenant, OlderThanMs: olderThan.Milliseconds(),
 			})
-			nodeID := ended.NodeID
 			if errors.Is(err, sql.ErrNoRows) {
-				err = nil
-			} else if err == nil {
-				err = domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID)
-				var revision int64
-				if err == nil {
-					revision, err = nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)
-				}
-				if err == nil {
-					err = enqueueOfflineEffectTx(ctx, tx, candidate.tenant, candidate.stream, nodeID, candidate.id, revision, OfflineEffectIntent{})
-				}
-				retiredCandidate = err == nil
+				return nil
 			}
-		}
-		if err == nil {
-			err = tx.Commit()
-		} else if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, fmt.Errorf("rollback never-projected session: %w", rollbackErr))
+			if err != nil {
+				return err
+			}
+			if idleErr := domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID); idleErr != nil {
+				return idleErr
+			}
+			revision, err := nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)
+			if err != nil {
+				return err
+			}
+			if err := enqueueOfflineEffectTx(ctx, tx, candidate.tenant, candidate.stream, ended.NodeID, candidate.id, revision, OfflineEffectIntent{}); err != nil {
+				return err
+			}
+			retiredCandidate = true
+			return nil
+		})
+		if err != nil && !began {
+			return retired, err
 		}
 		if err != nil {
 			logger.WithError(err).WithField("session_id", candidate.id).Warn("Failed to retire never-projected ingest session")

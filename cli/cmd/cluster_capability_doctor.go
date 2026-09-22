@@ -46,7 +46,7 @@ func doctorPostgresCapabilities(
 	executor := &provisioner.SSHExecutor{Runner: runner, UsePeerAuth: !pg.IsYugabyte()}
 	user := "postgres"
 	if pg.IsYugabyte() {
-		executor.BinaryPath = "/opt/yugabyte/bin/ysqlsh"
+		executor.UseYugabyteTools = true
 		executor.Password = password
 		user = "yugabyte"
 	}

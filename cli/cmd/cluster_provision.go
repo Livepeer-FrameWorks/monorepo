@@ -206,7 +206,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	// `release apply` / `cluster upgrade`: fetch the concrete release manifest and fail closed if this CLI is below the
 	// release's min_cli_version or is missing a required reconciliation transition, BEFORE planning or mutating
 	// anything. Without this a too-old CLI could greenfield-install a release whose transitions it cannot run. The
-	// fetch is cached, so per-task artifact resolution below reuses it rather than re-fetching.
+	// Remote fetches are cached; local release metadata is read through so errors and edited pins stay visible.
 	provChannel, provResolved := gitops.ResolveVersion(releaseVersion)
 	provGitops, provErr := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, provChannel, provResolved)
 	if provErr != nil {
@@ -808,6 +808,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		return err
 	}
 
+	ybRoll := newYugabyteRoll(ctx, cmd.OutOrStdout(), manifest, sshPool, plan)
+	// Provisioning a Yugabyte node runs the role's init tag, which creates any service database missing under its
+	// canonical name; mid-relayout that name can be free on purpose.
+	if host, ok := ybRoll.servingHost(); ok {
+		if err := refuseDuringYugabyteRelayoutFn(ctx, sshPool, host, manifest.Infrastructure.Postgres); err != nil {
+			return err
+		}
+	}
+
 	dataMigrationGateRan := false
 	for batchNum, batch := range plan.Batches {
 		// Release-level data-migration gate for PhaseAll: run ONCE, immediately before the first application batch. By
@@ -850,7 +859,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 
 		// Tasks in one batch are independent. Let every task reach a definitive
 		// result so a fast sibling failure cannot cancel and masquerade as a
-		// different host's deployment failure.
+		// different host's deployment failure. Yugabyte nodes on a running universe
+		// still take turns inside the batch; the roll fixes their order here.
+		ybRoll.beginBatch(batch)
 		var g errgroup.Group
 		for _, task := range batch {
 			task := task
@@ -870,7 +881,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			g.Go(func() error {
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 15*time.Second)
-				outcome, err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+				outcome, err := ybRoll.run(ctx, task, host, func(beforeChange func() error) (*taskProvisionOutcome, error) {
+					return provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, clusterEnvs, releaseRepos, beforeChange)
+				})
 				stopProgress()
 				if err != nil {
 					if task.Type == "privateer" {
@@ -5438,6 +5451,28 @@ func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *invento
 	return items
 }
 
+// yugabyteLogicalDatabaseName maps a physical per-cell database name produced by clusterScopedDatabaseAliases back to
+// the logical database whose embedded schema and layout it uses. Names that are not cell aliases map to themselves.
+func yugabyteLogicalDatabaseName(name string, manifest *inventory.Manifest) string {
+	name = strings.TrimSpace(name)
+	if manifest == nil {
+		return name
+	}
+	for serviceID, svc := range manifest.Services {
+		if !svc.Enabled || strings.TrimSpace(svc.Cluster) == "" {
+			continue
+		}
+		deploy := strings.TrimSpace(svc.Deploy)
+		if deploy == "" {
+			deploy = serviceID
+		}
+		if alias := strings.ReplaceAll(serviceID, "-", "_"); alias == name && alias != deploy {
+			return deploy
+		}
+	}
+	return name
+}
+
 func databaseConfigKey(db inventory.DatabaseConfig) string {
 	return strings.TrimSpace(db.Name) + "\x00" + strings.TrimSpace(db.Owner) + "\x00" + strings.TrimSpace(db.RuntimeRole)
 }
@@ -5446,9 +5481,10 @@ func yugabyteDatabaseConfigsToMetadata(databases []inventory.DatabaseConfig, man
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
 		item := map[string]string{
-			"name":         db.Name,
-			"owner":        db.Owner,
-			"runtime_role": databaseRuntimeRole(db),
+			"name":          db.Name,
+			"owner":         db.Owner,
+			"runtime_role":  databaseRuntimeRole(db),
+			"layout_source": yugabyteLogicalDatabaseName(db.Name, manifest),
 		}
 		if password := yugabyteDatabasePassword(db, manifest, sharedEnv, clusterEnvs, fallbackPassword); password != "" {
 			item["password"] = password
@@ -6174,8 +6210,9 @@ test -f /etc/privateer/privateer.env && sed 's/=.*/=<redacted>/' /etc/privateer/
 	fmt.Fprintln(out, text)
 }
 
-// provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (*taskProvisionOutcome, error) {
+// provisionTask provisions one task on its host. beforeChange, when set, runs right before the provisioner applies a
+// change to the host, and its error aborts the task; a task whose precheck finds nothing to change never calls it.
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, beforeChange func() error) (*taskProvisionOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -6206,6 +6243,11 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}
 
 	if !provisionSkipped {
+		if beforeChange != nil {
+			if err := beforeChange(); err != nil {
+				return nil, err
+			}
+		}
 		if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision", func(phaseCtx context.Context) error {
 			return prov.Provision(phaseCtx, host, config)
 		}); err != nil {
@@ -6273,20 +6315,22 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	}, nil
 }
 
+// taskProvisioner resolves the provisioner for a task type; tests replace it to drive provisionTask without hosts.
+var taskProvisioner = provisioner.GetProvisioner
+
 // renderProvisionTask resolves a task's provisioner and the ServiceConfig it
 // provisions with.
 func renderProvisionTask(task *orchestrator.Task, pool *ssh.Pool, manifest *inventory.Manifest, force bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.Provisioner, provisioner.ServiceConfig, error) {
+	prov, err := taskProvisioner(task.Type, pool)
+	if err != nil {
+		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
+	}
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, provisioner.ServiceConfig{}, err
 	}
 	if contractErr := validateTaskServiceEnvContract(manifest, task, config); contractErr != nil {
 		return nil, provisioner.ServiceConfig{}, contractErr
-	}
-
-	prov, err := provisioner.GetProvisioner(task.Type, pool)
-	if err != nil {
-		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
 	// Infrastructure roles need shared credentials during the initial

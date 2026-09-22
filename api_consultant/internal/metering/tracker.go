@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_consultant/internal/database/skipperdb"
 	"frameworks/api_consultant/internal/skipper"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -351,32 +352,31 @@ func (t *UsageTracker) publishPending(ctx context.Context) error {
 }
 
 func (t *UsageTracker) claimPending(ctx context.Context) ([]persistedUsage, error) {
-	tx, err := t.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck
-	queries := skipperdb.New(tx)
-	rows, err := queries.ClaimPendingUsage(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var result []persistedUsage
-	var ids []string
-	for _, row := range rows {
-		result = append(result, persistedUsage{
-			id: row.ID, tenantID: row.TenantID, eventType: row.EventType,
-			count: int(row.EventCount), inputTokens: int(row.TokensInput), outputTokens: int(row.TokensOutput),
-			model: row.Model, provider: row.Provider, createdAt: row.CreatedAt,
-		})
-		ids = append(ids, row.ID)
-	}
-	if len(ids) > 0 {
-		if err := queries.MarkUsageClaimed(ctx, ids); err != nil {
-			return nil, err
+	err := database.WithRetryablePostgresTx(ctx, t.db, nil, func(tx *sql.Tx) error {
+		result = nil
+		queries := skipperdb.New(tx)
+		rows, err := queries.ClaimPendingUsage(ctx)
+		if err != nil {
+			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		var ids []string
+		for _, row := range rows {
+			result = append(result, persistedUsage{
+				id: row.ID, tenantID: row.TenantID, eventType: row.EventType,
+				count: int(row.EventCount), inputTokens: int(row.TokensInput), outputTokens: int(row.TokensOutput),
+				model: row.Model, provider: row.Provider, createdAt: row.CreatedAt,
+			})
+			ids = append(ids, row.ID)
+		}
+		if len(ids) > 0 {
+			if err := queries.MarkUsageClaimed(ctx, ids); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return result, nil

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // Limits and schedules of the delivery ledger.
@@ -177,17 +178,7 @@ type Attempt struct {
 
 // inTx runs fn in a transaction and commits it.
 func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if fnErr := fn(tx); fnErr != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			return errors.Join(fnErr, rollbackErr)
-		}
-		return fnErr
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, s.DB, nil, fn)
 }
 
 func timePtr(t sql.NullTime) *time.Time {

@@ -228,7 +228,7 @@ func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchest
 		return fmt.Errorf("host %s not found in manifest", task.Host)
 	}
 	if !dryRun {
-		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
+		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, nil)
 		return err
 	}
 	prov, config, err := renderProvisionTask(task, c.pool, c.manifest, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)

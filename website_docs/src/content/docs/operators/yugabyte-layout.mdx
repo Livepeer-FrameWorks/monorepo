@@ -1,0 +1,244 @@
+---
+title: "YugabyteDB Physical Layout"
+description: "Colocated service databases, placement drift, and relaying out an existing database."
+sidebar:
+  order: 11
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="A short window per database">
+  Services keep running during a relayout. For the length of `cutover` they cannot reach the
+  database and see it as unavailable: requests that need it fail, and in-flight transactions are
+  rolled back. They reconnect on their own once access is restored. Run `preflight` first: it
+  rehearses the copy against the live database and reports the expected window. Relay out one
+  database at a time.
+</Aside>
+
+## Overview
+
+FrameWorks declares YugabyteDB placement for each platform database in the repository, not in the
+cluster manifest. Small tables share one colocated parent tablet, and tables that grow with events,
+media, sessions, or billing keep their own tablets. The layout and its criteria are described in
+[Database HA](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/database-ha.md).
+
+| Situation         | What happens                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| New database      | `cluster init`, `cluster provision`, `cluster migrate`, and `release apply` create each missing platform database with its declared layout, so one cluster can hold both placements for a while. |
+| Existing database | It keeps the placement it was created with. `cluster doctor` reports the drift as a warning that does not fail the check.                                                                        |
+| Moving a database | `frameworks cluster yugabyte relayout` copies it into a colocated database and renames that into place.                                                                                          |
+
+Colocation is fixed when a database is created, so an existing database can only move by being
+copied into a new one. A relayout copies the database's own schema with `ysql_dump`, so grants,
+runtime ledgers, and any schema the database carries beyond the repository baseline are copied
+exactly. Hash-sharded keys on tables that become colocated are converted to range keys, because a
+colocated database cannot hold hash-partitioned tables. Growth tables keep their hash keys and their
+own tablets.
+
+## How the window stays short
+
+Most of a copy's time goes into schema changes, not data. YugabyteDB builds every index online and
+waits for each schema change to reach every tserver, which costs seconds per index even on an empty
+table. A relayout therefore works in two phases:
+
+- **`prepare`, while services run.** Creates the copy, `<database>__relayout`, and builds its complete
+  schema: tables, indexes, constraints, and triggers. Nothing uses the copy, and the source is not
+  touched.
+- **`cutover`, the window.** Revokes access to the source and ends every session on every tserver,
+  checks the source schema still equals the copy's, dumps only the data, loads it with triggers and
+  foreign-key checks skipped (the rows come from a consistent source), verifies the copy, renames the
+  source to `<database>__pre_relayout` and the copy to the canonical name, and restores access.
+
+Services connect by database name, so after the renames their next connection reaches the relaid
+database. Revoking access is what keeps the source unchanged during the copy: YugabyteDB checks
+`CONNECT` only when a session starts, so the fence both revokes it and ends the sessions already
+open. Sessions are local to each tserver, which is why the fence ends and counts them on every node.
+
+## Checking placement
+
+The **Yugabyte layout** doctor check compares declared and observed placement for every table and
+secondary index. With `--verbose` it prints each database's layout, observed placement, distinct
+tablets, and tablet peers. `cluster snapshot` records the same placement rows and the tablets hosted
+by the snapshot node.
+
+```bash
+frameworks cluster doctor --manifest <path> --verbose
+```
+
+## Before the window
+
+Run the relayout command from a session that survives disconnects, such as `tmux` on a host inside
+the mesh. Every step can be re-run after an interruption, but a dropped SSH session restarts the step
+it was running. Every step accepts `--dry-run`, which prints its actions without connecting.
+
+1. Check readiness. `plan` is read-only. It proves:
+   - every tserver accepts local superuser YSQL;
+   - the manifest's Yugabyte hosts are exactly the live tservers;
+   - no tserver routes YSQL through the YSQL Connection Manager;
+   - the Yugabyte node has `ysql_dump`, `ysqlsh`, and a writable dump directory;
+   - the database has no tables outside its layout;
+   - no unrelated database already uses the `__relayout` or `__relayout_check` name.
+
+   It also shows placement, tablets, the services that will not reach the database during cutover,
+   and the journal state.
+
+   ```bash
+   frameworks cluster yugabyte relayout plan --manifest <path> --database quartermaster
+   ```
+
+2. Rehearse. `preflight` builds a colocated scratch database from the live database in the same order
+   a relayout does, then checks it:
+   - its schema, placement, and capability probes;
+   - a checksum of every row.
+
+   It then drops the scratch database. It changes nothing on the source, but it reads the whole
+   database and needs free disk for one data dump.
+
+   ```bash
+   frameworks cluster yugabyte relayout preflight --manifest <path> --database quartermaster
+   ```
+
+   Preflight prints two groups of timings. The phases before the window are the schema dump, the
+   tables, and the indexes and constraints. The phases inside it are the schema compare, the data
+   dump, the data load, and the checksums. It also prints the estimated window. Schedule from that
+   estimate, with margin. Any failure here is a problem the real relayout would have hit.
+
+   The scratch copy exists alongside the source, which is the same tablet replica count `prepare`
+   reaches, so a successful preflight also proves the cluster's tablet replica limit has room. Run it
+   shortly before the relayout, because tablet splits in other databases use that headroom.
+
+3. Prepare. Services keep running.
+
+   ```bash
+   frameworks cluster yugabyte relayout prepare --manifest <path> --database quartermaster
+   ```
+
+   From here until `finish` or a rollback, `cluster init`, `cluster migrate`,
+   `cluster upgrade yugabyte`, `release apply`, and `cluster provision` refuse to touch
+   Yugabyte databases, so the source schema cannot move away
+   from the copy's. If it changes anyway, `cutover` refuses before fencing and asks you to run
+   `prepare` again.
+
+## The window
+
+4. Cut over. One invocation runs the whole window, so no pause between steps lengthens it.
+
+   ```bash
+   frameworks cluster yugabyte relayout cutover --manifest <path> --database quartermaster --yes
+   ```
+
+   Verification compares:
+   - row counts and checksums, and sequences;
+   - triggers and constraints;
+   - effective privileges on every schema, table, column, function, and type;
+   - identity and generated columns, and sequence ownership;
+   - the migration ledgers, placement, and capability probes run as the runtime role.
+
+   Cutover prints how long it took.
+
+5. Confirm the result. Services reconnect by themselves.
+
+   ```bash
+   frameworks cluster doctor --manifest <path> --verbose
+   ```
+
+6. After the services run correctly, drop the original database and the staged dump.
+
+   ```bash
+   frameworks cluster yugabyte relayout finish --manifest <path> --database quartermaster --yes
+   ```
+
+## Interruptions and rollback
+
+Each step takes a lease on the database's journal row in the `yugabyte` admin database and renews it
+while the step runs, and again right before every rename, drop, create, revoke, or grant. A renewal
+that cannot reach the database, for example during a brief SSH interruption, is retried. The step
+stops when another invocation holds the lease. It also stops when no renewal has succeeded by one
+renewal interval before the lease could lapse, even while a renewal attempt still hangs.
+
+A lease held by a relayout process that no longer runs on the same host is taken over at once; a
+lease from a crashed invocation elsewhere expires after 15 minutes. A dead process can leave its work
+running on a host, such as a restore that keeps going after the SSH connection drops.
+
+Every script a relayout runs on a host is admitted as a worker of its invocation before it does
+anything. It records its process group under
+`/var/lib/frameworks/relayout-workers/<application name>` and then checks that its invocation was not
+revoked. A script that cannot record itself, or finds its invocation revoked, exits without running.
+So does a script, or a fence, that finds the registry or any directory above it writable by anyone
+but root or the SSH user, because such a registry could hold forged records. The application name is derived from the lease owner, and
+every database connection the relayout opens carries it too.
+
+Before taking over a lease, the new invocation fences the old one:
+
+1. On every Yugabyte host in the manifest, it revokes the old invocation and stops the scripts
+   recorded for it. This includes hosts whose tserver is down, because a script there would connect
+   once YSQL returns. A host that cannot be reached blocks the takeover until it answers or leaves
+   the manifest.
+2. It ends the old invocation's database sessions on the live tservers.
+3. It proves none remains.
+
+A script of the old invocation that was about to start then finds it revoked and never runs.
+
+A step that fails or is cancelled is fenced the same way before its lease is released. If that cannot
+be proved, the lease keeps naming the failed invocation, and the next invocation fences it before
+acting.
+
+Re-run an interrupted `cutover`: it resumes from the recorded state and checks which databases exist,
+including an interruption between the two renames. A data load interrupted part way empties the copy
+and loads again. If a session will not go away, the fence stops with access still revoked and names
+the session; run `cutover` again once it is gone, or roll back to restore access.
+
+Roll back at any point before access is restored:
+
+```bash
+frameworks cluster yugabyte relayout cutover --manifest <path> --database quartermaster --rollback --yes
+```
+
+Rollback before the window only drops the copy, because services never lost access. Otherwise it:
+
+1. finds the original database by the identity the fence recorded, under whichever relayout name it
+   holds;
+2. returns it to its name with its recorded access;
+3. drops the copy and removes the staged dump.
+
+An interrupted rollback can be run again and continues from what the cluster shows. It checks the
+dump location before changing anything, so pass the same `--dump-dir` that `cutover` used. A tserver
+that is down does not block it.
+
+Once `cutover` has restored access, services may have written to the relaid database, so rollback
+refuses. It also refuses when an interrupted `cutover` granted access before recording it, and tells
+you to run `cutover` again instead. `cutover` in turn refuses to restore access to anything but the
+relaid copy. Until `finish` runs, the original data remains in `<database>__pre_relayout`.
+
+Every step fails if a session outlives termination and names each one: process id, user,
+application, client, state, and query. The relayout's own connections appear as
+`frameworks-relayout`.
+
+## Limits
+
+- The window grows with the data: the data dump, the load, and the checksums read every row.
+  Preflight measures them.
+- A tserver running the YSQL Connection Manager blocks a relayout. The pooler keeps connections on a
+  renamed database and does not evict them (yugabyte-db #33018), so its clients would keep failing
+  after cutover.
+- A table the layout does not classify blocks the relayout, except the `_migrations`,
+  `_data_migrations`, and `_data_migration_runs` ledgers, which are placed colocated in whichever
+  schema holds them. A service's data-migration runner creates its two ledgers in its own schema
+  when one is named after its role.
+- Privileges are compared by who holds which privilege, with or without grant option, not by who
+  granted them. An object created by the migrate role and later owned by the service role keeps
+  grants recorded as made by `yugabyte`. PostgreSQL records any grant a superuser makes as made by
+  the owner, so a copy cannot reproduce that grantor, but the access is the same.
+- Database-level settings (`ALTER DATABASE ... SET`) are not copied, so a database that has them is
+  refused. So is a database whose encoding, collation, or character type differs from `template1`,
+  or that uses a non-default tablespace for itself or any relation. The connection limit, owner,
+  access list, and comment are carried over.
+- Any output `ysql_dump` or a restore writes to stderr fails the step, because it reports problems
+  it does not treat as fatal. `preflight` surfaces them before the window.
+- The staged data dump lives on the node that took it. `finish` and rollback remove it there, so that
+  node must be reachable. If it is not, rollback still returns the database and restores access, and
+  a later rollback run removes the dump.
+- A database ACL entry with a quoted role name is refused rather than guessed.
+- `preflight` and `prepare` create databases, which YugabyteDB records as catalog changes. Services
+  replay a transaction that meets a catalog-version error, so this shows as brief retries rather
+  than failures.

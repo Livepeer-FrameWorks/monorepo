@@ -350,3 +350,78 @@ func TestBaselineReferenceNames(t *testing.T) {
 		t.Fatalf("suffix = %q, err = %v", suffix, err)
 	}
 }
+
+// ybColocationProbe answers the colocation query for a YugabyteDB source and records the statements run.
+type ybColocationProbe struct {
+	completionProbe
+	colocated string
+}
+
+func (p *ybColocationProbe) scalarText(_ context.Context, _, query string) (string, error) {
+	if query == "SELECT yb_is_database_colocated()" {
+		return p.colocated, nil
+	}
+	panic("unexpected text query " + query)
+}
+
+func (*ybColocationProbe) maintenanceDatabase() string { return "yugabyte" }
+
+func (*ybColocationProbe) yugabyte() bool { return true }
+
+// TestYugabyteBaselineReferenceCopiesTheSourceColocation proves the reference database is created in the source's
+// shape, because index definitions differ between colocated (ASC) and distributed (HASH) databases.
+func TestYugabyteBaselineReferenceCopiesTheSourceColocation(t *testing.T) {
+	for _, tc := range []struct {
+		colocated, want string
+	}{
+		{"t", `CREATE DATABASE "purser__baseline_check_x" WITH COLOCATION = true`},
+		{"f", `CREATE DATABASE "purser__baseline_check_x"`},
+	} {
+		probe := &ybColocationProbe{colocated: tc.colocated}
+		if err := createBaselineReferenceDatabase(context.Background(), probe, "purser", "purser__baseline_check_x"); err != nil {
+			t.Fatalf("createBaselineReferenceDatabase: %v", err)
+		}
+		if len(probe.statements) != 1 || probe.statements[0] != "yugabyte: "+tc.want {
+			t.Fatalf("colocated=%s statements = %v, want %q", tc.colocated, probe.statements, tc.want)
+		}
+	}
+	if err := createBaselineReferenceDatabase(context.Background(), &ybColocationProbe{colocated: ""}, "purser", "x"); err == nil {
+		t.Fatal("an unreadable colocation created a reference anyway")
+	}
+}
+
+// busyDropProbe refuses the first drops as a database still being accessed, then accepts.
+type busyDropProbe struct {
+	completionProbe
+	refusals int
+}
+
+func (p *busyDropProbe) exec(ctx context.Context, database, statement string) error {
+	p.statements = append(p.statements, database+": "+statement)
+	if p.refusals > 0 {
+		p.refusals--
+		return errors.New(`ERROR:  database "x" is being accessed by other users`)
+	}
+	return nil
+}
+
+func TestDropDatabaseWaitsForLingeringBackends(t *testing.T) {
+	probe := &busyDropProbe{refusals: 1}
+	if err := dropDatabaseIfExists(context.Background(), probe, "purser__baseline_check_x"); err != nil {
+		t.Fatalf("drop after one refusal: %v", err)
+	}
+	if len(probe.statements) != 2 {
+		t.Fatalf("drop attempts = %d, want a retry after the refusal", len(probe.statements))
+	}
+	other := &failingDropProbe{}
+	if err := dropDatabaseIfExists(context.Background(), other, "x"); err == nil || len(other.statements) != 1 {
+		t.Fatalf("a different failure was retried: attempts=%d err=%v", len(other.statements), err)
+	}
+}
+
+type failingDropProbe struct{ completionProbe }
+
+func (p *failingDropProbe) exec(_ context.Context, database, statement string) error {
+	p.statements = append(p.statements, database+": "+statement)
+	return errors.New("permission denied")
+}

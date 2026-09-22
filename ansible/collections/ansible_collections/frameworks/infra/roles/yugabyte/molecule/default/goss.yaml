@@ -20,15 +20,19 @@ port:
     listening: true
 
 file:
-  /opt/yugabyte/bin/yb-master:
+  /opt/yugabyte/current/bin/yb-master:
+    exists: true
+    filetype: symlink
+    linked-to: yb-server
+  /opt/yugabyte/current/bin/yb-tserver:
+    exists: true
+    filetype: symlink
+    linked-to: yb-server
+  /opt/yugabyte/current/bin/yb-server:
     exists: true
     filetype: file
     mode: "0755"
-  /opt/yugabyte/bin/yb-tserver:
-    exists: true
-    filetype: file
-    mode: "0755"
-  /opt/yugabyte/.post_install_done:
+  /opt/yugabyte/current/.post_install_done:
     exists: true
   /opt/yugabyte/conf/master.conf:
     exists: true
@@ -43,11 +47,11 @@ file:
   /etc/systemd/system/yb-master.service:
     exists: true
     contains:
-      - "ExecStart=/opt/yugabyte/bin/yb-master"
+      - "/ExecStart=/opt/yugabyte/releases/[a-f0-9]+/bin/yb-master/"
   /etc/systemd/system/yb-tserver.service:
     exists: true
     contains:
-      - "ExecStart=/opt/yugabyte/bin/yb-tserver"
+      - "/ExecStart=/opt/yugabyte/releases/[a-f0-9]+/bin/yb-tserver/"
 
 user:
   yugabyte:

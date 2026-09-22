@@ -166,7 +166,7 @@ func TestProvisionTaskFailsWithoutFieldEncryptionKey(t *testing.T) {
 	task := contractTask("commodore")
 	host, _ := manifest.GetHost(task.Host)
 
-	_, err := provisionTask(context.Background(), task, host, nil, manifest, false, false, map[string]any{}, "", sharedEnv, nil, nil)
+	_, err := provisionTask(context.Background(), task, host, nil, manifest, false, false, map[string]any{}, "", sharedEnv, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "FIELD_ENCRYPTION_KEY") {
 		t.Fatalf("provision without FIELD_ENCRYPTION_KEY: err = %v, want failure naming it", err)
 	}

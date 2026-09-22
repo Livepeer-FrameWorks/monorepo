@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -318,78 +320,99 @@ func (s *Store) MarkMediaObjectLocalSourceReady(ctx context.Context, tenantID, a
 }
 
 func (s *Store) MarkPlaybackPairLocalReadReady(ctx context.Context, tenantID string, tenantVersion int64, authorityID string, objectVersion int64) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	stage := "begin"
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		queries := foghorndb.New(tx)
+		tenantRows, err := queries.MarkTenantAuthorityLocalReadReady(ctx, foghorndb.MarkTenantAuthorityLocalReadReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
+		})
+		if err != nil || tenantRows != 1 {
+			return fmt.Errorf("promote tenant local read: rows=%d: %w", tenantRows, err)
+		}
+		objectRows, err := queries.MarkMediaObjectAuthorityLocalReadReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalReadReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		})
+		if err != nil || objectRows != 1 {
+			return fmt.Errorf("promote media-object local read: rows=%d: %w", objectRows, err)
+		}
+		stage = "commit"
+		return nil
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case stage == "begin":
 		return false, fmt.Errorf("begin local-read promotion: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	tenantRows, err := queries.MarkTenantAuthorityLocalReadReady(ctx, foghorndb.MarkTenantAuthorityLocalReadReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
-	})
-	if err != nil || tenantRows != 1 {
-		return false, fmt.Errorf("promote tenant local read: rows=%d: %w", tenantRows, err)
-	}
-	objectRows, err := queries.MarkMediaObjectAuthorityLocalReadReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalReadReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
-	})
-	if err != nil || objectRows != 1 {
-		return false, fmt.Errorf("promote media-object local read: rows=%d: %w", objectRows, err)
-	}
-	if err := tx.Commit(); err != nil {
+	case stage == "commit":
 		return false, fmt.Errorf("commit local-read promotion: %w", err)
+	default:
+		return false, err
 	}
-	return true, nil
 }
 
 func (s *Store) MarkIngestPairLocalReady(ctx context.Context, tenantID string, tenantVersion int64, authorityID string, objectVersion int64) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	stage := "begin"
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		queries := foghorndb.New(tx)
+		tenantRows, err := queries.MarkTenantAuthorityLocalIngestReady(ctx, foghorndb.MarkTenantAuthorityLocalIngestReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
+		})
+		if err != nil || tenantRows != 1 {
+			return fmt.Errorf("promote tenant local ingest: rows=%d: %w", tenantRows, err)
+		}
+		objectRows, err := queries.MarkMediaObjectAuthorityLocalIngestReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalIngestReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		})
+		if err != nil || objectRows != 1 {
+			return fmt.Errorf("promote media-object local ingest: rows=%d: %w", objectRows, err)
+		}
+		stage = "commit"
+		return nil
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case stage == "begin":
 		return false, fmt.Errorf("begin local-ingest promotion: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	tenantRows, err := queries.MarkTenantAuthorityLocalIngestReady(ctx, foghorndb.MarkTenantAuthorityLocalIngestReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
-	})
-	if err != nil || tenantRows != 1 {
-		return false, fmt.Errorf("promote tenant local ingest: rows=%d: %w", tenantRows, err)
-	}
-	objectRows, err := queries.MarkMediaObjectAuthorityLocalIngestReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalIngestReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
-	})
-	if err != nil || objectRows != 1 {
-		return false, fmt.Errorf("promote media-object local ingest: rows=%d: %w", objectRows, err)
-	}
-	if err := tx.Commit(); err != nil {
+	case stage == "commit":
 		return false, fmt.Errorf("commit local-ingest promotion: %w", err)
+	default:
+		return false, err
 	}
-	return true, nil
 }
 
 func (s *Store) MarkSourcePairLocalReady(ctx context.Context, tenantID string, tenantVersion int64, authorityID string, objectVersion int64) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+	stage := "begin"
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { stage = "begin" }, func(tx *sql.Tx) error {
+		stage = "body"
+		queries := foghorndb.New(tx)
+		tenantRows, err := queries.MarkTenantAuthorityLocalSourceReady(ctx, foghorndb.MarkTenantAuthorityLocalSourceReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
+		})
+		if err != nil || tenantRows != 1 {
+			return fmt.Errorf("promote tenant local source: rows=%d: %w", tenantRows, err)
+		}
+		objectRows, err := queries.MarkMediaObjectAuthorityLocalSourceReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalSourceReadyParams{
+			TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		})
+		if err != nil || objectRows != 1 {
+			return fmt.Errorf("promote media-object local source: rows=%d: %w", objectRows, err)
+		}
+		stage = "commit"
+		return nil
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case stage == "begin":
 		return false, fmt.Errorf("begin local-source promotion: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best effort after commit/error
-	queries := foghorndb.New(tx)
-	tenantRows, err := queries.MarkTenantAuthorityLocalSourceReady(ctx, foghorndb.MarkTenantAuthorityLocalSourceReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityVersion: tenantVersion,
-	})
-	if err != nil || tenantRows != 1 {
-		return false, fmt.Errorf("promote tenant local source: rows=%d: %w", tenantRows, err)
-	}
-	objectRows, err := queries.MarkMediaObjectAuthorityLocalSourceReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalSourceReadyParams{
-		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
-	})
-	if err != nil || objectRows != 1 {
-		return false, fmt.Errorf("promote media-object local source: rows=%d: %w", objectRows, err)
-	}
-	if err := tx.Commit(); err != nil {
+	case stage == "commit":
 		return false, fmt.Errorf("commit local-source promotion: %w", err)
+	default:
+		return false, err
 	}
-	return true, nil
 }
 
 func authorityFreshness(now, refreshAfter, validUntil time.Time) Freshness {

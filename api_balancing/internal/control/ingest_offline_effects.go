@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // OfflineEffectIntent describes the idempotent stream-offline work that must follow an authoritative
@@ -197,42 +199,46 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 	if effect.ID <= 0 || effect.TenantID == "" || effect.InternalName == "" || effect.LeaseToken == "" {
 		return false, fmt.Errorf("apply offline effect missing identity")
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin offline effect tx: %w", err)
-	}
-	defer rollbackQuiet(tx)
-	qtx := foghorndb.New(tx)
-	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
-		return false, fmt.Errorf("lock offline effect stream: %w", lockErr)
-	}
-	flags, err := readOfflineLegsLocked(ctx, tx, effect)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, tx.Commit()
-	}
-	if err != nil {
-		return false, fmt.Errorf("lock offline effect lease: %w", err)
-	}
-	effect.SetNodeOfflineDone = flags.nodeOffline
-	effect.TeardownDone = flags.teardown
-	effect.BroadcastOfflineDone = flags.broadcast
-	effect.DecklogDone = flags.decklog
-	active, probeErr := qtx.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
-	if probeErr != nil {
-		return false, fmt.Errorf("recheck offline effect authority: %w", probeErr)
-	}
-	if active {
-		n, updateErr := qtx.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
-		if updateErr != nil {
-			return false, fmt.Errorf("supersede offline effect: %w", updateErr)
+	var (
+		authorityStop    bool
+		authorityOutcome bool
+	)
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		authorityStop, authorityOutcome = false, false
+		qtx := foghorndb.New(tx)
+		if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
+			return fmt.Errorf("lock offline effect stream: %w", lockErr)
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return false, fmt.Errorf("commit superseded offline effect: %w", commitErr)
+		flags, readErr := readOfflineLegsLocked(ctx, tx, effect)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			authorityStop = true
+			return nil
 		}
-		return n == 1, nil
+		if readErr != nil {
+			return fmt.Errorf("lock offline effect lease: %w", readErr)
+		}
+		effect.SetNodeOfflineDone = flags.nodeOffline
+		effect.TeardownDone = flags.teardown
+		effect.BroadcastOfflineDone = flags.broadcast
+		effect.DecklogDone = flags.decklog
+		active, probeErr := qtx.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
+		if probeErr != nil {
+			return fmt.Errorf("recheck offline effect authority: %w", probeErr)
+		}
+		if active {
+			n, updateErr := qtx.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
+			if updateErr != nil {
+				return fmt.Errorf("supersede offline effect: %w", updateErr)
+			}
+			authorityStop, authorityOutcome = true, n == 1
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, fmt.Errorf("commit offline effect authority phase: %w", commitErr)
+	if authorityStop {
+		return authorityOutcome, nil
 	}
 	if apply == nil {
 		return false, errors.New("apply offline effect callback is nil")
@@ -240,50 +246,57 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 
 	legs, applyErr := apply(ctx, effect)
 
-	tx3, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, errors.Join(applyErr, fmt.Errorf("begin offline effect settle tx: %w", err))
-	}
-	defer rollbackQuiet(tx3)
-	qtx3 := foghorndb.New(tx3)
-	if lockErr := qtx3.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
-		return false, errors.Join(applyErr, fmt.Errorf("lock offline effect stream for settle: %w", lockErr))
-	}
-	current, err := readOfflineLegsLocked(ctx, tx3, effect)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, errors.Join(applyErr, tx3.Commit())
-	}
-	if err != nil {
-		return false, errors.Join(applyErr, fmt.Errorf("re-read offline effect legs: %w", err))
-	}
-	active, err = qtx3.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
-	if err != nil {
-		return false, errors.Join(applyErr, fmt.Errorf("recheck offline effect authority for settle: %w", err))
-	}
-	if active || errors.Is(applyErr, ErrOfflineEffectSuperseded) {
-		n, updateErr := qtx3.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
-		if updateErr != nil {
-			return false, errors.Join(applyErr, fmt.Errorf("supersede offline effect after dispatch: %w", updateErr))
+	var (
+		settleNoRows     bool
+		settleSuperseded bool
+		settleOutcome    bool
+	)
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx3 *sql.Tx) error {
+		settleNoRows, settleSuperseded, settleOutcome = false, false, false
+		qtx3 := foghorndb.New(tx3)
+		if lockErr := qtx3.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
+			return fmt.Errorf("lock offline effect stream for settle: %w", lockErr)
 		}
-		if commitErr := tx3.Commit(); commitErr != nil {
-			return false, errors.Join(applyErr, fmt.Errorf("commit superseded offline effect after dispatch: %w", commitErr))
+		current, readErr := readOfflineLegsLocked(ctx, tx3, effect)
+		if errors.Is(readErr, sql.ErrNoRows) {
+			settleNoRows = true
+			return nil
 		}
-		return n == 1, nil
-	}
-	current.nodeOffline = current.nodeOffline || legs.SetNodeOfflineDone
-	current.broadcast = current.broadcast || legs.BroadcastOfflineDone
-	current.decklog = current.decklog || legs.DecklogDone
-	completed, err := settleOfflineEffectLocked(ctx, tx3, effect, current, applyErr == nil)
+		if readErr != nil {
+			return fmt.Errorf("re-read offline effect legs: %w", readErr)
+		}
+		active, probeErr := qtx3.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
+		if probeErr != nil {
+			return fmt.Errorf("recheck offline effect authority for settle: %w", probeErr)
+		}
+		if active || errors.Is(applyErr, ErrOfflineEffectSuperseded) {
+			n, updateErr := qtx3.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
+			if updateErr != nil {
+				return fmt.Errorf("supersede offline effect after dispatch: %w", updateErr)
+			}
+			settleSuperseded, settleOutcome = true, n == 1
+			return nil
+		}
+		current.nodeOffline = current.nodeOffline || legs.SetNodeOfflineDone
+		current.broadcast = current.broadcast || legs.BroadcastOfflineDone
+		current.decklog = current.decklog || legs.DecklogDone
+		completed, settleErr := settleOfflineEffectLocked(ctx, tx3, effect, current, applyErr == nil)
+		if settleErr != nil {
+			return settleErr
+		}
+		settleOutcome = completed
+		return nil
+	})
 	if err != nil {
 		return false, errors.Join(applyErr, err)
 	}
-	if commitErr := tx3.Commit(); commitErr != nil {
-		return false, errors.Join(applyErr, fmt.Errorf("commit offline effect settle: %w", commitErr))
+	if settleSuperseded {
+		return settleOutcome, nil
 	}
-	if applyErr != nil {
+	if settleNoRows || applyErr != nil {
 		return false, applyErr
 	}
-	return completed, nil
+	return settleOutcome, nil
 }
 
 // MarkOfflineTeardownDone records Helmsman's post-stop PushList convergence

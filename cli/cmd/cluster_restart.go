@@ -77,6 +77,10 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 		deployName = serviceName // infrastructure services use canonical IDs
 	}
 
+	if serviceName == "yugabyte" {
+		return runYugabyteRollingRestart(cmd, rc, deployName, validate)
+	}
+
 	hosts, err := resolveRestartHosts(manifest, serviceName)
 	if err != nil {
 		return err
@@ -274,4 +278,89 @@ func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inven
 		}
 	}
 	return inventory.Host{}, false
+}
+
+// yugabyteRollingRestartDeadline bounds a rolling restart of nodes nodes. Each node may wait for the masters to allow
+// its restart and then for its own recovery, each up to the roll's recovery timeout, on top of the restart itself.
+func yugabyteRollingRestartDeadline(nodes int) time.Duration {
+	return time.Duration(nodes) * (2*yugabyteRollRecoveryTimeout + 5*time.Minute)
+}
+
+// runYugabyteRollingRestart restarts every Yugabyte node, one at a time, through the roll's gate: nodes that are down
+// first, each serving node only once the masters confirm the universe survives losing it, and the next node only after
+// the restarted one has recovered. The first failure stops the restart.
+func runYugabyteRollingRestart(cmd *cobra.Command, rc *resolvedCluster, deployName string, validate bool) error {
+	manifest := rc.Manifest
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	sshPool := ssh.NewPool(30*time.Second, sshKey)
+	defer sshPool.Close()
+
+	roll := newYugabyteGate(cmd.OutOrStdout(), manifest, sshPool)
+	if roll == nil {
+		return fmt.Errorf("service yugabyte not found or not enabled in manifest")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), yugabyteRollingRestartDeadline(len(roll.hosts)))
+	defer cancel()
+
+	prov, err := provisioner.GetProvisioner(deployName, sshPool)
+	if err != nil {
+		return fmt.Errorf("get provisioner for %s: %w", deployName, err)
+	}
+	restarter, ok := prov.(provisioner.Restarter)
+	if !ok {
+		return fmt.Errorf("provisioner for %s does not support role-based restart", deployName)
+	}
+	manifestDir := filepath.Dir(rc.ManifestPath)
+	sharedEnv, envErr := rc.PreparedSharedEnv()
+	if envErr != nil {
+		return fmt.Errorf("prepare shared environment: %w", envErr)
+	}
+	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
+	if clusterEnvsErr != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "  warning: cluster env decrypt failed: %v\n", clusterEnvsErr)
+		clusterEnvs = nil
+	}
+
+	names := make([]string, 0, len(roll.hosts))
+	for _, host := range roll.hosts {
+		roll.serving[host.Name] = roll.u.ServesYSQL(ctx, host)
+		names = append(names, host.Name)
+	}
+	roll.setOrder(names)
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Restarting yugabyte on %d node(s), one at a time", len(roll.hosts)))
+	for _, name := range roll.order {
+		host, found := manifest.GetHost(name)
+		if !found {
+			return fmt.Errorf("yugabyte node %s not found in manifest", name)
+		}
+		task := &orchestrator.Task{
+			Name: "yugabyte", Type: deployName, ServiceID: "yugabyte", Host: host.Name,
+			Phase: orchestrator.PhaseInfrastructure, Idempotent: true,
+		}
+		config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+		if cfgErr != nil {
+			return fmt.Errorf("build restart config for %s: %w", host.Name, cfgErr)
+		}
+		rc.applyReleaseMetadata(config.Metadata)
+		fmt.Fprintf(cmd.OutOrStdout(), "\n--- %s ---\n", host.Name)
+		err := roll.change(ctx, host, func(gate func() error) error {
+			if gateErr := gate(); gateErr != nil {
+				return gateErr
+			}
+			if restartErr := restarter.Restart(ctx, host, config); restartErr != nil {
+				return fmt.Errorf("restart yugabyte on %s: %w", host.Name, restartErr)
+			}
+			if validate {
+				if validateErr := prov.Validate(ctx, host, config); validateErr != nil {
+					return fmt.Errorf("yugabyte on %s restarted but health check failed: %w", host.Name, validateErr)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("yugabyte restarted on %d node(s)", len(roll.hosts)))
+	return nil
 }

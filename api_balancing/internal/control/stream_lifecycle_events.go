@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/domainevents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // MarkIngestSessionPlayable records the first playable buffer of the stream's
@@ -24,25 +25,28 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 	if tenantID == "" || nodeID == "" || internalName == "" {
 		return false, nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin mark ingest session playable: %w", err)
-	}
-	defer rollbackQuiet(tx)
-	marked, err := foghorndb.New(tx).MarkIngestSessionPlayable(ctx, foghorndb.MarkIngestSessionPlayableParams{
-		TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis,
+	marked := false
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		markedRow, err := foghorndb.New(tx).MarkIngestSessionPlayable(ctx, foghorndb.MarkIngestSessionPlayableParams{
+			TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventMillis,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return errTxRollbackNoop
+		}
+		if err != nil {
+			return fmt.Errorf("mark ingest session playable: %w", err)
+		}
+		if err := domainevents.StreamLive(ctx, tx, tenantID, markedRow.StreamID); err != nil {
+			return err
+		}
+		marked = true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, errTxRollbackNoop) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("mark ingest session playable: %w", err)
-	}
-	if err := domainevents.StreamLive(ctx, tx, tenantID, marked.StreamID); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit ingest session playable: %w", err)
 	}
-	return true, nil
+	return marked, nil
 }

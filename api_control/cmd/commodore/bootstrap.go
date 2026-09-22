@@ -141,89 +141,120 @@ func runBootstrapCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", nodeErr)
 		return 1
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: begin tx: %v\n", err)
-		return 1
-	}
 
-	res, warnings, err := bootstrap.ReconcileAccounts(ctx, tx, desired.Accounts, resolver, *resetCreds)
-	for _, w := range warnings {
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: warning: %s\n", w)
+	// The reconcile body replays on retryable transaction failures, so its
+	// report lines are buffered per attempt and printed once the outcome is known.
+	var (
+		out     []bootstrapReportLine
+		bodyRan bool
+		bodyErr error
+	)
+	report := func(stderr bool, format string, args ...any) {
+		out = append(out, bootstrapReportLine{stderr: stderr, text: fmt.Sprintf(format, args...)})
 	}
-	if err != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
-		return 1
-	}
-	fmt.Fprintf(os.Stdout, "commodore bootstrap accounts: created=%d updated=%d noop=%d\n",
-		len(res.Created), len(res.Updated), len(res.Noop))
-
-	if streams := desired.Commodore.PullStreams; len(streams) > 0 {
-		encrypter, encrypterErr := newSourceURIEncrypter(cfg)
-		if encrypterErr != nil {
-			_ = tx.Rollback() //nolint:errcheck // already in error path
-			fmt.Fprintf(os.Stderr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
-			return 1
+	reconcile := func(tx *sql.Tx) error {
+		out, bodyRan, bodyErr = out[:0], true, nil
+		fail := func(err error, format string, args ...any) error {
+			report(true, format, args...)
+			bodyErr = err
+			return err
 		}
-		clusterResolver := &grpcClusterResolver{client: resolver.client}
-		psRes, reconcileErr := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
-		if reconcileErr != nil {
-			_ = tx.Rollback() //nolint:errcheck // already in error path
-			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", reconcileErr)
-			return 1
+
+		res, warnings, err := bootstrap.ReconcileAccounts(ctx, tx, desired.Accounts, resolver, *resetCreds)
+		for _, w := range warnings {
+			report(true, "commodore bootstrap: warning: %s\n", w)
 		}
-		fmt.Fprintf(os.Stdout, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
-			len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
+		if err != nil {
+			return fail(err, "commodore bootstrap: %v\n", err)
+		}
+		report(false, "commodore bootstrap accounts: created=%d updated=%d noop=%d\n",
+			len(res.Created), len(res.Updated), len(res.Noop))
+
+		if streams := desired.Commodore.PullStreams; len(streams) > 0 {
+			encrypter, encrypterErr := newSourceURIEncrypter(cfg)
+			if encrypterErr != nil {
+				return fail(encrypterErr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
+			}
+			clusterResolver := &grpcClusterResolver{client: resolver.client}
+			psRes, reconcileErr := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
+			if reconcileErr != nil {
+				return fail(reconcileErr, "commodore bootstrap: %v\n", reconcileErr)
+			}
+			report(false, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
+				len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
+		}
+
+		// Mist-native streams: always reconcile, even when the desired list is
+		// empty. ReconcileMistNativeStreams handles upserts; an empty list means
+		// "every previously-bootstrapped mist_native stream under the operator
+		// tenant must be deleted". Without this call the declarative remove path
+		// would be broken — pulling a stream out of bootstrap.yaml has to stop
+		// the stream, not leave it running.
+		mnStreams := desired.Commodore.MistNativeStreams
+		var mnRes bootstrap.Result
+		var mnErr error
+		if len(mnStreams) > 0 {
+			mnRes, mnErr = bootstrap.ReconcileMistNativeStreams(ctx, tx, mnStreams, resolver)
+		} else {
+			// No desired rows declared. Scope the prune to the operator/system
+			// tenant — any other tenant's mist_native streams stay untouched
+			// (the operator-tenant scope matches the render-time exec gate).
+			mnRes, mnErr = bootstrap.PruneAllMistNativeStreams(ctx, tx, resolver, []string{bootstrap.SystemTenantAlias})
+		}
+		if mnErr != nil {
+			return fail(mnErr, "commodore bootstrap: %v\n", mnErr)
+		}
+		report(false, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
+			len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
+
+		// Source locations become the declared streams' own ingest placement rules
+		// once every declared stream row exists in this transaction.
+		locationRes, err := bootstrap.ReconcileStreamSourceLocations(ctx, tx, desired.Commodore, resolver)
+		if err != nil {
+			return fail(err, "commodore bootstrap: %v\n", err)
+		}
+		report(false, "commodore bootstrap stream source_locations: updated=%d noop=%d\n",
+			len(locationRes.Updated), len(locationRes.Noop))
+		return nil
 	}
 
-	// Mist-native streams: always reconcile, even when the desired list is
-	// empty. ReconcileMistNativeStreams handles upserts; an empty list means
-	// "every previously-bootstrapped mist_native stream under the operator
-	// tenant must be deleted". Without this call the declarative remove path
-	// would be broken — pulling a stream out of bootstrap.yaml has to stop
-	// the stream, not leave it running.
-	mnStreams := desired.Commodore.MistNativeStreams
-	var mnRes bootstrap.Result
-	var mnErr error
-	if len(mnStreams) > 0 {
-		mnRes, mnErr = bootstrap.ReconcileMistNativeStreams(ctx, tx, mnStreams, resolver)
-	} else {
-		// No desired rows declared. Scope the prune to the operator/system
-		// tenant — any other tenant's mist_native streams stay untouched
-		// (the operator-tenant scope matches the render-time exec gate).
-		mnRes, mnErr = bootstrap.PruneAllMistNativeStreams(ctx, tx, resolver, []string{bootstrap.SystemTenantAlias})
-	}
-	if mnErr != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", mnErr)
-		return 1
-	}
-	fmt.Fprintf(os.Stdout, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
-		len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
-
-	// Source locations become the declared streams' own ingest placement rules
-	// once every declared stream row exists in this transaction.
-	locationRes, err := bootstrap.ReconcileStreamSourceLocations(ctx, tx, desired.Commodore, resolver)
-	if err != nil {
-		_ = tx.Rollback() //nolint:errcheck // already in error path
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
-		return 1
-	}
-	fmt.Fprintf(os.Stdout, "commodore bootstrap stream source_locations: updated=%d noop=%d\n",
-		len(locationRes.Updated), len(locationRes.Noop))
-
+	// A replay discards the aborted attempt's report, so a later begin failure is not mistaken for a failed commit
+	// of that attempt's work.
+	resetAttempt := func(error, int) { out, bodyRan, bodyErr = out[:0], false, nil }
+	var txErr error
 	if *dryRun {
-		if err := tx.Rollback(); err != nil {
-			fmt.Fprintf(os.Stderr, "commodore bootstrap [dry-run] rollback: %v\n", err)
-			return 1
-		}
-		fmt.Fprintln(os.Stdout, "commodore bootstrap [dry-run] rolled back; no changes persisted")
-		return 0
+		txErr = database.WithRetryablePostgresRollbackTxWithHook(ctx, db, nil, resetAttempt, reconcile)
+	} else {
+		txErr = database.WithRetryablePostgresTxWithHook(ctx, db, nil, resetAttempt, reconcile)
 	}
-	if err := tx.Commit(); err != nil {
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: commit: %v\n", err)
+	bodyFailed := bodyErr != nil && errors.Is(txErr, bodyErr)
+	finishFailed := txErr != nil && !bodyFailed && bodyRan && bodyErr == nil
+	// The report describes work that was applied (or, for --dry-run, rolled back on purpose); an attempt whose commit
+	// failed applied nothing, so only its failure is printed.
+	if txErr == nil || bodyFailed {
+		for _, line := range out {
+			if line.stderr {
+				fmt.Fprint(os.Stderr, line.text)
+			} else {
+				fmt.Fprint(os.Stdout, line.text)
+			}
+		}
+	}
+	switch {
+	case bodyFailed:
 		return 1
+	case finishFailed && *dryRun:
+		fmt.Fprintf(os.Stderr, "commodore bootstrap [dry-run] rollback: %v\n", txErr)
+		return 1
+	case finishFailed:
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: commit: %v\n", txErr)
+		return 1
+	case txErr != nil:
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: begin tx: %v\n", txErr)
+		return 1
+	}
+	if *dryRun {
+		fmt.Fprintln(os.Stdout, "commodore bootstrap [dry-run] rolled back; no changes persisted")
 	}
 	return 0
 }
@@ -272,6 +303,11 @@ func requireSourceLocationNodePlacement(ctx context.Context, section bootstrap.C
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return bootstrap.RequireSourceLocationNodePlacement(checkCtx, section, resolver, checker)
+}
+
+type bootstrapReportLine struct {
+	stderr bool
+	text   string
 }
 
 // grpcTenantResolver dials Quartermaster's TenantService and resolves

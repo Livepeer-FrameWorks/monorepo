@@ -41,6 +41,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -3168,210 +3169,205 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 	// rows committed before it acquired the lock. Make that PostgreSQL dependency explicit: under
 	// REPEATABLE READ a transaction could retain the snapshot it took while waiting and miss the
 	// preceding admission.
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return "", 0, fmt.Errorf("begin ingest-session tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logger.WithError(rbErr).Warn("Failed to roll back ingest-session tx")
-		}
-	}()
-
-	q := foghorndb.New(tx)
-	// Serialize every tenant admission before taking the narrower stream lock.
-	// Capped and unlimited authority generations can overlap during rollout or
-	// an outage; taking this lock unconditionally keeps a capped count+insert
-	// atomic against either generation. PostgreSQL is the shared authority, so
-	// cache state can neither revoke nor strand a publisher.
-	if lockErr := q.LockIngestStream(ctx, ingestTenantCapacityAdvisoryLockKey(tenantID)); lockErr != nil {
-		return "", 0, fmt.Errorf("acquire ingest-session tenant capacity lock: %w", lockErr)
-	}
-
-	// STREAM-scoped advisory lock: serialize ALL admissions for this (tenant, stream) — across
-	// Foghorn REPLICAS, since the lock is held in the shared per-cell database. This is the HA
-	// authority the process-local StreamRegistry cannot be: two replicas handling PUSH_REWRITEs for
-	// the same stream on different nodes contend here, so exactly one wins the admission decision.
-	// A (node, PID)-scoped lock could not provide this — two nodes' admissions for one stream would
-	// never contend on it. A connector PID maps to exactly one stream, so the stream lock also
-	// subsumes same-PID serialization. FinalizeIngestSessionClose takes the SAME lock, so a close-before-insert fully
-	// serializes against this mint (the close's tombstone is committed before the mint reads it, or
-	// this mint commits before the close runs and the close ends the row). Released on commit/rollback.
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return "", 0, fmt.Errorf("acquire ingest-session stream lock: %w", lockErr)
-	}
-
-	// 1. Has THIS exact trigger EXECUTION (keyed (tenant, node, UUID); the UUID identifies one trigger
-	// firing and is stable across its blocking-trigger retries) already minted a session? Resolves
-	// idempotent re-fires and the already-ended race without consulting the stream incumbent.
-	uuidRow, uuidErr := q.LockIngestSessionByTrigger(ctx, foghorndb.LockIngestSessionByTriggerParams{
-		TenantID: tenantID, NodeID: nodeID, StartTriggerUuid: triggerUUID,
-	})
-	switch {
-	case uuidErr == nil:
-		uuidID, uuidStream, uuidEnded, uuidPID := uuidRow.ID, uuidRow.StreamInternalName, uuidRow.Ended, uuidRow.ConnectorPid
-		if uuidStream != internalName || uuidPID != connectorPID {
-			// Same trigger UUID bound to a DIFFERENT stream or connector PID — an anomaly (a UUID
-			// identifies one trigger execution, which belongs to one connector admitting one
-			// stream). A same-UUID/different-PID replay is not a retry of the persisted connection;
-			// fail closed rather than resume a row whose identity does not match the caller.
-			return "", IngestSessionRejectedDuplicate, tx.Commit()
-		}
-		if uuidEnded {
-			// This exact trigger already CLOSED (its own PUSH_INPUT_CLOSE won the race). Deny — never
-			// re-admit an already-gone connector.
-			return uuidID, IngestSessionAlreadyEnded, tx.Commit()
-		}
-		// Idempotent duplicate PUSH_REWRITE for the SAME still-open connection.
-		return uuidID, IngestSessionActive, tx.Commit()
-	case errors.Is(uuidErr, sql.ErrNoRows):
-		// New trigger UUID — fall through to the stream-incumbent decision.
-	default:
-		return "", 0, fmt.Errorf("look up ingest session by trigger UUID: %w", uuidErr)
-	}
-
-	// 2. Is a DIFFERENT publisher already the ACTIVE source for this STREAM? At most one row here
-	// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
-	// single-publisher decision.
+	var sessionID string
+	var outcome IngestSessionOutcome
 	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse orphan stop)
-	var staleSessionID, staleNodeID string
-	inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
-	switch {
-	case incErr == nil:
-		incID, incNode, incPID, incMillis := inc.ID, inc.NodeID, inc.ConnectorPid, inc.StartedAtUnixMillis
-		// An incumbent holds the stream. The ONLY case that supersedes it is the OS reusing this
-		// exact (node, PID) for a NEWER connector while the incumbent's row still lingers active
-		// (its close was lost) — a genuine same-connection-slot replacement. Anything else (a
-		// different node, a different PID on the same node, or an older/equal trigger time) is a
-		// duplicate publisher and is REJECTED to protect the incumbent; a real reconnect is admitted
-		// once the incumbent is ended by its close or the STREAM_END reaper.
-		if incNode == nodeID && incPID == connectorPID && startedAtMillis > incMillis {
-			if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
-				return "", 0, fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
-			}
-			// The superseded session published the same stream, so its idle carries this stream's ID.
-			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID); idleErr != nil {
-				return "", 0, idleErr
-			}
-			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
-			if claimErr != nil {
-				return "", 0, fmt.Errorf("claim stale DVR stop on PID reuse: %w", claimErr)
-			}
-			staleStopClaims = claims
-			staleSessionID = incID
-			staleNodeID = incNode
-		} else {
-			return "", IngestSessionRejectedDuplicate, tx.Commit()
+	err := database.WithRetryablePostgresTx(ctx, db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
+		sessionID, outcome, staleStopClaims = "", 0, nil
+		q := foghorndb.New(tx)
+		// Serialize every tenant admission before taking the narrower stream lock.
+		// Capped and unlimited authority generations can overlap during rollout or
+		// an outage; taking this lock unconditionally keeps a capped count+insert
+		// atomic against either generation. PostgreSQL is the shared authority, so
+		// cache state can neither revoke nor strand a publisher.
+		if lockErr := q.LockIngestStream(ctx, ingestTenantCapacityAdvisoryLockKey(tenantID)); lockErr != nil {
+			return fmt.Errorf("acquire ingest-session tenant capacity lock: %w", lockErr)
 		}
-	case errors.Is(incErr, sql.ErrNoRows):
-		// No active publisher — mint fresh below.
-	default:
-		return "", 0, fmt.Errorf("look up active stream ingest session: %w", incErr)
-	}
 
-	// 2b. Close-before-insert tombstone: did a PUSH_INPUT_CLOSE for THIS connector already commit
-	// while no session row existed (concurrent dispatch / WAL redelivery processed the close before
-	// this rewrite)? Under the shared stream lock, a tombstone whose close event is at or after this
-	// session's start means the publisher is already gone — deny rather than mint an active session
-	// for a dead connector. The event-time bound (close >= start) keeps a genuine LATER reconnect on
-	// a reused (node, PID) — which starts after the old close — from being blocked.
-	tombstoned, tsErr := q.IngestCloseTombstoneExists(ctx, foghorndb.IngestCloseTombstoneExistsParams{
-		TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
-		StreamInternalName: internalName, CloseUnixMillis: startedAtMillis,
-	})
-	if tsErr != nil {
-		return "", 0, fmt.Errorf("check ingest close tombstone: %w", tsErr)
-	}
-	if tombstoned {
-		if staleSessionID != "" {
-			revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
-			if revisionErr != nil {
-				return "", 0, revisionErr
-			}
-			if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
-				SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-			}); enqueueErr != nil {
-				return "", 0, enqueueErr
-			}
+		// STREAM-scoped advisory lock: serialize ALL admissions for this (tenant, stream) — across
+		// Foghorn REPLICAS, since the lock is held in the shared per-cell database. This is the HA
+		// authority the process-local StreamRegistry cannot be: two replicas handling PUSH_REWRITEs for
+		// the same stream on different nodes contend here, so exactly one wins the admission decision.
+		// A (node, PID)-scoped lock could not provide this — two nodes' admissions for one stream would
+		// never contend on it. A connector PID maps to exactly one stream, so the stream lock also
+		// subsumes same-PID serialization. FinalizeIngestSessionClose takes the SAME lock, so a close-before-insert fully
+		// serializes against this mint (the close's tombstone is committed before the mint reads it, or
+		// this mint commits before the close runs and the close ends the row). Released on commit/rollback.
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("acquire ingest-session stream lock: %w", lockErr)
 		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return "", 0, fmt.Errorf("commit tombstoned ingest decision: %w", commitErr)
-		}
-		DispatchDVRStops(staleStopClaims, logger)
-		return "", IngestSessionAlreadyEnded, nil
-	}
 
-	// Count after PID supersession so replacing a stale connector for the same
-	// stream is capacity-neutral. The tenant lock makes count+insert atomic
-	// against admissions for different streams.
-	if authoritySnapshot != nil && authoritySnapshot.CapacityMaxStreams > 0 {
-		activeCount, countErr := q.CountActiveTenantIngestSessions(ctx, tenantID)
-		if countErr != nil {
-			return "", 0, fmt.Errorf("count active tenant ingest sessions: %w", countErr)
+		// 1. Has THIS exact trigger EXECUTION (keyed (tenant, node, UUID); the UUID identifies one trigger
+		// firing and is stable across its blocking-trigger retries) already minted a session? Resolves
+		// idempotent re-fires and the already-ended race without consulting the stream incumbent.
+		uuidRow, uuidErr := q.LockIngestSessionByTrigger(ctx, foghorndb.LockIngestSessionByTriggerParams{
+			TenantID: tenantID, NodeID: nodeID, StartTriggerUuid: triggerUUID,
+		})
+		switch {
+		case uuidErr == nil:
+			uuidID, uuidStream, uuidEnded, uuidPID := uuidRow.ID, uuidRow.StreamInternalName, uuidRow.Ended, uuidRow.ConnectorPid
+			if uuidStream != internalName || uuidPID != connectorPID {
+				// Same trigger UUID bound to a DIFFERENT stream or connector PID — an anomaly (a UUID
+				// identifies one trigger execution, which belongs to one connector admitting one
+				// stream). A same-UUID/different-PID replay is not a retry of the persisted connection;
+				// fail closed rather than resume a row whose identity does not match the caller.
+				outcome = IngestSessionRejectedDuplicate
+				return nil
+			}
+			if uuidEnded {
+				// This exact trigger already CLOSED (its own PUSH_INPUT_CLOSE won the race). Deny — never
+				// re-admit an already-gone connector.
+				sessionID, outcome = uuidID, IngestSessionAlreadyEnded
+				return nil
+			}
+			// Idempotent duplicate PUSH_REWRITE for the SAME still-open connection.
+			sessionID, outcome = uuidID, IngestSessionActive
+			return nil
+		case errors.Is(uuidErr, sql.ErrNoRows):
+			// New trigger UUID — fall through to the stream-incumbent decision.
+		default:
+			return fmt.Errorf("look up ingest session by trigger UUID: %w", uuidErr)
 		}
-		if activeCount >= authoritySnapshot.CapacityMaxStreams {
-			// A newer connector on the same (node, PID) proves the old generation is stale even
-			// when the successor cannot be admitted. Retire that generation and its obligations;
-			// rolling this transaction back would resurrect a publisher Mist has already replaced.
+
+		// 2. Is a DIFFERENT publisher already the ACTIVE source for this STREAM? At most one row here
+		// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
+		// single-publisher decision.
+		var staleSessionID, staleNodeID string
+		inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
+		switch {
+		case incErr == nil:
+			incID, incNode, incPID, incMillis := inc.ID, inc.NodeID, inc.ConnectorPid, inc.StartedAtUnixMillis
+			// An incumbent holds the stream. The ONLY case that supersedes it is the OS reusing this
+			// exact (node, PID) for a NEWER connector while the incumbent's row still lingers active
+			// (its close was lost) — a genuine same-connection-slot replacement. Anything else (a
+			// different node, a different PID on the same node, or an older/equal trigger time) is a
+			// duplicate publisher and is REJECTED to protect the incumbent; a real reconnect is admitted
+			// once the incumbent is ended by its close or the STREAM_END reaper.
+			if incNode == nodeID && incPID == connectorPID && startedAtMillis > incMillis {
+				if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
+					return fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
+				}
+				if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID); idleErr != nil {
+					return idleErr
+				}
+				claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
+				if claimErr != nil {
+					return fmt.Errorf("claim stale DVR stop on PID reuse: %w", claimErr)
+				}
+				staleStopClaims = claims
+				staleSessionID = incID
+				staleNodeID = incNode
+			} else {
+				outcome = IngestSessionRejectedDuplicate
+				return nil
+			}
+		case errors.Is(incErr, sql.ErrNoRows):
+			// No active publisher — mint fresh below.
+		default:
+			return fmt.Errorf("look up active stream ingest session: %w", incErr)
+		}
+
+		// 2b. Close-before-insert tombstone: did a PUSH_INPUT_CLOSE for THIS connector already commit
+		// while no session row existed (concurrent dispatch / WAL redelivery processed the close before
+		// this rewrite)? Under the shared stream lock, a tombstone whose close event is at or after this
+		// session's start means the publisher is already gone — deny rather than mint an active session
+		// for a dead connector. The event-time bound (close >= start) keeps a genuine LATER reconnect on
+		// a reused (node, PID) — which starts after the old close — from being blocked.
+		tombstoned, tsErr := q.IngestCloseTombstoneExists(ctx, foghorndb.IngestCloseTombstoneExistsParams{
+			TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
+			StreamInternalName: internalName, CloseUnixMillis: startedAtMillis,
+		})
+		if tsErr != nil {
+			return fmt.Errorf("check ingest close tombstone: %w", tsErr)
+		}
+		if tombstoned {
 			if staleSessionID != "" {
 				revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
 				if revisionErr != nil {
-					return "", 0, revisionErr
+					return revisionErr
 				}
 				if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
 					SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 				}); enqueueErr != nil {
-					return "", 0, enqueueErr
+					return enqueueErr
 				}
 			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return "", 0, fmt.Errorf("commit capacity-rejected ingest decision: %w", commitErr)
-			}
-			DispatchDVRStops(staleStopClaims, logger)
-			return "", IngestSessionRejectedCapacity, nil
+			outcome = IngestSessionAlreadyEnded
+			return nil
 		}
-	}
 
-	// 3. Mint. No ON CONFLICT clause: the stream lock has already serialized this decision, and the
-	// partial unique (tenant, stream) / (tenant, node, PID) / (tenant, node, UUID) indexes are the
-	// durable backstop — a violation here means a bug or lock-hash collision, so surface it (fail
-	// closed) rather than silently absorb it.
-	var newID string
-	var insErr error
-	if authoritySnapshot == nil {
-		newID, insErr = q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
-			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
-			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
-			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
-			StreamID: streamID,
-		})
-	} else {
-		newID, insErr = q.InsertIngestSessionWithAuthority(ctx, foghorndb.InsertIngestSessionWithAuthorityParams{
-			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
-			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
-			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
-			StreamID:               streamID,
-			MediaAuthorityID:       sql.NullString{String: strings.TrimSpace(authoritySnapshot.MediaAuthorityID), Valid: strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != ""},
-			MediaAuthorityVersion:  sql.NullInt64{Int64: authoritySnapshot.MediaAuthorityVersion, Valid: authoritySnapshot.MediaAuthorityVersion > 0},
-			TenantAuthorityVersion: sql.NullInt64{Int64: authoritySnapshot.TenantAuthorityVersion, Valid: authoritySnapshot.TenantAuthorityVersion > 0},
-			ProcessesJson:          authoritySnapshot.ProcessesJSON,
-			CapacityMaxStreams:     authoritySnapshot.CapacityMaxStreams,
-		})
-	}
-	if insErr != nil {
-		return "", 0, fmt.Errorf("insert ingest session: %w", insErr)
-	}
-	if streamID != "" {
-		if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.Protocol); connErr != nil {
-			return "", 0, connErr
+		// Count after PID supersession so replacing a stale connector for the same
+		// stream is capacity-neutral. The tenant lock makes count+insert atomic
+		// against admissions for different streams.
+		if authoritySnapshot != nil && authoritySnapshot.CapacityMaxStreams > 0 {
+			activeCount, countErr := q.CountActiveTenantIngestSessions(ctx, tenantID)
+			if countErr != nil {
+				return fmt.Errorf("count active tenant ingest sessions: %w", countErr)
+			}
+			if activeCount >= authoritySnapshot.CapacityMaxStreams {
+				// A newer connector on the same (node, PID) proves the old generation is stale even
+				// when the successor cannot be admitted. Retire that generation and its obligations;
+				// rolling this transaction back would resurrect a publisher Mist has already replaced.
+				if staleSessionID != "" {
+					revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
+					if revisionErr != nil {
+						return revisionErr
+					}
+					if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
+						SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+					}); enqueueErr != nil {
+						return enqueueErr
+					}
+				}
+				outcome = IngestSessionRejectedCapacity
+				return nil
+			}
 		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return "", 0, fmt.Errorf("commit ingest session: %w", commitErr)
+
+		// 3. Mint. No ON CONFLICT clause: the stream lock has already serialized this decision, and the
+		// partial unique (tenant, stream) / (tenant, node, PID) / (tenant, node, UUID) indexes are the
+		// durable backstop — a violation here means a bug or lock-hash collision, so surface it (fail
+		// closed) rather than silently absorb it.
+		var newID string
+		var insErr error
+		if authoritySnapshot == nil {
+			newID, insErr = q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
+				TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
+				StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
+				DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+				StreamID: streamID,
+			})
+		} else {
+			newID, insErr = q.InsertIngestSessionWithAuthority(ctx, foghorndb.InsertIngestSessionWithAuthorityParams{
+				TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
+				StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
+				DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+				StreamID:               streamID,
+				MediaAuthorityID:       sql.NullString{String: strings.TrimSpace(authoritySnapshot.MediaAuthorityID), Valid: strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != ""},
+				MediaAuthorityVersion:  sql.NullInt64{Int64: authoritySnapshot.MediaAuthorityVersion, Valid: authoritySnapshot.MediaAuthorityVersion > 0},
+				TenantAuthorityVersion: sql.NullInt64{Int64: authoritySnapshot.TenantAuthorityVersion, Valid: authoritySnapshot.TenantAuthorityVersion > 0},
+				ProcessesJson:          authoritySnapshot.ProcessesJSON,
+				CapacityMaxStreams:     authoritySnapshot.CapacityMaxStreams,
+			})
+		}
+		if insErr != nil {
+			return fmt.Errorf("insert ingest session: %w", insErr)
+		}
+		if streamID != "" {
+			if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.Protocol); connErr != nil {
+				return connErr
+			}
+		}
+		sessionID, outcome = newID, IngestSessionActive
+		return nil
+	})
+	if err != nil {
+		return "", 0, err
 	}
 	// The stale session's orphaned DVR stop (if any) is durable now — dispatch best-effort.
+	// Only the PID-reuse supersession path populates claims.
 	DispatchDVRStops(staleStopClaims, logger)
-	return newID, IngestSessionActive, nil
+	return sessionID, outcome, nil
 }
 
 // DVR command generations Foghorn stamps on DVRStart/DVRStop. A stop's generation is
@@ -3614,41 +3610,38 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin stream-end reaper tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logger.WithError(rbErr).Warn("Failed to roll back stream-end reaper tx")
-		}
-	}()
-	// Scope the rows in a closure so defer rows.Close() runs BEFORE the ClaimDVRStops queries below
-	// reuse the transaction (a tx cannot have open rows while issuing the next query).
-	endedIDs, scanErr := foghorndb.New(tx).ReapStreamEndIngestSessions(ctx, foghorndb.ReapStreamEndIngestSessionsParams{
-		TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true},
-	})
-	if scanErr != nil {
-		return 0, fmt.Errorf("reap ingest sessions on stream end: %w", scanErr)
-	}
-	// Claim each reaped session's bound DVR stop in the SAME transaction, so a lost close can never
-	// leave a live writer behind a reaped session.
 	var allClaims []DVRStopClaim
-	for _, ended := range endedIDs {
-		claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
-		if claimErr != nil {
-			return 0, fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
+	var endedCount int
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		allClaims, endedCount = nil, 0
+		// Scope the rows in a closure so defer rows.Close() runs BEFORE the ClaimDVRStops queries below
+		// reuse the transaction (a tx cannot have open rows while issuing the next query).
+		endedIDs, scanErr := foghorndb.New(tx).ReapStreamEndIngestSessions(ctx, foghorndb.ReapStreamEndIngestSessionsParams{
+			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true},
+		})
+		if scanErr != nil {
+			return fmt.Errorf("reap ingest sessions on stream end: %w", scanErr)
 		}
-		allClaims = append(allClaims, claims...)
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
-			return 0, idleErr
+		// Claim each reaped session's bound DVR stop in the SAME transaction, so a lost close can never
+		// leave a live writer behind a reaped session.
+		for _, ended := range endedIDs {
+			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
+			if claimErr != nil {
+				return fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
+			}
+			allClaims = append(allClaims, claims...)
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+				return idleErr
+			}
 		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return 0, fmt.Errorf("commit stream-end reaper: %w", commitErr)
+		endedCount = len(endedIDs)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	DispatchDVRStops(allClaims, logger)
-	return len(endedIDs), nil
+	return endedCount, nil
 }
 
 // EndExactMissingIngestSession retires only the admitted runtime identity that
@@ -3664,34 +3657,39 @@ func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, interna
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("begin runtime-absence reaper tx: %w", err)
-	}
-	defer rollbackQuiet(tx)
-	q := foghorndb.New(tx)
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return false, fmt.Errorf("lock runtime-absence reaper: %w", lockErr)
-	}
-	ended, err := q.ReapExactMissingIngestSession(ctx, foghorndb.ReapExactMissingIngestSessionParams{
-		EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true}, TenantID: tenantID,
-		NodeID: nodeID, StreamInternalName: internalName, Generation: generation, ConnectorPid: connectorPID,
+	var claims []DVRStopClaim
+	var reaped bool
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		claims, reaped = nil, false
+		q := foghorndb.New(tx)
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("lock runtime-absence reaper: %w", lockErr)
+		}
+		ended, err := q.ReapExactMissingIngestSession(ctx, foghorndb.ReapExactMissingIngestSessionParams{
+			EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true}, TenantID: tenantID,
+			NodeID: nodeID, StreamInternalName: internalName, Generation: generation, ConnectorPid: connectorPID,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("reap exact missing ingest session: %w", err)
+		}
+		claims, err = ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
+		if err != nil {
+			return fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
+		}
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+			return idleErr
+		}
+		reaped = true
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, tx.Commit()
-	}
 	if err != nil {
-		return false, fmt.Errorf("reap exact missing ingest session: %w", err)
+		return false, err
 	}
-	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
-	if err != nil {
-		return false, fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
-	}
-	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
-		return false, idleErr
-	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("commit runtime-absence reaper: %w", err)
+	if !reaped {
+		return false, nil
 	}
 	DispatchDVRStops(claims, logger)
 	return true, nil
@@ -3718,35 +3716,37 @@ func FenceOfflineBackstop(ctx context.Context, registry *StreamRegistry, tenantI
 		return false, 0, fmt.Errorf("offline fence missing scope: tenant=%q stream=%q", tenantID, internalName)
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, 0, fmt.Errorf("begin offline-fence tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back offline-fence tx")
+	var hasActive bool
+	var rev int64
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		hasActive, rev = false, 0
+		q := foghorndb.New(tx)
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("acquire offline-fence stream lock: %w", lockErr)
 		}
-	}()
-	q := foghorndb.New(tx)
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return false, 0, fmt.Errorf("acquire offline-fence stream lock: %w", lockErr)
-	}
-	hasActive, probeErr := q.HasActiveStreamIngestSession(ctx, foghorndb.HasActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
-	if probeErr != nil {
-		return false, 0, fmt.Errorf("offline-fence active probe: %w", probeErr)
+		var probeErr error
+		hasActive, probeErr = q.HasActiveStreamIngestSession(ctx, foghorndb.HasActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
+		if probeErr != nil {
+			return fmt.Errorf("offline-fence active probe: %w", probeErr)
+		}
+		if hasActive {
+			return nil
+		}
+		var revErr error
+		rev, revErr = nextSourceRevision(ctx, tx, tenantID, internalName)
+		if revErr != nil {
+			return revErr
+		}
+		if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, generation, rev, intent); enqueueErr != nil {
+			return enqueueErr
+		}
+		return nil
+	})
+	if err != nil {
+		return false, 0, err
 	}
 	if hasActive {
-		return false, 0, tx.Commit()
-	}
-	rev, revErr := nextSourceRevision(ctx, tx, tenantID, internalName)
-	if revErr != nil {
-		return false, 0, revErr
-	}
-	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, generation, rev, intent); enqueueErr != nil {
-		return false, 0, enqueueErr
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, 0, fmt.Errorf("commit offline-fence: %w", commitErr)
+		return false, 0, nil
 	}
 	// Publish the source-ownership transition immediately for routing. The durable effect row remains
 	// the retry boundary: a Redis failure is returned to durable trigger callers, and the worker later
@@ -3777,42 +3777,61 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(internalName) == "" || strings.TrimSpace(generation) == "" {
 		return false, false, fmt.Errorf("project-if-current missing scope: tenant=%q stream=%q generation=%q", tenantID, internalName, generation)
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, false, fmt.Errorf("begin project-if-current tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back project-if-current tx")
+	var isCurrent bool
+	var revision sql.NullInt64
+	var projectionState string
+	var rev int64
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		isCurrent, revision, projectionState, rev = false, sql.NullInt64{}, "", 0
+		q := foghorndb.New(tx)
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("acquire project-if-current stream lock: %w", lockErr)
 		}
-	}()
-	q := foghorndb.New(tx)
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return false, false, fmt.Errorf("acquire project-if-current stream lock: %w", lockErr)
+		probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{TenantID: tenantID, StreamInternalName: internalName, Generation: generation})
+		if probeErr != nil {
+			return fmt.Errorf("project-if-current active-session probe: %w", probeErr)
+		}
+		isCurrent, revision, projectionState = probe.IsCurrent, probe.SourceRevision, probe.ProjectionState
+		if !isCurrent {
+			return nil
+		}
+		if projectionState == "active" {
+			// An active row must carry the revision the CAS accepted; its absence is an invariant
+			// violation, not a resumable state — fail closed.
+			if !revision.Valid || revision.Int64 <= 0 {
+				return fmt.Errorf("resumed projection %s has no persisted source revision (invariant violation)", generation)
+			}
+			return nil
+		}
+		// Draw the monotonic source revision UNDER the lock, so this projection orders strictly after any
+		// prior transition for the stream and a stale replica's write cannot make old ownership look newer.
+		rev = revision.Int64
+		if !revision.Valid || rev <= 0 {
+			var revErr error
+			rev, revErr = nextSourceRevision(ctx, tx, tenantID, internalName)
+			if revErr != nil {
+				return revErr
+			}
+			if updateErr := q.PersistSourceProjectionRevision(ctx, foghorndb.PersistSourceProjectionRevisionParams{Generation: generation, SourceRevision: sql.NullInt64{Int64: rev, Valid: true}}); updateErr != nil {
+				return fmt.Errorf("persist source projection revision: %w", updateErr)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, false, err
 	}
-	probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{TenantID: tenantID, StreamInternalName: internalName, Generation: generation})
-	if probeErr != nil {
-		return false, false, fmt.Errorf("project-if-current active-session probe: %w", probeErr)
-	}
-	isCurrent, revision, projectionState := probe.IsCurrent, probe.SourceRevision, probe.ProjectionState
 	if !isCurrent {
 		// This session ended (its own close won) or was superseded by a newer admission while this
 		// projection was delayed — drop it, and signal the caller to DENY (no side effects).
-		return false, false, tx.Commit()
+		return false, false, nil
 	}
 	if projectionState == "active" {
 		// A RESUMED projection: this exact generation already crossed the shared CAS and was durably
 		// confirmed — this call is a blocking-trigger retry whose first response was lost (or a
 		// replica re-handling the trigger). The once-only admission effects are owed by the durable
 		// obligation inserted with the confirmation (applied by the admission-effects worker), so
-		// the caller has nothing to re-run or skip here. An active row must carry the revision the
-		// CAS accepted; its absence is an invariant violation, not a resumable state — fail closed.
-		if !revision.Valid || revision.Int64 <= 0 {
-			return false, false, fmt.Errorf("resumed projection %s has no persisted source revision (invariant violation)", generation)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return false, false, fmt.Errorf("commit project-if-current resume: %w", commitErr)
-		}
+		// the caller has nothing to re-run or skip here.
 		// Re-assert the registry projection at the persisted revision so a cache-cold replica repairs
 		// its local view (the equal-revision CAS is idempotent for the exact same identity). The
 		// result is CHECKED, not assumed. A strictly newer shared watermark while this DB generation
@@ -3831,22 +3850,6 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		}
 		return true, true, nil
 	}
-	// Draw the monotonic source revision UNDER the lock, so this projection orders strictly after any
-	// prior transition for the stream and a stale replica's write cannot make old ownership look newer.
-	rev := revision.Int64
-	if !revision.Valid || rev <= 0 {
-		var revErr error
-		rev, revErr = nextSourceRevision(ctx, tx, tenantID, internalName)
-		if revErr != nil {
-			return false, false, revErr
-		}
-		if updateErr := q.PersistSourceProjectionRevision(ctx, foghorndb.PersistSourceProjectionRevisionParams{Generation: generation, SourceRevision: sql.NullInt64{Int64: rev, Valid: true}}); updateErr != nil {
-			return false, false, fmt.Errorf("persist source projection revision: %w", updateErr)
-		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, false, fmt.Errorf("commit project-if-current: %w", commitErr)
-	}
 	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, rev)
 	if projectErr != nil {
 		cause := fmt.Errorf("publish source projection: %w", projectErr)
@@ -3861,36 +3864,25 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	// broadcast) exists if and only if this generation was confirmed, so a crash at ANY later point
 	// cannot lose the effects (the admission-effects worker applies them under the stream lock) and
 	// a trigger retry cannot duplicate them (one obligation per generation).
-	confirmTx, confirmErr := db.BeginTx(ctx, nil)
-	if confirmErr != nil {
-		cause := fmt.Errorf("begin projection confirmation: %w", confirmErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
-	}
-	defer rollbackQuiet(confirmTx)
-	abortConfirmation := func(cause error) (bool, bool, error) {
-		// Release the confirmation row lock before cleanup tries to retire the same pending
-		// generation in a new transaction. Keeping this transaction open would self-deadlock.
-		rollbackQuiet(confirmTx)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
-	}
-	marked, markErr := foghorndb.New(confirmTx).ConfirmSourceProjection(ctx, foghorndb.ConfirmSourceProjectionParams{
-		Generation: generation, TenantID: tenantID, StreamInternalName: internalName, SourceRevision: sql.NullInt64{Int64: rev, Valid: true},
+	confirmErr := database.WithRetryablePostgresTx(ctx, db, nil, func(confirmTx *sql.Tx) error {
+		marked, markErr := foghorndb.New(confirmTx).ConfirmSourceProjection(ctx, foghorndb.ConfirmSourceProjectionParams{
+			Generation: generation, TenantID: tenantID, StreamInternalName: internalName, SourceRevision: sql.NullInt64{Int64: rev, Valid: true},
+		})
+		if markErr != nil {
+			return fmt.Errorf("confirm source projection: %w", markErr)
+		}
+		if marked != 1 {
+			return fmt.Errorf("source session ended before projection confirmation")
+		}
+		if enqueueErr := enqueueAdmissionEffectTx(ctx, confirmTx, tenantID, internalName, nodeID, generation, rev, prior, priorGeneration, intent); enqueueErr != nil {
+			return fmt.Errorf("enqueue admission effects: %w", enqueueErr)
+		}
+		return nil
 	})
-	if markErr != nil {
-		cause := fmt.Errorf("confirm source projection: %w", markErr)
-		return abortConfirmation(cause)
-	}
-	if marked != 1 {
-		cause := fmt.Errorf("source session ended before projection confirmation")
-		return abortConfirmation(cause)
-	}
-	if enqueueErr := enqueueAdmissionEffectTx(ctx, confirmTx, tenantID, internalName, nodeID, generation, rev, prior, priorGeneration, intent); enqueueErr != nil {
-		cause := fmt.Errorf("enqueue admission effects: %w", enqueueErr)
-		return abortConfirmation(cause)
-	}
-	if commitErr := confirmTx.Commit(); commitErr != nil {
-		cause := fmt.Errorf("commit projection confirmation: %w", commitErr)
-		return abortConfirmation(cause)
+	if confirmErr != nil {
+		// The helper has rolled back the confirmation row lock before cleanup retires the same
+		// pending generation in a new transaction; keeping it open would self-deadlock.
+		return false, false, errors.Join(confirmErr, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
 	}
 	return true, false, nil
 }
@@ -3907,33 +3899,35 @@ func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry
 		if err := ctx.Err(); err != nil {
 			return false, fmt.Errorf("resumed source repair deadline: %w", err)
 		}
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return false, fmt.Errorf("begin resumed source repair: %w", err)
-		}
-		q := foghorndb.New(tx)
-		if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("lock resumed source repair: %w", err)
-		}
-		probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
-			TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
-		})
-		if probeErr != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("probe resumed source repair: %w", probeErr)
-		}
-		if !probe.IsCurrent || probe.ProjectionState != "active" || !probe.SourceRevision.Valid || probe.SourceRevision.Int64 <= 0 {
-			rollbackQuiet(tx)
-			return false, nil
-		}
-		expectedRevision := probe.SourceRevision.Int64
+		var expectedRevision int64
 		// Release the stream lock before advancing the per-stream repair counter. A
 		// concurrent transition may be waiting for this same stream lock; retaining
 		// both would create a cross-connection lock inversion. The shared
 		// watermark is also read after this rollback: Redis must not extend the
 		// lifetime of the database transaction that serializes publisher state.
-		rollbackQuiet(tx)
+		err := database.WithRetryablePostgresRollbackTx(ctx, db, nil, func(tx *sql.Tx) error {
+			expectedRevision = 0
+			q := foghorndb.New(tx)
+			if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+				return fmt.Errorf("lock resumed source repair: %w", lockErr)
+			}
+			probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+				TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
+			})
+			if probeErr != nil {
+				return fmt.Errorf("probe resumed source repair: %w", probeErr)
+			}
+			if probe.IsCurrent && probe.ProjectionState == "active" && probe.SourceRevision.Valid && probe.SourceRevision.Int64 > 0 {
+				expectedRevision = probe.SourceRevision.Int64
+			}
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+		if expectedRevision <= 0 {
+			return false, nil
+		}
 		sharedRevision, sharedErr := registry.sharedSourceRevision(ctx, internalName)
 		if sharedErr != nil {
 			return false, fmt.Errorf("read resumed source watermark: %w", sharedErr)
@@ -3943,16 +3937,17 @@ func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry
 		if revisionErr != nil {
 			return false, fmt.Errorf("allocate resumed source repair revision: %w", revisionErr)
 		}
-		tx, err = db.BeginTx(ctx, nil)
+		// Raw transaction: the stream lock must stay held across the Redis ProjectSource CAS below, which cannot be replayed.
+		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return false, fmt.Errorf("begin resumed source repair apply: %w", err)
 		}
-		q = foghorndb.New(tx)
+		q := foghorndb.New(tx)
 		if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
 			rollbackQuiet(tx)
 			return false, fmt.Errorf("lock resumed source repair apply: %w", err)
 		}
-		probe, probeErr = q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+		probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
 			TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
 		})
 		if probeErr != nil {
@@ -4032,36 +4027,27 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 	if db == nil {
 		return errors.New("abort pending source projection: no database configured")
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin abort pending source projection: %w", err)
-	}
-	defer rollbackQuiet(tx)
-	q := foghorndb.New(tx)
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return fmt.Errorf("lock abort pending source projection: %w", lockErr)
-	}
-	aborted, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
-	if errors.Is(err, sql.ErrNoRows) {
-		return tx.Commit()
-	}
-	if err != nil {
-		return fmt.Errorf("end pending source projection: %w", err)
-	}
-	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID); idleErr != nil {
-		return idleErr
-	}
-	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
-	if err != nil {
-		return err
-	}
-	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, aborted.NodeID, generation, revision, OfflineEffectIntent{}); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit abort pending source projection: %w", err)
-	}
-	return nil
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("lock abort pending source projection: %w", lockErr)
+		}
+		aborted, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("end pending source projection: %w", err)
+		}
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID); idleErr != nil {
+			return idleErr
+		}
+		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
+		if err != nil {
+			return err
+		}
+		return enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, aborted.NodeID, generation, revision, OfflineEffectIntent{})
+	})
 }
 
 // AbortPendingIngestSession releases a durable admission that could not pass a post-mint gate.
@@ -4126,72 +4112,66 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return res, fmt.Errorf("begin ingest-close tx: %w", err)
-	}
-	defer func() {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			logger.WithError(rbErr).Warn("Failed to roll back ingest-close tx")
+	var claims []DVRStopClaim
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		res, claims = CloseFinalization{}, nil
+		// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
+		// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
+		// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
+		q := foghorndb.New(tx)
+		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+			return fmt.Errorf("acquire ingest-close stream lock: %w", lockErr)
 		}
-	}()
+		ended, endErr := q.CloseIngestSession(ctx, foghorndb.CloseIngestSessionParams{
+			TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
+			CloseUnixMillis: sql.NullInt64{Int64: closeMillis, Valid: true}, StreamInternalName: internalName,
+		})
+		if errors.Is(endErr, sql.ErrNoRows) {
+			// No active session to end — either a duplicate / already-ended / event-time-fenced close, OR
+			// this close arrived BEFORE its own PUSH_REWRITE could mint the session (concurrent trigger
+			// dispatch + WAL redelivery). Record a durable tombstone so CreateIngestSession denies the late
+			// rewrite instead of resurrecting a dead publisher as an active session. Harmless when the close
+			// was merely a duplicate: a genuine reconnect starts AFTER this close's event time and so is not
+			// blocked, and the reaper sweeps the tombstone on a TTL.
+			if insErr := q.InsertIngestCloseTombstone(ctx, foghorndb.InsertIngestCloseTombstoneParams{
+				TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID, StreamInternalName: internalName, CloseUnixMillis: closeMillis,
+			}); insErr != nil {
+				return fmt.Errorf("record ingest close tombstone: %w", insErr)
+			}
+			return nil
+		}
+		if endErr != nil {
+			return fmt.Errorf("end ingest session on close: %w", endErr)
+		}
+		res.EndedSessionID = ended.ID
+		res.ClaimToken = ended.StartTriggerUuid
+		res.ClusterID = ended.ClusterID
 
-	// Serialize against MintIngestSession on the SAME (tenant, stream) lock so a close-before-insert
-	// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
-	// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
-	q := foghorndb.New(tx)
-	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
-		return res, fmt.Errorf("acquire ingest-close stream lock: %w", lockErr)
-	}
-
-	ended, endErr := q.CloseIngestSession(ctx, foghorndb.CloseIngestSessionParams{
-		TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
-		CloseUnixMillis: sql.NullInt64{Int64: closeMillis, Valid: true}, StreamInternalName: internalName,
+		// Claim the stop obligation for the DVR bound to THIS generation, in the SAME tx as the
+		// session end (atomic: either both commit and the durable stop_pending is drained by
+		// recovery even if the send below fails, or neither commits and the close is retried).
+		var claimErr error
+		claims, claimErr = ClaimDVRStops(ctx, tx,
+			`ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.ID, tenantID)
+		if claimErr != nil {
+			return fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
+		}
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+			return idleErr
+		}
+		revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
+		if revisionErr != nil {
+			return revisionErr
+		}
+		if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, ended.ID, revision, OfflineEffectIntent{
+			SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+		}); enqueueErr != nil {
+			return enqueueErr
+		}
+		return nil
 	})
-	if errors.Is(endErr, sql.ErrNoRows) {
-		// No active session to end — either a duplicate / already-ended / event-time-fenced close, OR
-		// this close arrived BEFORE its own PUSH_REWRITE could mint the session (concurrent trigger
-		// dispatch + WAL redelivery). Record a durable tombstone so MintIngestSession denies the late
-		// rewrite instead of resurrecting a dead publisher as an active session. Harmless when the close
-		// was merely a duplicate: a genuine reconnect starts AFTER this close's event time and so is not
-		// blocked, and the reaper sweeps the tombstone on a TTL.
-		if insErr := q.InsertIngestCloseTombstone(ctx, foghorndb.InsertIngestCloseTombstoneParams{
-			TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID, StreamInternalName: internalName, CloseUnixMillis: closeMillis,
-		}); insErr != nil {
-			return res, fmt.Errorf("record ingest close tombstone: %w", insErr)
-		}
-		return res, tx.Commit()
-	}
-	if endErr != nil {
-		return res, fmt.Errorf("end ingest session on close: %w", endErr)
-	}
-	res.EndedSessionID = ended.ID
-	res.ClaimToken = ended.StartTriggerUuid
-	res.ClusterID = ended.ClusterID
-
-	// Claim the stop obligation for the DVR bound to THIS generation, in the SAME tx as the
-	// session end (atomic: either both commit and the durable stop_pending is drained by
-	// recovery even if the send below fails, or neither commits and the close is retried).
-	claims, claimErr := ClaimDVRStops(ctx, tx,
-		`ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.ID, tenantID)
-	if claimErr != nil {
-		return CloseFinalization{}, fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
-	}
-	if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
-		return CloseFinalization{}, idleErr
-	}
-	revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
-	if revisionErr != nil {
-		return CloseFinalization{}, revisionErr
-	}
-	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, ended.ID, revision, OfflineEffectIntent{
-		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-	}); enqueueErr != nil {
-		return CloseFinalization{}, enqueueErr
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return CloseFinalization{}, fmt.Errorf("commit ingest-close finalize: %w", commitErr)
+	if err != nil {
+		return CloseFinalization{}, err
 	}
 
 	// Durable now (survives the send failing). Dispatch best-effort AFTER commit.
@@ -7146,28 +7126,31 @@ func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, 
 	// deterministic staging + candidate objects BEFORE the node holds any PUT URL, so a later completion whose
 	// guarded transaction is lost (e.g. a concurrent duplicate that clears the attempt identity) can never leak
 	// an uploaded/promoted object — the sweep collects it from the durable, identity-independent ledger row.
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return false, txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
-	n, execErr := foghorndb.New(tx).ClaimFreezeAttempt(ctx, foghorndb.ClaimFreezeAttemptParams{
-		ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: nodeID, Valid: true},
-		TenantID: tenantID, StorageClusterID: storageCluster, SyncObjectKey: sql.NullString{String: objectKey, Valid: true}, BackendID: sql.NullString{String: localBID, Valid: true},
+	err = database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		claimed = false
+		n, execErr := foghorndb.New(tx).ClaimFreezeAttempt(ctx, foghorndb.ClaimFreezeAttemptParams{
+			ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: nodeID, Valid: true},
+			TenantID: tenantID, StorageClusterID: storageCluster, SyncObjectKey: sql.NullString{String: objectKey, Valid: true}, BackendID: sql.NullString{String: localBID, Valid: true},
+		})
+		if execErr != nil {
+			return execErr
+		}
+		if n == 0 {
+			return errTxRollbackNoop // nothing claimed → rollback, no ledger rows
+		}
+		if lErr := RecordFreezePublicationLedgerTx(ctx, tx, assetHash, tenantID, requestID, objectKey); lErr != nil {
+			return lErr // ledger record failed → rollback the claim too (fail closed; the caller retries)
+		}
+		claimed = true
+		return nil
 	})
-	if execErr != nil {
-		return false, execErr
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
 	}
-	if n == 0 {
-		return false, nil // nothing claimed → rollback, no ledger rows
+	if err != nil {
+		return false, err
 	}
-	if lErr := RecordFreezePublicationLedgerTx(ctx, tx, assetHash, tenantID, requestID, objectKey); lErr != nil {
-		return false, lErr // ledger record failed → rollback the claim too (fail closed; the caller retries)
-	}
-	if cErr := tx.Commit(); cErr != nil {
-		return false, cErr
-	}
-	return true, nil
+	return claimed, nil
 }
 
 // claimDtshAttempt records the outstanding incremental-.dtsh sync attempt (request + node) on an
@@ -7197,33 +7180,36 @@ func claimDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantI
 	// attempt, that attempt's (possibly-uploaded) .dtsh staging object is durably enqueued for deletion rather
 	// than leaked. (The main freeze has no equivalent here because stale-freeze recovery resets + enqueues the
 	// prior attempt before it becomes re-claimable.)
-	tx, err := db.BeginTx(ctx, nil)
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		claimed = false
+		row, qErr := foghorndb.New(tx).ClaimDtshAttempt(ctx, foghorndb.ClaimDtshAttemptParams{
+			ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+			DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
+		})
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return errTxRollbackNoop // not claimable
+		}
+		if qErr != nil {
+			return qErr
+		}
+		objectKey, prevReq := row.ObjectKey, row.OldRequest
+		if prevReq != "" && prevReq != requestID && objectKey != "" {
+			// The superseded prior attempt may have uploaded its .dtsh staging AND had its versioned candidate
+			// promoted before it lost the race — enqueue both so neither leaks.
+			if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, prevReq); eErr != nil {
+				return eErr
+			}
+		}
+		claimed = true
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	row, qErr := foghorndb.New(tx).ClaimDtshAttempt(ctx, foghorndb.ClaimDtshAttemptParams{
-		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
-		DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
-	})
-	if errors.Is(qErr, sql.ErrNoRows) {
-		return false, nil // not claimable
-	}
-	if qErr != nil {
-		return false, qErr
-	}
-	objectKey, prevReq := row.ObjectKey, row.OldRequest
-	if prevReq != "" && prevReq != requestID && objectKey != "" {
-		// The superseded prior attempt may have uploaded its .dtsh staging AND had its versioned candidate
-		// promoted before it lost the race — enqueue both so neither leaks.
-		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, prevReq); eErr != nil {
-			return false, eErr
-		}
-	}
-	if cErr := tx.Commit(); cErr != nil {
-		return false, cErr
-	}
-	return true, nil
+	return claimed, nil
 }
 
 // clearDtshAttempt releases a claimed .dtsh attempt back to a retryable 'failed' state (identity
@@ -7238,39 +7224,47 @@ func clearDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantI
 	// uploaded the .dtsh to its staging key despite the send error, and a concurrent completion may even have
 	// promoted the candidate before losing the CAS), so clearing the only identity without scheduling those
 	// keys would leak them — stale recovery would never see them (this row is already synced, not freezing).
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		if registry != nil {
-			registry.log.WithError(err).WithField("asset_hash", assetHash).Debug("clearDtshAttempt: begin tx failed")
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		objectKey, qErr := foghorndb.New(tx).ClearDtshAttempt(ctx, foghorndb.ClearDtshAttemptParams{
+			ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+			DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
+		})
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return errTxRollbackNoop // nothing to release (already cleared / re-claimed); the >10min stale recovery still covers it
 		}
-		return
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	objectKey, qErr := foghorndb.New(tx).ClearDtshAttempt(ctx, foghorndb.ClearDtshAttemptParams{
-		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
-		DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
-	})
-	if errors.Is(qErr, sql.ErrNoRows) {
-		return // nothing to release (already cleared / re-claimed); the >10min stale recovery still covers it
-	}
-	if qErr != nil {
-		if registry != nil {
-			registry.log.WithError(qErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: best-effort release failed (row stays in_progress; >10min stale re-claim recovers)")
+		if qErr != nil {
+			return &stagedTxError{stage: "release", err: qErr}
 		}
-		return
-	}
-	if objectKey != "" {
-		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
-			if registry != nil {
-				registry.log.WithError(eErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: enqueue .dtsh cleanup failed (row stays in_progress; >10min stale re-claim recovers)")
+		if objectKey != "" {
+			if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
+				return &stagedTxError{stage: "enqueue", err: eErr}
 			}
-			return
 		}
+		return nil
+	})
+	if err == nil || errors.Is(err, errTxRollbackNoop) || registry == nil {
+		return
 	}
-	if cErr := tx.Commit(); cErr != nil && registry != nil {
-		registry.log.WithError(cErr).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: commit failed (row stays in_progress; >10min stale re-claim recovers)")
+	var staged *stagedTxError
+	switch {
+	case errors.As(err, &staged) && staged.stage == "release":
+		registry.log.WithError(staged.err).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: best-effort release failed (row stays in_progress; >10min stale re-claim recovers)")
+	case staged != nil:
+		registry.log.WithError(staged.err).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: enqueue .dtsh cleanup failed (row stays in_progress; >10min stale re-claim recovers)")
+	default:
+		registry.log.WithError(err).WithField("asset_hash", assetHash).Warn("clearDtshAttempt: begin/commit failed (row stays in_progress; >10min stale re-claim recovers)")
 	}
 }
+
+// stagedTxError tags a transaction-body failure with the step that failed, so callers can log the
+// step after the retrying transaction helper has rolled back. Unwrap keeps SQLSTATE classification.
+type stagedTxError struct {
+	stage string
+	err   error
+}
+
+func (e *stagedTxError) Error() string { return e.err.Error() }
+func (e *stagedTxError) Unwrap() error { return e.err }
 
 // applyDtshCompletionFailure attributes a FAILED completion to the persisted .dtsh attempt (request +
 // node). A .dtsh sync runs on an already-synced row, so its failure never matches the main-upload
@@ -7282,34 +7276,46 @@ func applyDtshCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 	if db == nil || requestID == "" || reportingNodeID == "" || tenantID == "" {
 		return false
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin dtsh sync failure tx")
-		return false
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	// Clear the attempt and RETURN the descriptor so the .dtsh staging object (which the node may have
-	// uploaded despite reporting failure) AND its versioned candidate (a completion may have promoted it before
-	// the row lost the CAS) are durably enqueued for deletion on the SAME transaction.
-	objectKey, qErr := foghorndb.New(tx).FailDtshAttempt(ctx, foghorndb.FailDtshAttemptParams{
-		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
-		DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, ErrorMessage: errorMsg, TenantID: tenantID,
-	})
-	if errors.Is(qErr, sql.ErrNoRows) {
-		return false // not a recognized dtsh attempt → let the main-upload failure guard handle it
-	}
-	if qErr != nil {
-		logger.WithError(qErr).WithField("asset_hash", assetHash).Error("failed to record dtsh sync failure")
-		return false
-	}
-	if objectKey != "" {
-		if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
-			logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue .dtsh cleanup on failure")
-			return false
+	var recognized bool
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		recognized = false
+		// Clear the attempt and RETURN the descriptor so the .dtsh staging object (which the node may have
+		// uploaded despite reporting failure) AND its versioned candidate (a completion may have promoted it before
+		// the row lost the CAS) are durably enqueued for deletion on the SAME transaction.
+		objectKey, qErr := foghorndb.New(tx).FailDtshAttempt(ctx, foghorndb.FailDtshAttemptParams{
+			ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+			DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, ErrorMessage: errorMsg, TenantID: tenantID,
+		})
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return errTxRollbackNoop // not a recognized dtsh attempt → let the main-upload failure guard handle it
 		}
+		if qErr != nil {
+			return &stagedTxError{stage: "record", err: qErr}
+		}
+		if objectKey != "" {
+			if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, objectKey, requestID); eErr != nil {
+				return &stagedTxError{stage: "enqueue", err: eErr}
+			}
+		}
+		recognized = true
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return false
 	}
-	if cErr := tx.Commit(); cErr != nil {
-		logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to commit dtsh sync failure")
+	if err != nil {
+		var staged *stagedTxError
+		switch {
+		case errors.As(err, &staged) && staged.stage == "record":
+			logger.WithError(staged.err).WithField("asset_hash", assetHash).Error("failed to record dtsh sync failure")
+		case staged != nil:
+			logger.WithError(staged.err).WithField("asset_hash", assetHash).Error("failed to enqueue .dtsh cleanup on failure")
+		default:
+			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin or commit dtsh sync failure tx")
+		}
+		return false
+	}
+	if !recognized {
 		return false
 	}
 	incArtifactSyncOutcome("dtsh_failed")
@@ -7734,47 +7740,6 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		// together, and the job is marked completed LAST. Any failure rolls back, leaving the job
 		// dispatched/processing so stale recovery retries — a completed job is never left with an
 		// unready/unregistered artifact. In-memory state + reconciler wake happen only post-commit.
-		completionTx, txErr := db.BeginTx(ctx, nil)
-		if txErr != nil {
-			logger.WithError(txErr).WithFields(fields).Error("Failed to begin completion transaction")
-			return
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				completionTx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-			}
-		}()
-
-		// Lock the job and confirm it is still active. A cancelled/deleted job or a duplicate
-		// (already-completed) result is a no-op — no resurrection.
-		q := foghorndb.New(completionTx)
-		job, lockErr := q.LockProcessingJobForCompletion(ctx, result.GetJobId())
-		if lockErr != nil {
-			if errors.Is(lockErr, sql.ErrNoRows) {
-				logger.WithFields(fields).Warn("Completion for unknown processing job; ignoring")
-				return
-			}
-			logger.WithError(lockErr).WithFields(fields).Error("Failed to lock processing job for completion")
-			return
-		}
-		jobStatusNow, assignedNode := job.Status.String, job.ProcessingNodeID
-		if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
-			logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled, deleted, or duplicate)")
-			return
-		}
-		// Bind the result to the node the job was dispatched to: the reporting node becomes the recorded
-		// origin, so a mismatched node completing another's job would forge origin placement. Dispatch persists
-		// processing_node_id (guarded, before the node can report) for EVERY node-dispatched job, so a
-		// node-reported completion must carry a non-empty assignment that equals the reporting node. An empty
-		// assignment is not a "nodeless" allowance — it is an unbound wildcard, so reject it (fail closed); a
-		// genuinely internal/gateway completion would need its own non-node ingress.
-		if assignedNode == "" || assignedNode != nodeID {
-			logger.WithFields(fields).WithField("assigned_node", assignedNode).
-				Warn("Ignoring completion whose reporting node does not match the assigned processing node")
-			return
-		}
-
 		// Artifact terminal state (only when there's a produced output); captured for the
 		// post-commit side effects.
 		outputPath := result.GetOutputPath()
@@ -7785,186 +7750,220 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			sizeBytes, actualDurationMs                    int64
 			partial                                        bool
 		)
-		if outputPath != "" {
-			var oldS3URL, oldFormat string
-			var requestedStartUnix, requestedStopUnix int64
-			// Lock the artifact row too. A lookup failure must NOT acknowledge the job — return
-			// (rollback) so it retries.
-			artifact, lookupErr := q.LockProcessingArtifactForCompletion(ctx, result.GetJobId())
-			if lookupErr != nil {
-				// A GENUINELY missing artifact row (ErrNoRows: the row was hard-deleted, or the
-				// job points at a hash with no artifact) must NOT be acknowledged as completed —
-				// roll back so stale recovery retries, and a permanently-gone artifact bounds out
-				// via max-retries → failed instead of a false "completed". This is distinct from a
-				// row that EXISTS in a terminal/deleted state (soft-deleted mid-processing), which
-				// the readiness UPDATE's affected==0 guard below handles by completing without
-				// publication.
-				if errors.Is(lookupErr, sql.ErrNoRows) {
-					logger.WithFields(fields).Warn("Completion for a job whose artifact row is missing; rolling back to retry")
-					return
+		// The stream-id lookup is a network call; resolve it at most once across transaction replays.
+		var resolvedStreamID string
+		streamIDResolved := false
+		txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(completionTx *sql.Tx) error {
+			haveArtifact, artifactHash, artifactType, tenantID, streamID = false, "", "", "", ""
+			streamInternalName, newFormat, sizeBytes, actualDurationMs, partial = "", "", 0, 0, false
+
+			// Lock the job and confirm it is still active. A cancelled/deleted job or a duplicate
+			// (already-completed) result is a no-op — no resurrection.
+			q := foghorndb.New(completionTx)
+			job, lockErr := q.LockProcessingJobForCompletion(ctx, result.GetJobId())
+			if lockErr != nil {
+				if errors.Is(lockErr, sql.ErrNoRows) {
+					logger.WithFields(fields).Warn("Completion for unknown processing job; ignoring")
+					return errTxRollbackNoop
 				}
-				logger.WithError(lookupErr).WithFields(fields).Error("Failed to look up artifact for completion; will retry")
-				return
+				return fmt.Errorf("lock processing job for completion: %w", lockErr)
 			}
-			artifactHash, artifactType, tenantID, streamID, streamInternalName = artifact.ArtifactHash, artifact.ArtifactType, artifact.TenantID, artifact.StreamID, artifact.StreamInternalName
-			oldS3URL, oldFormat, requestedStartUnix, requestedStopUnix = artifact.S3Url, artifact.Format, artifact.RequestedStartUnix, artifact.RequestedStopUnix
-			if artifactHash != "" {
-				_ = oldS3URL
-				sizeBytes = result.GetOutputSizeBytes()
-				newFormat = strings.TrimPrefix(filepath.Ext(outputPath), ".")
-				actualDurationMs = result.GetMediaDurationMs()
-				// A best-effort source (live buffer shallower than the requested range) legitimately
-				// yields a shorter clip: it publishes as partial rather than failing.
-				requestedSpanMs := (requestedStopUnix - requestedStartUnix) * 1000
-				partial = actualDurationMs > 0 && requestedSpanMs > 0 &&
-					requestedSpanMs-actualDurationMs > clipPartialShortfallMs
+			jobStatusNow, assignedNode := job.Status.String, job.ProcessingNodeID
+			if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
+				logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled, deleted, or duplicate)")
+				return errTxRollbackNoop
+			}
+			// Bind the result to the node the job was dispatched to: the reporting node becomes the recorded
+			// origin, so a mismatched node completing another's job would forge origin placement. Dispatch persists
+			// processing_node_id (guarded, before the node can report) for EVERY node-dispatched job, so a
+			// node-reported completion must carry a non-empty assignment that equals the reporting node. An empty
+			// assignment is not a "nodeless" allowance — it is an unbound wildcard, so reject it (fail closed); a
+			// genuinely internal/gateway completion would need its own non-node ingress.
+			if assignedNode == "" || assignedNode != nodeID {
+				logger.WithFields(fields).WithField("assigned_node", assignedNode).
+					Warn("Ignoring completion whose reporting node does not match the assigned processing node")
+				return errTxRollbackNoop
+			}
 
-				// Authoritative A/V track capture; tracks_present gates replace-vs-preserve.
-				tracksPresent := result.GetTracksPresent()
-				tracksJSON, tErr := marshalRecordingTracks(result.GetTracks())
-				if tErr != nil {
-					logger.WithError(tErr).WithField("artifact_hash", artifactHash).Warn("Failed to marshal processed artifact tracks; leaving existing summary")
-					tracksPresent = false
-					tracksJSON = "[]"
+			if outputPath != "" {
+				var oldS3URL, oldFormat string
+				var requestedStartUnix, requestedStopUnix int64
+				// Lock the artifact row too. A lookup failure must NOT acknowledge the job — return
+				// (rollback) so it retries.
+				artifact, lookupErr := q.LockProcessingArtifactForCompletion(ctx, result.GetJobId())
+				if lookupErr != nil {
+					// A GENUINELY missing artifact row (ErrNoRows: the row was hard-deleted, or the
+					// job points at a hash with no artifact) must NOT be acknowledged as completed —
+					// roll back so stale recovery retries, and a permanently-gone artifact bounds out
+					// via max-retries → failed instead of a false "completed". This is distinct from a
+					// row that EXISTS in a terminal/deleted state (soft-deleted mid-processing), which
+					// the readiness UPDATE's affected==0 guard below handles by completing without
+					// publication.
+					if errors.Is(lookupErr, sql.ErrNoRows) {
+						logger.WithFields(fields).Warn("Completion for a job whose artifact row is missing; rolling back to retry")
+						return errTxRollbackNoop
+					}
+					return fmt.Errorf("look up artifact for completion: %w", lookupErr)
 				}
+				artifactHash, artifactType, tenantID, streamID, streamInternalName = artifact.ArtifactHash, artifact.ArtifactType, artifact.TenantID, artifact.StreamID, artifact.StreamInternalName
+				oldS3URL, oldFormat, requestedStartUnix, requestedStopUnix = artifact.S3Url, artifact.Format, artifact.RequestedStartUnix, artifact.RequestedStopUnix
+				if artifactHash != "" {
+					_ = oldS3URL
+					sizeBytes = result.GetOutputSizeBytes()
+					newFormat = strings.TrimPrefix(filepath.Ext(outputPath), ".")
+					actualDurationMs = result.GetMediaDurationMs()
+					// A best-effort source (live buffer shallower than the requested range) legitimately
+					// yields a shorter clip: it publishes as partial rather than failing.
+					requestedSpanMs := (requestedStopUnix - requestedStartUnix) * 1000
+					partial = actualDurationMs > 0 && requestedSpanMs > 0 &&
+						requestedSpanMs-actualDurationMs > clipPartialShortfallMs
 
-				// Claim readiness on the transaction. A row deleted/failed mid-processing matches
-				// 0 (guard) — the job still completes, but nothing is published.
-				affected, dbErr := q.MarkProcessingArtifactReady(ctx, foghorndb.MarkProcessingArtifactReadyParams{
-					Format: sql.NullString{String: newFormat, Valid: newFormat != ""}, ArtifactHash: artifactHash,
-					SizeBytes: sql.NullInt64{Int64: sizeBytes, Valid: true}, DurationMs: actualDurationMs,
-					Tracks: json.RawMessage(tracksJSON), TracksPresent: tracksPresent,
-				})
-				if dbErr != nil {
-					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("Failed to update artifact readiness; will retry")
-					return
-				}
-				if affected == 0 {
-					logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); completing job without publication")
-				} else {
-					haveArtifact = true
+					// Authoritative A/V track capture; tracks_present gates replace-vs-preserve.
+					tracksPresent := result.GetTracksPresent()
+					tracksJSON, tErr := marshalRecordingTracks(result.GetTracks())
+					if tErr != nil {
+						logger.WithError(tErr).WithField("artifact_hash", artifactHash).Warn("Failed to marshal processed artifact tracks; leaving existing summary")
+						tracksPresent = false
+						tracksJSON = "[]"
+					}
 
-					// VOD metadata (codec/resolution/…) from Helmsman stream info — same tx.
-					if artifactType == "vod" {
-						o := result.GetOutputs()
-						textArg := func(v string) sql.NullString { return sql.NullString{String: v, Valid: v != ""} }
-						if mErr := q.UpdateCompletedVODMetadata(ctx, foghorndb.UpdateCompletedVODMetadataParams{
-							ArtifactHash: artifactHash, DurationMs: textArg(o["duration_ms"]), Resolution: textArg(o["resolution"]),
-							VideoCodec: textArg(o["video_codec"]), AudioCodec: textArg(o["audio_codec"]), BitrateKbps: textArg(o["bitrate_kbps"]),
-							Width: textArg(o["width"]), Height: textArg(o["height"]), Fps: textArg(o["fps"]),
-							AudioChannels: textArg(o["audio_channels"]), AudioSampleRate: textArg(o["audio_sample_rate"]),
-						}); mErr != nil {
-							logger.WithError(mErr).WithField("artifact_hash", artifactHash).Error("Failed to update vod_metadata; will retry")
-							return
-						}
+					// Claim readiness on the transaction. A row deleted/failed mid-processing matches
+					// 0 (guard) — the job still completes, but nothing is published.
+					affected, dbErr := q.MarkProcessingArtifactReady(ctx, foghorndb.MarkProcessingArtifactReadyParams{
+						Format: sql.NullString{String: newFormat, Valid: newFormat != ""}, ArtifactHash: artifactHash,
+						SizeBytes: sql.NullInt64{Int64: sizeBytes, Valid: true}, DurationMs: actualDurationMs,
+						Tracks: json.RawMessage(tracksJSON), TracksPresent: tracksPresent,
+					})
+					if dbErr != nil {
+						return fmt.Errorf("update artifact readiness for %s: %w", artifactHash, dbErr)
 					}
-					// Origin placement + node-copy event — same tx. This node wrote the canonical file;
-					// register as origin (is_complete=true) so it can serve peer-relay while it uploads.
-					if err := RegisterOriginArtifactTx(ctx, completionTx, artifactHash, nodeID, outputPath, sizeBytes, true); err != nil {
-						logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to register origin artifact; will retry")
-						return
-					}
-					// Lifecycle enqueue in the SAME tx (durable outbox), regardless of Decklog conn.
-					if artifactType == "clip" {
-						if streamID == "" {
-							streamID = resolveLifecycleStreamID(ctx, streamInternalName)
-						}
-						clipData := &ipcpb.ClipLifecycleData{
-							Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
-							ClipHash: artifactHash,
-							ProgressPercent: func() *uint32 {
-								p := uint32(100)
-								return &p
-							}(),
-							FilePath:        &outputPath,
-							SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
-							CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
-							NodeId:          &nodeID,
-							StorageLocation: func() *string { v := "local"; return &v }(),
-							SyncStatus:      func() *string { v := "pending"; return &v }(),
-							HasLocalCopy:    func() *bool { v := true; return &v }(),
-							IsSynced:        func() *bool { v := false; return &v }(),
-							IsFinalized:     func() *bool { v := false; return &v }(),
-						}
-						if tenantID != "" {
-							clipData.TenantId = &tenantID
-						}
-						if streamID != "" {
-							clipData.StreamId = &streamID
-						}
-						if streamInternalName != "" {
-							clipData.StreamInternalName = &streamInternalName
-						}
-						if actualDurationMs > 0 {
-							durationSec := actualDurationMs / 1000
-							clipData.DurationSec = &durationSec
-						}
-						if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
-							clipData.ProcessingSpeed = sp
-							clipData.ProcessingWallMs = wallMs
-						}
-						ready := &publicv1.ClipReady{
-							Artifact:   artifactoutbox.ClipArtifact(artifactHash, streamID),
-							DurationMs: max(actualDurationMs, 0),
-							SizeBytes:  max(sizeBytes, 0),
-						}
-						if err := artifactoutbox.EnqueueClipTransitionTx(ctx, completionTx, clipData, ready); err != nil {
-							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue clip lifecycle; will retry")
-							return
-						}
-					}
-					if artifactType == "vod" {
-						vodData := &ipcpb.VodLifecycleData{
-							Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
-							VodHash:         artifactHash,
-							FilePath:        &outputPath,
-							SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
-							CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
-							NodeId:          &nodeID,
-							ProgressPct:     func() *int32 { p := int32(100); return &p }(),
-							StorageLocation: func() *string { v := "local"; return &v }(),
-							SyncStatus:      func() *string { v := "pending"; return &v }(),
-							HasLocalCopy:    func() *bool { v := true; return &v }(),
-							IsSynced:        func() *bool { v := false; return &v }(),
-							IsFinalized:     func() *bool { v := false; return &v }(),
-						}
-						if tenantID != "" {
-							vodData.TenantId = &tenantID
-						}
-						if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
-							vodData.ProcessingSpeed = sp
-							vodData.ProcessingWallMs = wallMs
-						}
-						// Processing jobs exist only for clips and uploads, so a 'vod' artifact here is an upload.
-						ready := &publicv1.UploadReady{
-							Artifact:   artifactoutbox.UploadArtifact(artifactHash),
-							DurationMs: max(actualDurationMs, 0),
-							SizeBytes:  max(sizeBytes, 0),
-						}
-						if err := artifactoutbox.EnqueueVodTransitionTx(ctx, completionTx, vodData, ready); err != nil {
-							logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to enqueue vod lifecycle; will retry")
-							return
-						}
-					}
-					_ = oldFormat
-				} // end else (artifact published)
-			} // end if artifactHash != ""
-		} // end if outputPath != ""
+					if affected == 0 {
+						logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); completing job without publication")
+					} else {
+						haveArtifact = true
 
-		// Mark the job completed LAST, then commit the whole terminal transition atomically.
-		var outputMetadata sql.NullString
-		if outputMeta != nil {
-			outputMetadata = sql.NullString{String: *outputMeta, Valid: true}
-		}
-		if err := q.CompleteProcessingJob(ctx, foghorndb.CompleteProcessingJobParams{JobID: result.GetJobId(), OutputMetadata: outputMetadata}); err != nil {
-			logger.WithError(err).WithFields(fields).Error("Failed to mark job completed; will retry")
+						// VOD metadata (codec/resolution/…) from Helmsman stream info — same tx.
+						if artifactType == "vod" {
+							o := result.GetOutputs()
+							textArg := func(v string) sql.NullString { return sql.NullString{String: v, Valid: v != ""} }
+							if mErr := q.UpdateCompletedVODMetadata(ctx, foghorndb.UpdateCompletedVODMetadataParams{
+								ArtifactHash: artifactHash, DurationMs: textArg(o["duration_ms"]), Resolution: textArg(o["resolution"]),
+								VideoCodec: textArg(o["video_codec"]), AudioCodec: textArg(o["audio_codec"]), BitrateKbps: textArg(o["bitrate_kbps"]),
+								Width: textArg(o["width"]), Height: textArg(o["height"]), Fps: textArg(o["fps"]),
+								AudioChannels: textArg(o["audio_channels"]), AudioSampleRate: textArg(o["audio_sample_rate"]),
+							}); mErr != nil {
+								return fmt.Errorf("update vod_metadata for %s: %w", artifactHash, mErr)
+							}
+						}
+						// Origin placement + node-copy event — same tx. This node wrote the canonical file;
+						// register as origin (is_complete=true) so it can serve peer-relay while it uploads.
+						if err := RegisterOriginArtifactTx(ctx, completionTx, artifactHash, nodeID, outputPath, sizeBytes, true); err != nil {
+							return fmt.Errorf("register origin artifact for %s: %w", artifactHash, err)
+						}
+						// Lifecycle enqueue in the SAME tx (durable outbox), regardless of Decklog conn.
+						if artifactType == "clip" {
+							if streamID == "" {
+								if !streamIDResolved {
+									resolvedStreamID = resolveLifecycleStreamID(ctx, streamInternalName)
+									streamIDResolved = true
+								}
+								streamID = resolvedStreamID
+							}
+							clipData := &ipcpb.ClipLifecycleData{
+								Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
+								ClipHash: artifactHash,
+								ProgressPercent: func() *uint32 {
+									p := uint32(100)
+									return &p
+								}(),
+								FilePath:        &outputPath,
+								SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+								CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+								NodeId:          &nodeID,
+								StorageLocation: func() *string { v := "local"; return &v }(),
+								SyncStatus:      func() *string { v := "pending"; return &v }(),
+								HasLocalCopy:    func() *bool { v := true; return &v }(),
+								IsSynced:        func() *bool { v := false; return &v }(),
+								IsFinalized:     func() *bool { v := false; return &v }(),
+							}
+							if tenantID != "" {
+								clipData.TenantId = &tenantID
+							}
+							if streamID != "" {
+								clipData.StreamId = &streamID
+							}
+							if streamInternalName != "" {
+								clipData.StreamInternalName = &streamInternalName
+							}
+							if actualDurationMs > 0 {
+								durationSec := actualDurationMs / 1000
+								clipData.DurationSec = &durationSec
+							}
+							if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+								clipData.ProcessingSpeed = sp
+								clipData.ProcessingWallMs = wallMs
+							}
+							ready := &publicv1.ClipReady{
+								Artifact:   artifactoutbox.ClipArtifact(artifactHash, streamID),
+								DurationMs: max(actualDurationMs, 0),
+								SizeBytes:  max(sizeBytes, 0),
+							}
+							if err := artifactoutbox.EnqueueClipTransitionTx(ctx, completionTx, clipData, ready); err != nil {
+								return fmt.Errorf("enqueue clip lifecycle for %s: %w", artifactHash, err)
+							}
+						}
+						if artifactType == "vod" {
+							vodData := &ipcpb.VodLifecycleData{
+								Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
+								VodHash:         artifactHash,
+								FilePath:        &outputPath,
+								SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
+								CompletedAt:     func() *int64 { t := time.Now().Unix(); return &t }(),
+								NodeId:          &nodeID,
+								ProgressPct:     func() *int32 { p := int32(100); return &p }(),
+								StorageLocation: func() *string { v := "local"; return &v }(),
+								SyncStatus:      func() *string { v := "pending"; return &v }(),
+								HasLocalCopy:    func() *bool { v := true; return &v }(),
+								IsSynced:        func() *bool { v := false; return &v }(),
+								IsFinalized:     func() *bool { v := false; return &v }(),
+							}
+							if tenantID != "" {
+								vodData.TenantId = &tenantID
+							}
+							if sp, wallMs := processingSpeedFromOutputs(result.GetOutputs()); sp != nil || wallMs != nil {
+								vodData.ProcessingSpeed = sp
+								vodData.ProcessingWallMs = wallMs
+							}
+							ready := &publicv1.UploadReady{
+								Artifact:   artifactoutbox.UploadArtifact(artifactHash),
+								DurationMs: max(actualDurationMs, 0),
+								SizeBytes:  max(sizeBytes, 0),
+							}
+							if err := artifactoutbox.EnqueueVodTransitionTx(ctx, completionTx, vodData, ready); err != nil {
+								return fmt.Errorf("enqueue vod lifecycle for %s: %w", artifactHash, err)
+							}
+						}
+						_ = oldFormat
+					} // end else (artifact published)
+				} // end if artifactHash != ""
+			} // end if outputPath != ""
+
+			// Mark the job completed LAST, then commit the whole terminal transition atomically.
+			var outputMetadata sql.NullString
+			if outputMeta != nil {
+				outputMetadata = sql.NullString{String: *outputMeta, Valid: true}
+			}
+			if err := q.CompleteProcessingJob(ctx, foghorndb.CompleteProcessingJobParams{JobID: result.GetJobId(), OutputMetadata: outputMetadata}); err != nil {
+				return fmt.Errorf("mark job completed: %w", err)
+			}
+			return nil
+		})
+		if txErr != nil {
+			if !errors.Is(txErr, errTxRollbackNoop) {
+				logger.WithError(txErr).WithFields(fields).Error("Processing job completion did not commit; will retry")
+			}
 			return
 		}
-		if err := completionTx.Commit(); err != nil {
-			logger.WithError(err).WithFields(fields).Error("Failed to commit completion; will retry")
-			return
-		}
-		committed = true
 		logger.WithFields(fields).Info("Processing job completed")
 
 		// After commit: in-memory state + reconciler wake (best-effort, not part of durability).
@@ -8001,123 +8000,115 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 // (the split-write hazard the pre-transaction path carried). A transient error rolls back and
 // leaves the job active for stale recovery to retry.
 func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
-	tx, txErr := db.BeginTx(ctx, nil)
+	// The stream-id lookup is a network call; resolve it at most once across transaction replays.
+	var resolvedStreamID string
+	streamIDResolved := false
+	txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		// Lock the job and resolve its artifact in one shot. LEFT JOIN so a job with no artifact
+		// row still returns its status; FOR UPDATE OF pj serializes against the completion path.
+		q := foghorndb.New(tx)
+		job, lookupErr := q.LockProcessingJobForFailure(ctx, jobID)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, sql.ErrNoRows) {
+				logger.WithFields(fields).Warn("Failure for unknown processing job; ignoring")
+				return errTxRollbackNoop
+			}
+			return fmt.Errorf("lock processing job for failure: %w", lookupErr)
+		}
+		jobStatusNow, assignedNode, artHash, artType := job.Status.String, job.ProcessingNodeID, job.ArtifactHash, job.ArtifactType
+		tenantID, streamID, streamInternalName := job.TenantID, job.StreamID, job.StreamInternalName
+		if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
+			logger.WithFields(fields).Warn("Ignoring failure for a non-active processing job (cancelled, deleted, or duplicate)")
+			return errTxRollbackNoop
+		}
+		// Bind the failure to the assigned node so a foreign node cannot fail another node's job. Both callers
+		// (the "failed" report and the internal empty-output→fail) pass the reporting connection's node id, and
+		// dispatch persists processing_node_id for every node-dispatched job, so require a non-empty assignment
+		// that equals the reporting node. An empty assignment is an unbound wildcard — reject it (fail closed).
+		if reportingNode == "" || assignedNode == "" || assignedNode != reportingNode {
+			logger.WithFields(fields).WithField("assigned_node", assignedNode).
+				Warn("Ignoring failure whose reporting node does not match the assigned processing node")
+			return errTxRollbackNoop
+		}
+
+		if err := q.MarkProcessingJobFailed(ctx, foghorndb.MarkProcessingJobFailedParams{JobID: jobID, ErrorMessage: sql.NullString{String: errMsg, Valid: true}}); err != nil {
+			return fmt.Errorf("mark job failed: %w", err)
+		}
+
+		// Mark the artifact failed (clip AND vod) on the same tx. Without this a failed VOD/clip
+		// stays "processing" in the UI forever. The guard only touches a PRE-TERMINAL artifact and is
+		// tenant-scoped: a concurrently deleted/expired/aborted/already-ready artifact (or a
+		// hash-collision across tenants) must never be resurrected to 'failed'.
+		if artHash != "" && (artType == "clip" || artType == "vod") {
+			artFailed, err := q.MarkProcessingArtifactFailed(ctx, foghorndb.MarkProcessingArtifactFailedParams{
+				ArtifactHash: artHash, ErrorMessage: sql.NullString{String: errMsg, Valid: true}, TenantID: tenantID,
+			})
+			if err != nil {
+				return fmt.Errorf("mark artifact failed for %s: %w", artHash, err)
+			}
+			// Only emit FAILED if THIS tx actually transitioned the artifact; a 0-row result means it
+			// was already terminal (concurrently ready/deleted/expired/aborted) and a false FAILED
+			// analytics event must not be emitted. The job-failed transition still commits.
+			if artFailed == 0 {
+				// nothing to publish
+			} else if artType == "clip" {
+				// Resolve the stream id when the artifact row lacks it: periscope-ingest drops
+				// lifecycle events without a valid stream UUID — how a failed clip stays
+				// "processing" in the UI forever.
+				if streamID == "" {
+					if !streamIDResolved {
+						resolvedStreamID = resolveLifecycleStreamID(ctx, streamInternalName)
+						streamIDResolved = true
+					}
+					streamID = resolvedStreamID
+				}
+				clipData := &ipcpb.ClipLifecycleData{
+					Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
+					ClipHash: artHash,
+					Error:    &errMsg,
+				}
+				if tenantID != "" {
+					clipData.TenantId = &tenantID
+				}
+				if streamID != "" {
+					clipData.StreamId = &streamID
+				}
+				if streamInternalName != "" {
+					clipData.StreamInternalName = &streamInternalName
+				}
+				failed := &publicv1.ClipFailed{
+					Artifact: artifactoutbox.ClipArtifact(artHash, streamID),
+					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+				}
+				if err := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); err != nil {
+					return fmt.Errorf("enqueue clip failure lifecycle for %s: %w", artHash, err)
+				}
+			} else {
+				vodData := &ipcpb.VodLifecycleData{
+					Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
+					VodHash: artHash,
+					Error:   &errMsg,
+				}
+				if tenantID != "" {
+					vodData.TenantId = &tenantID
+				}
+				failed := &publicv1.UploadFailed{
+					Artifact: artifactoutbox.UploadArtifact(artHash),
+					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+				}
+				if err := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); err != nil {
+					return fmt.Errorf("enqueue vod failure lifecycle for %s: %w", artHash, err)
+				}
+			}
+		}
+		return nil
+	})
 	if txErr != nil {
-		logger.WithError(txErr).WithFields(fields).Error("Failed to begin failure transaction")
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
+		if !errors.Is(txErr, errTxRollbackNoop) {
+			logger.WithError(txErr).WithFields(fields).Error("Processing job failure did not commit; will retry")
 		}
-	}()
-
-	// Lock the job and resolve its artifact in one shot. LEFT JOIN so a job with no artifact
-	// row still returns its status; FOR UPDATE OF pj serializes against the completion path.
-	q := foghorndb.New(tx)
-	job, lookupErr := q.LockProcessingJobForFailure(ctx, jobID)
-	if lookupErr != nil {
-		if errors.Is(lookupErr, sql.ErrNoRows) {
-			logger.WithFields(fields).Warn("Failure for unknown processing job; ignoring")
-			return
-		}
-		logger.WithError(lookupErr).WithFields(fields).Error("Failed to lock processing job for failure; will retry")
 		return
 	}
-	jobStatusNow, assignedNode, artHash, artType := job.Status.String, job.ProcessingNodeID, job.ArtifactHash, job.ArtifactType
-	tenantID, streamID, streamInternalName := job.TenantID, job.StreamID, job.StreamInternalName
-	if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
-		logger.WithFields(fields).Warn("Ignoring failure for a non-active processing job (cancelled, deleted, or duplicate)")
-		return
-	}
-	// Bind the failure to the assigned node so a foreign node cannot fail another node's job. Both callers
-	// (the "failed" report and the internal empty-output→fail) pass the reporting connection's node id, and
-	// dispatch persists processing_node_id for every node-dispatched job, so require a non-empty assignment
-	// that equals the reporting node. An empty assignment is an unbound wildcard — reject it (fail closed).
-	if reportingNode == "" || assignedNode == "" || assignedNode != reportingNode {
-		logger.WithFields(fields).WithField("assigned_node", assignedNode).
-			Warn("Ignoring failure whose reporting node does not match the assigned processing node")
-		return
-	}
-
-	if err := q.MarkProcessingJobFailed(ctx, foghorndb.MarkProcessingJobFailedParams{JobID: jobID, ErrorMessage: sql.NullString{String: errMsg, Valid: true}}); err != nil {
-		logger.WithError(err).WithFields(fields).Error("Failed to mark job failed; will retry")
-		return
-	}
-
-	// Mark the artifact failed (clip AND vod) on the same tx. Without this a failed VOD/clip
-	// stays "processing" in the UI forever. The guard only touches a PRE-TERMINAL artifact and is
-	// tenant-scoped: a concurrently deleted/expired/aborted/already-ready artifact (or a
-	// hash-collision across tenants) must never be resurrected to 'failed'.
-	if artHash != "" && (artType == "clip" || artType == "vod") {
-		artFailed, err := q.MarkProcessingArtifactFailed(ctx, foghorndb.MarkProcessingArtifactFailedParams{
-			ArtifactHash: artHash, ErrorMessage: sql.NullString{String: errMsg, Valid: true}, TenantID: tenantID,
-		})
-		if err != nil {
-			logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to mark artifact failed; will retry")
-			return
-		}
-		// Only emit FAILED if THIS tx actually transitioned the artifact; a 0-row result means it
-		// was already terminal (concurrently ready/deleted/expired/aborted) and a false FAILED
-		// analytics event must not be emitted. The job-failed transition still commits.
-		if artFailed == 0 {
-			// nothing to publish
-		} else if artType == "clip" {
-			// Resolve the stream id when the artifact row lacks it: periscope-ingest drops
-			// lifecycle events without a valid stream UUID — how a failed clip stays
-			// "processing" in the UI forever.
-			if streamID == "" {
-				streamID = resolveLifecycleStreamID(ctx, streamInternalName)
-			}
-			clipData := &ipcpb.ClipLifecycleData{
-				Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
-				ClipHash: artHash,
-				Error:    &errMsg,
-			}
-			if tenantID != "" {
-				clipData.TenantId = &tenantID
-			}
-			if streamID != "" {
-				clipData.StreamId = &streamID
-			}
-			if streamInternalName != "" {
-				clipData.StreamInternalName = &streamInternalName
-			}
-			failed := &publicv1.ClipFailed{
-				Artifact: artifactoutbox.ClipArtifact(artHash, streamID),
-				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
-			}
-			if err := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); err != nil {
-				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue clip failure lifecycle; will retry")
-				return
-			}
-		} else {
-			// Processing jobs exist only for clips and uploads, so a 'vod' artifact here is an upload.
-			vodData := &ipcpb.VodLifecycleData{
-				Status:  ipcpb.VodLifecycleData_STATUS_FAILED,
-				VodHash: artHash,
-				Error:   &errMsg,
-			}
-			if tenantID != "" {
-				vodData.TenantId = &tenantID
-			}
-			failed := &publicv1.UploadFailed{
-				Artifact: artifactoutbox.UploadArtifact(artHash),
-				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
-			}
-			if err := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); err != nil {
-				logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to enqueue vod failure lifecycle; will retry")
-				return
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		logger.WithError(err).WithFields(fields).Error("Failed to commit failure; will retry")
-		return
-	}
-	committed = true
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job failed")
 }
 
@@ -8143,90 +8134,81 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 
 	// The progress write and its lifecycle sample commit together: a sample exists exactly when the
 	// progress it reports was recorded.
-	tx, txErr := db.BeginTx(ctx, nil)
-	if txErr != nil {
-		logger.WithError(txErr).WithField("job_id", progress.GetJobId()).Warn("Failed to begin processing progress transaction")
-		return
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-
-	// Update job progress and refresh updated_at so stale recovery doesn't requeue. Bind STRICTLY to the
-	// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
-	// genuinely stuck node). processing_node_id is persisted before the node can report, so an active
-	// node-dispatched job always carries it; require an exact match (a NULL assignment is an unbound wildcard).
-	q := foghorndb.New(tx)
-	var artifactType, streamID, streamInternalName string
-	updated, err := q.UpdateProcessingJobProgress(ctx, foghorndb.UpdateProcessingJobProgressParams{
-		JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
-	})
-	if err != nil {
+	txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		// Update job progress and refresh updated_at so stale recovery doesn't requeue. Bind STRICTLY to the
+		// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
+		// genuinely stuck node). processing_node_id is persisted before the node can report, so an active
+		// node-dispatched job always carries it; require an exact match (a NULL assignment is an unbound wildcard).
+		q := foghorndb.New(tx)
+		var artifactType, streamID, streamInternalName string
+		updated, err := q.UpdateProcessingJobProgress(ctx, foghorndb.UpdateProcessingJobProgressParams{
+			JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+		})
 		if errors.Is(err, sql.ErrNoRows) {
-			logger.WithFields(logging.Fields{
-				"job_id":  progress.GetJobId(),
-				"node_id": nodeID,
-			}).Debug("Ignored processing progress from a non-owner or terminal job")
-		} else {
-			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
+			return errTxRollbackNoop
 		}
-		return
-	}
-	artifactHash, tenantID := updated.ArtifactHash, updated.TenantID
-	if updated.Progress.Valid {
-		progressPct = clampProgressPct(updated.Progress.Int32)
-	}
+		if err != nil {
+			return fmt.Errorf("update processing job progress: %w", err)
+		}
+		artifactHash, tenantID := updated.ArtifactHash, updated.TenantID
+		if updated.Progress.Valid {
+			progressPct = clampProgressPct(updated.Progress.Int32)
+		}
 
-	if artifactHash.Valid {
-		lifecycle, typeErr := q.GetProcessingArtifactLifecycle(ctx, artifactHash.String)
-		if typeErr == nil {
-			artifactType, streamID, streamInternalName = lifecycle.ArtifactType, lifecycle.StreamID, lifecycle.StreamInternalName
+		if artifactHash.Valid {
+			lifecycle, typeErr := q.GetProcessingArtifactLifecycle(ctx, artifactHash.String)
+			if typeErr == nil {
+				artifactType, streamID, streamInternalName = lifecycle.ArtifactType, lifecycle.StreamID, lifecycle.StreamInternalName
+			}
+			if typeErr != nil && !errors.Is(typeErr, sql.ErrNoRows) {
+				return fmt.Errorf("look up processing artifact type: %w", typeErr)
+			}
 		}
-		if typeErr != nil && !errors.Is(typeErr, sql.ErrNoRows) {
-			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type; the next progress report retries")
-			return
-		}
-	}
 
-	// A progress sample is analytics only, not a domain fact: the artifact's 'processing'
-	// transition committed at dispatch. A failed write loses this tick; the next report
-	// carries a newer one.
-	if artifactHash.Valid {
-		var enqErr error
-		if artifactType == "clip" {
-			clipData := &ipcpb.ClipLifecycleData{
-				Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
-				ClipHash:        artifactHash.String,
-				ProgressPercent: func() *uint32 { p := uint32(progressPct); return &p }(),
+		// A progress sample is analytics only, not a domain fact: the artifact's 'processing'
+		// transition committed at dispatch. A failed write loses this tick; the next report
+		// carries a newer one.
+		if artifactHash.Valid {
+			var enqErr error
+			if artifactType == "clip" {
+				clipData := &ipcpb.ClipLifecycleData{
+					Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
+					ClipHash:        artifactHash.String,
+					ProgressPercent: func() *uint32 { p := uint32(progressPct); return &p }(),
+				}
+				if tenantID != "" {
+					clipData.TenantId = &tenantID
+				}
+				if streamID != "" {
+					clipData.StreamId = &streamID
+				}
+				if streamInternalName != "" {
+					clipData.StreamInternalName = &streamInternalName
+				}
+				enqErr = artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData)
+			} else {
+				// DVR chapter finalization has its own path above because chapter jobs are not in
+				// foghorn.processing_jobs.
+				vodData := &ipcpb.VodLifecycleData{
+					Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
+					VodHash:     artifactHash.String,
+					ProgressPct: &progressPct,
+				}
+				if tenantID != "" {
+					vodData.TenantId = &tenantID
+				}
+				enqErr = artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
 			}
-			if tenantID != "" {
-				clipData.TenantId = &tenantID
+			if enqErr != nil {
+				return fmt.Errorf("enqueue processing progress lifecycle: %w", enqErr)
 			}
-			if streamID != "" {
-				clipData.StreamId = &streamID
-			}
-			if streamInternalName != "" {
-				clipData.StreamInternalName = &streamInternalName
-			}
-			enqErr = artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData)
-		} else {
-			// DVR chapter finalization has its own path above because chapter jobs are not in
-			// foghorn.processing_jobs.
-			vodData := &ipcpb.VodLifecycleData{
-				Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
-				VodHash:     artifactHash.String,
-				ProgressPct: &progressPct,
-			}
-			if tenantID != "" {
-				vodData.TenantId = &tenantID
-			}
-			enqErr = artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
 		}
-		if enqErr != nil {
-			logger.WithError(enqErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to enqueue processing progress lifecycle")
-			return
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to commit processing job progress")
+		return nil
+	})
+	if errors.Is(txErr, errTxRollbackNoop) {
+		logger.WithFields(logging.Fields{"job_id": progress.GetJobId(), "node_id": nodeID}).Debug("Ignored processing progress from a non-owner or terminal job")
+	} else if txErr != nil {
+		logger.WithError(txErr).WithField("job_id", progress.GetJobId()).Warn("Failed to record processing job progress")
 	}
 }
 
@@ -8236,42 +8218,32 @@ func clampProgressPct(progress int32) int32 {
 
 func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, expectedAttempt, progressPct int32, logger logging.Logger) {
 	// The heartbeat and its lifecycle sample commit together.
-	tx, txErr := db.BeginTx(ctx, nil)
-	if txErr != nil {
-		logger.WithError(txErr).WithField("chapter_id", chapterID).Warn("Failed to begin chapter progress transaction")
-		return
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-	// The node and attempt together own the lease. A report from a foreign node,
-	// a replaced attempt, or an attempt-less legacy job matches no row.
-	row, err := foghorndb.New(tx).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
-		ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}, ExpectedAttempt: expectedAttempt,
-	})
-	if err != nil {
+	txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		// The node and attempt together own the lease. A report from a foreign node,
+		// a replaced attempt, or an attempt-less legacy job matches no row.
+		row, err := foghorndb.New(tx).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
+			ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}, ExpectedAttempt: expectedAttempt,
+		})
 		if errors.Is(err, sql.ErrNoRows) {
-			logger.WithFields(logging.Fields{
-				"chapter_id": chapterID,
-				"node_id":    nodeID,
-				"attempt":    expectedAttempt,
-			}).Debug("Ignored chapter progress from a non-owner or stale attempt")
-		} else {
-			logger.WithError(err).WithField("chapter_id", chapterID).Warn("Failed to update chapter finalize progress")
+			return errTxRollbackNoop
 		}
-		return
-	}
-	artifactHash, tenantID := row.PlaybackArtifactHash.String, row.ATenantID
-	vodData := &ipcpb.VodLifecycleData{
-		Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
-		VodHash:     artifactHash,
-		TenantId:    &tenantID,
-		ProgressPct: &progressPct,
-	}
-	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-		logger.WithError(enqErr).WithField("chapter_id", chapterID).Warn("Failed to enqueue chapter progress lifecycle")
-		return
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		logger.WithError(commitErr).WithField("chapter_id", chapterID).Warn("Failed to commit chapter finalize progress")
+		if err != nil {
+			return fmt.Errorf("update chapter finalize progress: %w", err)
+		}
+		artifactHash, tenantID := row.PlaybackArtifactHash.String, row.ATenantID
+		vodData := &ipcpb.VodLifecycleData{
+			Status: ipcpb.VodLifecycleData_STATUS_PROCESSING, VodHash: artifactHash,
+			TenantId: &tenantID, ProgressPct: &progressPct,
+		}
+		if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
+			return fmt.Errorf("enqueue chapter progress lifecycle: %w", enqErr)
+		}
+		return nil
+	})
+	if errors.Is(txErr, errTxRollbackNoop) {
+		logger.WithFields(logging.Fields{"chapter_id": chapterID, "node_id": nodeID, "attempt": expectedAttempt}).Debug("Ignored chapter progress from a non-owner or stale attempt")
+	} else if txErr != nil {
+		logger.WithError(txErr).WithField("chapter_id", chapterID).Warn("Failed to record chapter finalize progress")
 	}
 }
 
@@ -8965,209 +8937,192 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 		// zero rows and the whole transaction is a no-op — no double node-copy, no resurrected lifecycle, no
 		// wrong-node attribution. Node-copy, VOD metadata, and the chapter freeze all commit atomically with
 		// the artifact promotion. The attempt identity is cleared here.
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin sync completion tx")
-			return
-		}
-		defer tx.Rollback() //nolint:errcheck // rollback is best-effort on the non-commit paths
-		q := foghorndb.New(tx)
-		applied, err := q.CompleteMainArtifactSync(ctx, foghorndb.CompleteMainArtifactSyncParams{
-			S3Url: s3URL, DtshSynced: sql.NullBool{Bool: dtshIncluded, Valid: true}, ArtifactHash: assetHash, SizeBytes: int64(sizeBytes),
-			SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: guardTenant,
-			SyncObjectKey: syncObjectKey, ActiveObjectKey: publishMainKey, ActiveDtshKey: publishDtshKey,
-		})
-		if err != nil {
-			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
-			return
-		}
-		if applied == 0 {
-			// Not an in_progress→synced transition. An incremental .dtsh sync (TriggerDtshSync) runs on
-			// an ALREADY-SYNCED artifact and reports back through this same SyncComplete path, so it can
-			// never match the in_progress guard. Handle it as its own idempotent transition, authenticated
-			// against the persisted DTSH attempt (request + node): set dtsh_synced on the synced row and
-			// clear the attempt, then advance the chapter freeze that depends on it — without touching
-			// sync_status or node copies. A stale/duplicate/wrong-node dtsh completion matches zero rows
-			// (guarded on the attempt identity AND dtsh not-yet-set) and is a no-op.
-			if dtshIncluded {
-				// Tenant is MANDATORY here (no wildcard): the metadata pre-read resolved it, and a dtsh
-				// completion for an unresolvable tenant must not finalize the index or advance reclaim.
-				if tenantID == "" {
-					logger.WithField("asset_hash", assetHash).Warn("Ignoring dtsh completion: unresolved tenant")
-					return
+		// dtshOnly records which committed transition the callback applied, for the post-commit effects.
+		dtshOnly := false
+		syncTxErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+			dtshOnly = false
+			q := foghorndb.New(tx)
+			applied, err := q.CompleteMainArtifactSync(ctx, foghorndb.CompleteMainArtifactSyncParams{
+				S3Url: s3URL, DtshSynced: sql.NullBool{Bool: dtshIncluded, Valid: true}, ArtifactHash: assetHash, SizeBytes: int64(sizeBytes),
+				SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: guardTenant,
+				SyncObjectKey: syncObjectKey, ActiveObjectKey: publishMainKey, ActiveDtshKey: publishDtshKey,
+			})
+			if err != nil {
+				return fmt.Errorf("mark artifact as synced: %w", err)
+			}
+			if applied == 0 {
+				// Not an in_progress→synced transition. An incremental .dtsh sync (TriggerDtshSync) runs on
+				// an ALREADY-SYNCED artifact and reports back through this same SyncComplete path, so it can
+				// never match the in_progress guard. Handle it as its own idempotent transition, authenticated
+				// against the persisted DTSH attempt (request + node): set dtsh_synced on the synced row and
+				// clear the attempt, then advance the chapter freeze that depends on it — without touching
+				// sync_status or node copies. A stale/duplicate/wrong-node dtsh completion matches zero rows
+				// (guarded on the attempt identity AND dtsh not-yet-set) and is a no-op.
+				if dtshIncluded {
+					// Tenant is MANDATORY here (no wildcard): the metadata pre-read resolved it, and a dtsh
+					// completion for an unresolvable tenant must not finalize the index or advance reclaim.
+					if tenantID == "" {
+						logger.WithField("asset_hash", assetHash).Warn("Ignoring dtsh completion: unresolved tenant")
+						return errTxRollbackNoop
+					}
+					dApplied, dErr := q.CompleteIncrementalDtshSync(ctx, foghorndb.CompleteIncrementalDtshSyncParams{
+						ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+						DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: tenantID, ActiveDtshKey: publishDtshKey,
+					})
+					if dErr != nil {
+						return fmt.Errorf("apply dtsh sync: %w", dErr)
+					}
+					if dApplied == 0 {
+						// This completion LOST its CAS (a duplicate won, or the row is no longer in the pending-dtsh
+						// state). Any object it published (recorded in the freeze_publication_ledger BEFORE the promote)
+						// is left for reconcileFreezePublicationLedger to collect durably — it is req-aware, so a live
+						// candidate or a still-retrying attempt is never deleted. Roll back and return.
+						logger.WithField("asset_hash", assetHash).Debug("Ignoring sync completion: no in_progress attempt and no pending dtsh transition")
+						return errTxRollbackNoop
+					}
+					// The .dtsh index was already PUBLISHED (out of tx) to the fresh publishDtshKey; this transition
+					// flipped active_dtsh_key to it. If it superseded a PREVIOUS .dtsh version, that old index is now
+					// unreferenced — durably enqueue it.
+					if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
+						if eErr := EnqueueStagingCleanupTx(ctx, tx, previousActiveDtshKey); eErr != nil {
+							return fmt.Errorf("enqueue superseded .dtsh cleanup in dtsh sync completion: %w", eErr)
+						}
+					}
+					if chapterID != "" {
+						if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
+							return fmt.Errorf("freeze chapter %s in dtsh sync completion: %w", chapterID, frzErr)
+						}
+					}
+					// Durable analytics for the finalization transition, on the same tx (syncLifecycleEvent
+					// was built with finalized=dtshIncluded=true for this path).
+					if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
+						return fmt.Errorf("enqueue storage lifecycle in dtsh sync completion: %w", lErr)
+					}
+					// Durably enqueue the superseded .dtsh staging object for deletion ON this transaction.
+					if eErr := EnqueueStagingCleanupTx(ctx, tx, dtshStagingToCleanup); eErr != nil {
+						return fmt.Errorf("enqueue .dtsh staging cleanup in dtsh sync completion: %w", eErr)
+					}
+					// This completion's .dtsh candidate is now LIVE (active_dtsh_key) and its staging is enqueued —
+					// clear their publication-ledger rows so the sweep never reconsiders them.
+					if lErr := ClearPublicationLedgerTx(ctx, tx, dtshStagingToCleanup, publishDtshKey); lErr != nil {
+						return fmt.Errorf("clear publication ledger in dtsh sync completion: %w", lErr)
+					}
+					dtshOnly = true
+					return nil
 				}
-				dApplied, dErr := q.CompleteIncrementalDtshSync(ctx, foghorndb.CompleteIncrementalDtshSyncParams{
-					ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
-					DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: tenantID, ActiveDtshKey: publishDtshKey,
-				})
-				if dErr != nil {
-					logger.WithError(dErr).WithField("asset_hash", assetHash).Error("failed to apply dtsh sync")
-					return
-				}
-				if dApplied == 0 {
-					// This completion LOST its CAS (a duplicate won, or the row is no longer in the pending-dtsh
-					// state). Any object it published (recorded in the freeze_publication_ledger BEFORE the promote)
-					// is left for reconcileFreezePublicationLedger to collect durably — it is req-aware, so a live
-					// candidate or a still-retrying attempt is never deleted. Roll back and return.
-					logger.WithField("asset_hash", assetHash).Debug("Ignoring sync completion: no in_progress attempt and no pending dtsh transition")
-					return
-				}
-				// The .dtsh index was already PUBLISHED (out of tx) to the fresh publishDtshKey; this transition
-				// flipped active_dtsh_key to it. If it superseded a PREVIOUS .dtsh version, that old index is now
-				// unreferenced — durably enqueue it.
+				// This attempt LOST the guarded CAS (duplicate/stale/wrong-node). Any main/.dtsh object it published
+				// was recorded in the freeze_publication_ledger BEFORE the promote, so reconcileFreezePublicationLedger
+				// durably collects whichever candidate is orphaned (and its staging) — req-aware, so a live candidate
+				// (a concurrent duplicate that won with the SAME key) or a still-retrying attempt is never deleted.
+				// Nothing to do inline; roll back and return.
+				logger.WithFields(logging.Fields{
+					"asset_hash": assetHash,
+					"request_id": requestID,
+					"node_id":    reportingNodeID,
+				}).Debug("Ignoring sync completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
+				return errTxRollbackNoop
+			}
+
+			// applied == 1: THIS attempt won the CAS and the pointer flip above published the new object. The main
+			// (and any bundled .dtsh) object was already promoted to its fresh candidate key OUTSIDE this
+			// transaction, so nothing overwrites a served object and there is no S3 mutation inside the tx. If this
+			// re-published over a PREVIOUS version (active_object_key changed), that superseded MEDIA object and the
+			// superseded .dtsh index (the OLD active_dtsh_key, when this attempt published a new one) are now
+			// unreferenced — durably enqueue them for cleanup on THIS transaction.
+			if previousActiveKey != "" && previousActiveKey != publishMainKey {
+				supersededKeys := []string{previousActiveKey}
 				if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
-					if eErr := EnqueueStagingCleanupTx(ctx, tx, previousActiveDtshKey); eErr != nil {
-						logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded .dtsh cleanup in dtsh sync completion")
-						return
+					supersededKeys = append(supersededKeys, previousActiveDtshKey)
+				}
+				for _, sk := range supersededKeys {
+					if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
+						return fmt.Errorf("enqueue superseded object cleanup in sync completion: %w", eErr)
 					}
 				}
-				if chapterID != "" {
-					if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
-						logger.WithError(frzErr).WithFields(logging.Fields{"chapter_id": chapterID, "artifact_hash": assetHash}).
-							Error("Chapter freeze transition failed in dtsh sync completion")
-						return
-					}
-				}
-				// Durable analytics for the finalization transition, on the same tx (syncLifecycleEvent
-				// was built with finalized=dtshIncluded=true for this path).
-				if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
-					logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to enqueue storage lifecycle in dtsh sync completion")
-					return
-				}
-				// Durably enqueue the superseded .dtsh staging object for deletion ON this transaction.
-				if eErr := EnqueueStagingCleanupTx(ctx, tx, dtshStagingToCleanup); eErr != nil {
-					logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue .dtsh staging cleanup in dtsh sync completion")
-					return
-				}
-				// This completion's .dtsh candidate is now LIVE (active_dtsh_key) and its staging is enqueued —
-				// clear their publication-ledger rows so the sweep never reconsiders them.
-				if lErr := ClearPublicationLedgerTx(ctx, tx, dtshStagingToCleanup, publishDtshKey); lErr != nil {
-					logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to clear publication ledger in dtsh sync completion")
-					return
-				}
-				if cErr := tx.Commit(); cErr != nil {
-					logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to commit dtsh sync completion")
-					return
-				}
-				NotifyCatalogDirty()
-				if chapterID != "" {
-					logger.WithFields(logging.Fields{"chapter_id": chapterID, "artifact_hash": assetHash}).
-						Info("Chapter frozen — source segments eligible for reclaim")
-				}
-				logger.WithField("asset_hash", assetHash).Info("Incremental .dtsh sync applied")
-				return
 			}
-			// This attempt LOST the guarded CAS (duplicate/stale/wrong-node). Any main/.dtsh object it published
-			// was recorded in the freeze_publication_ledger BEFORE the promote, so reconcileFreezePublicationLedger
-			// durably collects whichever candidate is orphaned (and its staging) — req-aware, so a live candidate
-			// (a concurrent duplicate that won with the SAME key) or a still-retrying attempt is never deleted.
-			// Nothing to do inline; roll back and return.
-			logger.WithFields(logging.Fields{
-				"asset_hash": assetHash,
-				"request_id": requestID,
-				"node_id":    reportingNodeID,
-			}).Debug("Ignoring sync completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
-			return
-		}
+			// When this main upload BUNDLED a .dtsh ($2/dtshIncluded=true), the guarded UPDATE also CLEARED any
+			// overlapping incremental .dtsh attempt's identity (a different request id that was in-flight). That
+			// attempt may have uploaded its .dtsh staging and even promoted its versioned candidate — neither is
+			// derivable once the identity is gone, so enqueue both here. The bundled attempt's own keys use
+			// `requestID` (staging is enqueued as dtshStagingToCleanup; candidate is the new active_dtsh_key we keep).
+			if dtshIncluded && previousDtshReq != "" && previousDtshReq != requestID && syncObjectKey != "" {
+				if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, syncObjectKey, previousDtshReq); eErr != nil {
+					return fmt.Errorf("enqueue superseded incremental .dtsh cleanup in sync completion: %w", eErr)
+				}
+			}
 
-		// applied == 1: THIS attempt won the CAS and the pointer flip above published the new object. The main
-		// (and any bundled .dtsh) object was already promoted to its fresh candidate key OUTSIDE this
-		// transaction, so nothing overwrites a served object and there is no S3 mutation inside the tx. If this
-		// re-published over a PREVIOUS version (active_object_key changed), that superseded MEDIA object and the
-		// superseded .dtsh index (the OLD active_dtsh_key, when this attempt published a new one) are now
-		// unreferenced — durably enqueue them for cleanup on THIS transaction.
-		if previousActiveKey != "" && previousActiveKey != publishMainKey {
-			supersededKeys := []string{previousActiveKey}
-			if previousActiveDtshKey != "" && previousActiveDtshKey != publishDtshKey {
-				supersededKeys = append(supersededKeys, previousActiveDtshKey)
+			// Add this node to cached_nodes (it has a local copy) IN THE SAME TRANSACTION. Pass the synced
+			// size so the row and the emitted node-copy transition carry a real size, not zero.
+			copyApplied, err := AddCachedNodeCopyTx(ctx, tx, assetHash, reportingNodeID, "", int64(sizeBytes), nodeClockCompletedAtMs)
+			if err != nil {
+				return fmt.Errorf("add cached node copy in sync completion: %w", err)
 			}
-			for _, sk := range supersededKeys {
+			if !copyApplied {
+				logger.WithFields(logging.Fields{
+					"asset_hash":                 assetHash,
+					"node_id":                    reportingNodeID,
+					"node_clock_completed_at_ms": nodeClockCompletedAtMs,
+				}).Info("Ignoring sync-complete placement superseded by a newer node deletion")
+			}
+
+			// For VOD, the s3_key in vod_metadata is the canonical S3 key. On processed-VOD replacement
+			// uploads the derived key differs from the original upload key; persist the new value so relay
+			// reads the synced location, not the original-upload row.
+			if derivedVodKey != "" {
+				if dbErr := q.UpsertSyncedVODObjectKey(ctx, foghorndb.UpsertSyncedVODObjectKeyParams{
+					ArtifactHash: assetHash, S3Key: sql.NullString{String: derivedVodKey, Valid: true}, Filename: sql.NullString{String: assetHash + "." + format, Valid: true},
+				}); dbErr != nil {
+					return fmt.Errorf("update vod_metadata.s3_key in sync completion: %w", dbErr)
+				}
+			}
+
+			// Chapter artifacts (origin_type='dvr_chapter') advance finalized → frozen once both
+			// sync_status AND dtsh_synced are true, atomically with this completion. This is the trigger
+			// the reclaim sweep waits on; without it source TS segments stay pinned.
+			if chapterID != "" {
+				if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
+					return fmt.Errorf("freeze chapter %s in sync completion: %w", chapterID, frzErr)
+				}
+			}
+
+			// Durable storage-state analytics: enqueue the pre-built lifecycle event onto THIS transaction,
+			// so the S3 transition and its stats record commit together (no fire-and-forget loss).
+			if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
+				return fmt.Errorf("enqueue storage lifecycle in sync completion: %w", lErr)
+			}
+
+			// The staging objects are now superseded by the promoted canonical copies. Enqueue their deletion ON
+			// THIS transaction so cleanup is DURABLE: a crash between the promote and commit leaves the staging
+			// bytes for an idempotent retry, and once committed the StagingCleanupJob deletes them with retries
+			// from the durable queue (never a one-shot best-effort delete that leaks storage on failure).
+			for _, sk := range []string{stagingToCleanup, dtshStagingToCleanup} {
 				if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
-					logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded object cleanup in sync completion")
-					return
+					return fmt.Errorf("enqueue staging cleanup in sync completion: %w", eErr)
 				}
 			}
-		}
-		// When this main upload BUNDLED a .dtsh ($2/dtshIncluded=true), the guarded UPDATE also CLEARED any
-		// overlapping incremental .dtsh attempt's identity (a different request id that was in-flight). That
-		// attempt may have uploaded its .dtsh staging and even promoted its versioned candidate — neither is
-		// derivable once the identity is gone, so enqueue both here. The bundled attempt's own keys use
-		// `requestID` (staging is enqueued as dtshStagingToCleanup; candidate is the new active_dtsh_key we keep).
-		if dtshIncluded && previousDtshReq != "" && previousDtshReq != requestID && syncObjectKey != "" {
-			if eErr := EnqueueDtshAttemptGarbageTx(ctx, tx, syncObjectKey, previousDtshReq); eErr != nil {
-				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue superseded incremental .dtsh cleanup in sync completion")
-				return
-			}
-		}
 
-		// Add this node to cached_nodes (it has a local copy) IN THE SAME TRANSACTION. Pass the synced
-		// size so the row and the emitted node-copy transition carry a real size, not zero.
-		copyApplied, err := AddCachedNodeCopyTx(ctx, tx, assetHash, reportingNodeID, "", int64(sizeBytes), nodeClockCompletedAtMs)
-		if err != nil {
-			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to add cached node copy in sync completion")
+			// This completion's published candidates are now LIVE (active_object_key / active_dtsh_key) and its
+			// staging objects are enqueued above — clear their publication-ledger rows on THIS transaction so the
+			// sweep never reconsiders them. Deletes strictly by object_key, so an orphaned .dtsh candidate from a
+			// mixed-duplicate peer completion keeps its own ledger row for the sweep.
+			if lErr := ClearPublicationLedgerTx(ctx, tx, stagingToCleanup, dtshStagingToCleanup, publishMainKey, publishDtshKey); lErr != nil {
+				return fmt.Errorf("clear publication ledger in sync completion: %w", lErr)
+			}
+			return nil
+		})
+		if syncTxErr != nil {
+			if !errors.Is(syncTxErr, errTxRollbackNoop) {
+				logger.WithError(syncTxErr).WithField("asset_hash", assetHash).Error("Sync completion did not commit")
+			}
 			return
 		}
-		if !copyApplied {
-			logger.WithFields(logging.Fields{
-				"asset_hash":                 assetHash,
-				"node_id":                    reportingNodeID,
-				"node_clock_completed_at_ms": nodeClockCompletedAtMs,
-			}).Info("Ignoring sync-complete placement superseded by a newer node deletion")
-		}
-
-		// For VOD, the s3_key in vod_metadata is the canonical S3 key. On processed-VOD replacement
-		// uploads the derived key differs from the original upload key; persist the new value so relay
-		// reads the synced location, not the original-upload row.
-		if derivedVodKey != "" {
-			if dbErr := q.UpsertSyncedVODObjectKey(ctx, foghorndb.UpsertSyncedVODObjectKeyParams{
-				ArtifactHash: assetHash, S3Key: sql.NullString{String: derivedVodKey, Valid: true}, Filename: sql.NullString{String: assetHash + "." + format, Valid: true},
-			}); dbErr != nil {
-				logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update vod_metadata.s3_key in sync completion")
-				return
+		if dtshOnly {
+			NotifyCatalogDirty()
+			if chapterID != "" {
+				logger.WithFields(logging.Fields{"chapter_id": chapterID, "artifact_hash": assetHash}).
+					Info("Chapter frozen — source segments eligible for reclaim")
 			}
-		}
-
-		// Chapter artifacts (origin_type='dvr_chapter') advance finalized → frozen once both
-		// sync_status AND dtsh_synced are true, atomically with this completion. This is the trigger
-		// the reclaim sweep waits on; without it source TS segments stay pinned.
-		if chapterID != "" {
-			if frzErr := MarkChapterFrozenTx(ctx, tx, chapterID); frzErr != nil {
-				logger.WithError(frzErr).WithFields(logging.Fields{
-					"chapter_id":    chapterID,
-					"artifact_hash": assetHash,
-				}).Error("Chapter freeze transition failed in sync completion")
-				return
-			}
-		}
-
-		// Durable storage-state analytics: enqueue the pre-built lifecycle event onto THIS transaction,
-		// so the S3 transition and its stats record commit together (no fire-and-forget loss).
-		if lErr := enqueueArtifactStorageLifecycleTx(ctx, tx, syncLifecycleEvent); lErr != nil {
-			logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to enqueue storage lifecycle in sync completion")
-			return
-		}
-
-		// The staging objects are now superseded by the promoted canonical copies. Enqueue their deletion ON
-		// THIS transaction so cleanup is DURABLE: a crash between the promote and commit leaves the staging
-		// bytes for an idempotent retry, and once committed the StagingCleanupJob deletes them with retries
-		// from the durable queue (never a one-shot best-effort delete that leaks storage on failure).
-		for _, sk := range []string{stagingToCleanup, dtshStagingToCleanup} {
-			if eErr := EnqueueStagingCleanupTx(ctx, tx, sk); eErr != nil {
-				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue staging cleanup in sync completion")
-				return
-			}
-		}
-
-		// This completion's published candidates are now LIVE (active_object_key / active_dtsh_key) and its
-		// staging objects are enqueued above — clear their publication-ledger rows on THIS transaction so the
-		// sweep never reconsiders them. Deletes strictly by object_key, so an orphaned .dtsh candidate from a
-		// mixed-duplicate peer completion keeps its own ledger row for the sweep.
-		if lErr := ClearPublicationLedgerTx(ctx, tx, stagingToCleanup, dtshStagingToCleanup, publishMainKey, publishDtshKey); lErr != nil {
-			logger.WithError(lErr).WithField("asset_hash", assetHash).Error("failed to clear publication ledger in sync completion")
-			return
-		}
-		if err := tx.Commit(); err != nil {
-			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to commit sync completion")
+			logger.WithField("asset_hash", assetHash).Info("Incremental .dtsh sync applied")
 			return
 		}
 
@@ -9227,102 +9182,103 @@ func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 		// never applied unscoped).
 		return false
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to begin sync failure tx")
-		return false
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	var newSyncStatus string
+	var deletionOutcome state.NodeArtifactDeletionOutcome
+	txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		newSyncStatus, deletionOutcome = "", ""
 
-	// Guard FIRST: lock the row and verify it is the EXACT outstanding attempt (request id + node) while
-	// still in_progress, BEFORE any orphaning — that exact match is the authorization, so a
-	// stale/unauthenticated/wrong-node completion never drops a copy or mutates state. The lock reads the
-	// artifact owner (tenant_id), which scopes the terminal UPDATE below as partition scoping. A query
-	// error rejects the completion (fail closed).
-	q := foghorndb.New(tx)
-	locked, guardErr := q.LockSyncFailureAttempt(ctx, foghorndb.LockSyncFailureAttemptParams{
-		ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true},
-		SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: ownerTenant,
+		// Guard FIRST: lock the row and verify it is the EXACT outstanding attempt (request id + node) while
+		// still in_progress, BEFORE any orphaning — that exact match is the authorization, so a
+		// stale/unauthenticated/wrong-node completion never drops a copy or mutates state. The lock reads the
+		// artifact owner (tenant_id), which scopes the terminal UPDATE below as partition scoping. A query
+		// error rejects the completion (fail closed).
+		q := foghorndb.New(tx)
+		locked, guardErr := q.LockSyncFailureAttempt(ctx, foghorndb.LockSyncFailureAttemptParams{
+			ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true},
+			SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: ownerTenant,
+		})
+		if errors.Is(guardErr, sql.ErrNoRows) {
+			logger.WithFields(logging.Fields{"asset_hash": assetHash, "request_id": requestID, "node_id": reportingNodeID}).
+				Debug("Ignoring failure completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
+			return errTxRollbackNoop
+		}
+		lockedTenant, lockedObjectKey := locked.TenantID, locked.SyncObjectKey
+		if guardErr != nil {
+			return fmt.Errorf("lock artifact for sync failure: %w", guardErr)
+		}
+
+		status := "failed"
+		if localMissing {
+			// Drop the failed node's copy (emit LOST) atomically, then check whether any OTHER node still
+			// holds a present, complete copy.
+			outcome, delErr := DeleteNodeArtifactTx(ctx, tx, assetHash, reportingNodeID, nodeClockCompletedAtMs)
+			if delErr != nil {
+				return fmt.Errorf("orphan local_missing node copy: %w", delErr)
+			}
+			deletionOutcome = outcome
+			switch deletionOutcome {
+			case state.NodeArtifactDeletionFenced:
+				logger.WithFields(logging.Fields{
+					"asset_hash":                 assetHash,
+					"node_id":                    reportingNodeID,
+					"node_clock_completed_at_ms": nodeClockCompletedAtMs,
+					"deletion_outcome":           deletionOutcome,
+				}).Warn("Ignoring stale local_missing copy state superseded by newer node inventory")
+			case state.NodeArtifactDeletionApplied:
+				otherComplete, cErr := q.CountOtherCompleteArtifactCopies(ctx, foghorndb.CountOtherCompleteArtifactCopiesParams{ArtifactHash: assetHash, NodeID: reportingNodeID})
+				if cErr != nil {
+					return fmt.Errorf("count surviving copies: %w", cErr)
+				}
+				if otherComplete == 0 {
+					status = "lost_local" // no viable source remains → terminal
+				}
+			case state.NodeArtifactDeletionAbsent:
+				// Absence is not proof that no viable source exists: inventory may not
+				// have observed the reporting copy yet. Keep the attempt retryable.
+			case state.NodeArtifactDeletionParentMissing:
+				logger.WithField("asset_hash", assetHash).Error("sync failure lost its locked artifact parent")
+				return errTxRollbackNoop
+			default:
+				logger.WithFields(logging.Fields{"asset_hash": assetHash, "deletion_outcome": deletionOutcome}).Error("sync failure received an unknown deletion outcome")
+				return errTxRollbackNoop
+			}
+		}
+
+		// The row is already locked+guarded above; this UPDATE keys on the hash under the artifact-owner
+		// tenant (tenant_id = $4, partition scoping from the locked row). The attempt identity is cleared.
+		if uErr := q.FailMainArtifactSync(ctx, foghorndb.FailMainArtifactSyncParams{ArtifactHash: assetHash, SyncStatus: status, ErrorMessage: errorMsg, TenantID: lockedTenant}); uErr != nil {
+			return fmt.Errorf("record sync failure: %w", uErr)
+		}
+		// This failure WON the row lock, so the concurrent SUCCESS (if any) for the SAME attempt lost its CAS. The
+		// success may have already PUBLISHED its candidate objects (main + .dtsh) outside its transaction — and its
+		// own lost-CAS cleanup is only best-effort. So durably enqueue, ON this transaction, BOTH the attempt's
+		// staging objects AND its published candidates (all deterministic from lockedObjectKey + requestID). The
+		// identity is cleared here, so no future attempt reuses these keys. Descriptor-less rows enqueue nothing.
+		if lockedObjectKey != "" {
+			for _, key := range []string{
+				FreezeStagingKey(lockedObjectKey, requestID),
+				FreezeStagingKey(lockedObjectKey+".dtsh", requestID),
+				FreezePublishKey(lockedObjectKey, requestID),
+				FreezePublishDtshKey(lockedObjectKey, requestID),
+			} {
+				if eErr := EnqueueStagingCleanupTx(ctx, tx, key); eErr != nil {
+					return fmt.Errorf("enqueue cleanup on sync failure: %w", eErr)
+				}
+			}
+		}
+		newSyncStatus = status
+		return nil
 	})
-	if errors.Is(guardErr, sql.ErrNoRows) {
-		logger.WithFields(logging.Fields{"asset_hash": assetHash, "request_id": requestID, "node_id": reportingNodeID}).
-			Debug("Ignoring failure completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
-		return false
-	}
-	lockedTenant, lockedObjectKey := locked.TenantID, locked.SyncObjectKey
-	if guardErr != nil {
-		logger.WithError(guardErr).WithField("asset_hash", assetHash).Error("failed to lock artifact for sync failure")
-		return false
-	}
-
-	newSyncStatus := "failed"
-	if localMissing {
-		// Drop the failed node's copy (emit LOST) atomically, then check whether any OTHER node still
-		// holds a present, complete copy.
-		deletionOutcome, delErr := DeleteNodeArtifactTx(ctx, tx, assetHash, reportingNodeID, nodeClockCompletedAtMs)
-		if delErr != nil {
-			logger.WithError(delErr).WithField("asset_hash", assetHash).Error("failed to orphan local_missing node copy")
-			return false
-		}
+	if deletionOutcome != "" {
 		ObserveArtifactDeletionOutcome(string(deletionOutcome))
-		switch deletionOutcome {
-		case state.NodeArtifactDeletionFenced:
-			logger.WithFields(logging.Fields{
-				"asset_hash":                 assetHash,
-				"node_id":                    reportingNodeID,
-				"node_clock_completed_at_ms": nodeClockCompletedAtMs,
-				"deletion_outcome":           deletionOutcome,
-			}).Warn("Ignoring stale local_missing copy state superseded by newer node inventory")
-		case state.NodeArtifactDeletionApplied:
-			otherComplete, cErr := q.CountOtherCompleteArtifactCopies(ctx, foghorndb.CountOtherCompleteArtifactCopiesParams{ArtifactHash: assetHash, NodeID: reportingNodeID})
-			if cErr != nil {
-				logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to count surviving copies")
-				return false
-			}
-			if otherComplete == 0 {
-				newSyncStatus = "lost_local" // no viable source remains → terminal
-			}
-		case state.NodeArtifactDeletionAbsent:
-			// Absence is not proof that no viable source exists: inventory may not
-			// have observed the reporting copy yet. Keep the attempt retryable.
-		case state.NodeArtifactDeletionParentMissing:
-			logger.WithField("asset_hash", assetHash).Error("sync failure lost its locked artifact parent")
-			return false
-		default:
-			logger.WithFields(logging.Fields{"asset_hash": assetHash, "deletion_outcome": deletionOutcome}).Error("sync failure received an unknown deletion outcome")
-			return false
+	}
+	if txErr != nil {
+		if !errors.Is(txErr, errTxRollbackNoop) {
+			logger.WithError(txErr).WithField("asset_hash", assetHash).Error("Sync failure did not commit")
 		}
+		return false
 	}
 	incArtifactSyncOutcome(newSyncStatus)
-
-	// The row is already locked+guarded above; this UPDATE keys on the hash under the artifact-owner
-	// tenant (tenant_id = $4, partition scoping from the locked row). The attempt identity is cleared.
-	if uErr := q.FailMainArtifactSync(ctx, foghorndb.FailMainArtifactSyncParams{ArtifactHash: assetHash, SyncStatus: newSyncStatus, ErrorMessage: errorMsg, TenantID: lockedTenant}); uErr != nil {
-		logger.WithError(uErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
-		return false
-	}
-	// This failure WON the row lock, so the concurrent SUCCESS (if any) for the SAME attempt lost its CAS. The
-	// success may have already PUBLISHED its candidate objects (main + .dtsh) outside its transaction — and its
-	// own lost-CAS cleanup is only best-effort. So durably enqueue, ON this transaction, BOTH the attempt's
-	// staging objects AND its published candidates (all deterministic from lockedObjectKey + requestID). The
-	// identity is cleared here, so no future attempt reuses these keys. Descriptor-less rows enqueue nothing.
-	if lockedObjectKey != "" {
-		for _, key := range []string{
-			FreezeStagingKey(lockedObjectKey, requestID),
-			FreezeStagingKey(lockedObjectKey+".dtsh", requestID),
-			FreezePublishKey(lockedObjectKey, requestID),
-			FreezePublishDtshKey(lockedObjectKey, requestID),
-		} {
-			if eErr := EnqueueStagingCleanupTx(ctx, tx, key); eErr != nil {
-				logger.WithError(eErr).WithField("asset_hash", assetHash).Error("failed to enqueue cleanup on sync failure")
-				return false
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to commit sync failure")
-		return false
-	}
 	// lost_local means nothing was uploaded from this node — the caller must not run S3 cleanup.
 	return newSyncStatus == "failed"
 }

@@ -12,6 +12,7 @@ import (
 	"frameworks/api_incidents/internal/database/lookoutdb"
 	"frameworks/api_incidents/internal/incidents"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 
@@ -60,53 +61,48 @@ var (
 )
 
 // ClaimBatch leases due rows under a fresh token each.
-func (s *Store) ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) (claims []outbox.Claim[Delivery], err error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
+func (s *Store) ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) ([]outbox.Claim[Delivery], error) {
+	var claims []outbox.Claim[Delivery]
+	err := database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
+		q := lookoutdb.New(tx)
+		candidates, err := q.ClaimDeliveryCandidates(ctx, lookoutdb.ClaimDeliveryCandidatesParams{
+			LeaseMilliseconds: lease.Milliseconds(),
+			BatchSize:         int32(batchSize),
+		})
+		if err != nil {
+			return fmt.Errorf("select delivery outbox: %w", err)
 		}
-	}()
-	q := lookoutdb.New(tx)
-	candidates, err := q.ClaimDeliveryCandidates(ctx, lookoutdb.ClaimDeliveryCandidatesParams{
-		LeaseMilliseconds: lease.Milliseconds(),
-		BatchSize:         int32(batchSize),
+		claims = make([]outbox.Claim[Delivery], 0, len(candidates))
+		for _, candidate := range candidates {
+			token := uuid.NewString()
+			affected, leaseErr := q.LeaseDelivery(ctx, lookoutdb.LeaseDeliveryParams{
+				LeaseToken: token,
+				ID:         candidate.ID,
+				TenantID:   candidate.TenantID,
+			})
+			if leaseErr != nil {
+				return fmt.Errorf("lease delivery outbox: %w", leaseErr)
+			}
+			if affected != 1 {
+				return errors.New("lease delivery outbox: selected row disappeared")
+			}
+			claims = append(claims, outbox.Claim[Delivery]{
+				ID:         claimID(candidate.TenantID.String, candidate.ID),
+				Attempts:   int(candidate.Attempts),
+				LeaseToken: token,
+				Payload: Delivery{
+					OutboxID:   candidate.ID,
+					TenantID:   candidate.TenantID.String,
+					IncidentID: candidate.IncidentID,
+					EventID:    candidate.EventID,
+					Channel:    candidate.Channel,
+					Payload:    candidate.Payload,
+				},
+			})
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select delivery outbox: %w", err)
-	}
-	claims = make([]outbox.Claim[Delivery], 0, len(candidates))
-	for _, candidate := range candidates {
-		token := uuid.NewString()
-		affected, leaseErr := q.LeaseDelivery(ctx, lookoutdb.LeaseDeliveryParams{
-			LeaseToken: token,
-			ID:         candidate.ID,
-			TenantID:   candidate.TenantID,
-		})
-		if leaseErr != nil {
-			return nil, fmt.Errorf("lease delivery outbox: %w", leaseErr)
-		}
-		if affected != 1 {
-			return nil, errors.New("lease delivery outbox: selected row disappeared")
-		}
-		claims = append(claims, outbox.Claim[Delivery]{
-			ID:         claimID(candidate.TenantID.String, candidate.ID),
-			Attempts:   int(candidate.Attempts),
-			LeaseToken: token,
-			Payload: Delivery{
-				OutboxID:   candidate.ID,
-				TenantID:   candidate.TenantID.String,
-				IncidentID: candidate.IncidentID,
-				EventID:    candidate.EventID,
-				Channel:    candidate.Channel,
-				Payload:    candidate.Payload,
-			},
-		})
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return claims, nil
@@ -125,46 +121,39 @@ func (s *Store) RecordFailure(context.Context, string, int, []string, error, tim
 // MarkCompletedToken settles a delivered row and, for operator channels that
 // are still configured, records a notified timeline event in the same
 // transaction.
-func (s *Store) MarkCompletedToken(ctx context.Context, id, leaseToken string) (err error) {
+func (s *Store) MarkCompletedToken(ctx context.Context, id, leaseToken string) error {
 	tenantID, outboxID, err := parseClaimID(id)
 	if err != nil {
 		return err
 	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, rollbackErr)
+	return database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
+		q := lookoutdb.New(tx)
+		row, err := q.CompleteDelivery(ctx, lookoutdb.CompleteDeliveryParams{
+			ID:         outboxID,
+			TenantID:   nullTenant(tenantID),
+			LeaseToken: leaseToken,
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return errLeaseLost
 		}
-	}()
-	q := lookoutdb.New(tx)
-	row, err := q.CompleteDelivery(ctx, lookoutdb.CompleteDeliveryParams{
-		ID:         outboxID,
-		TenantID:   nullTenant(tenantID),
-		LeaseToken: leaseToken,
+		if err != nil {
+			return fmt.Errorf("complete delivery: %w", err)
+		}
+		if row.Channel != incidents.ChannelKafka && (s.Channels == nil || s.Channels.Enabled(row.Channel)) {
+			body, marshalErr := json.Marshal(map[string]string{"channel": row.Channel})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if _, err := q.InsertIncidentEvent(ctx, lookoutdb.InsertIncidentEventParams{
+				IncidentID: row.IncidentID,
+				Kind:       incidents.EventNotified,
+				Body:       body,
+			}); err != nil {
+				return fmt.Errorf("record notified event: %w", err)
+			}
+		}
+		return nil
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return errLeaseLost
-	}
-	if err != nil {
-		return fmt.Errorf("complete delivery: %w", err)
-	}
-	if row.Channel != incidents.ChannelKafka && (s.Channels == nil || s.Channels.Enabled(row.Channel)) {
-		body, marshalErr := json.Marshal(map[string]string{"channel": row.Channel})
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if _, err := q.InsertIncidentEvent(ctx, lookoutdb.InsertIncidentEventParams{
-			IncidentID: row.IncidentID,
-			Kind:       incidents.EventNotified,
-			Body:       body,
-		}); err != nil {
-			return fmt.Errorf("record notified event: %w", err)
-		}
-	}
-	return tx.Commit()
 }
 
 // RecordFailureToken records a failed attempt for a row the caller still

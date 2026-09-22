@@ -70,7 +70,6 @@ import (
 
 	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -2823,37 +2822,46 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		return 0, nil, nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, nil, status.Errorf(codes.Internal, "begin placement sync: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	rows, refusedRows, err := commodoredb.New(tx).ApplyActiveIngestPlacementBatch(ctx, commodoredb.ActiveIngestPlacementBatchParams{
-		TenantIDs:     tenantIDs,
-		InternalNames: internalNames,
-		ClaimTokens:   claimTokens,
-		ClusterIDs:    clusterIDs,
-		LeaseSeconds:  int64(activeIngestLease.Seconds()),
-		Renew:         renew,
-	})
-	if err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"default_cluster_id": defaultClusterID,
-			"streams":            len(tenantIDs),
-		}).Error("SyncActiveIngestPlacement: update failed")
-		return 0, nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	refused := make([]*commodorepb.ActiveIngestStream, 0, len(refusedRows))
-	for _, row := range refusedRows {
-		refused = append(refused, &commodorepb.ActiveIngestStream{
-			TenantId:     row.TenantID,
-			InternalName: row.InternalName,
-			ClaimToken:   row.ClaimToken,
-			ClusterId:    row.ClusterID,
+	var (
+		rows    int64
+		refused []*commodorepb.ActiveIngestStream
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "begin placement sync: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "commit placement sync: %v", err) },
+		func(tx *sql.Tx) error {
+			var (
+				refusedRows []commodoredb.ActiveIngestPlacementRefusal
+				err         error
+			)
+			rows, refusedRows, err = commodoredb.New(tx).ApplyActiveIngestPlacementBatch(ctx, commodoredb.ActiveIngestPlacementBatchParams{
+				TenantIDs:     tenantIDs,
+				InternalNames: internalNames,
+				ClaimTokens:   claimTokens,
+				ClusterIDs:    clusterIDs,
+				LeaseSeconds:  int64(activeIngestLease.Seconds()),
+				Renew:         renew,
+			})
+			if err != nil {
+				s.logger.WithError(err).WithFields(logging.Fields{
+					"default_cluster_id": defaultClusterID,
+					"streams":            len(tenantIDs),
+				}).Error("SyncActiveIngestPlacement: update failed")
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
+			}
+			refused = make([]*commodorepb.ActiveIngestStream, 0, len(refusedRows))
+			for _, row := range refusedRows {
+				refused = append(refused, &commodorepb.ActiveIngestStream{
+					TenantId:     row.TenantID,
+					InternalName: row.InternalName,
+					ClaimToken:   row.ClaimToken,
+					ClusterId:    row.ClusterID,
+				})
+			}
+			return nil
 		})
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, nil, status.Errorf(codes.Internal, "commit placement sync: %v", err)
+	if txErr != nil {
+		return 0, nil, txErr
 	}
 	return rows, refused, nil
 }
@@ -3874,82 +3882,77 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 	// row could not (an absent row locks nothing). A present tombstone marker means the chapter's
 	// vod_hash was deleted (chapters are content-addressed — a retry reuses the same vod_hash), so refuse
 	// with FailedPrecondition and write nothing rather than resurrect a deleted asset. No marker → proceed.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "mint chapter begin: %v", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
-		}
-	}()
+	var stored string
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "mint chapter begin: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "mint chapter commit: %v", err) },
+		func(tx *sql.Tx) error {
+			chapterQueries := commodoredb.New(tx)
+			if lErr := chapterQueries.LockArtifactCatalogKey(ctx, tenantID+":vod:"+artifactHash); lErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "mint chapter lock: %v", lErr), lErr)
+			}
+			_, tErr := chapterQueries.GetVODTombstoneForUpdate(ctx, commodoredb.GetVODTombstoneForUpdateParams{
+				TenantID: tenantID, ArtifactHash: artifactHash,
+			})
+			switch {
+			case tErr == nil:
+				return status.Error(codes.FailedPrecondition, "chapter artifact was deleted; not resurrecting catalog row")
+			case errors.Is(tErr, sql.ErrNoRows):
+				// No tombstone marker → the chapter is live or fresh; proceed to register it.
+			default:
+				return txStatus(status.Errorf(codes.Internal, "chapter tombstone check failed: %v", tErr), tErr)
+			}
 
-	chapterQueries := commodoredb.New(tx)
-	if lErr := chapterQueries.LockArtifactCatalogKey(ctx, tenantID+":vod:"+artifactHash); lErr != nil {
-		return nil, status.Errorf(codes.Internal, "mint chapter lock: %v", lErr)
-	}
-	_, tErr := chapterQueries.GetVODTombstoneForUpdate(ctx, commodoredb.GetVODTombstoneForUpdateParams{
-		TenantID: tenantID, ArtifactHash: artifactHash,
-	})
-	switch {
-	case tErr == nil:
-		return nil, status.Error(codes.FailedPrecondition, "chapter artifact was deleted; not resurrecting catalog row")
-	case errors.Is(tErr, sql.ErrNoRows):
-		// No tombstone marker → the chapter is live or fresh; proceed to register it.
-	default:
-		return nil, status.Errorf(codes.Internal, "chapter tombstone check failed: %v", tErr)
-	}
+			var err error
+			stored, err = chapterQueries.UpsertChapterPlaybackID(ctx, commodoredb.UpsertChapterPlaybackIDParams{
+				ChapterID: chapterID, TenantID: tenantID, PlaybackID: playbackID,
+				ArtifactHash: artifactHash, DvrHash: req.GetDvrHash(),
+			})
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return status.Error(codes.FailedPrecondition, "chapter identity belongs to a different tenant")
+				}
+				s.logger.WithFields(logging.Fields{
+					"chapter_id":    chapterID,
+					"tenant_id":     tenantID,
+					"artifact_hash": artifactHash,
+					"error":         err,
+				}).Error("Failed to mint chapter playback id")
+				return txStatus(status.Errorf(codes.Internal, "mint chapter playback id: %v", err), err)
+			}
 
-	stored, err := chapterQueries.UpsertChapterPlaybackID(ctx, commodoredb.UpsertChapterPlaybackIDParams{
-		ChapterID: chapterID, TenantID: tenantID, PlaybackID: playbackID,
-		ArtifactHash: artifactHash, DvrHash: req.GetDvrHash(),
-	})
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.FailedPrecondition, "chapter identity belongs to a different tenant")
-		}
-		s.logger.WithFields(logging.Fields{
-			"chapter_id":    chapterID,
-			"tenant_id":     tenantID,
-			"artifact_hash": artifactHash,
-			"error":         err,
-		}).Error("Failed to mint chapter playback id")
-		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
+			affected, err := chapterQueries.UpsertChapterVODAsset(ctx, commodoredb.UpsertChapterVODAssetParams{
+				ID:               uuid.New().String(),
+				TenantID:         tenantID,
+				DvrHash:          dvrHash,
+				VodHash:          artifactHash,
+				InternalName:     artifactHash,
+				PlaybackID:       stored,
+				Title:            sql.NullString{String: title, Valid: true},
+				Description:      description,
+				Filename:         filename,
+				ContentType:      sql.NullString{String: contentType, Valid: true},
+				OriginClusterID:  req.GetOriginClusterId(),
+				StorageClusterID: req.GetStorageClusterId(),
+				OriginID:         sql.NullString{String: chapterID, Valid: true},
+			})
+			if err != nil {
+				s.logger.WithFields(logging.Fields{
+					"chapter_id":    chapterID,
+					"tenant_id":     tenantID,
+					"artifact_hash": artifactHash,
+					"error":         err,
+				}).Error("Failed to register chapter VOD asset")
+				return txStatus(status.Errorf(codes.Internal, "register chapter VOD asset: %v", err), err)
+			}
+			if affected != 1 {
+				return status.Error(codes.FailedPrecondition, "parent DVR is unavailable; chapter policy cannot be snapshotted")
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
-
-	affected, err := chapterQueries.UpsertChapterVODAsset(ctx, commodoredb.UpsertChapterVODAssetParams{
-		ID:               uuid.New().String(),
-		TenantID:         tenantID,
-		DvrHash:          dvrHash,
-		VodHash:          artifactHash,
-		InternalName:     artifactHash,
-		PlaybackID:       stored,
-		Title:            sql.NullString{String: title, Valid: true},
-		Description:      description,
-		Filename:         filename,
-		ContentType:      sql.NullString{String: contentType, Valid: true},
-		OriginClusterID:  req.GetOriginClusterId(),
-		StorageClusterID: req.GetStorageClusterId(),
-		OriginID:         sql.NullString{String: chapterID, Valid: true},
-	})
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"chapter_id":    chapterID,
-			"tenant_id":     tenantID,
-			"artifact_hash": artifactHash,
-			"error":         err,
-		}).Error("Failed to register chapter VOD asset")
-		return nil, status.Errorf(codes.Internal, "register chapter VOD asset: %v", err)
-	}
-	if affected != 1 {
-		return nil, status.Error(codes.FailedPrecondition, "parent DVR is unavailable; chapter policy cannot be snapshotted")
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "mint chapter commit: %v", err)
-	}
-	committed = true
 
 	return &commodorepb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
 }
@@ -4298,6 +4301,10 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 // WALLET IDENTITY
 // ============================================================================
 
+// errWalletIdentityConflict rolls back a wallet signup whose identity insert lost
+// the unique race to another replica, so the winner is read outside the aborted tx.
+var errWalletIdentityConflict = errors.New("wallet identity created concurrently")
+
 // GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
 // This is called after a wallet-auth challenge signature has been verified.
 // If the wallet is not known, creates a new tenant (prepaid) + user (email=NULL) + wallet_identity.
@@ -4400,65 +4407,71 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 	}
 
 	// 3. Create user and wallet identity in local commodore.* tables (owned by this service)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to begin transaction")
-		return nil, status.Error(codes.Internal, "failed to create wallet account")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-	txQueries := commodoredb.New(tx)
-
-	userID = uuid.NewString()
 	shortAddr := normalizedAddress
 	if len(shortAddr) >= 8 {
 		shortAddr = shortAddr[2:8]
 	}
-	err = txQueries.InsertWalletUser(ctx, commodoredb.InsertWalletUserParams{
-		ID:        userID,
-		TenantID:  tenantID,
-		FirstName: sql.NullString{String: "Wallet " + shortAddr, Valid: true},
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create user")
-		return nil, status.Error(codes.Internal, "failed to create user")
-	}
+	var identityErr error
+	txErr := s.withStatusTx(ctx,
+		func(err error) error {
+			s.logger.WithError(err).Error("Failed to begin transaction")
+			return status.Error(codes.Internal, "failed to create wallet account")
+		},
+		func(err error) error {
+			s.logger.WithError(err).Error("Failed to commit transaction")
+			return status.Error(codes.Internal, "failed to create wallet account")
+		},
+		func(tx *sql.Tx) error {
+			identityErr = nil
+			txQueries := commodoredb.New(tx)
 
-	err = txQueries.InsertWalletIdentity(ctx, commodoredb.InsertWalletIdentityParams{
-		WalletAddress: normalizedAddress,
-		ChainType:     chainType,
-		TenantID:      tenantID,
-		UserID:        userID,
-	})
-	if err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
-			// Another replica completed the same wallet signup after both callers
-			// converged on Quartermaster's provisioning key. Roll back this local
-			// user and return the winner's canonical identity.
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				return nil, status.Error(codes.Internal, "failed to resolve concurrent wallet signup")
+			userID = uuid.NewString()
+			if insertErr := txQueries.InsertWalletUser(ctx, commodoredb.InsertWalletUserParams{
+				ID:        userID,
+				TenantID:  tenantID,
+				FirstName: sql.NullString{String: "Wallet " + shortAddr, Valid: true},
+			}); insertErr != nil {
+				s.logger.WithError(insertErr).Error("Failed to create user")
+				return txStatus(status.Error(codes.Internal, "failed to create user"), insertErr)
 			}
-			var existingTenantID, existingUserID string
-			winner, lookupErr := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
-				ChainType:     chainType,
+
+			if insertErr := txQueries.InsertWalletIdentity(ctx, commodoredb.InsertWalletIdentityParams{
 				WalletAddress: normalizedAddress,
-			})
-			if lookupErr == nil {
-				existingTenantID = winner.TenantID
-				existingUserID = winner.UserID
-				return &commodorepb.GetOrCreateWalletUserResponse{
-					TenantId: existingTenantID, UserId: existingUserID, IsNew: false,
-					BillingModel: "prepaid", WalletAddress: normalizedAddress,
-				}, nil
+				ChainType:     chainType,
+				TenantID:      tenantID,
+				UserID:        userID,
+			}); insertErr != nil {
+				if fwdb.SQLState(insertErr) == "23505" {
+					// Another replica completed the same wallet signup after both callers
+					// converged on Quartermaster's provisioning key. Roll back this local
+					// user; the winner is read after the transaction ends.
+					identityErr = insertErr
+					return errWalletIdentityConflict
+				}
+				s.logger.WithError(insertErr).Error("Failed to create wallet identity")
+				return txStatus(status.Error(codes.Internal, "failed to create wallet identity"), insertErr)
 			}
+			return nil
+		})
+	if errors.Is(txErr, errWalletIdentityConflict) {
+		var existingTenantID, existingUserID string
+		winner, lookupErr := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
+			ChainType:     chainType,
+			WalletAddress: normalizedAddress,
+		})
+		if lookupErr == nil {
+			existingTenantID = winner.TenantID
+			existingUserID = winner.UserID
+			return &commodorepb.GetOrCreateWalletUserResponse{
+				TenantId: existingTenantID, UserId: existingUserID, IsNew: false,
+				BillingModel: "prepaid", WalletAddress: normalizedAddress,
+			}, nil
 		}
-		s.logger.WithError(err).Error("Failed to create wallet identity")
+		s.logger.WithError(identityErr).Error("Failed to create wallet identity")
 		return nil, status.Error(codes.Internal, "failed to create wallet identity")
 	}
-
-	if err := tx.Commit(); err != nil {
-		s.logger.WithError(err).Error("Failed to commit transaction")
-		return nil, status.Error(codes.Internal, "failed to create wallet account")
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -4745,8 +4758,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	})
 
 	if err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		if fwdb.SQLState(err) == "23505" {
 			// Concurrent retries converge on Quartermaster's provisioning key and
 			// the unique normalized email. The winning request owns the token/email.
 			return &commodorepb.RegisterResponse{
@@ -4884,151 +4896,169 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 
 	tokenHash := hashToken(refreshToken)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	txQueries := commodoredb.New(tx)
-
-	refreshRow, err := txQueries.LockRefreshTokenByHash(ctx, tokenHash)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
-	}
-	if err != nil {
-		s.logger.WithError(err).Error("Database error validating refresh token")
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	tokenID := refreshRow.ID
-	userID := refreshRow.UserID
-	tenantID := refreshRow.TenantID
-	revoked := refreshRow.Revoked
-	rotatedAt := refreshRow.RotatedAt
-	replacedBy := refreshRow.ReplacedBy
-
-	rotateCurrent := !revoked
-	var staleSuccessorID string
-
-	if revoked {
-		if rotatedAt.Valid && time.Since(rotatedAt.Time) <= refreshTokenReuseGracePeriod {
-			// Concurrent refreshes (multiple tabs, timer + 401-retry) replay
-			// the just-rotated token; issue a fresh pair instead of failing.
-			s.logger.WithFields(logging.Fields{
-				"user_id":    userID,
-				"tenant_id":  tenantID,
-				"rotated_at": rotatedAt.Time,
-			}).Info("Refresh token replayed within rotation grace period; issuing fresh session")
-		} else {
-			successorUsed := true
-			if replacedBy.Valid {
-				successorRevoked, successorErr := txQueries.GetRefreshTokenSuccessorState(ctx, replacedBy.String)
-				switch {
-				case successorErr == nil:
-					successorUsed = successorRevoked
-				case errors.Is(successorErr, sql.ErrNoRows):
-					// Successor gone (e.g. explicit logout); treat as used.
-				default:
-					s.logger.WithError(successorErr).Error("Database error checking refresh token successor")
-					return nil, status.Errorf(codes.Internal, "database error: %v", successorErr)
-				}
+	var (
+		userID, tenantID   string
+		user               commodoreUserRecord
+		token              string
+		newRefreshToken    string
+		sessionInvalidated bool
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error {
+			if sessionInvalidated {
+				s.logger.WithError(err).Error("Failed to commit session revocation")
+				return status.Error(codes.Unauthenticated, "session invalidated")
 			}
-			if successorUsed {
-				// Old token and its replacement are both in play: two parties
-				// share this session line. Revoke everything.
-				s.logger.WithFields(logging.Fields{
-					"user_id":   userID,
-					"tenant_id": tenantID,
-				}).Warn("Refresh token reuse detected, revoking all user sessions")
-				if revokeErr := txQueries.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{
-					UserID: userID, TenantID: tenantID,
-				}); revokeErr != nil {
-					s.logger.WithError(revokeErr).WithFields(logging.Fields{
+			return status.Errorf(codes.Internal, "failed to commit: %v", err)
+		},
+		func(tx *sql.Tx) error {
+			sessionInvalidated = false
+			txQueries := commodoredb.New(tx)
+
+			refreshRow, err := txQueries.LockRefreshTokenByHash(ctx, tokenHash)
+
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Error(codes.Unauthenticated, "invalid or expired refresh token")
+			}
+			if err != nil {
+				s.logger.WithError(err).Error("Database error validating refresh token")
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
+			}
+			tokenID := refreshRow.ID
+			userID = refreshRow.UserID
+			tenantID = refreshRow.TenantID
+			revoked := refreshRow.Revoked
+			rotatedAt := refreshRow.RotatedAt
+			replacedBy := refreshRow.ReplacedBy
+
+			rotateCurrent := !revoked
+			var staleSuccessorID string
+
+			if revoked {
+				if rotatedAt.Valid && time.Since(rotatedAt.Time) <= refreshTokenReuseGracePeriod {
+					// Concurrent refreshes (multiple tabs, timer + 401-retry) replay
+					// the just-rotated token; issue a fresh pair instead of failing.
+					s.logger.WithFields(logging.Fields{
+						"user_id":    userID,
+						"tenant_id":  tenantID,
+						"rotated_at": rotatedAt.Time,
+					}).Info("Refresh token replayed within rotation grace period; issuing fresh session")
+				} else {
+					successorUsed := true
+					if replacedBy.Valid {
+						successorRevoked, successorErr := txQueries.GetRefreshTokenSuccessorState(ctx, replacedBy.String)
+						switch {
+						case successorErr == nil:
+							successorUsed = successorRevoked
+						case errors.Is(successorErr, sql.ErrNoRows):
+							// Successor gone (e.g. explicit logout); treat as used.
+						default:
+							s.logger.WithError(successorErr).Error("Database error checking refresh token successor")
+							return txStatus(status.Errorf(codes.Internal, "database error: %v", successorErr), successorErr)
+						}
+					}
+					if successorUsed {
+						// Old token and its replacement are both in play: two parties
+						// share this session line. Revoke everything.
+						s.logger.WithFields(logging.Fields{
+							"user_id":   userID,
+							"tenant_id": tenantID,
+						}).Warn("Refresh token reuse detected, revoking all user sessions")
+						if revokeErr := txQueries.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{
+							UserID: userID, TenantID: tenantID,
+						}); revokeErr != nil {
+							s.logger.WithError(revokeErr).WithFields(logging.Fields{
+								"user_id":   userID,
+								"tenant_id": tenantID,
+							}).Error("Failed to revoke sessions after refresh token reuse detection")
+							return txStatus(status.Error(codes.Unauthenticated, "session invalidated"), revokeErr)
+						}
+						// The revocation commits; the caller still receives Unauthenticated.
+						sessionInvalidated = true
+						return nil
+					}
+					// The replacement we issued was never used: the rotation response
+					// never reached the client. Recover the session instead of
+					// treating the client as an attacker.
+					staleSuccessorID = replacedBy.String
+					s.logger.WithFields(logging.Fields{
 						"user_id":   userID,
 						"tenant_id": tenantID,
-					}).Error("Failed to revoke sessions after refresh token reuse detection")
-				} else if commitErr := tx.Commit(); commitErr != nil {
-					s.logger.WithError(commitErr).Error("Failed to commit session revocation")
+					}).Warn("Refresh token rotation response was lost; recovering session with fresh tokens")
 				}
-				return nil, status.Error(codes.Unauthenticated, "session invalidated")
 			}
-			// The replacement we issued was never used: the rotation response
-			// never reached the client. Recover the session instead of
-			// treating the client as an attacker.
-			staleSuccessorID = replacedBy.String
-			s.logger.WithFields(logging.Fields{
-				"user_id":   userID,
-				"tenant_id": tenantID,
-			}).Warn("Refresh token rotation response was lost; recovering session with fresh tokens")
-		}
-	}
 
-	userRow, err := txQueries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
+			userRow, err := txQueries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
 
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "user not found")
-	}
-	user, err := commodoreUserFromRefreshRow(userRow)
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "user not found")
-	}
+			if err != nil {
+				return txStatus(status.Error(codes.Unauthenticated, "user not found"), err)
+			}
+			user, err = commodoreUserFromRefreshRow(userRow)
+			if err != nil {
+				return status.Error(codes.Unauthenticated, "user not found")
+			}
 
-	if !user.IsActive {
-		return nil, status.Error(codes.Unauthenticated, "account deactivated")
-	}
+			if !user.IsActive {
+				return status.Error(codes.Unauthenticated, "account deactivated")
+			}
 
-	// Generate new access token
-	jwtSecret := s.settings().JWTSecret
-	token, err := auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
-	}
+			// Generate new access token
+			jwtSecret := s.settings().JWTSecret
+			token, err = auth.GenerateSessionJWT(userID, tenantID, user.Email, user.Role, platformRoles(user.PlatformOperator), time.Now(), jwtSecret)
+			if err != nil {
+				return status.Errorf(codes.Internal, "failed to generate token: %v", err)
+			}
 
-	// Generate new refresh token
-	newRefreshToken, err := generateRandomString(40)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
-	}
-	newRefreshHash := hashToken(newRefreshToken)
-	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
+			// Generate new refresh token
+			newRefreshToken, err = generateRandomString(40)
+			if err != nil {
+				return status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+			}
+			newRefreshHash := hashToken(newRefreshToken)
+			refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
 
-	newTokenID, err := txQueries.InsertRotatedRefreshToken(ctx, commodoredb.InsertRotatedRefreshTokenParams{
-		TenantID: tenantID, UserID: userID, TokenHash: newRefreshHash, ExpiresAt: refreshExpiry,
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to store new refresh token")
-		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
-	}
+			newTokenID, err := txQueries.InsertRotatedRefreshToken(ctx, commodoredb.InsertRotatedRefreshTokenParams{
+				TenantID: tenantID, UserID: userID, TokenHash: newRefreshHash, ExpiresAt: refreshExpiry,
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to store new refresh token")
+				return txStatus(status.Errorf(codes.Internal, "failed to store refresh token: %v", err), err)
+			}
 
-	if rotateCurrent {
-		// Revoke the old refresh token (don't delete - keep for reuse detection)
-		if err := txQueries.RotateRefreshToken(ctx, commodoredb.RotateRefreshTokenParams{
-			ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
-		}); err != nil {
-			s.logger.WithError(err).Error("Failed to rotate refresh token")
-			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
-		}
-	} else if staleSuccessorID != "" {
-		// Retire the undelivered successor and re-point the presented token
-		// at its actual replacement so a repeated lost response still
-		// resolves as recovery, not theft.
-		if err := txQueries.RevokeRefreshTokenByID(ctx, staleSuccessorID); err != nil {
-			s.logger.WithError(err).Error("Failed to retire undelivered refresh token successor")
-			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
-		}
-		if err := txQueries.RelinkRefreshToken(ctx, commodoredb.RelinkRefreshTokenParams{
-			ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
-		}); err != nil {
-			s.logger.WithError(err).Error("Failed to re-link recovered refresh token")
-			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
-		}
+			if rotateCurrent {
+				// Revoke the old refresh token (don't delete - keep for reuse detection)
+				if err := txQueries.RotateRefreshToken(ctx, commodoredb.RotateRefreshTokenParams{
+					ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
+				}); err != nil {
+					s.logger.WithError(err).Error("Failed to rotate refresh token")
+					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
+				}
+			} else if staleSuccessorID != "" {
+				// Retire the undelivered successor and re-point the presented token
+				// at its actual replacement so a repeated lost response still
+				// resolves as recovery, not theft.
+				if err := txQueries.RevokeRefreshTokenByID(ctx, staleSuccessorID); err != nil {
+					s.logger.WithError(err).Error("Failed to retire undelivered refresh token successor")
+					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
+				}
+				if err := txQueries.RelinkRefreshToken(ctx, commodoredb.RelinkRefreshTokenParams{
+					ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
+				}); err != nil {
+					s.logger.WithError(err).Error("Failed to re-link recovered refresh token")
+					return txStatus(status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err), err)
+				}
+			}
+			if err := s.enqueueAuthEventTx(ctx, tx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", ""); err != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to record token refresh: %v", err), err)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
-
-	if err := s.enqueueAuthEventTx(ctx, tx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", ""); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to record token refresh: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	if sessionInvalidated {
+		return nil, status.Error(codes.Unauthenticated, "session invalidated")
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
@@ -5153,60 +5183,109 @@ func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *co
 
 	codeHash := hashToken(req.GetCode())
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	txQueries := commodoredb.New(tx)
+	var (
+		resp             *commodorepb.AuthResponse
+		userID, tenantID string
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
+		func(tx *sql.Tx) error {
+			txQueries := commodoredb.New(tx)
 
-	authorizationRow, err := txQueries.LockAuthorizationCode(ctx, codeHash)
+			authorizationRow, err := txQueries.LockAuthorizationCode(ctx, codeHash)
 
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or expired authorization code")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if authorizationRow.ConsumedAt.Valid {
-		return nil, status.Error(codes.AlreadyExists, "authorization code already used")
-	}
-	if authorizationRow.ClientID != req.GetClientId() || authorizationRow.RedirectUri != req.GetRedirectUri() {
-		return nil, status.Error(codes.PermissionDenied, "client_id or redirect_uri mismatch")
-	}
-	if authorizationRow.CodeChallengeMethod != "S256" {
-		return nil, status.Error(codes.Internal, "unsupported code_challenge_method")
-	}
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Error(codes.Unauthenticated, "invalid or expired authorization code")
+			}
+			if err != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
+			}
+			if authorizationRow.ConsumedAt.Valid {
+				return status.Error(codes.AlreadyExists, "authorization code already used")
+			}
+			if authorizationRow.ClientID != req.GetClientId() || authorizationRow.RedirectUri != req.GetRedirectUri() {
+				return status.Error(codes.PermissionDenied, "client_id or redirect_uri mismatch")
+			}
+			if authorizationRow.CodeChallengeMethod != "S256" {
+				return status.Error(codes.Internal, "unsupported code_challenge_method")
+			}
 
-	h := sha256.Sum256([]byte(req.GetCodeVerifier()))
-	computed := base64.RawURLEncoding.EncodeToString(h[:])
-	if subtle.ConstantTimeCompare([]byte(computed), []byte(authorizationRow.CodeChallenge)) != 1 {
-		return nil, status.Error(codes.PermissionDenied, "code_verifier mismatch")
-	}
+			h := sha256.Sum256([]byte(req.GetCodeVerifier()))
+			computed := base64.RawURLEncoding.EncodeToString(h[:])
+			if subtle.ConstantTimeCompare([]byte(computed), []byte(authorizationRow.CodeChallenge)) != 1 {
+				return status.Error(codes.PermissionDenied, "code_verifier mismatch")
+			}
 
-	if execErr := txQueries.ConsumeAuthorizationCode(ctx, authorizationRow.ID); execErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to mark code consumed: %v", execErr)
-	}
+			if execErr := txQueries.ConsumeAuthorizationCode(ctx, authorizationRow.ID); execErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to mark code consumed: %v", execErr), execErr)
+			}
 
-	resp, err := s.issueUserSessionTx(ctx, tx, authorizationRow.UserID, authorizationRow.TenantID, "pkce")
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+			userID, tenantID = authorizationRow.UserID, authorizationRow.TenantID
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, "pkce")
+			return err
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 	return resp, nil
 }
 
-func (s *CommodoreServer) rollbackTx(tx *sql.Tx) {
-	if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-		s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+// txStatusError is returned from a retrying transaction body when a database
+// failure maps to a gRPC status. The status is what the caller receives; the
+// database cause stays in the error chain so the retry helper can still
+// classify SQLSTATE 40001/40P01 and replay the transaction.
+type txStatusError struct {
+	status error
+	cause  error
+}
+
+func (e *txStatusError) Error() string { return e.status.Error() }
+
+func (e *txStatusError) Unwrap() error { return e.cause }
+
+func txStatus(st, cause error) error {
+	return &txStatusError{status: st, cause: cause}
+}
+
+// withStatusTx runs fn in a retrying transaction. fn may run several times, so
+// it must only touch the database and state it resets itself. A final failure
+// from fn is returned with any txStatusError unwrapped to its gRPC status;
+// begin failures (including cancellation while backing off) go through onBegin
+// and commit failures through onCommit.
+func (s *CommodoreServer) withStatusTx(ctx context.Context, onBegin, onCommit func(error) error, fn func(*sql.Tx) error) error {
+	const (
+		phaseBegin = iota
+		phaseBody
+		phaseCommit
+	)
+	phase := phaseBegin
+	err := fwdb.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) { phase = phaseBegin }, func(tx *sql.Tx) error {
+		phase = phaseBody
+		if bodyErr := fn(tx); bodyErr != nil {
+			return bodyErr
+		}
+		phase = phaseCommit
+		return nil
+	})
+	if err == nil {
+		return nil
 	}
+	switch phase {
+	case phaseBegin:
+		return onBegin(err)
+	case phaseCommit:
+		return onCommit(err)
+	}
+	if se, ok := errors.AsType[*txStatusError](err); ok {
+		return se.status
+	}
+	return err
 }
 
 // issueUserSessionTx issues a new access + refresh token pair for the given
-// user inside an open transaction. The caller is responsible for committing.
+// user inside an open transaction. The caller is responsible for committing
+// and for emitting the login event once the commit succeeds.
 // Returns the same AuthResponse shape as Login.
 func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*commodorepb.AuthResponse, error) {
 	queries := commodoredb.New(tx)
@@ -5215,7 +5294,7 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 		return nil, status.Error(codes.Unauthenticated, "user not found")
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		return nil, txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
 	}
 	user, err := commodoreUserFromRefreshRow(userRow)
 	if err != nil {
@@ -5241,7 +5320,7 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	if err := queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
 		TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
 	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
+		return nil, txStatus(status.Errorf(codes.Internal, "failed to store refresh token: %v", err), err)
 	}
 	if err := s.enqueueAuthEventTx(ctx, tx, eventAuthLoginSucceeded, userID, tenantID, authType, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to record sign-in: %v", err)
@@ -5388,77 +5467,81 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 
 	deviceCodeHash := hashToken(req.GetDeviceCode())
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	txQueries := commodoredb.New(tx)
+	// committedOutcome is the status returned after a transaction that commits a
+	// non-approved poll result (expiry, poll timestamp) instead of a session.
+	var (
+		resp             *commodorepb.AuthResponse
+		userID, tenantID string
+		committedOutcome error
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
+		func(tx *sql.Tx) error {
+			committedOutcome = nil
+			resp = nil
+			txQueries := commodoredb.New(tx)
 
-	deviceRow, err := txQueries.LockDeviceAuthorizationByHash(ctx, deviceCodeHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if deviceRow.ClientID != req.GetClientId() {
-		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
-	}
-
-	now := time.Now()
-	if now.After(deviceRow.ExpiresAt) || deviceRow.Status == "expired" {
-		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.FailedPrecondition, "EXPIRED_TOKEN")
-	}
-	if deviceRow.Status == "denied" {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
-	}
-	if deviceRow.Status == "pending" {
-		// SLOW_DOWN: client polled before its returned interval elapsed.
-		if deviceRow.LastPolledAt.Valid && now.Sub(deviceRow.LastPolledAt.Time) < time.Duration(deviceRow.PollIntervalSeconds)*time.Second {
-			if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
-				return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
+			deviceRow, err := txQueries.LockDeviceAuthorizationByHash(ctx, deviceCodeHash)
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Error(codes.PermissionDenied, "ACCESS_DENIED")
 			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+			if err != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
 			}
-			return nil, status.Error(codes.FailedPrecondition, "SLOW_DOWN")
-		}
-		if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
-	}
-	if deviceRow.Status != "approved" || !deviceRow.UserID.Valid || !deviceRow.TenantID.Valid {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
-	}
+			if deviceRow.ClientID != req.GetClientId() {
+				return status.Error(codes.PermissionDenied, "ACCESS_DENIED")
+			}
 
-	// Approved — issue session and consume the row (DELETE so a re-poll
-	// returns ACCESS_DENIED on missing row).
-	resp, err := s.issueUserSessionTx(ctx, tx, deviceRow.UserID.String, deviceRow.TenantID.String, "device_code")
-	if err != nil {
-		return nil, err
+			now := time.Now()
+			if now.After(deviceRow.ExpiresAt) || deviceRow.Status == "expired" {
+				if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr), execErr)
+				}
+				committedOutcome = status.Error(codes.FailedPrecondition, "EXPIRED_TOKEN")
+				return nil
+			}
+			if deviceRow.Status == "denied" {
+				committedOutcome = status.Error(codes.PermissionDenied, "ACCESS_DENIED")
+				return nil
+			}
+			if deviceRow.Status == "pending" {
+				// SLOW_DOWN: client polled before its returned interval elapsed.
+				if deviceRow.LastPolledAt.Valid && now.Sub(deviceRow.LastPolledAt.Time) < time.Duration(deviceRow.PollIntervalSeconds)*time.Second {
+					if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
+						return txStatus(status.Errorf(codes.Internal, "failed to record poll: %v", execErr), execErr)
+					}
+					committedOutcome = status.Error(codes.FailedPrecondition, "SLOW_DOWN")
+					return nil
+				}
+				if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to record poll: %v", execErr), execErr)
+				}
+				committedOutcome = status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
+				return nil
+			}
+			if deviceRow.Status != "approved" || !deviceRow.UserID.Valid || !deviceRow.TenantID.Valid {
+				committedOutcome = status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
+				return nil
+			}
+
+			// Approved — issue session and consume the row (DELETE so a re-poll
+			// returns ACCESS_DENIED on missing row).
+			userID, tenantID = deviceRow.UserID.String, deviceRow.TenantID.String
+			resp, err = s.issueUserSessionTx(ctx, tx, userID, tenantID, "device_code")
+			if err != nil {
+				return err
+			}
+			if err := txQueries.DeleteDeviceAuthorization(ctx, deviceRow.ID); err != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to consume device_code: %v", err), err)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
-	if err := txQueries.DeleteDeviceAuthorization(ctx, deviceRow.ID); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to consume device_code: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	if committedOutcome != nil {
+		return nil, committedOutcome
 	}
 	return resp, nil
 }
@@ -5474,35 +5557,43 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 		return nil, status.Error(codes.InvalidArgument, "invalid user_code")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	txQueries := commodoredb.New(tx)
+	var (
+		deviceRow        commodoredb.LockDeviceAuthorizationByUserCodeRow
+		committedOutcome error
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
+		func(tx *sql.Tx) error {
+			committedOutcome = nil
+			txQueries := commodoredb.New(tx)
 
-	deviceRow, err := txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "user_code not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
+			var err error
+			deviceRow, err = txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
+			if errors.Is(err, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "user_code not found")
+			}
+			if err != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", err), err)
+			}
 
-	if time.Now().After(deviceRow.ExpiresAt) {
-		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
+			if time.Now().After(deviceRow.ExpiresAt) {
+				if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr), execErr)
+				}
+				committedOutcome = status.Error(codes.FailedPrecondition, "user_code expired")
+				return nil
+			}
+			if deviceRow.Status != "pending" {
+				return status.Error(codes.FailedPrecondition, "user_code already resolved")
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
-	if deviceRow.Status != "pending" {
-		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+	if committedOutcome != nil {
+		return nil, committedOutcome
 	}
 
 	return &commodorepb.LookupDeviceAuthorizationResponse{
@@ -5526,43 +5617,51 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *c
 		return nil, status.Error(codes.InvalidArgument, "invalid user_code")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer s.rollbackTx(tx)
-	txQueries := commodoredb.New(tx)
+	var (
+		deviceRow        commodoredb.LockDeviceAuthorizationByUserCodeRow
+		committedOutcome error
+	)
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
+		func(tx *sql.Tx) error {
+			committedOutcome = nil
+			txQueries := commodoredb.New(tx)
 
-	deviceRow, err := txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "user_code not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
+			var lockErr error
+			deviceRow, lockErr = txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "user_code not found")
+			}
+			if lockErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "database error: %v", lockErr), lockErr)
+			}
 
-	if time.Now().After(deviceRow.ExpiresAt) {
-		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
-		}
-		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
-	}
-	if deviceRow.Status != "pending" {
-		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
-	}
+			if time.Now().After(deviceRow.ExpiresAt) {
+				if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr), execErr)
+				}
+				committedOutcome = status.Error(codes.FailedPrecondition, "user_code expired")
+				return nil
+			}
+			if deviceRow.Status != "pending" {
+				return status.Error(codes.FailedPrecondition, "user_code already resolved")
+			}
 
-	if err := txQueries.ApproveDeviceAuthorization(ctx, commodoredb.ApproveDeviceAuthorizationParams{
-		UserID:   sql.NullString{String: userID, Valid: true},
-		TenantID: sql.NullString{String: tenantID, Valid: true},
-		ID:       deviceRow.ID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to approve device_code: %v", err)
+			if approveErr := txQueries.ApproveDeviceAuthorization(ctx, commodoredb.ApproveDeviceAuthorizationParams{
+				UserID:   sql.NullString{String: userID, Valid: true},
+				TenantID: sql.NullString{String: tenantID, Valid: true},
+				ID:       deviceRow.ID,
+			}); approveErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to approve device_code: %v", approveErr), approveErr)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	if committedOutcome != nil {
+		return nil, committedOutcome
 	}
 
 	return &commodorepb.ApproveDeviceAuthorizationResponse{
@@ -6262,61 +6361,61 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		return nil, status.Error(codes.InvalidArgument, "wallet_id required")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to begin wallet unlink")
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit or an early return
-	txQueries := commodoredb.New(tx)
+	txErr := s.withStatusTx(ctx,
+		func(error) error { return status.Error(codes.Internal, "failed to begin wallet unlink") },
+		func(error) error { return status.Error(codes.Internal, "failed to commit wallet unlink") },
+		func(tx *sql.Tx) error {
+			txQueries := commodoredb.New(tx)
 
-	// Locking the user serializes concurrent unlink attempts. Without this lock,
-	// two requests could each observe another wallet and remove both, locking a
-	// wallet-only user out of the account.
-	hasPasswordSignin, lockErr := txQueries.LockUserAuthenticationMethods(ctx, commodoredb.LockUserAuthenticationMethodsParams{
-		ID: userID, TenantID: tenantID,
-	})
-	if errors.Is(lockErr, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "user not found")
-	} else if lockErr != nil {
-		return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
-	}
+			// Locking the user serializes concurrent unlink attempts. Without this lock,
+			// two requests could each observe another wallet and remove both, locking a
+			// wallet-only user out of the account.
+			hasPasswordSignin, lockErr := txQueries.LockUserAuthenticationMethods(ctx, commodoredb.LockUserAuthenticationMethodsParams{
+				ID: userID, TenantID: tenantID,
+			})
+			if errors.Is(lockErr, sql.ErrNoRows) {
+				return status.Error(codes.NotFound, "user not found")
+			} else if lockErr != nil {
+				return txStatus(status.Error(codes.Internal, "failed to verify account authentication methods"), lockErr)
+			}
 
-	owned, ownedErr := txQueries.UserOwnsWallet(ctx, commodoredb.UserOwnsWalletParams{
-		ID: walletID, UserID: userID, TenantID: tenantID,
-	})
-	if ownedErr != nil {
-		return nil, status.Error(codes.Internal, "failed to verify wallet ownership")
-	}
-	if !owned {
-		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
-	}
+			owned, ownedErr := txQueries.UserOwnsWallet(ctx, commodoredb.UserOwnsWalletParams{
+				ID: walletID, UserID: userID, TenantID: tenantID,
+			})
+			if ownedErr != nil {
+				return txStatus(status.Error(codes.Internal, "failed to verify wallet ownership"), ownedErr)
+			}
+			if !owned {
+				return status.Error(codes.NotFound, "wallet not found or not owned by you")
+			}
 
-	if !hasPasswordSignin.Valid || !hasPasswordSignin.Bool {
-		walletCount, countErr := txQueries.CountUserWallets(ctx, commodoredb.CountUserWalletsParams{
-			UserID: userID, TenantID: tenantID,
+			if !hasPasswordSignin.Valid || !hasPasswordSignin.Bool {
+				walletCount, countErr := txQueries.CountUserWallets(ctx, commodoredb.CountUserWalletsParams{
+					UserID: userID, TenantID: tenantID,
+				})
+				if countErr != nil {
+					return txStatus(status.Error(codes.Internal, "failed to verify account authentication methods"), countErr)
+				}
+				if walletCount <= 1 {
+					return status.Error(codes.FailedPrecondition, "cannot unlink the final wallet until another sign-in method is configured")
+				}
+			}
+
+			if _, deleteErr := txQueries.DeleteUserWallet(ctx, commodoredb.DeleteUserWalletParams{
+				ID: walletID, UserID: userID, TenantID: tenantID,
+			}); deleteErr != nil {
+				if errors.Is(deleteErr, sql.ErrNoRows) {
+					return status.Error(codes.NotFound, "wallet not found or not owned by you")
+				}
+				return txStatus(status.Error(codes.Internal, "failed to unlink wallet"), deleteErr)
+			}
+			if eventErr := s.enqueueAuthEventTx(ctx, tx, eventWalletUnlinked, userID, tenantID, "wallet", walletID); eventErr != nil {
+				return txStatus(status.Error(codes.Internal, "failed to record wallet unlink"), eventErr)
+			}
+			return nil
 		})
-		if countErr != nil {
-			return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
-		}
-		if walletCount <= 1 {
-			return nil, status.Error(codes.FailedPrecondition, "cannot unlink the final wallet until another sign-in method is configured")
-		}
-	}
-
-	_, err = txQueries.DeleteUserWallet(ctx, commodoredb.DeleteUserWalletParams{
-		ID: walletID, UserID: userID, TenantID: tenantID,
-	})
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
-		}
-		return nil, status.Error(codes.Internal, "failed to unlink wallet")
-	}
-	if err := s.enqueueAuthEventTx(ctx, tx, eventWalletUnlinked, userID, tenantID, "wallet", walletID); err != nil {
-		return nil, status.Error(codes.Internal, "failed to record wallet unlink")
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Error(codes.Internal, "failed to commit wallet unlink")
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	return &commodorepb.UnlinkWalletResponse{
@@ -6486,89 +6585,94 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	// still read pins enforce the same cluster set.
 	pullAllowedClusterIDs := legacyPinColumn(placementPlan.location)
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-	txQueries := commodoredb.New(tx)
-
-	// Keep stream creation and requested initial state atomic. Pull streams
-	// must not leak as push streams if source persistence fails.
-	created, err := txQueries.CreateUserStreamProcedure(ctx, commodoredb.CreateUserStreamProcedureParams{
-		TenantID: tenantID, UserID: userID, Title: title,
-	})
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to create stream")
-		return nil, status.Errorf(codes.Internal, "failed to create stream: %v", err)
-	}
-	if ingestMode == "pull" {
-		var encURI string
-		encURI, err = s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
-		}
-		err = txQueries.MarkCreatedStreamPull(ctx, commodoredb.MarkCreatedStreamPullParams{
-			ID: created.StreamID, TenantID: tenantID,
-		})
-		if err == nil {
-			err = txQueries.InsertCreatedPullSource(ctx, commodoredb.InsertCreatedPullSourceParams{
-				StreamID:          created.StreamID,
-				SourceUriEnc:      encURI,
-				Enabled:           pullSourceEnabled(req.GetPullSource()),
-				AllowedClusterIds: pullAllowedClusterIDs,
-			})
-		}
-		if err != nil {
-			s.logger.WithError(err).WithField("stream_id", created.StreamID).Error("Failed to persist pull source")
-			return nil, status.Errorf(codes.Internal, "failed to persist pull source: %v", err)
-		}
-	}
+	var created commodoredb.CreateUserStreamProcedureRow
 	var placementResult placementpolicy.SystemApplyResult
-	if placementPlan.needsApply() {
-		if placementResult, err = applyStreamPlacement(ctx, tx, tenantID, created.StreamID, userID, placementPlan); err != nil {
-			return nil, err
-		}
-	}
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error {
+			return status.Errorf(codes.Internal, "failed to commit stream creation: %v", err)
+		},
+		func(tx *sql.Tx) error {
+			txQueries := commodoredb.New(tx)
+			placementResult = placementpolicy.SystemApplyResult{}
 
-	// Update description if provided
-	if req.GetDescription() != "" {
-		err = txQueries.SetCreatedStreamDescription(ctx, commodoredb.SetCreatedStreamDescriptionParams{
-			Description: sql.NullString{String: req.GetDescription(), Valid: true}, ID: created.StreamID,
+			// Keep stream creation and requested initial state atomic. Pull streams
+			// must not leak as push streams if source persistence fails.
+			var err error
+			created, err = txQueries.CreateUserStreamProcedure(ctx, commodoredb.CreateUserStreamProcedureParams{
+				TenantID: tenantID, UserID: userID, Title: title,
+			})
+			if err != nil {
+				s.logger.WithError(err).Error("Failed to create stream")
+				return txStatus(status.Errorf(codes.Internal, "failed to create stream: %v", err), err)
+			}
+			if ingestMode == "pull" {
+				var encURI string
+				encURI, err = s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
+				if err != nil {
+					return status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
+				}
+				err = txQueries.MarkCreatedStreamPull(ctx, commodoredb.MarkCreatedStreamPullParams{
+					ID: created.StreamID, TenantID: tenantID,
+				})
+				if err == nil {
+					err = txQueries.InsertCreatedPullSource(ctx, commodoredb.InsertCreatedPullSourceParams{
+						StreamID:          created.StreamID,
+						SourceUriEnc:      encURI,
+						Enabled:           pullSourceEnabled(req.GetPullSource()),
+						AllowedClusterIds: pullAllowedClusterIDs,
+					})
+				}
+				if err != nil {
+					s.logger.WithError(err).WithField("stream_id", created.StreamID).Error("Failed to persist pull source")
+					return txStatus(status.Errorf(codes.Internal, "failed to persist pull source: %v", err), err)
+				}
+			}
+			if placementPlan.needsApply() {
+				if placementResult, err = applyStreamPlacement(ctx, tx, tenantID, created.StreamID, userID, placementPlan); err != nil {
+					return err
+				}
+			}
+
+			// Update description if provided
+			if req.GetDescription() != "" {
+				err = txQueries.SetCreatedStreamDescription(ctx, commodoredb.SetCreatedStreamDescriptionParams{
+					Description: sql.NullString{String: req.GetDescription(), Valid: true}, ID: created.StreamID,
+				})
+				if err != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to update stream description: %v", err), err)
+				}
+			}
+
+			// Update recording setting if requested
+			if req.GetIsRecording() {
+				err = txQueries.EnableCreatedStreamRecording(ctx, created.StreamID)
+				if err != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to enable recording: %v", err), err)
+				}
+			}
+
+			changedFields := []string{"title"}
+			if req.GetDescription() != "" {
+				changedFields = append(changedFields, "description")
+			}
+			if req.GetIsRecording() {
+				changedFields = append(changedFields, "is_recording_enabled")
+			}
+			if ingestMode == "pull" {
+				changedFields = append(changedFields, "ingest_mode", "pull_source")
+			}
+			if placementResult.Changed {
+				changedFields = append(changedFields, "source_location")
+			}
+			if eventErr := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamCreated, tenantID, userID, created.StreamID, changedFields),
+				&domainEvent{msg: &publicv1.StreamCreated{StreamId: created.StreamID, Name: title, PlaybackId: created.PlaybackID}, aggregateID: created.StreamID}); eventErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to record stream creation: %v", eventErr), eventErr)
+			}
+			return nil
 		})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update stream description: %v", err)
-		}
-	}
-
-	// Update recording setting if requested
-	if req.GetIsRecording() {
-		err = txQueries.EnableCreatedStreamRecording(ctx, created.StreamID)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to enable recording: %v", err)
-		}
-	}
-
-	changedFields := []string{"title"}
-	if req.GetDescription() != "" {
-		changedFields = append(changedFields, "description")
-	}
-	if req.GetIsRecording() {
-		changedFields = append(changedFields, "is_recording_enabled")
-	}
-	if ingestMode == "pull" {
-		changedFields = append(changedFields, "ingest_mode", "pull_source")
-	}
-	if placementResult.Changed {
-		changedFields = append(changedFields, "source_location")
-	}
-	if err := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamCreated, tenantID, userID, created.StreamID, changedFields),
-		&domainEvent{msg: &publicv1.StreamCreated{StreamId: created.StreamID, Name: title, PlaybackId: created.PlaybackID}, aggregateID: created.StreamID}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to record stream creation: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit stream creation: %v", err)
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	resp := &commodorepb.CreateStreamResponse{
@@ -7045,65 +7149,70 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		return s.queryStream(ctx, streamID, userID, tenantID)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-	txQueries := commodoredb.New(tx)
-
-	// Placement locks the tenant policy before the stream row, the same order a
-	// reviewed placement apply uses, so it runs before the stream row update.
+	pullSourceUpdated := false
 	var placementResult placementpolicy.SystemApplyResult
-	if placementPlan.needsApply() {
-		if placementResult, err = applyStreamPlacement(ctx, tx, tenantID, streamID, userID, placementPlan); err != nil {
-			return nil, err
-		}
-		if placementResult.Changed {
-			changedFields = append(changedFields, "source_location")
-		}
-	}
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit stream update: %v", err) },
+		func(tx *sql.Tx) error {
+			pullSourceUpdated = false
+			placementResult = placementpolicy.SystemApplyResult{}
+			attemptChangedFields := append([]string(nil), changedFields...)
+			txQueries := commodoredb.New(tx)
 
-	if applyStreamUpdate {
-		var rows int64
-		rows, err = txQueries.UpdateStreamFields(ctx, updateParams)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update stream: %v", err)
-		}
-		if rows == 0 {
-			return nil, status.Error(codes.NotFound, "stream not found")
-		}
-	}
-
-	if currentState.IngestMode == "pull" {
-		if pullPlan.writeURI || pullPlan.writeEnabled || pullPlan.writeAllowed {
-			var rows int64
-			rows, err = txQueries.UpdatePullSourceFields(ctx, commodoredb.UpdatePullSourceFieldsParams{
-				ApplyUri:          pullPlan.writeURI,
-				SourceUriEnc:      pullPlan.encryptedURI,
-				ApplyEnabled:      pullPlan.writeEnabled,
-				Enabled:           pullPlan.enabledValue,
-				ApplyAllowed:      pullPlan.writeAllowed,
-				AllowedClusterIds: pullPlan.allowedClusters,
-				StreamID:          streamID,
-			})
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to update pull source: %v", err)
+			// Placement locks the tenant policy before the stream row, the same order a
+			// reviewed placement apply uses, so it runs before the stream row update.
+			if placementPlan.needsApply() {
+				var placementErr error
+				if placementResult, placementErr = applyStreamPlacement(ctx, tx, tenantID, streamID, userID, placementPlan); placementErr != nil {
+					return placementErr
+				}
 			}
-			if rows == 0 {
-				return nil, status.Error(codes.NotFound, "pull source not found")
+			if applyStreamUpdate {
+				rows, updateErr := txQueries.UpdateStreamFields(ctx, updateParams)
+				if updateErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to update stream: %v", updateErr), updateErr)
+				}
+				if rows == 0 {
+					return status.Error(codes.NotFound, "stream not found")
+				}
 			}
-			changedFields = append(changedFields, "pull_source")
-		}
-	}
 
-	if len(changedFields) > 0 {
-		if eventErr := s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, streamID, changedFields); eventErr != nil {
-			return nil, status.Errorf(codes.Internal, "failed to record stream update: %v", eventErr)
-		}
-	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit stream update: %v", commitErr)
+			if currentState.IngestMode == "pull" {
+				if pullPlan.writeURI || pullPlan.writeEnabled || pullPlan.writeAllowed {
+					rows, updateErr := txQueries.UpdatePullSourceFields(ctx, commodoredb.UpdatePullSourceFieldsParams{
+						ApplyUri:          pullPlan.writeURI,
+						SourceUriEnc:      pullPlan.encryptedURI,
+						ApplyEnabled:      pullPlan.writeEnabled,
+						Enabled:           pullPlan.enabledValue,
+						ApplyAllowed:      pullPlan.writeAllowed,
+						AllowedClusterIds: pullPlan.allowedClusters,
+						StreamID:          streamID,
+					})
+					if updateErr != nil {
+						return txStatus(status.Errorf(codes.Internal, "failed to update pull source: %v", updateErr), updateErr)
+					}
+					if rows == 0 {
+						return status.Error(codes.NotFound, "pull source not found")
+					}
+					pullSourceUpdated = true
+				}
+			}
+			if placementResult.Changed {
+				attemptChangedFields = append(attemptChangedFields, "source_location")
+			}
+			if pullSourceUpdated {
+				attemptChangedFields = append(attemptChangedFields, "pull_source")
+			}
+			if len(attemptChangedFields) > 0 {
+				if eventErr := s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, streamID, attemptChangedFields); eventErr != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to record stream update: %v", eventErr), eventErr)
+				}
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	if req.Record != nil && req.GetRecord() && (!currentState.IsRecordingEnabled.Valid || !currentState.IsRecordingEnabled.Bool) {
@@ -7164,32 +7273,37 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	// listing/resolve reads) + stop ingest (drop stream_keys) + enqueue the thumbnail-cleanup obligation. We do NOT
 	// hard-delete the stream row yet: the deletion is not "done" until the SERVING authority (Foghorn) durably holds
 	// the tombstone. No RPC is held across this tx.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	txErr := s.withStatusTx(ctx,
+		func(err error) error { return status.Errorf(codes.Internal, "failed to begin transaction: %v", err) },
+		func(err error) error { return status.Errorf(codes.Internal, "failed to commit: %v", err) },
+		func(tx *sql.Tx) error {
+			txQueries := commodoredb.New(tx)
+			if keysErr := txQueries.DeleteStreamKeysForDeletion(ctx, commodoredb.DeleteStreamKeysForDeletionParams{
+				StreamID: streamID, TenantID: tenantID,
+			}); keysErr != nil {
+				s.logger.WithError(keysErr).Warn("Failed to delete stream keys")
+				// A serialization failure aborts the transaction, so replay it rather than
+				// failing every following statement.
+				if fwdb.IsRetryablePostgresError(keysErr) {
+					return txStatus(status.Errorf(codes.Internal, "failed to delete stream keys: %v", keysErr), keysErr)
+				}
+			}
+			if deleteErr := txQueries.SoftDeleteStream(ctx, commodoredb.SoftDeleteStreamParams{ID: streamID, TenantID: tenantID}); deleteErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to soft-delete stream: %v", deleteErr), deleteErr)
+			}
+			if _, retainErr := txQueries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); retainErr != nil {
+				return txStatus(status.Error(codes.Internal, "failed to retain stream placement policy"), retainErr)
+			}
 
-	txQueries := commodoredb.New(tx)
-	if err = txQueries.DeleteStreamKeysForDeletion(ctx, commodoredb.DeleteStreamKeysForDeletionParams{
-		StreamID: streamID, TenantID: tenantID,
-	}); err != nil {
-		s.logger.WithError(err).Warn("Failed to delete stream keys")
-	}
-	if err = txQueries.SoftDeleteStream(ctx, commodoredb.SoftDeleteStreamParams{ID: streamID, TenantID: tenantID}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to soft-delete stream: %v", err)
-	}
-	if _, err = txQueries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); err != nil {
-		return nil, status.Error(codes.Internal, "failed to retain stream placement policy")
-	}
-
-	// Enqueue the cleanup obligation ATOMICALLY with the soft-delete (idempotent on re-delete). The stream-cleanup
-	// outbox worker durably delivers it to Foghorn and finalizes the deletion on a positive ack.
-	if oErr := s.enqueueStreamCleanupOutbox(ctx, tx, streamID, tenantID); oErr != nil {
-		return nil, status.Errorf(codes.Internal, "failed to record stream cleanup obligation: %v", oErr)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+			// Enqueue the cleanup obligation ATOMICALLY with the soft-delete (idempotent on re-delete). The stream-cleanup
+			// outbox worker durably delivers it to Foghorn and finalizes the deletion on a positive ack.
+			if oErr := s.enqueueStreamCleanupOutbox(ctx, tx, streamID, tenantID); oErr != nil {
+				return txStatus(status.Errorf(codes.Internal, "failed to record stream cleanup obligation: %v", oErr), oErr)
+			}
+			return nil
+		})
+	if txErr != nil {
+		return nil, txErr
 	}
 
 	// The TERMINAL stream_deleted event is emitted by finalizeStreamDeletion (below, or by the outbox convergence)
@@ -7277,66 +7391,74 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 	if claimTenantID == "" {
 		return fmt.Errorf("finalize stream deletion for %s: missing tenant in claim identity", streamID)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin finalize tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	// OWNERSHIP GATE: settle the outbox row FIRST, token-fenced, and REQUIRE it to affect a row.
-	// A leased worker whose lease lapsed (the row was re-claimed with a NEW token) — or any duplicate finalize after a
-	// peer already completed the row — matches zero rows here and must NOT hard-delete the stream or emit the terminal
-	// event. Only the tx that flips this pending row to completed owns the finalization; everything below runs for
-	// that single winner, atomically with the settlement. ($2 = '' is the synchronous DeleteStream fast-path, which
-	// still requires a pending row so a converged re-run is a clean no-op.)
-	// RETURNING the obligation's tenant_id makes it the authoritative attribution for the rest of this tx — the
-	// value captured at enqueue time — and lets every query below fence on the owning tenant, not just the (globally
-	// unique) stream_id. Zero rows → sql.ErrNoRows → not our obligation, commit nothing.
-	queries := commodoredb.New(tx)
-	tenantID, err := queries.SettleStreamCleanupForFinalization(ctx, commodoredb.SettleStreamCleanupForFinalizationParams{
-		StreamID:   streamID,
-		LeaseToken: leaseToken,
-		TenantID:   claimTenantID,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		// Not our obligation (lease lost, or a peer/fast-path already finalized) — commit nothing.
+	err := s.withStatusTx(ctx,
+		func(err error) error { return fmt.Errorf("begin finalize tx: %w", err) },
+		func(err error) error { return err },
+		func(tx *sql.Tx) error {
+			// OWNERSHIP GATE: settle the outbox row FIRST, token-fenced, and REQUIRE it to affect a row.
+			// A leased worker whose lease lapsed (the row was re-claimed with a NEW token) — or any duplicate finalize after a
+			// peer already completed the row — matches zero rows here and must NOT hard-delete the stream or emit the terminal
+			// event. Only the tx that flips this pending row to completed owns the finalization; everything below runs for
+			// that single winner, atomically with the settlement. ($2 = '' is the synchronous DeleteStream fast-path, which
+			// still requires a pending row so a converged re-run is a clean no-op.)
+			// RETURNING the obligation's tenant_id makes it the authoritative attribution for the rest of this tx — the
+			// value captured at enqueue time — and lets every query below fence on the owning tenant, not just the (globally
+			// unique) stream_id. Zero rows → sql.ErrNoRows → not our obligation, commit nothing.
+			queries := commodoredb.New(tx)
+			tenantID, err := queries.SettleStreamCleanupForFinalization(ctx, commodoredb.SettleStreamCleanupForFinalizationParams{
+				StreamID:   streamID,
+				LeaseToken: leaseToken,
+				TenantID:   claimTenantID,
+			})
+			if errors.Is(err, sql.ErrNoRows) {
+				// Not our obligation (lease lost, or a peer/fast-path already finalized) — commit nothing.
+				return errStreamCleanupNotOwned
+			}
+			if err != nil {
+				return fmt.Errorf("settle stream cleanup outbox: %w", err)
+			}
+
+			// We own the finalization. Read attribution (user) from the still-soft-deleted row (present until the DELETE
+			// below), tenant-fenced, so the terminal event carries tenant/user, then hard-delete and emit — all atomic with
+			// the settlement above.
+			userID, sErr := queries.GetStreamFinalizationUser(ctx, commodoredb.GetStreamFinalizationUserParams{
+				StreamID: streamID,
+				TenantID: tenantID,
+			})
+			if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
+				return fmt.Errorf("read finalize attribution: %w", sErr)
+			}
+			// Finalization also covers deletion jobs created before retention was installed.
+			if _, retentionErr := queries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); retentionErr != nil {
+				return fmt.Errorf("retain finalized stream placement policy: %w", retentionErr)
+			}
+			n, err := queries.HardDeleteFinalizedStream(ctx, commodoredb.HardDeleteFinalizedStreamParams{
+				StreamID: streamID,
+				TenantID: tenantID,
+			})
+			if err != nil {
+				return fmt.Errorf("hard-delete finalized stream: %w", err)
+			}
+			// Enqueue the terminal event ONLY when THIS call performed the hard-delete (RowsAffected > 0), atomically with
+			// it — so a converged re-run never double-emits and a crash never suppresses it. Emitting at soft-delete time
+			// would tell consumers "deleted" while the saga still reports pending.
+			if n > 0 && tenantID != "" {
+				if err := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil),
+					&domainEvent{msg: &publicv1.StreamDeleted{StreamId: streamID}, aggregateID: streamID}); err != nil {
+					return fmt.Errorf("enqueue terminal stream_deleted event: %w", err)
+				}
+			}
+			return nil
+		})
+	if errors.Is(err, errStreamCleanupNotOwned) {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("settle stream cleanup outbox: %w", err)
-	}
-
-	// We own the finalization. Read attribution (user) from the still-soft-deleted row (present until the DELETE
-	// below), tenant-fenced, so the terminal event carries tenant/user, then hard-delete and emit — all atomic with
-	// the settlement above.
-	userID, sErr := queries.GetStreamFinalizationUser(ctx, commodoredb.GetStreamFinalizationUserParams{
-		StreamID: streamID,
-		TenantID: tenantID,
-	})
-	if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
-		return fmt.Errorf("read finalize attribution: %w", sErr)
-	}
-	// Finalization also covers deletion jobs created before retention was installed.
-	if _, retentionErr := queries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); retentionErr != nil {
-		return fmt.Errorf("retain finalized stream placement policy: %w", retentionErr)
-	}
-	n, err := queries.HardDeleteFinalizedStream(ctx, commodoredb.HardDeleteFinalizedStreamParams{
-		StreamID: streamID,
-		TenantID: tenantID,
-	})
-	if err != nil {
-		return fmt.Errorf("hard-delete finalized stream: %w", err)
-	}
-	// Enqueue the terminal event ONLY when THIS call performed the hard-delete (RowsAffected > 0), atomically with
-	// it — so a converged re-run never double-emits and a crash never suppresses it. Emitting at soft-delete time
-	// would tell consumers "deleted" while the saga still reports pending.
-	if n > 0 && tenantID != "" {
-		if err := s.enqueueEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil),
-			&domainEvent{msg: &publicv1.StreamDeleted{StreamId: streamID}, aggregateID: streamID}); err != nil {
-			return fmt.Errorf("enqueue terminal stream_deleted event: %w", err)
-		}
-	}
-	return tx.Commit()
+	return err
 }
+
+// errStreamCleanupNotOwned rolls back a finalize whose token-fenced settlement
+// matched no outbox row, so nothing is committed for an obligation this caller lost.
+var errStreamCleanupNotOwned = errors.New("stream cleanup obligation not owned")
 
 // RefreshStreamKey generates a new stream key
 func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb.RefreshStreamKeyRequest) (*commodorepb.RefreshStreamKeyResponse, error) {

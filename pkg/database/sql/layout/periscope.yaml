@@ -1,0 +1,17 @@
+# YugabyteDB placement for the periscope database. Every table created by schema/periscope.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: periscope
+layout: colocated
+colocated_tables:
+  - periscope.billing_cursors
+  - periscope.metering_leases
+  - periscope.metering_sources
+  - periscope.metering_reservation_keys
+  - public._schema_baseline
+distributed_tables:
+  - periscope.delegated_jwt_replays
+write_rate_benchmark:
+  - periscope.metering_leases
+  - periscope.metering_reservation_keys

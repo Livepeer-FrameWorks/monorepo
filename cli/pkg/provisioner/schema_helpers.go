@@ -133,12 +133,36 @@ func embeddedBaselineSQL(source string) (string, bool, error) {
 	return schemaSQL, true, nil
 }
 
-// BuildSchemaItems materializes embedded baseline schemas matching configured
-// database names to local temp files. Returns {db, schema, owner, src} entries
-// suitable for postgres_schema_items / yugabyte_schema_items role vars; Ansible
-// copies the file bytes, executes them with community.postgresql, and grants
-// ownership to the application role.
+// SQLEngine names the PostgreSQL-family engine that will execute generated SQL items.
+type SQLEngine string
+
+const (
+	SQLEnginePostgres SQLEngine = "postgres"
+	// SQLEngineYugabyte targets receive SQL with the source database's layout applied.
+	SQLEngineYugabyte SQLEngine = "yugabyte"
+)
+
+func validateSQLEngine(engine SQLEngine) error {
+	switch engine {
+	case SQLEnginePostgres, SQLEngineYugabyte:
+		return nil
+	}
+	return fmt.Errorf("unsupported SQL engine %q", engine)
+}
+
+// BuildSchemaItems materializes embedded baseline schemas for PostgreSQL targets. See BuildSchemaItemsForEngine.
 func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), error) {
+	return BuildSchemaItemsForEngine(databases, SQLEnginePostgres)
+}
+
+// BuildSchemaItemsForEngine materializes embedded baseline schemas matching configured database names to local temp
+// files. Returns {db, schema, owner, src} entries suitable for postgres_schema_items / yugabyte_schema_items role
+// vars; Ansible copies the file bytes, executes them with community.postgresql, and grants ownership to the
+// application role. YugabyteDB baselines carry the source database's layout.
+func BuildSchemaItemsForEngine(databases []SchemaDatabase, engine SQLEngine) ([]map[string]any, func(), error) {
+	if err := validateSQLEngine(engine); err != nil {
+		return nil, func() {}, err
+	}
 	if len(databases) == 0 {
 		return nil, func() {}, nil
 	}
@@ -161,6 +185,14 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 		if err != nil {
 			cleanup()
 			return nil, func() {}, err
+		}
+		if engine == SQLEngineYugabyte {
+			rewritten, rewriteErr := yugabyteSQLForSource(database.SourceName, schemaSQL)
+			if rewriteErr != nil {
+				cleanup()
+				return nil, func() {}, fmt.Errorf("apply YugabyteDB layout to %s baseline: %w", database.SourceName, rewriteErr)
+			}
+			schemaSQL = rewritten
 		}
 		file, err := os.CreateTemp("", fmt.Sprintf("frameworks-schema-%s-*.sql", safeSchemaFilePrefix(db)))
 		if err != nil {

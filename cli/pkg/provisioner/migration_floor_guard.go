@@ -373,7 +373,7 @@ func readBaselineMarkerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host 
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	exec := &SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}
+	exec := &SSHExecutor{Runner: runner, UseYugabyteTools: true}
 	conn := ConnParams{Port: pg.EffectivePort(), User: "yugabyte", Database: dbName}
 	var floor string
 	if qErr := exec.QueryRow(queryCtx, conn, baselineMarkerQuery, nil, &floor); qErr != nil {

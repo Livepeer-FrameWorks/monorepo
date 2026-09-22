@@ -131,9 +131,12 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 		Filename: "001_add_column.sql",
 		content:  "ALTER TABLE foghorn.streams ADD COLUMN IF NOT EXISTS x INT;",
 	}}
-	items := buildMigrationItemsFromList(all, []SchemaDatabase{
+	items, err := buildMigrationItemsFromList(all, []SchemaDatabase{
 		{Name: "foghorn_eu", Owner: "foghorn_eu_owner", SourceName: "foghorn", Schema: "foghorn"},
-	}, "expand", "v99.0.0")
+	}, "expand", "v99.0.0", SQLEnginePostgres)
+	if err != nil {
+		t.Fatalf("buildMigrationItemsFromList: %v", err)
+	}
 	if len(items) == 0 {
 		t.Fatal("expected foghorn migrations remapped onto physical foghorn_eu database")
 	}
@@ -159,7 +162,10 @@ func TestMigrationItemSplitsNonTransactionalStatementsForAutocommit(t *testing.T
 		Filename: "019_indexes.notx.sql", Transactional: false,
 		content: "CREATE INDEX CONCURRENTLY IF NOT EXISTS one ON purser.t (a);\nCREATE INDEX CONCURRENTLY IF NOT EXISTS two ON purser.t (b);",
 	}
-	item := migrationItem(SchemaDatabase{Name: "purser"}, migration)
+	item, err := migrationItem(SchemaDatabase{Name: "purser"}, migration)
+	if err != nil {
+		t.Fatal(err)
+	}
 	statements, ok := item["statements"].([]string)
 	if !ok || len(statements) != 2 {
 		t.Fatalf("migration statements = %#v, want two autocommit queries", item["statements"])

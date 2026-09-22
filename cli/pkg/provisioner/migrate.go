@@ -442,7 +442,11 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 			})
 		}
 		if !migration.Transactional && hasConcurrentIndex {
-			statements := splitSQLStatements(structuralContent)
+			// The statements checked here are the ones the roles execute, split by the same tokenizer.
+			statements, _, splitErr := migrationStatements(migration)
+			if splitErr != nil {
+				issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: splitErr.Error()})
+			}
 			for _, stmt := range statements {
 				if !createIndexConcurrently.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{

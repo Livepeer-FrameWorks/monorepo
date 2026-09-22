@@ -252,7 +252,7 @@ func readLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host inventor
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	exec := &SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}
+	exec := &SSHExecutor{Runner: runner, UseYugabyteTools: true}
 	conn := ConnParams{
 		Port:     pg.EffectivePort(),
 		User:     "yugabyte",

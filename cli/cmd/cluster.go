@@ -80,6 +80,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterPreflightCmd())
 	cluster.AddCommand(newClusterMigrateCmd())
 	cluster.AddCommand(newClusterDataMigrateCmd())
+	cluster.AddCommand(newClusterYugabyteCmd())
 	cluster.AddCommand(newClusterSeedCmd())
 	cluster.AddCommand(newClusterNodesCmd())
 	cluster.AddCommand(newClusterReleasesCmd())
@@ -864,6 +865,9 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			passedChecks++
 			return
 		}
+		if result.Status == yugabyteLayoutWarning {
+			passedChecks++
+		}
 		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
 			remediationSteps = append(remediationSteps, step)
 		}
@@ -917,6 +921,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			// healthy one rather than pinning the (possibly dead) first node.
 			runInfraCheck("Postgres/Yugabyte", checkYugabyteCluster(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
 			runInfraCheck("Yugabyte master consensus", doctorYugabyteMasterConsensus(cmd.Context(), manifest, doctorSSHPool))
+			runInfraCheck("Yugabyte layout", doctorYugabyteLayout(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
 		} else {
 			pgHostName := manifest.Infrastructure.Postgres.Host
 			host, ok := manifest.GetHost(pgHostName)
@@ -1230,7 +1235,7 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 		return result
 	}
 
-	exec := &provisioner.SSHExecutor{Runner: runner, BinaryPath: "/opt/yugabyte/bin/ysqlsh"}
+	exec := &provisioner.SSHExecutor{Runner: runner, UseYugabyteTools: true}
 	conn := provisioner.ConnParams{
 		Port:     pg.EffectivePort(),
 		User:     "yugabyte",
@@ -1559,6 +1564,11 @@ func doctorServiceRemediation(serviceName string) ux.NextStep {
 	baseName, _, _ := strings.Cut(serviceName, "@")
 	n := strings.ToLower(baseName)
 	switch {
+	case n == "yugabyte layout":
+		return ux.NextStep{
+			Cmd: "frameworks cluster yugabyte relayout plan --database <name>",
+			Why: "A database keeps its creation-time placement until it is relaid out; plan shows what a relayout would move.",
+		}
 	case strings.HasPrefix(n, "postgres"), strings.HasPrefix(n, "yugabyte"):
 		return ux.NextStep{
 			Cmd: "frameworks cluster logs postgres",
@@ -1622,7 +1632,7 @@ func printHealthResult(cmd *cobra.Command, serviceName string, result *health.Ch
 	switch {
 	case result.OK:
 		ux.Success(cmd.OutOrStdout(), line)
-	case result.Status == "degraded":
+	case result.Status == "degraded", result.Status == yugabyteLayoutWarning:
 		ux.Warn(cmd.OutOrStdout(), line)
 	default:
 		ux.Fail(cmd.OutOrStdout(), line)

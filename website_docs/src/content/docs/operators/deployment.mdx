@@ -219,6 +219,11 @@ frameworks cluster provision --github-repo org/gitops --cluster production --age
 
 This fetches the cluster manifest and referenced files (env files, host inventory) from the repo, then runs the standard provision pipeline. SOPS-encrypted files — both env files and host inventory YAML — are decrypted automatically if an age key is available (see [External Services](/operators/external-services#encrypting-secrets-with-sops--age)). Operators manage config changes via pull requests.
 
+A local GitOps checkout is authoritative for release metadata. Missing or invalid
+channel pointers and release manifests stop resolution; neither a cached release
+nor the default upstream repository replaces them. Explicit offline resolution may
+use a validated cached copy of that same repository.
+
 <Aside type="note" title="Provisioning Phases">
 The CLI provisions in dependency order:
 

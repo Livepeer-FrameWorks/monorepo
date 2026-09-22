@@ -383,6 +383,7 @@ export default defineConfig({
                 { slug: "operators/backup-restore" },
                 { slug: "operators/postgres-migrations" },
                 { slug: "operators/clickhouse-migrations" },
+                { slug: "operators/yugabyte-layout" },
               ],
             },
             {

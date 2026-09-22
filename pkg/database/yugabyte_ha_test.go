@@ -196,6 +196,7 @@ func startYugabyteHACluster(t *testing.T) *yugabyteHACluster {
 			"run", "-d", "--name", name, "--hostname", name,
 			"--network", cluster.network, "--ip", address, "-P", image,
 			"bin/yugabyted", "start", "--background=false", "--advertise_address=" + address,
+			"--tserver_flags=yb_enable_read_committed_isolation=true",
 			fmt.Sprintf("--cloud_location=frameworks.eu.z%d", index),
 		}
 		if index == 1 {

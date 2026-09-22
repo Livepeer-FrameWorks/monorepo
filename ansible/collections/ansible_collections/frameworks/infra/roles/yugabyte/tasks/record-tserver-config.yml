@@ -1,0 +1,15 @@
+---
+# Written only after starting/restarting the process, never when merely rendering its desired configuration.
+# A missing or mismatched receipt keeps a deferred restart visible across CLI and Ansible interruptions.
+- name: Record the tserver configuration applied at startup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    receipt={{ (yugabyte_data_dir ~ '/.frameworks-tserver-config-applied') | quote }}
+    tmp="$(mktemp "${receipt}.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    sha256sum {{ yugabyte_tserver_conf_path | quote }} {{ yugabyte_tserver_unit_path | quote }} > "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$receipt"
+  args:
+    executable: /bin/bash
+  changed_when: true

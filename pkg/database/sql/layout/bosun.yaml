@@ -1,0 +1,6 @@
+# YugabyteDB placement for the bosun database. Webhook events, deliveries, attempts,
+# and both outboxes grow with event traffic. Endpoint metadata participates directly
+# in delivery scheduling and settlement, so the database stays distributed and every
+# table gets its own tablets. Classification criteria live in docs/architecture/database-ha.md.
+database: bosun
+layout: distributed

@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/google/uuid"
 )
 
@@ -33,61 +34,57 @@ func RecordStreamCleanupObligation(ctx context.Context, dbh *sql.DB, tenantID, a
 	if tenantID == "" || assetKey == "" {
 		return errors.New("record stream cleanup obligation: tenant_id and asset_key are required")
 	}
-	tx, txErr := dbh.BeginTx(ctx, nil)
-	if txErr != nil {
-		return txErr
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	return database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		// Per-asset fence: serialize with a concurrent claim/publish for the same asset_key. A row-lock cannot do this
+		// (the tombstone row does not exist yet, and FOR UPDATE on an absent row locks nothing), so record/claim/publish
+		// share a transaction-scoped advisory lock — whichever commits first, the other observes its result.
+		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
+			return lErr
+		}
 
-	// Per-asset fence: serialize with a concurrent claim/publish for the same asset_key. A row-lock cannot do this
-	// (the tombstone row does not exist yet, and FOR UPDATE on an absent row locks nothing), so record/claim/publish
-	// share a transaction-scoped advisory lock — whichever commits first, the other observes its result.
-	if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
-		return lErr
-	}
+		// Snapshot the backend the asset's thumbnails were written to, INSIDE the tx and BEFORE any control row is dropped.
+		// Under one-immutable-backend-per-cell every attempt shares this cell's store, so the DISTINCT recorded non-empty
+		// backend_id is unique — assert it rather than picking one arbitrarily. FAIL CLOSED on more than one distinct id:
+		// that violates the invariant (the drainer sweeps a single store), and snapshotting an arbitrary one would leak the
+		// other. An asset with no recorded id (never published / legacy) falls back to this cell's current local fingerprint
+		// (the store its live-stream thumbnails were minted on). The drainer later fails closed if the recorded id no longer
+		// matches the cell's current store (a forbidden repoint).
+		qtx := foghorndb.New(tx)
+		snapshot, sErr := qtx.GetThumbnailAssetBackendSnapshot(ctx, foghorndb.GetThumbnailAssetBackendSnapshotParams{
+			TenantID: tenantID, AssetKey: assetKey,
+		})
+		if sErr != nil {
+			return sErr
+		}
+		distinctBackends := int(snapshot.DistinctBackends)
+		recorded := snapshot.BackendID
+		if distinctBackends > 1 {
+			return fmt.Errorf("record stream cleanup obligation: asset %s has %d distinct thumbnail backend_ids — the one-immutable-backend-per-cell invariant is violated; refusing to snapshot an arbitrary backend", assetKey, distinctBackends)
+		}
+		backendID := recorded
+		if backendID == "" {
+			backendID = localBackendFingerprint()
+		}
+		// FAIL CLOSED on an unattributable obligation: with neither a recorded thumbnail backend nor a local fingerprint we
+		// cannot record WHICH store owns these bytes, and the drainer would otherwise settle the durable obligation after a
+		// guessed-current-store sweep. Refuse rather than persist a NULL identity (never a silent success).
+		if backendID == "" {
+			return fmt.Errorf("record stream cleanup obligation: asset %s has no recorded thumbnail backend and this cell has no local fingerprint — refusing to record an unattributed obligation", assetKey)
+		}
 
-	// Snapshot the backend the asset's thumbnails were written to, INSIDE the tx and BEFORE any control row is dropped.
-	// Under one-immutable-backend-per-cell every attempt shares this cell's store, so the DISTINCT recorded non-empty
-	// backend_id is unique — assert it rather than picking one arbitrarily. FAIL CLOSED on more than one distinct id:
-	// that violates the invariant (the drainer sweeps a single store), and snapshotting an arbitrary one would leak the
-	// other. An asset with no recorded id (never published / legacy) falls back to this cell's current local fingerprint
-	// (the store its live-stream thumbnails were minted on). The drainer later fails closed if the recorded id no longer
-	// matches the cell's current store (a forbidden repoint).
-	qtx := foghorndb.New(tx)
-	snapshot, sErr := qtx.GetThumbnailAssetBackendSnapshot(ctx, foghorndb.GetThumbnailAssetBackendSnapshotParams{
-		TenantID: tenantID, AssetKey: assetKey,
+		// Parent tombstone: existence fences claims/publishes; the lease/status/backoff machinery lives here.
+		_, iErr := qtx.InsertStreamCleanupObligation(ctx, foghorndb.InsertStreamCleanupObligationParams{
+			AssetKey: assetKey, TenantID: tenantID, BackendID: sql.NullString{String: backendID, Valid: true},
+		})
+		if iErr != nil {
+			return iErr
+		}
+		// IDEMPOTENT: a fresh insert commits the new tombstone; a re-delivered DeleteStreamThumbnails RPC (RowsAffected==0,
+		// the tombstone already exists) commits nothing new but releases the advisory lock as the durable ack, preserving
+		// the original snapshot. FAIL CLOSED if RowsAffected itself errors rather than assuming a state — Postgres normally
+		// supports it, but a foundational durability record must not proceed on an unknown insert result.
+		return nil
 	})
-	if sErr != nil {
-		return sErr
-	}
-	distinctBackends := int(snapshot.DistinctBackends)
-	recorded := snapshot.BackendID
-	if distinctBackends > 1 {
-		return fmt.Errorf("record stream cleanup obligation: asset %s has %d distinct thumbnail backend_ids — the one-immutable-backend-per-cell invariant is violated; refusing to snapshot an arbitrary backend", assetKey, distinctBackends)
-	}
-	backendID := recorded
-	if backendID == "" {
-		backendID = localBackendFingerprint()
-	}
-	// FAIL CLOSED on an unattributable obligation: with neither a recorded thumbnail backend nor a local fingerprint we
-	// cannot record WHICH store owns these bytes, and the drainer would otherwise settle the durable obligation after a
-	// guessed-current-store sweep. Refuse rather than persist a NULL identity (never a silent success).
-	if backendID == "" {
-		return fmt.Errorf("record stream cleanup obligation: asset %s has no recorded thumbnail backend and this cell has no local fingerprint — refusing to record an unattributed obligation", assetKey)
-	}
-
-	// Parent tombstone: existence fences claims/publishes; the lease/status/backoff machinery lives here.
-	_, iErr := qtx.InsertStreamCleanupObligation(ctx, foghorndb.InsertStreamCleanupObligationParams{
-		AssetKey: assetKey, TenantID: tenantID, BackendID: sql.NullString{String: backendID, Valid: true},
-	})
-	if iErr != nil {
-		return iErr
-	}
-	// IDEMPOTENT: a fresh insert commits the new tombstone; a re-delivered DeleteStreamThumbnails RPC (RowsAffected==0,
-	// the tombstone already exists) commits nothing new but releases the advisory lock as the durable ack, preserving
-	// the original snapshot. FAIL CLOSED if RowsAffected itself errors rather than assuming a state — Postgres normally
-	// supports it, but a foundational durability record must not proceed on an unknown insert result.
-	return tx.Commit()
 }
 
 // AssetTombstoned reports whether an asset_key has a durable cleanup tombstone (a stream_cleanup_obligation row,
@@ -171,60 +168,67 @@ func FenceFederatedPointerForPurge(ctx context.Context, db *sql.DB, tenantID, as
 	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" {
 		return "", false, nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
-		return "", false, lockErr
-	}
-	q := foghorndb.New(tx)
-	destinations, err := q.ListThumbnailDestinations(ctx, foghorndb.ListThumbnailDestinationsParams{
-		TenantID: tenantID, AssetKey: assetKey,
-	})
-	if err != nil {
-		return "", false, err
-	}
-	for _, destination := range destinations {
-		if !destination.BackendLocal && !allowCrossClusterDelete {
-			// Do not make a pointer terminal before this cell can execute every known byte
-			// deletion. A later run may fence it after federation mutations are enabled.
-			return "", false, nil
+	var (
+		fencedToken string
+		fenced      bool
+	)
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		fencedToken, fenced = "", false
+		if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+			return lockErr
 		}
-	}
-	claimToken := uuid.NewString()
-	leaseInterval := federatedPointerPurgeLease.String()
-	var affected int64
-	switch kind {
-	case FederatedPointerPurgeTombstone:
-		affected, err = q.FenceTombstonedFederatedArtifactPointerForPurge(ctx, foghorndb.FenceTombstonedFederatedArtifactPointerForPurgeParams{
-			PurgeToken: claimToken, LeaseInterval: leaseInterval,
-			ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
+		q := foghorndb.New(tx)
+		destinations, err := q.ListThumbnailDestinations(ctx, foghorndb.ListThumbnailDestinationsParams{
+			TenantID: tenantID, AssetKey: assetKey,
 		})
-	case FederatedPointerPurgeStale:
-		affected, err = q.FenceStaleFederatedArtifactPointerForPurge(ctx, foghorndb.FenceStaleFederatedArtifactPointerForPurgeParams{
-			PurgeToken: claimToken, LeaseInterval: leaseInterval,
-			ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
-		})
-	case FederatedPointerPurgeInterruptedActive:
-		affected, err = q.FenceInterruptedActiveFederatedArtifactPointerPurge(ctx, foghorndb.FenceInterruptedActiveFederatedArtifactPointerPurgeParams{
-			PurgeToken: claimToken, LeaseInterval: leaseInterval,
-			ArtifactHash: assetKey, TenantID: tenantID,
-		})
-	default:
-		return "", false, errors.New("unknown federated pointer purge kind")
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if affected == 0 {
+		if err != nil {
+			return err
+		}
+		for _, destination := range destinations {
+			if !destination.BackendLocal && !allowCrossClusterDelete {
+				// Do not make a pointer terminal before this cell can execute every known byte
+				// deletion. A later run may fence it after federation mutations are enabled.
+				return errTxRollbackNoop
+			}
+		}
+		claimToken := uuid.NewString()
+		leaseInterval := federatedPointerPurgeLease.String()
+		var affected int64
+		switch kind {
+		case FederatedPointerPurgeTombstone:
+			affected, err = q.FenceTombstonedFederatedArtifactPointerForPurge(ctx, foghorndb.FenceTombstonedFederatedArtifactPointerForPurgeParams{
+				PurgeToken: claimToken, LeaseInterval: leaseInterval,
+				ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
+			})
+		case FederatedPointerPurgeStale:
+			affected, err = q.FenceStaleFederatedArtifactPointerForPurge(ctx, foghorndb.FenceStaleFederatedArtifactPointerForPurgeParams{
+				PurgeToken: claimToken, LeaseInterval: leaseInterval,
+				ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
+			})
+		case FederatedPointerPurgeInterruptedActive:
+			affected, err = q.FenceInterruptedActiveFederatedArtifactPointerPurge(ctx, foghorndb.FenceInterruptedActiveFederatedArtifactPointerPurgeParams{
+				PurgeToken: claimToken, LeaseInterval: leaseInterval,
+				ArtifactHash: assetKey, TenantID: tenantID,
+			})
+		default:
+			return errors.New("unknown federated pointer purge kind")
+		}
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return errTxRollbackNoop
+		}
+		fencedToken, fenced = claimToken, true
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
 		return "", false, nil
 	}
-	if err := tx.Commit(); err != nil {
+	if err != nil {
 		return "", false, err
 	}
-	return claimToken, true, nil
+	return fencedToken, fenced, nil
 }
 
 // FinalizeFederatedPointerPurge removes thumbnail control state and its terminal
@@ -235,45 +239,49 @@ func FinalizeFederatedPointerPurge(ctx context.Context, db *sql.DB, tenantID, as
 	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" {
 		return FederatedPointerPurgeNotOwned, nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return FederatedPointerPurgeNotOwned, err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
-		return FederatedPointerPurgeNotOwned, lockErr
-	}
-	q := foghorndb.New(tx)
-	if _, stateErr := q.GetFencedFederatedArtifactPointerPurgeState(ctx, foghorndb.GetFencedFederatedArtifactPointerPurgeStateParams{
-		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
-	}); errors.Is(stateErr, sql.ErrNoRows) {
-		return FederatedPointerPurgeNotOwned, nil
-	} else if stateErr != nil {
-		return FederatedPointerPurgeNotOwned, stateErr
-	}
-	if cleanupErr := DeleteThumbnailControlRowsTx(ctx, tx, tenantID, assetKey); cleanupErr != nil {
-		return FederatedPointerPurgeNotOwned, cleanupErr
-	}
-	restored, err := q.RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx, foghorndb.RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams{
-		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
-	})
-	if err != nil {
-		return FederatedPointerPurgeNotOwned, err
-	}
-	settlement := FederatedPointerPurgeRestoredActive
-	if restored != 1 {
-		deleted, deleteErr := q.DeleteFencedFederatedArtifactPointer(ctx, foghorndb.DeleteFencedFederatedArtifactPointerParams{
+	settlement := FederatedPointerPurgeNotOwned
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		settlement = FederatedPointerPurgeNotOwned
+		if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+			return lockErr
+		}
+		q := foghorndb.New(tx)
+		if _, stateErr := q.GetFencedFederatedArtifactPointerPurgeState(ctx, foghorndb.GetFencedFederatedArtifactPointerPurgeStateParams{
+			ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+		}); errors.Is(stateErr, sql.ErrNoRows) {
+			return errTxRollbackNoop
+		} else if stateErr != nil {
+			return stateErr
+		}
+		if cleanupErr := DeleteThumbnailControlRowsTx(ctx, tx, tenantID, assetKey); cleanupErr != nil {
+			return cleanupErr
+		}
+		restored, err := q.RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx, foghorndb.RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams{
 			ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
 		})
-		if deleteErr != nil {
-			return FederatedPointerPurgeNotOwned, deleteErr
+		if err != nil {
+			return err
 		}
-		if deleted != 1 {
-			return FederatedPointerPurgeNotOwned, nil
+		next := FederatedPointerPurgeRestoredActive
+		if restored != 1 {
+			deleted, deleteErr := q.DeleteFencedFederatedArtifactPointer(ctx, foghorndb.DeleteFencedFederatedArtifactPointerParams{
+				ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+			})
+			if deleteErr != nil {
+				return deleteErr
+			}
+			if deleted != 1 {
+				return errTxRollbackNoop
+			}
+			next = FederatedPointerPurgeDeleted
 		}
-		settlement = FederatedPointerPurgeDeleted
+		settlement = next
+		return nil
+	})
+	if errors.Is(err, errTxRollbackNoop) {
+		return FederatedPointerPurgeNotOwned, nil
 	}
-	if err := tx.Commit(); err != nil {
+	if err != nil {
 		return FederatedPointerPurgeNotOwned, err
 	}
 	return settlement, nil
@@ -287,21 +295,22 @@ func ReleaseFederatedPointerPurgeClaim(ctx context.Context, db *sql.DB, tenantID
 	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" {
 		return false, nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
-		return false, lockErr
-	}
-	released, err := foghorndb.New(tx).ReleaseFederatedArtifactPointerPurgeClaim(ctx, foghorndb.ReleaseFederatedArtifactPointerPurgeClaimParams{
-		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+	var released int64
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		released = 0
+		if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+			return lockErr
+		}
+		var err error
+		released, err = foghorndb.New(tx).ReleaseFederatedArtifactPointerPurgeClaim(ctx, foghorndb.ReleaseFederatedArtifactPointerPurgeClaimParams{
+			ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+		})
+		if err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return released == 1, nil
@@ -314,21 +323,22 @@ func DeferFederatedPointerPurgeClaim(ctx context.Context, db *sql.DB, tenantID, 
 	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" || retryAfter <= 0 {
 		return false, nil
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
-		return false, lockErr
-	}
-	deferred, err := foghorndb.New(tx).DeferFederatedArtifactPointerPurgeClaim(ctx, foghorndb.DeferFederatedArtifactPointerPurgeClaimParams{
-		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken, RetryInterval: retryAfter.String(),
+	var deferred int64
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		deferred = 0
+		if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+			return lockErr
+		}
+		var err error
+		deferred, err = foghorndb.New(tx).DeferFederatedArtifactPointerPurgeClaim(ctx, foghorndb.DeferFederatedArtifactPointerPurgeClaimParams{
+			ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken, RetryInterval: retryAfter.String(),
+		})
+		if err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return deferred == 1, nil

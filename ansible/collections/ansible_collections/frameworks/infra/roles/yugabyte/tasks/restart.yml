@@ -1,16 +1,30 @@
 ---
 # Yugabyte restart order matters: tserver first (so it releases its master
 # connection), then master. The wait_for on the master RPC port gives
-# leader election time to settle before tserver reconnects.
+# leader election time to settle before tserver reconnects. yugabyte_restart_scope
+# limits the restart to one process, as an engine upgrade does for every master
+# before any tserver.
+- name: Select tserver release only in its admitted restart phase
+  ansible.builtin.template:
+    src: yb-tserver.service.j2
+    dest: "{{ yugabyte_tserver_unit_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: yugabyte_restart_scope == 'tserver'
+
 - name: Restart yb-tserver
   ansible.builtin.systemd:
     name: "{{ yugabyte_tserver_service }}"
     state: restarted
+    daemon_reload: true
+  when: yugabyte_restart_scope in ['all', 'tserver']
 
 - name: Restart yb-master
   ansible.builtin.systemd:
     name: "{{ yugabyte_master_service }}"
     state: restarted
+  when: yugabyte_restart_scope in ['all', 'master']
 
 - name: Wait for yb-master RPC port after restart
   ansible.builtin.wait_for:
@@ -25,3 +39,8 @@
     port: "{{ yugabyte_ysql_port }}"
     timeout: 120
     sleep: 2
+  when: yugabyte_restart_scope in ['all', 'tserver']
+
+- name: Record configuration of restarted tserver
+  ansible.builtin.import_tasks: record-tserver-config.yml
+  when: yugabyte_restart_scope in ['all', 'tserver']

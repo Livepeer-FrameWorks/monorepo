@@ -1,0 +1,5 @@
+# YugabyteDB placement for the skipper database. Nearly every Skipper table grows with
+# conversations, crawls, or embeddings, so the database stays distributed and every table
+# gets its own tablets. Classification criteria live in docs/architecture/database-ha.md.
+database: skipper
+layout: distributed

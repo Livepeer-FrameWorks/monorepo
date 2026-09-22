@@ -133,7 +133,7 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	if provErr != nil {
 		return provErr
 	}
-	if initErr := prov.Initialize(ctx, host, init.config); initErr != nil {
+	if initErr := initializeOutsideRelayout(ctx, pool, host, pg, func() error { return prov.Initialize(ctx, host, init.config) }); initErr != nil {
 		return initErr
 	}
 
@@ -264,6 +264,7 @@ func postgresInitConfig(rc *resolvedCluster, only map[string]struct{}) (postgres
 // applyPostgresBaselineSchemas runs the role's schema tag for the databases that
 // have an embedded baseline. The role applies a baseline only to a service
 // schema without base tables and then grants owner and runtime privileges.
+// Yugabyte baselines carry each source database's declared layout.
 func applyPostgresBaselineSchemas(
 	ctx context.Context,
 	out io.Writer,
@@ -273,7 +274,11 @@ func applyPostgresBaselineSchemas(
 	prov provisioner.Provisioner,
 	databases []provisioner.SchemaDatabase,
 ) error {
-	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItems(databases)
+	engine := provisioner.SQLEnginePostgres
+	if service == "yugabyte" {
+		engine = provisioner.SQLEngineYugabyte
+	}
+	schemaItems, schemaCleanup, err := provisioner.BuildSchemaItemsForEngine(databases, engine)
 	defer schemaCleanup()
 	if err != nil {
 		return fmt.Errorf("collect baseline schemas: %w", err)
@@ -312,6 +317,10 @@ func applyPostgresSchemasAndMigrations(
 	pg *inventory.PostgresConfig,
 	password string,
 ) error {
+	engine := provisioner.SQLEnginePostgres
+	if service == "yugabyte" {
+		engine = provisioner.SQLEngineYugabyte
+	}
 	if err := applyPostgresBaselineSchemas(ctx, out, service, host, config, prov, databases); err != nil {
 		return err
 	}
@@ -347,7 +356,7 @@ func applyPostgresSchemasAndMigrations(
 	}
 
 	fmt.Fprintf(out, "Applying %s expand migrations up to %s...\n", service, targetVersion)
-	migrationItems, err := provisioner.BuildMigrationItemsForDatabases(databases, "expand", targetVersion)
+	migrationItems, err := provisioner.BuildMigrationItemsForEngine(databases, "expand", targetVersion, engine)
 	if err != nil {
 		return fmt.Errorf("collect migrations: %w", err)
 	}

@@ -1,7 +1,9 @@
 package grpc
 
 import (
+	"context"
 	"database/sql"
+	"net"
 	"testing"
 	"time"
 
@@ -26,13 +28,11 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
 		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
-	// ensureServiceExists mini-transaction
-	mock.ExpectBegin()
+	// ensureServiceExistsTx runs on the bootstrap transaction
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
-	mock.ExpectCommit()
 	// IP reverse lookup (no match)
 	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
 		WithArgs("cluster-1", "10.0.0.1").
@@ -120,13 +120,11 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 	mock.ExpectQuery("SELECT kind, COALESCE\\(cluster_id, ''\\), expires_at").
 		WithArgs(hashBootstrapToken("token-1")).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-1", expiresAt))
-	// ensureServiceExists mini-transaction
-	mock.ExpectBegin()
+	// ensureServiceExistsTx runs on the bootstrap transaction
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
 		WithArgs("bridge").
 		WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("bridge"))
-	mock.ExpectCommit()
 	// IP reverse lookup (no match)
 	mock.ExpectQuery("SELECT node_id FROM quartermaster.infrastructure_nodes").
 		WithArgs("cluster-1", "10.0.0.1").
@@ -636,7 +634,7 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 	mock.ExpectQuery("SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = \\$1").
 		WithArgs("cluster-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
-	// ensureServiceExists mini-transaction
+	// ensureServiceExists mini-transaction (no token, so no bootstrap transaction)
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
@@ -689,7 +687,7 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
-	// ensureServiceExists mini-transaction
+	// ensureServiceExists mini-transaction (no token, so no bootstrap transaction)
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("bridge").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").
@@ -738,10 +736,14 @@ func TestBootstrapServiceSkipsIPLookupForHostname(t *testing.T) {
 	defer db.Close()
 
 	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	// The hostname must not resolve, whatever the machine's DNS does with unknown names.
+	server.lookupHost = func(context.Context, string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "quartermaster", IsNotFound: true}
+	}
 
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
-	// ensureServiceExists mini-transaction
+	// ensureServiceExists mini-transaction (no token, so no bootstrap transaction)
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs("quartermaster").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT service_id FROM quartermaster.services").

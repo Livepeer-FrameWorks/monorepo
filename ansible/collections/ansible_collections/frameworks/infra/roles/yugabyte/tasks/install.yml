@@ -69,6 +69,7 @@
 - name: Stat YugabyteDB binary
   ansible.builtin.stat:
     path: "{{ yugabyte_bin_dir }}/yb-master"
+    follow: true
   register: yugabyte_bin_stat
   check_mode: false
   changed_when: false
@@ -80,13 +81,68 @@
   check_mode: false
   changed_when: false
 
+- name: Stat YugabyteDB relocation sentinel
+  ansible.builtin.stat:
+    path: "{{ yugabyte_post_install_sentinel }}"
+  register: yugabyte_relocation_sentinel_stat
+  check_mode: false
+  changed_when: false
+
 - name: Decide whether YugabyteDB reinstall is required
   ansible.builtin.set_fact:
     yugabyte_reinstall_required: >-
       {{
         not (yugabyte_bin_stat.stat.exists | default(false)) or
-        not (yugabyte_install_sentinel_stat.stat.exists | default(false))
+        not (yugabyte_install_sentinel_stat.stat.exists | default(false)) or
+        not (yugabyte_relocation_sentinel_stat.stat.exists | default(false))
       }}
+
+- name: Read selected YugabyteDB release
+  ansible.builtin.stat:
+    path: "{{ yugabyte_current_link }}"
+    follow: false
+  register: yugabyte_current
+  check_mode: false
+  changed_when: false
+
+- name: Read in-place artifact identity before adopting release directories
+  ansible.builtin.stat:
+    path: "{{ yugabyte_install_dir }}/.installed-{{ yugabyte_artifact_id }}"
+  register: yugabyte_in_place_identity
+  check_mode: false
+  changed_when: false
+
+- name: Require the engine selector to be a symlink
+  ansible.builtin.assert:
+    that: not yugabyte_current.stat.exists or (yugabyte_current.stat.islnk | default(false))
+    fail_msg: "{{ yugabyte_current_link }} must be a symlink, not a directory or file"
+
+- name: Stat bootstrap sentinel for the engine change guard
+  ansible.builtin.stat:
+    path: "{{ yugabyte_bootstrap_sentinel }}"
+  register: yugabyte_engine_guard_bootstrap
+  check_mode: false
+  changed_when: false
+
+- name: Refuse an engine change outside cluster upgrade
+  ansible.builtin.fail:
+    msg: >-
+      {{ inventory_hostname }} already joined the YugabyteDB universe with another engine artifact. Changing the engine
+      needs the ordered upgrade (every master, then every tserver, then finalize): run frameworks cluster upgrade
+      yugabyte.
+  when:
+    - yugabyte_engine_guard_bootstrap.stat.exists | default(false)
+    - >-
+      (yugabyte_current.stat.exists and yugabyte_current.stat.lnk_source != yugabyte_release_dir) or
+      (not yugabyte_current.stat.exists and not yugabyte_in_place_identity.stat.exists)
+    - not (yugabyte_allow_engine_change | bool)
+
+- name: Refuse to overwrite an incomplete selected release
+  ansible.builtin.assert:
+    that: >-
+      not (yugabyte_reinstall_required | bool) or
+      (yugabyte_current.stat.lnk_source | default('')) != yugabyte_release_dir
+    fail_msg: "Selected YugabyteDB release is incomplete; refusing to alter files that running processes may use"
 
 - name: Report pending YugabyteDB reinstall under --check
   ansible.builtin.debug:
@@ -97,13 +153,21 @@
   changed_when: yugabyte_reinstall_required | bool
   when: ansible_check_mode
 
-- name: Remove stale YugabyteDB install sentinels before reinstall
+- name: Remove unpublished partial extraction
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ yugabyte_release_dir }}"
     state: absent
-  loop:
-    - "{{ yugabyte_install_sentinel }}"
-    - "{{ yugabyte_post_install_sentinel }}"
+  when:
+    - not ansible_check_mode
+    - yugabyte_reinstall_required | default(false)
+
+- name: Create clean artifact directory
+  ansible.builtin.file:
+    path: "{{ yugabyte_release_dir }}"
+    state: directory
+    owner: "{{ yugabyte_user }}"
+    group: "{{ yugabyte_group }}"
+    mode: "0755"
   when:
     - not ansible_check_mode
     - yugabyte_reinstall_required | default(false)
@@ -119,22 +183,17 @@
     - not ansible_check_mode
     - yugabyte_reinstall_required | default(true)
 
-# Version-keyed sentinel: the archive is re-extracted on a URL/checksum change.
-# On unchanged inputs, `creates:` short-circuits on the sentinel file and the
-# task reports ok (not changed).
-- name: Extract YugabyteDB tarball into install dir
+# Each archive has its own tree. Old processes keep their executable, libraries and catalog files until restarted.
+- name: Extract YugabyteDB tarball into clean artifact directory
   ansible.builtin.unarchive:
     src: "{{ yugabyte_tarball_path }}"
-    dest: "{{ yugabyte_install_dir }}"
+    dest: "{{ yugabyte_release_dir }}"
     remote_src: true
     owner: "{{ yugabyte_user }}"
     group: "{{ yugabyte_group }}"
     extra_opts:
       - --strip-components=1
     creates: "{{ yugabyte_install_sentinel }}"
-  notify:
-    - yugabyte restart master
-    - yugabyte restart tserver
   when:
     - not ansible_check_mode
     - yugabyte_reinstall_required | default(true)
@@ -168,3 +227,22 @@
   when:
     - not ansible_check_mode
     - yugabyte_reinstall_required | default(true)
+
+# Service units use the absolute release path; current selects tools and the desired engine, not a running process's files.
+- name: Select complete YugabyteDB release atomically
+  ansible.builtin.shell: |
+    set -eu
+    link={{ yugabyte_current_link | quote }}
+    pending="$(mktemp -d {{ (yugabyte_install_dir ~ '/.select-XXXXXX') | quote }})"
+    trap 'rm -rf "$pending"' EXIT
+    ln -s {{ yugabyte_release_dir | quote }} "$pending/current"
+    mv -Tf "$pending/current" "$link"
+  args:
+    executable: /bin/bash
+  changed_when: true
+  notify:
+    - yugabyte restart master
+    - yugabyte restart tserver
+  when:
+    - not ansible_check_mode
+    - (yugabyte_current.stat.lnk_source | default('')) != yugabyte_release_dir

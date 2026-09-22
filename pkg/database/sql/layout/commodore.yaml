@@ -1,0 +1,62 @@
+# YugabyteDB placement for the commodore database. Every table created by schema/commodore.sql
+# appears in exactly one list. Colocated tables share the database's parent tablet and never
+# split; distributed tables get their own tablets and split automatically. Classification
+# criteria live in docs/architecture/database-ha.md.
+database: commodore
+layout: colocated
+colocated_tables:
+  - commodore.users
+  - commodore.wallet_identities
+  - commodore.stream_keys
+  - commodore.stream_pull_sources
+  - commodore.stream_mist_sources
+  - commodore.push_targets
+  - commodore.field_encryption_quarantine
+  - commodore.tenant_processing_config
+  - commodore.stream_processing_config
+  - commodore.tenant_media_retention_policies
+  - commodore.signing_keys
+  - commodore.stream_cluster_pins
+  - commodore.media_placement_policies
+  - commodore.media_cell_placement_capabilities
+  # Cell recovery markers and singleton compiler/epoch state are control metadata.
+  - commodore.media_authority_cell_ack_resets
+  - commodore.media_authority_compiler_state
+  - commodore.media_authority_use_epoch
+  - public._schema_baseline
+distributed_tables:
+  # Every API-token request touches last_used_at, so writes follow request traffic.
+  - commodore.api_tokens
+  - commodore.delegated_jwt_replays
+  - commodore.refresh_tokens
+  - commodore.auth_authorization_codes
+  - commodore.auth_device_codes
+  - commodore.wallet_auth_challenges
+  - commodore.streams
+  - commodore.clips
+  - commodore.dvr_recordings
+  - commodore.vod_assets
+  - commodore.dvr_chapter_playback
+  - commodore.artifact_catalog_tombstones
+  - commodore.artifact_creation_intents
+  - commodore.pull_source_events
+  - commodore.playback_policy_invalidation_outbox
+  - commodore.service_event_outbox
+  - commodore.domain_event_outbox
+  - commodore.stream_cleanup_outbox
+  - commodore.signing_key_audit
+  - commodore.policy_bundle_versions
+  - commodore.media_placement_changes
+  - commodore.media_authority_counters
+  - commodore.media_authority_compile_fences
+  - commodore.media_authority_versions
+  - commodore.media_authority_current
+  - commodore.media_authority_deliveries
+  - commodore.media_authority_targets
+  - commodore.media_authority_distribution
+  - commodore.media_authority_refresh_inbox
+  # Use reports, refresh work and claims scale with active authorities and traffic.
+  - commodore.media_authority_use
+  - commodore.media_authority_refresh_obligations
+  - commodore.media_authority_target_claims
+write_rate_benchmark: []

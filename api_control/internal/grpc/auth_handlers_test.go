@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"github.com/yugabyte/pgx/v5/pgconn"
 	"net/url"
 	"strings"
 	"testing"
@@ -73,6 +74,33 @@ func TestRegister(t *testing.T) {
 		}
 		if resp.GetSuccess() {
 			t.Errorf("Success = true, want false for existing user")
+		}
+	})
+
+	// A concurrent duplicate registration loses the unique email insert. Production runs the pgx driver, so the
+	// violation arrives as *pgconn.PgError and must converge like the lib/pq form did.
+	t.Run("concurrent_duplicate_converges_under_pgx", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+			WithArgs("new@example.com").
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery("COUNT").
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO commodore.users").
+			WillReturnError(&pgconn.PgError{Code: "23505", Message: "duplicate key value violates unique constraint"})
+		mock.ExpectRollback()
+
+		resp, err := s.Register(context.Background(), &commodorepb.RegisterRequest{
+			Email: "new@example.com", Password: "pw", HumanCheck: "human", Behavior: goodBehavior(),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.GetSuccess() {
+			t.Errorf("Success = false, want the converged response")
 		}
 	})
 
@@ -572,6 +600,34 @@ func TestPollDeviceAuthorization(t *testing.T) {
 			DeviceCode: devCode, ClientId: "cli",
 		})
 		wantCode(t, err, codes.FailedPrecondition)
+	})
+
+	// A poll whose write aborts with 40001 replays and still answers authorization_pending.
+	t.Run("pending_poll_replays_serialization_failure", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		for attempt := 0; attempt < 2; attempt++ {
+			mock.ExpectBegin()
+			mock.ExpectQuery("FROM commodore.auth_device_codes").
+				WithArgs(hashToken(devCode)).
+				WillReturnRows(sqlmock.NewRows(deviceCodeCols).
+					AddRow("row1", "cli", "pending", nil, nil, future, nil, 5))
+			poll := mock.ExpectExec("SET last_polled_at").WithArgs("row1")
+			if attempt == 0 {
+				poll.WillReturnError(serializationFailure())
+				mock.ExpectRollback()
+				continue
+			}
+			poll.WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+		}
+		_, err := s.PollDeviceAuthorization(context.Background(), &commodorepb.PollDeviceAuthorizationRequest{
+			DeviceCode: devCode, ClientId: "cli",
+		})
+		wantCode(t, err, codes.FailedPrecondition)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet: %v", err)
+		}
 	})
 
 	t.Run("expired_code_marks_and_reports", func(t *testing.T) {
