@@ -6,8 +6,8 @@
 #   pypi  livepeer-frameworks (sdk_python)
 #   go    github.com/Livepeer-FrameWorks/sdk-go, a mirror of sdk_go/ with a v<version> tag
 #
-# Once npm, PyPI and the Go mirror all serve the SDK version, the monorepo commit is tagged
-# sdk-v<version> locally; make verify-api-compat reads that tag once it is pushed.
+# Once npm, PyPI and the Go mirror accept the SDK version, the monorepo commit is tagged
+# sdk-v<version> locally; registry visibility may lag behind a successful submission.
 #
 # Usage:
 #   scripts/publish-packages.sh [--dry-run] [--only npm|pypi|go]
@@ -15,7 +15,7 @@
 #   --dry-run   Print the registry state and every publish, push and tag the run would do;
 #               changes nothing and runs no gates.
 #   --only X    Publish to one registry (npm, pypi or go). The gates still run, and the
-#               sdk-v tag is still created when all three registries already serve the version.
+#               sdk-v tag is still created when the other registries already have the version.
 #
 # Release procedure:
 #   1. pnpm changeset          describe the change
@@ -136,17 +136,6 @@ sdk_go_has_ref() {
   esac
 }
 
-# Polls a lookup until the registry serves the version; registry reads lag a publish by seconds.
-wait_served() {
-  local label="$1"
-  shift
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ "$("$@")" == yes ]] && return 0
-    sleep 15
-  done
-  fail "$label is still not served 150 seconds after publishing"
-}
-
 # ---------------------------------------------------------------------------
 # Local checks.
 
@@ -265,8 +254,8 @@ selected npm && [[ ${#npm_todo[@]} -gt 0 ]] && todo_npm=true
 selected pypi && [[ "$PYPI_HAS" == no ]] && todo_pypi=true
 selected go && [[ "$GO_HAS" == no ]] && todo_go=true
 
-# The SDK version is released once npm, PyPI and the Go mirror all serve it, counting what this
-# run publishes.
+# The SDK version is released once npm, PyPI and the Go mirror have it, counting successful
+# submissions from this run even when registry reads have not caught up yet.
 missing=()
 [[ "$API_HAS" == yes ]] || { $todo_npm && [[ "${npm_todo[0]}" == npm_api ]]; } || missing+=(npm)
 [[ "$PYPI_HAS" == yes ]] || $todo_pypi || missing+=(pypi)
@@ -363,21 +352,28 @@ publish_npm() {
     (cd "$ROOT/$dir" && pnpm run build) || fail "building $dir failed"
   done
 
-  local dir name version
+  local dir name version publish_log
+  local api_submitted=false
+  [[ "$API_HAS" == yes ]] && api_submitted=true
   for dir in "${npm_todo[@]}"; do
     name=$(pkg_field "$dir" name)
     version=$(pkg_field "$dir" version)
-    # The cores' workspace:^ range on the API becomes ^$VERSION when packed, so that version
-    # must be installable first. It publishes earlier in this run when it is new.
+    # The cores' workspace:^ range on the API becomes ^$VERSION when packed, so submit that
+    # version first. npm may still be processing it while the remaining packages are submitted.
     if [[ -n "$(node -p "const p = require('$ROOT/$dir/package.json'); (p.dependencies || {})['@livepeer-frameworks/api'] || ''")" ]]; then
-      [[ "$(npm_has @livepeer-frameworks/api "$VERSION")" == yes ]] ||
-        fail "@livepeer-frameworks/api@$VERSION is not on npm; $name@$version would not install (run without --only, or --only npm)"
+      $api_submitted ||
+        fail "@livepeer-frameworks/api@$VERSION was not submitted; $name@$version would not install (run without --only, or --only npm)"
     fi
     echo "Publishing $name@$version"
-    (cd "$ROOT/$dir" && pnpm publish --access public --no-git-checks) ||
+    publish_log="$WORK_DIR/npm-publish.log"
+    if (cd "$ROOT/$dir" && pnpm publish --access public --no-git-checks 2>&1) | tee "$publish_log"; then
+      :
+    elif grep -Fq "You cannot publish over the previously published versions" "$publish_log"; then
+      echo "$name@$version was already accepted by npm; continuing while registry visibility catches up."
+    else
       fail "publishing $name@$version failed; re-run to continue from here"
-    [[ "$name" == "@livepeer-frameworks/api" ]] &&
-      wait_served "@livepeer-frameworks/api@$VERSION on npm" npm_has @livepeer-frameworks/api "$VERSION"
+    fi
+    [[ "$name" == "@livepeer-frameworks/api" ]] && api_submitted=true
   done
   echo ""
 }
@@ -451,11 +447,9 @@ if $todo_go; then publish_go; fi
 
 if $todo_tag; then
   echo "=== $TAG ==="
-  wait_served "@livepeer-frameworks/api@$VERSION on npm" npm_has @livepeer-frameworks/api "$VERSION"
-  wait_served "$PYPI_PROJECT $VERSION on PyPI" pypi_has "$VERSION"
-  wait_served "sdk-go v$VERSION" sdk_go_has_ref "refs/tags/v$VERSION"
   git tag "$TAG" "$SHA"
-  echo "Tagged $TAG on ${SHA:0:12}. Push it so make verify-api-compat sees the release:"
+  echo "Tagged $TAG on ${SHA:0:12} after every registry accepted its submission."
+  echo "Registry reads may take a few minutes to catch up. Push the tag so make verify-api-compat sees the release:"
   echo "  git push origin refs/tags/$TAG"
   echo ""
 fi
