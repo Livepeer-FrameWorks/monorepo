@@ -27,8 +27,12 @@ fixtures, so they behave the same way. Every example on this page is a file in t
 CI compiles or type-checks (`tsc`, `go vet`, `mypy`).
 
 Every public root query, mutation, and subscription that is not deprecated, and every field that
-takes arguments below `Query`, has a generated typed method in each SDK. The
-[GraphQL schema reference](/builders/api-schema/) lists the method names under each root field.
+takes arguments, has a generated typed method in each SDK. A namespace root such as `analytics`,
+whose data sits behind fields that take arguments, has no method of its own; those fields have
+theirs. Fields without arguments nested deeper than a method's default selection are typed only
+through the TypeScript [custom selections](#custom-selections); in Go and Python you reach them
+with your own GraphQL document. The [GraphQL schema reference](/builders/api-schema/) lists the
+method names under each root field.
 
 | Language   | Install                                                                      | Needs                 | Registry and source                                                                                                                           |
 | ---------- | ---------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -49,16 +53,20 @@ client in Python (`client.get_stream(id=...)`). The operations come from two sou
   type reached from `Query` through single (non-list) objects. A nested operation selects the
   path from the root down to its field and takes every argument on that path as a variable: the
   `streamAnalyticsSummary(streamId:)` field under `analytics.usage.streaming` is
-  `GetStreamAnalyticsSummary(streamId, timeRange)`. Argument fields reached only through lists,
-  unions, or interfaces have no default operation.
+  `GetStreamAnalyticsSummary(streamId, timeRange)`. A field that takes arguments on a type
+  reachable only through a list, union, or interface is reached through `node(id:)` when the type
+  implements `Node`: `InfrastructureNode.metricsConnection` is
+  `GetInfrastructureNodeMetricsConnection(id, page, timeRange)`, which selects
+  `node(id:) { ... on InfrastructureNode { metricsConnection } }`.
 - **Hand-written operations.** 44 documents with a curated selection (for example `CreateStream`,
   `ListStreams`, `ListPushTargets`). A hand-written operation replaces the default operation of
-  the field it selects.
+  the field it addresses.
 
 **Names.** A default query is `Get<Field>` and a default mutation or subscription is `<Field>`,
 in PascalCase; Python uses the snake_case form (`get_stream_analytics_summary`). A nested query
 is `Get` plus its field, or `Get` plus every field on its path when another query ends in a field
-of the same name (`GetAnalyticsInfraServiceInstancesHealth`). A name equal to a schema type gets
+of the same name (`GetAnalyticsInfraServiceInstancesHealth`). A query through `node(id:)` is `Get`
+plus the type and the field (`GetInfrastructureNodeMetricsConnection`). A name equal to a schema type gets
 the operation kind as suffix (`CryptoTopupStatusMutation`). Go subscriptions are
 `Subscribe<Operation>`.
 
@@ -238,7 +246,7 @@ release it supports and supports every stable release from there on.
 
 | SDK line | Oldest supported FrameWorks release | Operations                                       |
 | -------- | ----------------------------------- | ------------------------------------------------ |
-| 0.3      | v0.3.11                             | every public root field and argument field (224) |
+| 0.3      | v0.3.11                             | 182 default and 44 hand-written operations (226) |
 | 0.2      | v0.3.11                             | the 44 hand-written operations                   |
 | 0.1      | v0.3.11                             | the 44 hand-written operations                   |
 

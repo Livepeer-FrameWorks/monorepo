@@ -22,8 +22,10 @@ type targetCoverage struct {
 	// Targets and HandWritten count, per root kind, the targets with an
 	// operation and those whose operation is hand-written.
 	Targets, HandWritten map[ast.Operation]int
-	Nested               int
-	ListOnly             []string
+	// Nested counts the argument-field targets with an operation, ViaNode
+	// those of them reached through Query.node.
+	Nested, ViaNode int
+	ListOnly        []string
 }
 
 // coverage checks that every target of schema has an operation. The loader
@@ -42,13 +44,16 @@ func coverage(schema *ast.Schema, ops []operation) targetCoverage {
 		known[key] = true
 		op, ok := byTarget[key]
 		def := schema.Types[t.field().Type.Name()]
-		if !ok && def.Kind != ast.Scalar && def.Kind != ast.Enum && len(b.targetSelection(def)) == 0 {
+		if !ok && b.isNamespace(def) {
 			c.Namespaces = append(c.Namespaces, key)
 			continue
 		}
 		c.Targets[t.Kind]++
 		if len(t.Path) > 1 {
 			c.Nested++
+		}
+		if t.On != "" {
+			c.ViaNode++
 		}
 		switch {
 		case !ok:
@@ -110,8 +115,12 @@ func runAudit(repo string) error {
 		fmt.Printf("%s: %d targets with an operation (%d hand-written); %d deprecated and %d internal root fields excluded\n",
 			root.kind, c.Targets[root.kind], c.HandWritten[root.kind], deprecated, internal)
 	}
-	fmt.Printf("argument fields below Query: %d with an operation; %d reachable only through lists, unions, or interfaces (custom selection): %s\n",
-		c.Nested, len(c.ListOnly), strings.Join(c.ListOnly, ", "))
+	listOnly := "none"
+	if len(c.ListOnly) > 0 {
+		listOnly = strings.Join(c.ListOnly, ", ")
+	}
+	fmt.Printf("argument fields below Query: %d with an operation (%d of them through Query.node); %d reachable only through lists, unions, or interfaces (custom selection): %s\n",
+		c.Nested, c.ViaNode, len(c.ListOnly), listOnly)
 	if len(c.Namespaces) > 0 {
 		fmt.Printf("namespaces without an operation of their own: %s\n", strings.Join(c.Namespaces, ", "))
 	}

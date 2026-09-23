@@ -39,9 +39,12 @@ fragments}.graphql` from the public schema (`scripts/sdkcontract/defaultops.go` 
   visited once, at its shortest distance from `Query` (schema order breaks ties), so each such field has one path. The
   operation selects the path from the root to the field, and every argument on the path is a variable: the target
   keeps its argument names, and an ancestor's argument that clashes becomes `<field><Arg>`. Variables with a schema
-  default keep it. Argument fields reached only through lists, unions, or interfaces, and paths below `Mutation` and
-  `Subscription`, are not targets. A target whose default selection is empty (a namespace such as `Query.analytics`)
-  gets no operation; its argument fields do.
+  default keep it. An argument field on a type that walk does not reach but that implements `Node` is a target through
+  `Query.node`: the operation selects `node(id: $id) { __typename ... on <Type> { <field>(...) { ... } } }`, and the
+  target is keyed with the type after `node` (`query.node.InfrastructureNode.metricsConnection`). Other argument fields
+  reached only through lists, unions, or interfaces, and paths below `Mutation` and `Subscription`, are not targets
+  (`make sdk-audit` lists them; there are none today). A target whose default selection is empty (a namespace such as
+  `Query.analytics`) gets no operation; its argument fields do.
 - **Selection.** A per-type fragment `<Type>DefaultFields`: the type's scalar and enum fields and its argument-free
   object, union, and interface fields to depth 2. Connections select `edges { cursor node }`, `pageInfo`, and
   `totalCount`. Unions and interfaces select `__typename` and each member's fragment; a member field whose type
@@ -49,19 +52,47 @@ fragments}.graphql` from the public schema (`scripts/sdkcontract/defaultops.go` 
   never part of a selection.
 - **Names.** A query is `Get<Field>`, a mutation or subscription `<Field>`, in PascalCase. A nested query is
   `Get<Field>`, or `Get` followed by every field of its path when another query target ends in a field of the same
-  name. A name equal to a public schema type gets the operation kind as suffix.
+  name. A query through `Query.node` is `Get<Type><Field>` (`GetInfrastructureNodeMetricsConnection`). A name equal
+  to a public schema type gets the operation kind as suffix.
 
 **Hand-written operations** in `pkg/graphql/public/{queries,mutations,subscriptions}` (with shared fragments in
-`fragments/`) are overrides. An operation's target is its single root field, followed down while the selection below
-the current field holds exactly one field with a selection of its own (`stream(id:) { pushTargets { ... } }` targets
-`query.stream.pushTargets`). The generator emits nothing for a target an override already addresses. The loader
-(`scripts/sdkcontract/ops.go`) fails when two documents declare the same operation name or two operations address
-the same target.
+`fragments/`) are overrides. An operation's target is the path its `# @target` comment names, directly above the
+operation:
+
+```graphql
+# @target query.stream.pushTargets
+query ListPushTargets($streamId: ID!) {
+  stream(id: $streamId) {
+    id
+    pushTargets {
+      ...PushTargetFields
+    }
+  }
+}
+```
+
+Without the annotation, the target is the operation's single root field, followed down while the selection below the
+current field holds exactly one field with a selection of its own (`stream(id:) { pushTargets { ... } }` targets
+`query.stream.pushTargets`; adding `id` beside `pushTargets` would make it `query.stream`). A path is
+`kind.field.field`, with a member type name after a field of union or interface type. The loader
+(`scripts/sdkcontract/ops.go`) fails when an annotation names a field the public schema lacks, a path the operation
+does not select, or a kind other than the operation's; when two documents declare the same operation name; or when two
+operations address the same target. The generator emits nothing for a target an override already addresses, and
+annotates its own `Query.node` operations. genqlient copies the comment into the Go doc comment, and
+`sdk_go/tools/genclient` removes it there; graphql-codegen and ariadne-codegen drop comments.
+
+`make generate-ops` also writes `generated/targets.json`, every operation's target. The SDK code generators read it to
+document each method with its target field's description, so none of them re-derives a target.
 
 The operation lint holds every document, generated or hand-written, to the public schema: it validates, selects
 `__typename` and every error member in each union selection, and uses no deprecated field, argument, or enum value.
 `make sdk-audit` fails when a target has no operation. `make sdk-manifest` depends on `generate-ops`, so the manifest
 is never built from a stale set.
+
+So each SDK has a typed method for every non-deprecated public root field (a namespace root through its argument
+fields) and every non-deprecated field that takes arguments, apart from the list-only fields `make sdk-audit` reports
+(none today). Argument-free fields nested deeper than the default selection are typed only through the TypeScript
+select client.
 
 **Custom selections** beyond the default selection:
 

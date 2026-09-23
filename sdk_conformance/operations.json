@@ -3426,6 +3426,105 @@
       }
     },
     {
+      "name": "GetInfrastructureNodeMetrics1hConnection",
+      "kind": "query",
+      "variables": {
+        "id": "id-1"
+      },
+      "response": {
+        "data": {
+          "node": {
+            "__typename": "InfrastructureNode",
+            "metrics1hConnection": {
+              "edges": [
+                {
+                  "cursor": "text",
+                  "node": {
+                    "avgCpu": 1.5,
+                    "avgDisk": 1.5,
+                    "avgMemory": 1.5,
+                    "avgShm": 1.5,
+                    "clusterId": "text",
+                    "id": "id-1",
+                    "nodeId": "text",
+                    "peakCpu": 1.5,
+                    "peakDisk": 1.5,
+                    "peakMemory": 1.5,
+                    "peakShm": 1.5,
+                    "timestamp": "2026-09-19T14:03:27Z",
+                    "totalBandwidthIn": 1.5,
+                    "totalBandwidthOut": 1.5,
+                    "wasHealthy": true
+                  }
+                }
+              ],
+              "pageInfo": {
+                "endCursor": "text",
+                "hasNextPage": true,
+                "hasPreviousPage": true,
+                "startCursor": "text"
+              },
+              "totalCount": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "GetInfrastructureNodeMetricsConnection",
+      "kind": "query",
+      "variables": {
+        "id": "id-1"
+      },
+      "response": {
+        "data": {
+          "node": {
+            "__typename": "InfrastructureNode",
+            "metricsConnection": {
+              "edges": [
+                {
+                  "cursor": "text",
+                  "node": {
+                    "clusterId": "text",
+                    "connectionsCurrent": 1,
+                    "cpuUsage": 1.5,
+                    "diskTotal": 1.5,
+                    "diskUsed": 1.5,
+                    "downSpeed": 1.5,
+                    "id": "id-1",
+                    "isHealthy": true,
+                    "latitude": 1.5,
+                    "longitude": 1.5,
+                    "memoryTotal": 1.5,
+                    "memoryUsed": 1.5,
+                    "metadata": {
+                      "key": "value"
+                    },
+                    "networkRx": 1.5,
+                    "networkTx": 1.5,
+                    "nodeId": "text",
+                    "shmTotal": 1.5,
+                    "shmUsed": 1.5,
+                    "status": "text",
+                    "streamCount": 1,
+                    "timestamp": "2026-09-19T14:03:27Z",
+                    "upSpeed": 1.5
+                  }
+                }
+              ],
+              "pageInfo": {
+                "endCursor": "text",
+                "hasNextPage": true,
+                "hasPreviousPage": true,
+                "startCursor": "text"
+              },
+              "totalCount": 1
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "GetInvoice",
       "kind": "query",
       "variables": {
@@ -8265,6 +8364,7 @@
       "response": {
         "data": {
           "stream": {
+            "id": "id-1",
             "pushTargets": [
               {
                 "createdAt": "2026-09-19T14:03:27Z",

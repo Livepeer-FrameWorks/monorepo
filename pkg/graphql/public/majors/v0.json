@@ -1177,6 +1177,20 @@
           "document": "query GetIncidentsConnection ($page: ConnectionInput, $filter: IncidentFilterInput) {\n  incidentsConnection(page: $page, filter: $filter) {\n    edges {\n      cursor\n      node {\n        ... IncidentDefaultFields\n      }\n    }\n    pageInfo {\n      ... PageInfoDefaultFields\n    }\n    totalCount\n  }\n}\nfragment IncidentDefaultFields on Incident {\n  id\n  scope\n  tenantId\n  clusterId\n  region\n  alertname\n  severity\n  status\n  resolution\n  title\n  summary\n  firingAlertCount\n  startedAt\n  lastAlertAt\n  acknowledgedAt\n  acknowledgedBy\n  assignedTo\n  resolvedAt\n  resolvedBy\n  createdAt\n  updatedAt\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
         },
         {
+          "name": "GetInfrastructureNodeMetrics1hConnection",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:957b4a1d77ab58976fc6b483a051bf2570265108cbd0d91c2388458963dca097",
+          "document": "query GetInfrastructureNodeMetrics1hConnection ($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {\n  node(id: $id) {\n    __typename\n    ... on InfrastructureNode {\n      metrics1hConnection(page: $page, timeRange: $timeRange) {\n        edges {\n          cursor\n          node {\n            ... NodeMetricHourlyDefaultFields\n          }\n        }\n        pageInfo {\n          ... PageInfoDefaultFields\n        }\n        totalCount\n      }\n    }\n  }\n}\nfragment NodeMetricHourlyDefaultFields on NodeMetricHourly {\n  id\n  timestamp\n  nodeId\n  clusterId\n  avgCpu\n  peakCpu\n  avgMemory\n  peakMemory\n  avgDisk\n  peakDisk\n  avgShm\n  peakShm\n  totalBandwidthIn\n  totalBandwidthOut\n  wasHealthy\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
+        },
+        {
+          "name": "GetInfrastructureNodeMetricsConnection",
+          "kind": "query",
+          "since": "v0.3.11",
+          "hash": "sha256:39c077630bfd3943df1036147d5d7de87523328056338e72888030af185f04be",
+          "document": "query GetInfrastructureNodeMetricsConnection ($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {\n  node(id: $id) {\n    __typename\n    ... on InfrastructureNode {\n      metricsConnection(page: $page, timeRange: $timeRange) {\n        edges {\n          cursor\n          node {\n            ... NodeMetricDefaultFields\n          }\n        }\n        pageInfo {\n          ... PageInfoDefaultFields\n        }\n        totalCount\n      }\n    }\n  }\n}\nfragment NodeMetricDefaultFields on NodeMetric {\n  id\n  timestamp\n  nodeId\n  clusterId\n  cpuUsage\n  memoryTotal\n  memoryUsed\n  diskTotal\n  diskUsed\n  shmTotal\n  shmUsed\n  networkRx\n  networkTx\n  upSpeed\n  downSpeed\n  connectionsCurrent\n  streamCount\n  status\n  isHealthy\n  latitude\n  longitude\n  metadata\n}\nfragment PageInfoDefaultFields on PageInfo {\n  startCursor\n  endCursor\n  hasNextPage\n  hasPreviousPage\n}\n"
+        },
+        {
           "name": "GetInvoice",
           "kind": "query",
           "since": "v0.3.11",
@@ -1796,8 +1810,8 @@
           "name": "ListPushTargets",
           "kind": "query",
           "since": "v0.3.11",
-          "hash": "sha256:3f2287ee725bb14d3ed2212d52c7ba2bdf710243389c3b030a6f8f11dc5aa5c1",
-          "document": "query ListPushTargets ($streamId: ID!) {\n  stream(id: $streamId) {\n    pushTargets {\n      ... PushTargetFields\n    }\n  }\n}\nfragment PushTargetFields on PushTarget {\n  id\n  streamId\n  platform\n  name\n  targetUri\n  isEnabled\n  status\n  lastError\n  reasonCode\n  lastPushedAt\n  createdAt\n}\n"
+          "hash": "sha256:e25c8d3787946a7f17ae2a5af6e053c65e7e1848933e59957f8fd36538072323",
+          "document": "query ListPushTargets ($streamId: ID!) {\n  stream(id: $streamId) {\n    id\n    pushTargets {\n      ... PushTargetFields\n    }\n  }\n}\nfragment PushTargetFields on PushTarget {\n  id\n  streamId\n  platform\n  name\n  targetUri\n  isEnabled\n  status\n  lastError\n  reasonCode\n  lastPushedAt\n  createdAt\n}\n"
         },
         {
           "name": "ListSigningKeys",

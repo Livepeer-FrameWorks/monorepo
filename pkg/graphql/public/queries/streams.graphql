@@ -28,8 +28,10 @@ query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
   }
 }
 
+# @target query.stream.pushTargets
 query ListPushTargets($streamId: ID!) {
   stream(id: $streamId) {
+    id
     pushTargets {
       ...PushTargetFields
     }

@@ -358,6 +358,9 @@ type referencePage struct {
 type referenceLayout struct {
 	schema   *ast.Schema
 	typePage map[string]string
+	// namespaces holds the root fields with no operation of their own
+	// (namespaceRoots).
+	namespaces map[string]bool
 }
 
 func (l *referenceLayout) namedTypeLink(name string) string {
@@ -415,7 +418,7 @@ func renderReferenceDomains(schema *ast.Schema, bindings map[string][]sdkBinding
 		groups[i].types = append(groups[i].types, name)
 	}
 
-	layout := &referenceLayout{schema: schema, typePage: map[string]string{}}
+	layout := &referenceLayout{schema: schema, typePage: map[string]string{}, namespaces: namespaceRoots(schema)}
 	type plannedPage struct {
 		slug, title string
 		types       []string
@@ -544,7 +547,7 @@ func renderReferenceDomains(schema *ast.Schema, bindings map[string][]sdkBinding
 	}
 	files[referenceDir+"/index.mdx"] = renderReferenceIndex(groups[len(groups)-1].types, func(i int) (referenceDomain, []rootField, []string) {
 		return groups[i].domain, groups[i].roots, groups[i].types
-	}, len(domains))
+	}, len(domains), sortedKeys(layout.namespaces))
 	return files, nil
 }
 
@@ -554,7 +557,7 @@ func (p referencePage) render() string {
 	return fmt.Sprintf("---\ntitle: %s\ndescription: %s\nsidebar:\n  order: %d\n---\n\n%s", p.Title, p.Description, p.Order, strings.TrimRight(p.Body, "\n")+"\n")
 }
 
-func renderReferenceIndex(shared []string, group func(int) (referenceDomain, []rootField, []string), domainCount int) string {
+func renderReferenceIndex(shared []string, group func(int) (referenceDomain, []rootField, []string), domainCount int, namespaces []string) string {
 	var b strings.Builder
 	b.WriteString("---\ntitle: GraphQL schema reference\ndescription: Generated public GraphQL fields and types, by domain.\nsidebar:\n  order: 0\n---\n\n")
 	fmt.Fprintf(&b, "Generated from the public schema [`%s`](%s) by `make generate-graphql-reference`. This reference covers GraphQL fields available to tenant and public clients. Operator-only and service-token-only fields, marked `@internal` in `pkg/graphql/schema.graphql`, are not part of the public schema. A field can still require a token, a role, ownership, or a product capability; read its description and the [authentication guide](/builders/api-reference/#authentication).\n\n", publicSchemaPath, publicSchemaURL)
@@ -573,8 +576,23 @@ func renderReferenceIndex(shared []string, group func(int) (referenceDomain, []r
 	b.WriteString("- Each domain page lists its root queries, mutations, and subscriptions, then the types that only that domain's root fields reach. Types reached from two or more domains are on [Shared types](" + referenceRoute + sharedDomainSlug + "/).\n")
 	b.WriteString("- A root field shows its GraphQL signature, return type, arguments with defaults, description, and deprecation. Every type name links to its definition.\n")
 	b.WriteString("- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then.\n")
-	b.WriteString("- **SDK** lists the generated operations that select a root field, with the TypeScript document, Go function, and Python method names. Python generates subscriptions in its async client only. Every root field that is not deprecated has one; a deprecated field is reachable through each SDK's raw GraphQL client. See the [SDK guide](/builders/sdks/).\n")
+	b.WriteString("- **SDK** lists the generated operations that select a root field, with the TypeScript document, Go function, and Python method names. Python generates subscriptions in its async client only. A path in the **Selects** column is the field an operation below the root addresses; a type name in it stands for an inline fragment on that type (`node.<Type>.<field>` selects `node(id:) { ... on <Type> { <field> } }`).\n")
+	b.WriteString("- Every root field that is not deprecated and returns data of its own has an operation of its own. ")
+	if len(namespaces) > 0 {
+		quoted := make([]string, len(namespaces))
+		for i, key := range namespaces {
+			quoted[i] = "`" + rootHeading(key) + "`"
+		}
+		fmt.Fprintf(&b, "A namespace root (%s) returns an object whose data sits only behind argument-taking fields, at any depth, so it has no operation of its own; each of those argument fields has one, listed under the root. ", strings.Join(quoted, ", "))
+	}
+	b.WriteString("A deprecated root field has no generated operation; send a GraphQL document through each SDK's raw client. See the [SDK guide](/builders/sdks/).\n")
 	return b.String()
+}
+
+// rootHeading turns a root key (query.analytics) into its heading
+// (Query.analytics).
+func rootHeading(key string) string {
+	return strings.ToUpper(key[:1]) + key[1:]
 }
 
 // renderRoot renders one root field as a level-3 section.
@@ -590,7 +608,7 @@ func (l *referenceLayout) renderRoot(root rootField, bindings []sdkBinding) stri
 	b.WriteString("\n```\n\n")
 	fmt.Fprintf(&b, "**Returns:** %s\n\n", l.typeLink(field.Type))
 	l.writeArguments(&b, field.Arguments)
-	writeSDKBindings(&b, field, bindings)
+	writeSDKBindings(&b, field, bindings, l.namespaces[root.key()])
 	return b.String()
 }
 
@@ -611,7 +629,14 @@ func fieldSignature(field *ast.FieldDefinition) string {
 	return b.String()
 }
 
-func writeSDKBindings(b *strings.Builder, field *ast.FieldDefinition, bindings []sdkBinding) {
+func writeSDKBindings(b *strings.Builder, field *ast.FieldDefinition, bindings []sdkBinding, namespace bool) {
+	if namespace {
+		if len(bindings) == 0 {
+			b.WriteString("**SDK:** none; this namespace has no operation of its own and no argument fields below it.\n\n")
+			return
+		}
+		b.WriteString("**SDK:** this namespace has no operation of its own; each argument field below it has one.\n\n")
+	}
 	if len(bindings) == 0 {
 		if isDeprecated(field.Directives) {
 			b.WriteString("**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.\n\n")
@@ -624,7 +649,9 @@ func writeSDKBindings(b *strings.Builder, field *ast.FieldDefinition, bindings [
 	for _, binding := range bindings {
 		nested = nested || len(binding.Path) > 1
 	}
-	b.WriteString("**SDK**\n\n")
+	if !namespace {
+		b.WriteString("**SDK**\n\n")
+	}
 	if nested {
 		b.WriteString("| Operation | Selects | TypeScript | Go | Python |\n| --- | --- | --- | --- | --- |\n")
 	} else {

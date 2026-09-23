@@ -30,9 +30,9 @@ func mustSchema(t *testing.T, text string) *ast.Schema {
 	return s
 }
 
-func mustOps(t *testing.T, text string) []operation {
+func mustOps(t *testing.T, schema *ast.Schema, text string) []operation {
 	t.Helper()
-	ops, err := parseOperations([]*ast.Source{{Name: "test.graphql", Input: text}})
+	ops, err := parseOperations(schema, []*ast.Source{{Name: "test.graphql", Input: text}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +42,9 @@ func mustOps(t *testing.T, text string) []operation {
 func TestLintRequiresTypenameAndEveryErrorMember(t *testing.T) {
 	schema := mustSchema(t, baseSchema)
 	// Two operations may not target one field, so each is its own set.
-	ops := append(mustOps(t, `
+	ops := append(mustOps(t, schema, `
 mutation Missing($input: CreateStreamInput!) { createStream(input: $input) { ... on Stream { id } ... on ValidationError { message } } }
-`), mustOps(t, `
+`), mustOps(t, schema, `
 fragment NF on NotFoundError { message resourceId }
 mutation Complete($input: CreateStreamInput!) { createStream(input: $input) { __typename ... on Stream { id } ... on ValidationError { message } ...NF } }
 `)...)
@@ -62,14 +62,15 @@ mutation Complete($input: CreateStreamInput!) { createStream(input: $input) { __
 }
 
 func TestLintRejectsDeprecatedFields(t *testing.T) {
-	problems := lintOperations(mustSchema(t, baseSchema), mustOps(t, `query Old { stream(id: "1") { legacy } }`))
+	schema := mustSchema(t, baseSchema)
+	problems := lintOperations(schema, mustOps(t, schema, `query Old { stream(id: "1") { legacy } }`))
 	if len(problems) != 1 || !strings.Contains(problems[0], "legacy is deprecated") {
 		t.Fatalf("problems = %v", problems)
 	}
 }
 
 func TestOperationDocumentsCarryOnlyTheirFragments(t *testing.T) {
-	ops := mustOps(t, `
+	ops := mustOps(t, mustSchema(t, baseSchema), `
 fragment A on Stream { id }
 fragment B on Stream { name }
 query One { stream(id: "1") { ...A } }

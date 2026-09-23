@@ -222,8 +222,10 @@ type Query {
 }
 
 // TestReferenceEveryUndeprecatedRootHasAnOperation reads the repository's
-// operations: the reference shows an SDK method for every public root field
-// the default-operation generator targets.
+// operations: every public root field that is not deprecated has an
+// operation of its own, except a namespace root (namespaceRoots), which has
+// none of its own and one per argument field below it. Deprecated roots have
+// none.
 func TestReferenceEveryUndeprecatedRootHasAnOperation(t *testing.T) {
 	schema, err := loadPublicSchema("../..", headRef)
 	if err != nil {
@@ -237,9 +239,30 @@ func TestReferenceEveryUndeprecatedRootHasAnOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	namespaces := namespaceRoots(schema)
+	if !namespaces["query.analytics"] {
+		t.Fatalf("query.analytics is not a namespace root: %v", namespaces)
+	}
 	for _, root := range publicRootFields(schema) {
-		if !isDeprecated(root.Field.Directives) && len(bindings[root.key()]) == 0 {
-			t.Errorf("%s has no SDK operation", root.key())
+		own, below := 0, 0
+		for _, binding := range bindings[root.key()] {
+			if len(binding.Path) == 1 {
+				own++
+			} else {
+				below++
+			}
+		}
+		switch {
+		case isDeprecated(root.Field.Directives):
+			if own > 0 {
+				t.Errorf("deprecated %s has an operation of its own", root.key())
+			}
+		case namespaces[root.key()]:
+			if own > 0 || below == 0 {
+				t.Errorf("namespace %s: %d operations of its own, %d below it; want 0 and at least 1", root.key(), own, below)
+			}
+		case own != 1:
+			t.Errorf("%s has %d operations of its own, want 1", root.key(), own)
 		}
 	}
 }

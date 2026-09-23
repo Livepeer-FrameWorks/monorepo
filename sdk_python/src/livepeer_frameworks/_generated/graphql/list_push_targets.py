@@ -23,6 +23,8 @@ class ListPushTargetsStream(BaseModel):
     """A live stream configuration with real-time operational metrics.
     Streams are the core entity for broadcasting and viewing live content."""
 
+    id: str = Field(description="Global unique identifier for Relay compatibility.")
+    "Global unique identifier for Relay compatibility."
     push_targets: list["ListPushTargetsStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",

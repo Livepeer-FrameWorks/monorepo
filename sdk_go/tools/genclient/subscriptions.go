@@ -24,7 +24,7 @@ const subscriptionPrefix = "Subscribe"
 // same variables and runs the subscription on the SDK's SubscriptionClient.
 // The variables go out as genqlient's input struct, so a variable marked
 // @genqlient(omitempty: true) is left out when unset exactly as in queries.
-func subscriptionFunctions(src []byte, schema *gqlast.Schema) ([]byte, error) {
+func subscriptionFunctions(src []byte, schema *gqlast.Schema, targets map[string]string) ([]byte, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "generated.go", src, parser.ParseComments)
 	if err != nil {
@@ -33,9 +33,9 @@ func subscriptionFunctions(src []byte, schema *gqlast.Schema) ([]byte, error) {
 	offset := func(p token.Pos) int { return fset.Position(p).Offset }
 	text := func(n ast.Node) string { return string(src[offset(n.Pos()):offset(n.End())]) }
 
-	operations := map[string]string{}
+	operations := map[string]bool{}
 	for _, match := range operationPattern.FindAllSubmatch(src, -1) {
-		operations[string(match[1])] = string(match[2])
+		operations[string(match[1])] = true
 	}
 
 	type edit struct {
@@ -54,11 +54,14 @@ func subscriptionFunctions(src []byte, schema *gqlast.Schema) ([]byte, error) {
 			continue
 		}
 		name := fn.Name.Name
-		query, ok := operations[name]
-		if !ok {
+		if !operations[name] {
 			return nil, fmt.Errorf("subscription %s has no %s_Operation", name, name)
 		}
-		description, descErr := operationDescription(schema, query, name)
+		target, ok := targets[name]
+		if !ok {
+			return nil, fmt.Errorf("subscription %s has no target in %s; run make generate-ops", name, targetsFile)
+		}
+		description, descErr := operationDescription(schema, target)
 		if descErr != nil {
 			return nil, fmt.Errorf("%s_Operation: %w", name, descErr)
 		}

@@ -49,7 +49,7 @@ func generateFixture(t *testing.T, handWritten string) (map[string]string, []ope
 	t.Helper()
 	schema := mustSchema(t, defaultOpsSchema)
 	hand := []*ast.Source{{Name: "pkg/graphql/public/queries/hand.graphql", Input: handWritten}}
-	handOps, err := parseOperations(hand)
+	handOps, err := parseOperations(schema, hand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func generateFixture(t *testing.T, handWritten string) (map[string]string, []ope
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := parseOperations(append(hand, generatedSources(files)...))
+	all, err := parseOperations(schema, append(hand, generatedSources(files)...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,13 +231,13 @@ query B($id: ID!) { stream(id: $id) { name } }`, "operations A and B both target
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			hand := []*ast.Source{{Name: "hand.graphql", Input: tc.doc}}
-			handOps, err := parseOperations(hand)
+			handOps, err := parseOperations(schema, hand)
 			if err == nil {
 				files, _, gerr := generateDefaultOps(schema, handOps)
 				if gerr != nil {
 					t.Fatal(gerr)
 				}
-				_, err = parseOperations(append(hand, generatedSources(files)...))
+				_, err = parseOperations(schema, append(hand, generatedSources(files)...))
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
@@ -254,14 +254,153 @@ func TestOperationTargetFollowsSingleFieldPath(t *testing.T) {
 		`query Q { stream(id: "1") { __typename owner { id } } }`:                                 "query.stream",
 		`mutation M { ping }`: "mutation.ping",
 	}
+	schema := mustSchema(t, defaultOpsSchema)
 	for doc, want := range cases {
-		ops := mustOps(t, doc)
+		ops := mustOps(t, schema, doc)
 		if ops[0].Target != want {
 			t.Errorf("%s: target %s, want %s", doc, ops[0].Target, want)
 		}
 	}
-	if _, err := parseOperations([]*ast.Source{{Name: "x.graphql", Input: `query Q { stream(id: "1") { id } summary { views } }`}}); err == nil {
+	if _, err := parseOperations(schema, []*ast.Source{{Name: "x.graphql", Input: `query Q { stream(id: "1") { id } summary { views } }`}}); err == nil {
 		t.Fatal("an operation with two root fields loaded")
+	}
+}
+
+// TestTargetAnnotationWins: a hand-written operation that selects more than
+// its target's path names the target, which then replaces that target's
+// default operation instead of the inferred one.
+func TestTargetAnnotationWins(t *testing.T) {
+	_, ops := generateFixture(t, `
+# Reads a clip with its stream's id.
+# @target query.stream.clip
+query StreamClip($streamId: ID!, $id: ID!) { stream(id: $streamId) { id clip(id: $id) { id title } } }
+`)
+	if got := opNamed(t, ops, "StreamClip").Target; got != "query.stream.clip" {
+		t.Fatalf("StreamClip targets %s, want query.stream.clip", got)
+	}
+	names := map[string]bool{}
+	for _, op := range ops {
+		names[op.Name] = true
+	}
+	if names["GetClip"] || !names["GetStream"] {
+		t.Fatalf("GetClip must be replaced and GetStream generated: %v", names)
+	}
+	// Without the annotation the same document targets query.stream.
+	inferred := mustOps(t, mustSchema(t, defaultOpsSchema), `query StreamClip($streamId: ID!, $id: ID!) { stream(id: $streamId) { id clip(id: $id) { id title } } }`)
+	if inferred[0].Target != "query.stream" {
+		t.Fatalf("inferred target %s, want query.stream", inferred[0].Target)
+	}
+}
+
+func TestTargetAnnotationMustMatchSchemaAndSelection(t *testing.T) {
+	full := mustSchema(t, `
+directive @internal(reason: String!) on FIELD_DEFINITION
+type Query { stream(id: ID!): Stream }
+type Stream { id: ID! owner: Owner clip(id: ID!): Clip secret(id: ID!): Clip @internal(reason: "service token") }
+type Owner { id: ID! }
+type Clip { id: ID! }
+`)
+	schema, err := publicSchema(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = `query Q($id: ID!) { stream(id: $id) { id clip(id: $id) { id } } }`
+	cases := map[string]struct{ annotation, want string }{
+		"unknown field":    {"# @target query.stream.nope", "Stream has no public field nope"},
+		"internal field":   {"# @target query.stream.secret", "Stream has no public field secret"},
+		"not selected":     {"# @target query.stream.owner", "the operation does not select query.stream.owner"},
+		"wrong kind":       {"# @target mutation.stream.clip", "a query operation's target is query.<field>"},
+		"two annotations":  {"# @target query.stream\n# @target query.stream.clip", "2 @target annotations"},
+		"missing path":     {"# @target", "takes exactly one path"},
+		"below the target": {"# @target query.stream.clip.id.x", "ID has no public field x"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseOperations(schema, []*ast.Source{{Name: "x.graphql", Input: tc.annotation + "\n" + body}})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+const nodeOpsSchema = `
+interface Node { id: ID! }
+input ConnectionInput { first: Int after: String }
+type Query {
+  node(id: ID!): Node
+  devices: [Device!]!
+  sites: [Site!]!
+  stream(id: ID!): Stream
+}
+type Stream implements Node { id: ID! clip(id: ID!): Clip }
+type Clip { id: ID! }
+type Device implements Node {
+  id: ID!
+  name: String!
+  metrics(page: ConnectionInput, window: Int = 60): [Metric!]!
+}
+type Metric { at: String! value: Float! }
+type Site { id: ID! usage(day: String!): Int }
+`
+
+// TestNodeTypeArgumentFieldsTargetThroughNode: an argument field on a Node
+// type the single-object walk does not reach is a target through Query.node;
+// one on a type that is not a Node stays list-only.
+func TestNodeTypeArgumentFieldsTargetThroughNode(t *testing.T) {
+	schema := mustSchema(t, nodeOpsSchema)
+	targets, listOnly := opTargets(schema)
+	keys := map[string]bool{}
+	for _, target := range targets {
+		keys[target.key()] = true
+	}
+	if !keys["query.node.Device.metrics"] || !keys["query.stream.clip"] || keys["query.node.Stream.clip"] {
+		t.Fatalf("targets = %v", keys)
+	}
+	if len(listOnly) != 1 || listOnly[0] != "Site.usage" {
+		t.Fatalf("list-only = %v", listOnly)
+	}
+
+	files, ops, err := generateDefaultOps(schema, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := parseOperations(schema, generatedSources(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := lintOperations(schema, all); len(problems) > 0 {
+		t.Fatalf("generated operations do not validate:\n%s", strings.Join(problems, "\n"))
+	}
+	for _, op := range ops {
+		if got := targetOf(all, op.Name); got != op.Target.key() {
+			t.Errorf("%s loads as %s, not its target %s", op.Name, got, op.Target.key())
+		}
+	}
+	metrics := opNamed(t, all, "GetDeviceMetrics")
+	if metrics.Target != "query.node.Device.metrics" || opNamed(t, all, "GetNode").Target != "query.node" {
+		t.Fatalf("GetDeviceMetrics = %s, GetNode = %s", metrics.Target, opNamed(t, all, "GetNode").Target)
+	}
+	queries := files[generatedOpsDir+"/queries.graphql"]
+	want := `# @target query.node.Device.metrics
+query GetDeviceMetrics(
+  $id: ID!
+  $page: ConnectionInput
+  # @genqlient(omitempty: true)
+  $window: Int = 60
+) {
+  node(id: $id) {
+    __typename
+    ... on Device {
+      metrics(page: $page, window: $window) {
+        ...MetricDefaultFields
+      }
+    }
+  }
+}
+`
+	if !strings.Contains(queries, want) {
+		t.Fatalf("GetDeviceMetrics is not\n%s\nin\n%s", want, queries)
 	}
 }
 
@@ -292,6 +431,20 @@ func TestRepoDefaultOperationsAreCurrent(t *testing.T) {
 	}
 	if missing := coverage(schema, all).Missing; len(missing) > 0 {
 		t.Fatalf("targets without an operation: %v", missing)
+	}
+	// ListPushTargets selects the stream's id beside its push targets and
+	// names its target with @target.
+	push := opNamed(t, all, "ListPushTargets")
+	if push.Target != "query.stream.pushTargets" || !strings.Contains(push.Document, "stream(id: $streamId) {\n    id\n    pushTargets {") {
+		t.Fatalf("ListPushTargets = %s\n%s", push.Target, push.Document)
+	}
+	for name, target := range map[string]string{
+		"GetInfrastructureNodeMetricsConnection":   "query.node.InfrastructureNode.metricsConnection",
+		"GetInfrastructureNodeMetrics1hConnection": "query.node.InfrastructureNode.metrics1hConnection",
+	} {
+		if got := opNamed(t, all, name).Target; got != target {
+			t.Errorf("%s targets %s, want %s", name, got, target)
+		}
 	}
 	summary := opNamed(t, all, "GetStreamAnalyticsSummary")
 	if summary.Target != "query.analytics.usage.streaming.streamAnalyticsSummary" || !strings.Contains(summary.Document, "$streamId: ID!") {

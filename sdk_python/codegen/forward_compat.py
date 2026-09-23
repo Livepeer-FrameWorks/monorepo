@@ -17,6 +17,8 @@ lists the plugin."""
 from __future__ import annotations
 
 import ast
+import functools
+import json
 from pathlib import Path
 
 from ariadne_codegen.plugins.base import Plugin
@@ -25,8 +27,10 @@ from graphql import (
     FragmentDefinitionNode,
     GraphQLEnumType,
     GraphQLInputField,
+    GraphQLInterfaceType,
     GraphQLNamedType,
     GraphQLSchema,
+    GraphQLUnionType,
     InlineFragmentNode,
     OperationDefinitionNode,
     OperationType,
@@ -299,26 +303,42 @@ def _find_selection_type(
     return visit(definition.selection_set, _definition_root(schema, definition))
 
 
+_TARGETS_FILE = Path(__file__).resolve().parents[2] / "pkg/graphql/public/generated/targets.json"
+
+
+@functools.cache
+def _targets() -> dict[str, str]:
+    """Each public operation's target, from scripts/sdkcontract (make
+    generate-ops)."""
+    targets: dict[str, str] = json.loads(_TARGETS_FILE.read_text())["targets"]
+    return targets
+
+
 def _operation_description(
     schema: GraphQLSchema, definition: OperationDefinitionNode
 ) -> str | None:
-    """The description of the field the operation targets: its root field, or
-    the last field of a path such as analytics { usage { streaming {
-    streamAnalyticsSummary(...) } } } (operationTarget in
-    scripts/sdkcontract/ops.go)."""
+    """The description of the field the operation targets. A target is
+    kind.field.field, with a member type name after a field of union or
+    interface type (query.node.InfrastructureNode.metricsConnection)."""
+    name = definition.name.value if definition.name else ""
+    target = _targets().get(name)
+    if target is None:
+        raise ValueError(f"{name}: no target in {_TARGETS_FILE}; run make generate-ops")
     parent: GraphQLNamedType | None = _definition_root(schema, definition)
-    selections = definition.selection_set.selections
     description = None
-    while parent is not None and len(selections) == 1 and isinstance(selections[0], FieldNode):
-        field = _field_map(parent).get(selections[0].name.value)
+    for segment in target.split(".")[1:]:
+        if isinstance(parent, (GraphQLUnionType, GraphQLInterfaceType)):
+            member = next(
+                (t for t in schema.get_possible_types(parent) if t.name == segment), None
+            )
+            if member is not None:
+                parent = member
+                continue
+        field = _field_map(parent).get(segment)
         if field is None:
-            break
+            raise ValueError(f"{name}: target {target} is not in the schema")
         description = field.description
-        children = selections[0].selection_set.selections if selections[0].selection_set else ()
-        if len(children) != 1 or not isinstance(children[0], FieldNode) or children[0].selection_set is None:
-            break
         parent = get_named_type(field.type)
-        selections = children
     return description
 
 

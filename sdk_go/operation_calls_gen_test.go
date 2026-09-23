@@ -245,6 +245,12 @@ var operationCalls = map[string]operationCall{
 	"GetIncidentsConnection": {GetIncidentsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetIncidentsConnection(ctx, c, arg[*ConnectionInput](v, "page"), arg[*IncidentFilterInput](v, "filter"))
 	}},
+	"GetInfrastructureNodeMetrics1hConnection": {GetInfrastructureNodeMetrics1hConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetInfrastructureNodeMetrics1hConnection(ctx, c, arg[string](v, "id"), arg[*ConnectionInput](v, "page"), arg[*TimeRangeInput](v, "timeRange"))
+	}},
+	"GetInfrastructureNodeMetricsConnection": {GetInfrastructureNodeMetricsConnection_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetInfrastructureNodeMetricsConnection(ctx, c, arg[string](v, "id"), arg[*ConnectionInput](v, "page"), arg[*TimeRangeInput](v, "timeRange"))
+	}},
 	"GetInvoice": {GetInvoice_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetInvoice(ctx, c, arg[string](v, "id"))
 	}},

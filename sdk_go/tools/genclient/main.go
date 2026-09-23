@@ -24,6 +24,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -69,16 +70,20 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	targets, err := loadTargets(config.Schema[0])
+	if err != nil {
+		return err
+	}
 	files, err := generate.Generate(config)
 	if err != nil {
 		return err
 	}
 	for name, src := range files {
 		if strings.HasSuffix(name, ".go") {
-			if src, err = subscriptionFunctions(src, schema); err != nil {
+			if src, err = subscriptionFunctions(src, schema, targets); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
-			if src, err = documentOperations(src, schema); err != nil {
+			if src, err = documentOperations(src, schema, targets); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
 			if src, err = openUnions(src); err != nil {
@@ -226,8 +231,33 @@ func loadSchema(paths []string) (*gqlast.Schema, error) {
 	return schema, nil
 }
 
-// documentOperations adds schema descriptions to the generated Go functions.
-func documentOperations(src []byte, schema *gqlast.Schema) ([]byte, error) {
+// targetsFile, next to the public schema, maps each public operation to the
+// field it targets (scripts/sdkcontract, make generate-ops).
+const targetsFile = "generated/targets.json"
+
+func loadTargets(schemaPath string) (map[string]string, error) {
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(schemaPath), targetsFile))
+	if err != nil {
+		return nil, err
+	}
+	var file struct {
+		Targets map[string]string `json:"targets"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, fmt.Errorf("%s: %w", targetsFile, err)
+	}
+	return file.Targets, nil
+}
+
+// targetAnnotation matches the "# @target <path>" line of a hand-written
+// operation (scripts/sdkcontract/ops.go), which genqlient copies into the
+// function's doc comment.
+var targetAnnotation = regexp.MustCompile(`(?m)^// @target \S+\n`)
+
+// documentOperations adds the description of each operation's target field
+// (targets, by operation name) to the generated Go functions.
+func documentOperations(src []byte, schema *gqlast.Schema, targets map[string]string) ([]byte, error) {
+	src = targetAnnotation.ReplaceAll(src, nil)
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "generated.go", src, parser.ParseComments)
 	if err != nil {
@@ -235,8 +265,12 @@ func documentOperations(src []byte, schema *gqlast.Schema) ([]byte, error) {
 	}
 	descriptions := map[string]string{}
 	for _, match := range operationPattern.FindAllSubmatch(src, -1) {
-		name, query := string(match[1]), string(match[2])
-		description, err := operationDescription(schema, query, name)
+		name := string(match[1])
+		target, ok := targets[name]
+		if !ok {
+			return nil, fmt.Errorf("%s_Operation: no target in %s; run make generate-ops", name, targetsFile)
+		}
+		description, err := operationDescription(schema, target)
 		if err != nil {
 			return nil, fmt.Errorf("%s_Operation: %w", name, err)
 		}
@@ -282,36 +316,48 @@ func documentOperations(src []byte, schema *gqlast.Schema) ([]byte, error) {
 	return format.Source(documented)
 }
 
-func operationDescription(schema *gqlast.Schema, source, operationName string) (string, error) {
-	document, errors := gqlparser.LoadQuery(schema, source)
-	if errors != nil {
-		return "", errors
+// operationDescription returns the description of the field target names:
+// kind.field.field, with a member type name after a field of union or
+// interface type (query.node.InfrastructureNode.metricsConnection).
+func operationDescription(schema *gqlast.Schema, target string) (string, error) {
+	segments := strings.Split(target, ".")
+	var parent *gqlast.Definition
+	switch segments[0] {
+	case "query":
+		parent = schema.Query
+	case "mutation":
+		parent = schema.Mutation
+	case "subscription":
+		parent = schema.Subscription
 	}
-	operation := document.Operations.ForName(operationName)
-	if operation == nil {
-		return "", fmt.Errorf("operation not found")
-	}
-	// The operation's target is its root field, or the last field of a
-	// path such as analytics { usage { streaming { streamAnalyticsSummary } } }
-	// (operationTarget in scripts/sdkcontract/ops.go).
 	description := ""
-	selections := operation.SelectionSet
-	for len(selections) == 1 {
-		field, ok := selections[0].(*gqlast.Field)
-		if !ok || field.Definition == nil {
-			break
+	for _, segment := range segments[1:] {
+		if parent == nil {
+			return "", fmt.Errorf("target %s is not in the schema", target)
 		}
-		description = field.Definition.Description
-		if len(field.SelectionSet) != 1 {
-			break
+		if parent.Kind == gqlast.Union || parent.Kind == gqlast.Interface {
+			if member := possibleType(schema, parent, segment); member != nil {
+				parent = member
+				continue
+			}
 		}
-		child, ok := field.SelectionSet[0].(*gqlast.Field)
-		if !ok || len(child.SelectionSet) == 0 {
-			break
+		field := parent.Fields.ForName(segment)
+		if field == nil {
+			return "", fmt.Errorf("target %s is not in the schema", target)
 		}
-		selections = field.SelectionSet
+		description = field.Description
+		parent = schema.Types[field.Type.Name()]
 	}
 	return description, nil
+}
+
+func possibleType(schema *gqlast.Schema, abstract *gqlast.Definition, name string) *gqlast.Definition {
+	for _, member := range schema.GetPossibleTypes(abstract) {
+		if member.Name == name {
+			return member
+		}
+	}
+	return nil
 }
 
 // openUnions rewrites genqlient output so each union accepts *UnknownMember.

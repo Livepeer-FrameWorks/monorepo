@@ -94,6 +94,12 @@ from .get_federation_summary import GetFederationSummary
 from .get_geographic_distribution import GetGeographicDistribution
 from .get_incident import GetIncident
 from .get_incidents_connection import GetIncidentsConnection
+from .get_infrastructure_node_metrics_1_h_connection import (
+    GetInfrastructureNodeMetrics1hConnection,
+)
+from .get_infrastructure_node_metrics_connection import (
+    GetInfrastructureNodeMetricsConnection,
+)
 from .get_invoice import GetInvoice
 from .get_invoices_connection import GetInvoicesConnection
 from .get_marketplace_cluster import GetMarketplaceCluster
@@ -6009,6 +6015,141 @@ class AsyncGraphQLClient(AsyncBaseClient):
         )
         data = self.get_data(response)
         return GetIncidentsConnection.model_validate(data)
+
+    async def get_infrastructure_node_metrics_1_h_connection(
+        self,
+        id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        time_range: Union[Optional[TimeRangeInput], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> GetInfrastructureNodeMetrics1hConnection:
+        """Hourly aggregated metrics for this node."""
+        query = gql("""
+            query GetInfrastructureNodeMetrics1hConnection($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+              node(id: $id) {
+                __typename
+                ... on InfrastructureNode {
+                  metrics1hConnection(page: $page, timeRange: $timeRange) {
+                    edges {
+                      cursor
+                      node {
+                        ...NodeMetricHourlyDefaultFields
+                      }
+                    }
+                    pageInfo {
+                      ...PageInfoDefaultFields
+                    }
+                    totalCount
+                  }
+                }
+              }
+            }
+
+            fragment NodeMetricHourlyDefaultFields on NodeMetricHourly {
+              id
+              timestamp
+              nodeId
+              clusterId
+              avgCpu
+              peakCpu
+              avgMemory
+              peakMemory
+              avgDisk
+              peakDisk
+              avgShm
+              peakShm
+              totalBandwidthIn
+              totalBandwidthOut
+              wasHealthy
+            }
+
+            fragment PageInfoDefaultFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            """)
+        variables: dict[str, object] = {"id": id, "page": page, "timeRange": time_range}
+        response = await self.execute(
+            query=query,
+            operation_name="GetInfrastructureNodeMetrics1hConnection",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetInfrastructureNodeMetrics1hConnection.model_validate(data)
+
+    async def get_infrastructure_node_metrics_connection(
+        self,
+        id: str,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        time_range: Union[Optional[TimeRangeInput], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> GetInfrastructureNodeMetricsConnection:
+        """Paginated time-series metrics for this node."""
+        query = gql("""
+            query GetInfrastructureNodeMetricsConnection($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+              node(id: $id) {
+                __typename
+                ... on InfrastructureNode {
+                  metricsConnection(page: $page, timeRange: $timeRange) {
+                    edges {
+                      cursor
+                      node {
+                        ...NodeMetricDefaultFields
+                      }
+                    }
+                    pageInfo {
+                      ...PageInfoDefaultFields
+                    }
+                    totalCount
+                  }
+                }
+              }
+            }
+
+            fragment NodeMetricDefaultFields on NodeMetric {
+              id
+              timestamp
+              nodeId
+              clusterId
+              cpuUsage
+              memoryTotal
+              memoryUsed
+              diskTotal
+              diskUsed
+              shmTotal
+              shmUsed
+              networkRx
+              networkTx
+              upSpeed
+              downSpeed
+              connectionsCurrent
+              streamCount
+              status
+              isHealthy
+              latitude
+              longitude
+              metadata
+            }
+
+            fragment PageInfoDefaultFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            """)
+        variables: dict[str, object] = {"id": id, "page": page, "timeRange": time_range}
+        response = await self.execute(
+            query=query,
+            operation_name="GetInfrastructureNodeMetricsConnection",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetInfrastructureNodeMetricsConnection.model_validate(data)
 
     async def get_invoice(self, id: str, **kwargs: Any) -> GetInvoice:
         """Fetch a single invoice by ID."""
@@ -17598,6 +17739,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
         query = gql("""
             query ListPushTargets($streamId: ID!) {
               stream(id: $streamId) {
+                id
                 pushTargets {
                   ...PushTargetFields
                 }

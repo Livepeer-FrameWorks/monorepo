@@ -26,8 +26,9 @@ type operation struct {
 	Document string
 	Hash     string
 	File     string
-	// Target is the field the operation addresses (operationTarget), as
-	// kind.field.field.
+	// Target is the field the operation addresses (resolveTarget), as
+	// kind.field.field, with a member type name after a field of union or
+	// interface type (query.node.InfrastructureNode.metricsConnection).
 	Target string
 }
 
@@ -35,11 +36,15 @@ type operation struct {
 // hand-written and generated, and returns one self-contained document per
 // operation, sorted by name.
 func loadOperations(repo string) ([]operation, error) {
+	schema, err := loadPublicSchema(repo, headRef)
+	if err != nil {
+		return nil, err
+	}
 	sources, err := operationSources(repo, true)
 	if err != nil {
 		return nil, err
 	}
-	return parseOperations(sources)
+	return parseOperations(schema, sources)
 }
 
 // operationSources reads the .graphql files under pkg/graphql/public except
@@ -79,10 +84,10 @@ func operationSources(repo string, withGenerated bool) ([]*ast.Source, error) {
 	return sources, nil
 }
 
-// parseOperations returns the operations of sources. Operation and fragment
-// names are unique, every operation selects one root field, and no two
-// operations address the same target.
-func parseOperations(sources []*ast.Source) ([]operation, error) {
+// parseOperations returns the operations of sources against the public
+// schema. Operation and fragment names are unique, every operation selects
+// one root field, and no two operations address the same target.
+func parseOperations(schema *ast.Schema, sources []*ast.Source) ([]operation, error) {
 	fragments := map[string]*ast.FragmentDefinition{}
 	type located struct {
 		op   *ast.OperationDefinition
@@ -120,7 +125,7 @@ func parseOperations(sources []*ast.Source) ([]operation, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s: %w", item.file, item.op.Name, err)
 		}
-		target, err := operationTarget(item.op, fragments)
+		target, err := resolveTarget(schema, item.op, fragments)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s: %w", item.file, item.op.Name, err)
 		}
@@ -149,13 +154,168 @@ func parseOperations(sources []*ast.Source) ([]operation, error) {
 	return out, nil
 }
 
+// targetAnnotation marks a comment line directly above an operation that
+// names its target explicitly: "# @target query.stream.pushTargets". The
+// three SDK code generators ignore it: genqlient reads only "# @genqlient"
+// comment directives (sdk_go/tools/genclient drops the line from the Go doc
+// comment genqlient copies it into), and graphql-codegen and ariadne-codegen
+// drop comments when they print a document.
+const targetAnnotation = "@target"
+
+// resolveTarget returns the target of op: the path its @target annotation
+// names, or, without one, the path operationTarget infers. An annotated path
+// must name public fields of schema, a union or interface member after a
+// field of that abstract type, and must be selected by op itself.
+func resolveTarget(schema *ast.Schema, op *ast.OperationDefinition, fragments map[string]*ast.FragmentDefinition) (string, error) {
+	inferred, err := operationTarget(op, fragments)
+	if err != nil {
+		return "", err
+	}
+	annotated, err := annotatedTarget(op)
+	if err != nil || annotated == "" {
+		return inferred, err
+	}
+	if err := checkTargetPath(schema, op, fragments, annotated); err != nil {
+		return "", fmt.Errorf("%s %s: %w", targetAnnotation, annotated, err)
+	}
+	return annotated, nil
+}
+
+// annotatedTarget returns the path of the @target line in the comments
+// directly above op, or "" when there is none.
+func annotatedTarget(op *ast.OperationDefinition) (string, error) {
+	if op.Comment == nil {
+		return "", nil
+	}
+	var found []string
+	for _, c := range op.Comment.List {
+		words := strings.Fields(c.Text())
+		if len(words) == 0 || words[0] != targetAnnotation {
+			continue
+		}
+		if len(words) != 2 {
+			return "", fmt.Errorf("%q: %s takes exactly one path", strings.TrimSpace(c.Text()), targetAnnotation)
+		}
+		found = append(found, words[1])
+	}
+	switch len(found) {
+	case 0:
+		return "", nil
+	case 1:
+		return found[0], nil
+	}
+	return "", fmt.Errorf("%d %s annotations; an operation has one target", len(found), targetAnnotation)
+}
+
+// checkTargetPath checks that target (kind.field.field, a member type name
+// after a field of union or interface type) exists in schema and that op
+// selects every step of it.
+func checkTargetPath(schema *ast.Schema, op *ast.OperationDefinition, fragments map[string]*ast.FragmentDefinition, target string) error {
+	segments := strings.Split(target, ".")
+	if len(segments) < 2 || segments[0] != string(op.Operation) {
+		return fmt.Errorf("a %s operation's target is %s.<field>[.<field>...]", op.Operation, op.Operation)
+	}
+	parent := rootDefinition(schema, op.Operation)
+	if parent == nil {
+		return fmt.Errorf("the public schema has no %s root", op.Operation)
+	}
+	sets := []ast.SelectionSet{op.SelectionSet}
+	for i, seg := range segments[1:] {
+		last := i == len(segments)-2
+		if member := abstractMember(schema, parent, seg); member != nil {
+			if last {
+				return fmt.Errorf("ends at type %s; a target is a field", seg)
+			}
+			var narrowed []ast.SelectionSet
+			for _, set := range sets {
+				narrowed = append(narrowed, typedSelections(set, fragments, seg)...)
+			}
+			if len(narrowed) == 0 {
+				return fmt.Errorf("the operation has no ... on %s below %s", seg, strings.Join(segments[:i+1], "."))
+			}
+			parent, sets = member, narrowed
+			continue
+		}
+		field := parent.Fields.ForName(seg)
+		if field == nil || strings.HasPrefix(seg, "__") {
+			return fmt.Errorf("%s has no public field %s", parent.Name, seg)
+		}
+		var next []ast.SelectionSet
+		selected := false
+		for _, set := range sets {
+			for _, group := range responseFields(set, fragments) {
+				for _, f := range group {
+					if f.Name == seg {
+						selected = true
+						next = append(next, f.SelectionSet)
+					}
+				}
+			}
+		}
+		if !selected {
+			return fmt.Errorf("the operation does not select %s", strings.Join(segments[:i+2], "."))
+		}
+		parent, sets = schema.Types[field.Type.Name()], next
+	}
+	return nil
+}
+
+// abstractMember returns the member named name of parent when parent is a
+// union or interface, and nil otherwise.
+func abstractMember(schema *ast.Schema, parent *ast.Definition, name string) *ast.Definition {
+	if parent.Kind != ast.Union && parent.Kind != ast.Interface {
+		return nil
+	}
+	for _, m := range schema.GetPossibleTypes(parent) {
+		if m.Name == name {
+			return m
+		}
+	}
+	return nil
+}
+
+// typedSelections returns the selection sets of the inline fragments and
+// fragment spreads in set, at any fragment depth, whose type condition is
+// typeName.
+func typedSelections(set ast.SelectionSet, fragments map[string]*ast.FragmentDefinition, typeName string) []ast.SelectionSet {
+	var out []ast.SelectionSet
+	var walk func(ast.SelectionSet, map[string]bool)
+	walk = func(set ast.SelectionSet, visiting map[string]bool) {
+		for _, sel := range set {
+			switch s := sel.(type) {
+			case *ast.InlineFragment:
+				if s.TypeCondition == typeName {
+					out = append(out, s.SelectionSet)
+					continue
+				}
+				walk(s.SelectionSet, visiting)
+			case *ast.FragmentSpread:
+				frag := fragments[s.Name]
+				if frag == nil || visiting[s.Name] {
+					continue
+				}
+				if frag.TypeCondition == typeName {
+					out = append(out, frag.SelectionSet)
+					continue
+				}
+				visiting[s.Name] = true
+				walk(frag.SelectionSet, visiting)
+				delete(visiting, s.Name)
+			}
+		}
+	}
+	walk(set, map[string]bool{})
+	return out
+}
+
 // operationTarget returns the field an operation addresses, as
 // kind.field.field: the operation's single root field, followed down while
 // the selection below the current field (fragments expanded) holds exactly
 // one field and that field has a selection of its own. A document that
 // selects stream(id:) { analytics(range:) { ... } } targets
 // query.stream.analytics; one that selects stream(id:) { id name } targets
-// query.stream.
+// query.stream. An operation whose target this rule cannot express names it
+// with a @target annotation (resolveTarget).
 func operationTarget(op *ast.OperationDefinition, fragments map[string]*ast.FragmentDefinition) (string, error) {
 	fields := responseFields(op.SelectionSet, fragments)
 	if len(fields) != 1 {

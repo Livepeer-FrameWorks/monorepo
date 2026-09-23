@@ -406,6 +406,16 @@ exports[`public API > operation manifest 1`] = `
       "kind": "query",
       "since": "v0.3.11",
     },
+    "GetInfrastructureNodeMetrics1hConnection": {
+      "hash": "sha256:957b4a1d77ab58976fc6b483a051bf2570265108cbd0d91c2388458963dca097",
+      "kind": "query",
+      "since": "v0.3.11",
+    },
+    "GetInfrastructureNodeMetricsConnection": {
+      "hash": "sha256:39c077630bfd3943df1036147d5d7de87523328056338e72888030af185f04be",
+      "kind": "query",
+      "since": "v0.3.11",
+    },
     "GetInvoice": {
       "hash": "sha256:0622ad43c7b345f99c71c83f33f4be15f2e55da785617eeaae044e5e60cbc062",
       "kind": "query",
@@ -847,7 +857,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "ListPushTargets": {
-      "hash": "sha256:3f2287ee725bb14d3ed2212d52c7ba2bdf710243389c3b030a6f8f11dc5aa5c1",
+      "hash": "sha256:e25c8d3787946a7f17ae2a5af6e053c65e7e1848933e59957f8fd36538072323",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -1273,6 +1283,8 @@ exports[`public API > root entry exports 1`] = `
   "GetGeographicDistributionDocument",
   "GetIncidentDocument",
   "GetIncidentsConnectionDocument",
+  "GetInfrastructureNodeMetrics1hConnectionDocument",
+  "GetInfrastructureNodeMetricsConnectionDocument",
   "GetInvoiceDocument",
   "GetInvoicesConnectionDocument",
   "GetMarketplaceClusterDocument",

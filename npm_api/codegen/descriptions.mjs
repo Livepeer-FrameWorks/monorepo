@@ -75,23 +75,35 @@ for (const fragment of fragments.values()) {
 for (const operation of operations.values())
   collectAliases(operation.selectionSet, operationRoot(operation));
 
-// The description of the field an operation targets: its root field, or,
-// for an operation that selects a path such as analytics { usage { streaming
-// { streamAnalyticsSummary(...) } } }, the last field of that path (the rule
-// of operationTarget in scripts/sdkcontract/ops.go).
+// Each operation's target from scripts/sdkcontract (make generate-ops):
+// kind.field.field, with a member type name after a field of union or
+// interface type (query.node.InfrastructureNode.metricsConnection).
+const targets = JSON.parse(
+  readFileSync(join(repositoryRoot, "pkg/graphql/public/generated/targets.json"), "utf8")
+).targets;
+
+// The description of the field an operation targets.
 function rootFieldDescription(operation) {
+  const target = targets[operation.name.value];
+  if (!target)
+    throw new Error(`descriptions: no target for ${operation.name.value}; run make generate-ops`);
+  const [, ...segments] = target.split(".");
   let parent = operationRoot(operation);
-  let selections = operation.selectionSet.selections;
   let description;
-  while (parent && selections.length === 1 && selections[0].kind === Kind.FIELD) {
-    const fields = isObjectType(parent) || isInterfaceType(parent) ? parent.getFields() : {};
-    const field = fields[selections[0].name.value];
-    if (!field) break;
+  for (const segment of segments) {
+    if (isUnionType(parent) || isInterfaceType(parent)) {
+      const member = schema.getPossibleTypes(parent).find((type) => type.name === segment);
+      if (member) {
+        parent = member;
+        continue;
+      }
+    }
+    const field =
+      isObjectType(parent) || isInterfaceType(parent) ? parent.getFields()[segment] : undefined;
+    if (!field)
+      throw new Error(`descriptions: ${operation.name.value}: ${target} is not in the schema`);
     description = field.description;
-    const next = selections[0].selectionSet?.selections ?? [];
-    if (next.length !== 1 || next[0].kind !== Kind.FIELD || !next[0].selectionSet) break;
     parent = getNamedType(field.type);
-    selections = next;
   }
   return description;
 }

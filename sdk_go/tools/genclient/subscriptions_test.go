@@ -94,7 +94,10 @@ type Subscription {
   firehose: Int!
 }
 `})
-	out, err := subscriptionFunctions([]byte(genqlientSubscriptions), schema)
+	out, err := subscriptionFunctions([]byte(genqlientSubscriptions), schema, map[string]string{
+		"Views":    "subscription.views",
+		"Firehose": "subscription.firehose",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +131,8 @@ type Query { ping: Int }
 type Subscription { views(sc: ID): Int! }
 `})
 	src := strings.NewReplacer("streamId", "sc", "StreamId", "Sc").Replace(genqlientSubscriptions)
-	if _, err := subscriptionFunctions([]byte(src), schema); err == nil || !strings.Contains(err.Error(), "variable named sc") {
+	targets := map[string]string{"Views": "subscription.views", "Firehose": "subscription.views"}
+	if _, err := subscriptionFunctions([]byte(src), schema, targets); err == nil || !strings.Contains(err.Error(), "variable named sc") {
 		t.Fatalf("err = %v, want a variable named sc", err)
 	}
 }

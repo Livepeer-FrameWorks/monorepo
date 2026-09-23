@@ -6025,6 +6025,92 @@ export type GetIncidentsConnectionQueryVariables = Exact<{
 export type GetIncidentsConnectionQuery = { /** Incidents raised by platform alerting on clusters the current tenant owns, newest first. */
 incidentsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, scope: IncidentScope, tenantId: string | null, clusterId: string | null, region: string | null, alertname: string, severity: string, status: IncidentStatus, resolution: IncidentResolution | null, title: string, summary: string | null, firingAlertCount: number, startedAt: string, lastAlertAt: string, acknowledgedAt: string | null, acknowledgedBy: string | null, assignedTo: string | null, resolvedAt: string | null, resolvedBy: string | null, createdAt: string, updatedAt: string } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
+export type GetInfrastructureNodeMetrics1hConnectionQueryVariables = Exact<{
+  id: string;
+  page?: ConnectionInput | null | undefined;
+  timeRange?: TimeRangeInput | null | undefined;
+}>;
+
+
+/** Hourly aggregated metrics for this node. */
+export type GetInfrastructureNodeMetrics1hConnectionQuery = { /** Fetch a single node by its global ID. */
+node:
+    | { __typename: 'APIUsageRecord' }
+    | { __typename: 'ArtifactEvent' }
+    | { __typename: 'BufferEvent' }
+    | { __typename: 'ClientMetrics5m' }
+    | { __typename: 'Clip' }
+    | { __typename: 'Cluster' }
+    | { __typename: 'ConnectionEvent' }
+    | { __typename: 'Conversation' }
+    | { __typename: 'InfrastructureNode', /** Hourly aggregated metrics for this node. */
+metrics1hConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, clusterId: string | null, avgCpu: number, peakCpu: number, avgMemory: number, peakMemory: number, avgDisk: number, peakDisk: number, avgShm: number, peakShm: number, totalBandwidthIn: number, totalBandwidthOut: number, wasHealthy: boolean } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } }
+    | { __typename: 'Message' }
+    | { __typename: 'NodeMetric' }
+    | { __typename: 'NodeMetricHourly' }
+    | { __typename: 'NodePerformance5m' }
+    | { __typename: 'ProcessingUsageRecord' }
+    | { __typename: 'QualityTierDaily' }
+    | { __typename: 'SigningKey' }
+    | { __typename: 'StorageEvent' }
+    | { __typename: 'StorageUsageRecord' }
+    | { __typename: 'Stream' }
+    | { __typename: 'StreamAnalyticsDaily' }
+    | { __typename: 'StreamConnectionHourly' }
+    | { __typename: 'StreamEvent' }
+    | { __typename: 'StreamHealth5m' }
+    | { __typename: 'StreamHealthMetric' }
+    | { __typename: 'TenantDailyStat' }
+    | { __typename: 'TrackListEvent' }
+    | { __typename: 'ViewerGeoHourly' }
+    | { __typename: 'ViewerHoursHourly' }
+    | { __typename: 'ViewerSession' }
+    | { __typename: 'VodAsset' }
+   | null };
+
+export type GetInfrastructureNodeMetricsConnectionQueryVariables = Exact<{
+  id: string;
+  page?: ConnectionInput | null | undefined;
+  timeRange?: TimeRangeInput | null | undefined;
+}>;
+
+
+/** Paginated time-series metrics for this node. */
+export type GetInfrastructureNodeMetricsConnectionQuery = { /** Fetch a single node by its global ID. */
+node:
+    | { __typename: 'APIUsageRecord' }
+    | { __typename: 'ArtifactEvent' }
+    | { __typename: 'BufferEvent' }
+    | { __typename: 'ClientMetrics5m' }
+    | { __typename: 'Clip' }
+    | { __typename: 'Cluster' }
+    | { __typename: 'ConnectionEvent' }
+    | { __typename: 'Conversation' }
+    | { __typename: 'InfrastructureNode', /** Paginated time-series metrics for this node. */
+metricsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, clusterId: string | null, cpuUsage: number, memoryTotal: number | null, memoryUsed: number | null, diskTotal: number | null, diskUsed: number | null, shmTotal: number | null, shmUsed: number | null, networkRx: number, networkTx: number, upSpeed: number | null, downSpeed: number | null, connectionsCurrent: number | null, streamCount: number | null, status: string, isHealthy: boolean | null, latitude: number | null, longitude: number | null, metadata: unknown } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } }
+    | { __typename: 'Message' }
+    | { __typename: 'NodeMetric' }
+    | { __typename: 'NodeMetricHourly' }
+    | { __typename: 'NodePerformance5m' }
+    | { __typename: 'ProcessingUsageRecord' }
+    | { __typename: 'QualityTierDaily' }
+    | { __typename: 'SigningKey' }
+    | { __typename: 'StorageEvent' }
+    | { __typename: 'StorageUsageRecord' }
+    | { __typename: 'Stream' }
+    | { __typename: 'StreamAnalyticsDaily' }
+    | { __typename: 'StreamConnectionHourly' }
+    | { __typename: 'StreamEvent' }
+    | { __typename: 'StreamHealth5m' }
+    | { __typename: 'StreamHealthMetric' }
+    | { __typename: 'TenantDailyStat' }
+    | { __typename: 'TrackListEvent' }
+    | { __typename: 'ViewerGeoHourly' }
+    | { __typename: 'ViewerHoursHourly' }
+    | { __typename: 'ViewerSession' }
+    | { __typename: 'VodAsset' }
+   | null };
+
 export type GetInvoiceQueryVariables = Exact<{
   id: string;
 }>;
@@ -9393,7 +9479,8 @@ export type ListPushTargetsQueryVariables = Exact<{
 
 /** Configured multistream push targets for this stream. */
 export type ListPushTargetsQuery = { /** Fetch a single stream by its global ID. */
-stream: { /** Configured multistream push targets for this stream. */
+stream: { /** Global unique identifier for Relay compatibility. */
+id: string, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }> } | null };
 
 export type TenantEventsSubscriptionVariables = Exact<{
@@ -20364,6 +20451,101 @@ fragment PageInfoDefaultFields on PageInfo {
   hasNextPage
   hasPreviousPage
 }`) as unknown as TypedDocumentString<GetIncidentsConnectionQuery, GetIncidentsConnectionQueryVariables>;
+/** Hourly aggregated metrics for this node. */
+export const GetInfrastructureNodeMetrics1hConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetInfrastructureNodeMetrics1hConnection($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+  node(id: $id) {
+    __typename
+    ... on InfrastructureNode {
+      metrics1hConnection(page: $page, timeRange: $timeRange) {
+        edges {
+          cursor
+          node {
+            ...NodeMetricHourlyDefaultFields
+          }
+        }
+        pageInfo {
+          ...PageInfoDefaultFields
+        }
+        totalCount
+      }
+    }
+  }
+}
+    fragment NodeMetricHourlyDefaultFields on NodeMetricHourly {
+  id
+  timestamp
+  nodeId
+  clusterId
+  avgCpu
+  peakCpu
+  avgMemory
+  peakMemory
+  avgDisk
+  peakDisk
+  avgShm
+  peakShm
+  totalBandwidthIn
+  totalBandwidthOut
+  wasHealthy
+}
+fragment PageInfoDefaultFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}`) as unknown as TypedDocumentString<GetInfrastructureNodeMetrics1hConnectionQuery, GetInfrastructureNodeMetrics1hConnectionQueryVariables>;
+/** Paginated time-series metrics for this node. */
+export const GetInfrastructureNodeMetricsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetInfrastructureNodeMetricsConnection($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+  node(id: $id) {
+    __typename
+    ... on InfrastructureNode {
+      metricsConnection(page: $page, timeRange: $timeRange) {
+        edges {
+          cursor
+          node {
+            ...NodeMetricDefaultFields
+          }
+        }
+        pageInfo {
+          ...PageInfoDefaultFields
+        }
+        totalCount
+      }
+    }
+  }
+}
+    fragment NodeMetricDefaultFields on NodeMetric {
+  id
+  timestamp
+  nodeId
+  clusterId
+  cpuUsage
+  memoryTotal
+  memoryUsed
+  diskTotal
+  diskUsed
+  shmTotal
+  shmUsed
+  networkRx
+  networkTx
+  upSpeed
+  downSpeed
+  connectionsCurrent
+  streamCount
+  status
+  isHealthy
+  latitude
+  longitude
+  metadata
+}
+fragment PageInfoDefaultFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}`) as unknown as TypedDocumentString<GetInfrastructureNodeMetricsConnectionQuery, GetInfrastructureNodeMetricsConnectionQueryVariables>;
 /** Fetch a single invoice by ID. */
 export const GetInvoiceDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetInvoice($id: ID!) {
@@ -29462,6 +29644,7 @@ fragment StreamKeyFields on StreamKey {
 export const ListPushTargetsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListPushTargets($streamId: ID!) {
   stream(id: $streamId) {
+    id
     pushTargets {
       ...PushTargetFields
     }

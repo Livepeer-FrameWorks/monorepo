@@ -37809,6 +37809,2386 @@ func (v *GetIncidentsConnectionResponse) GetIncidentsConnection() GetIncidentsCo
 	return v.IncidentsConnection
 }
 
+// GetInfrastructureNodeMetrics1hConnectionNode includes the requested fields of the GraphQL interface Node.
+//
+// GetInfrastructureNodeMetrics1hConnectionNode is implemented by the following types:
+// GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord
+// GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m
+// GetInfrastructureNodeMetrics1hConnectionNodeClip
+// GetInfrastructureNodeMetrics1hConnectionNodeCluster
+// GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeConversation
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode
+// GetInfrastructureNodeMetrics1hConnectionNodeMessage
+// GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric
+// GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly
+// GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m
+// GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord
+// GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily
+// GetInfrastructureNodeMetrics1hConnectionNodeSigningKey
+// GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord
+// GetInfrastructureNodeMetrics1hConnectionNodeStream
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric
+// GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat
+// GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerSession
+// GetInfrastructureNodeMetrics1hConnectionNodeVodAsset
+// The GraphQL type's documentation follows.
+//
+// Relay-style global node interface.
+// All fetchable objects implement this interface and can be retrieved by their global ID.
+type GetInfrastructureNodeMetrics1hConnectionNode interface {
+	implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeClip) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeCluster) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeConversation) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeMessage) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeSigningKey) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStream) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerSession) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeVodAsset) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+
+func __unmarshalGetInfrastructureNodeMetrics1hConnectionNode(b []byte, v *GetInfrastructureNodeMetrics1hConnectionNode) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "APIUsageRecord":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "ArtifactEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent)
+		return json.Unmarshal(b, *v)
+	case "BufferEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent)
+		return json.Unmarshal(b, *v)
+	case "ClientMetrics5m":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m)
+		return json.Unmarshal(b, *v)
+	case "Clip":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeClip)
+		return json.Unmarshal(b, *v)
+	case "Cluster":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeCluster)
+		return json.Unmarshal(b, *v)
+	case "ConnectionEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent)
+		return json.Unmarshal(b, *v)
+	case "Conversation":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeConversation)
+		return json.Unmarshal(b, *v)
+	case "InfrastructureNode":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode)
+		return json.Unmarshal(b, *v)
+	case "Message":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeMessage)
+		return json.Unmarshal(b, *v)
+	case "NodeMetric":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric)
+		return json.Unmarshal(b, *v)
+	case "NodeMetricHourly":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly)
+		return json.Unmarshal(b, *v)
+	case "NodePerformance5m":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m)
+		return json.Unmarshal(b, *v)
+	case "ProcessingUsageRecord":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "QualityTierDaily":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily)
+		return json.Unmarshal(b, *v)
+	case "SigningKey":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeSigningKey)
+		return json.Unmarshal(b, *v)
+	case "StorageEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent)
+		return json.Unmarshal(b, *v)
+	case "StorageUsageRecord":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "Stream":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStream)
+		return json.Unmarshal(b, *v)
+	case "StreamAnalyticsDaily":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily)
+		return json.Unmarshal(b, *v)
+	case "StreamConnectionHourly":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly)
+		return json.Unmarshal(b, *v)
+	case "StreamEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent)
+		return json.Unmarshal(b, *v)
+	case "StreamHealth5m":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m)
+		return json.Unmarshal(b, *v)
+	case "StreamHealthMetric":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric)
+		return json.Unmarshal(b, *v)
+	case "TenantDailyStat":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat)
+		return json.Unmarshal(b, *v)
+	case "TrackListEvent":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent)
+		return json.Unmarshal(b, *v)
+	case "ViewerGeoHourly":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly)
+		return json.Unmarshal(b, *v)
+	case "ViewerHoursHourly":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly)
+		return json.Unmarshal(b, *v)
+	case "ViewerSession":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeViewerSession)
+		return json.Unmarshal(b, *v)
+	case "VodAsset":
+		*v = new(GetInfrastructureNodeMetrics1hConnectionNodeVodAsset)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing Node.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalGetInfrastructureNodeMetrics1hConnectionNode(v *GetInfrastructureNodeMetrics1hConnectionNode) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord:
+		typename = "APIUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent:
+		typename = "ArtifactEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent:
+		typename = "BufferEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m:
+		typename = "ClientMetrics5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeClip:
+		typename = "Clip"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeClip
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeCluster:
+		typename = "Cluster"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeCluster
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent:
+		typename = "ConnectionEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeConversation:
+		typename = "Conversation"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeConversation
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode:
+		typename = "InfrastructureNode"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeMessage:
+		typename = "Message"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeMessage
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric:
+		typename = "NodeMetric"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly:
+		typename = "NodeMetricHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m:
+		typename = "NodePerformance5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord:
+		typename = "ProcessingUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily:
+		typename = "QualityTierDaily"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeSigningKey:
+		typename = "SigningKey"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeSigningKey
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent:
+		typename = "StorageEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord:
+		typename = "StorageUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStream:
+		typename = "Stream"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStream
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily:
+		typename = "StreamAnalyticsDaily"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly:
+		typename = "StreamConnectionHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent:
+		typename = "StreamEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m:
+		typename = "StreamHealth5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric:
+		typename = "StreamHealthMetric"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat:
+		typename = "TenantDailyStat"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent:
+		typename = "TrackListEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly:
+		typename = "ViewerGeoHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly:
+		typename = "ViewerHoursHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeViewerSession:
+		typename = "ViewerSession"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeViewerSession
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetrics1hConnectionNodeVodAsset:
+		typename = "VodAsset"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetrics1hConnectionNodeVodAsset
+		}{typename, v}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for GetInfrastructureNodeMetrics1hConnectionNode: "%T"`, v)
+	}
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord includes the requested fields of the GraphQL type APIUsageRecord.
+type GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent includes the requested fields of the GraphQL type ArtifactEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent includes the requested fields of the GraphQL type BufferEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m includes the requested fields of the GraphQL type ClientMetrics5m.
+type GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeClip includes the requested fields of the GraphQL type Clip.
+// The GraphQL type's documentation follows.
+//
+// A video clip extracted from a live stream's DVR buffer.
+// Clips are created from recorded stream segments and stored for playback.
+type GetInfrastructureNodeMetrics1hConnectionNodeClip struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeClip.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeClip) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetrics1hConnectionNodeCluster includes the requested fields of the GraphQL type Cluster.
+// The GraphQL type's documentation follows.
+//
+// A streaming cluster containing one or more infrastructure nodes.
+// Clusters provide isolated capacity for streaming workloads.
+type GetInfrastructureNodeMetrics1hConnectionNodeCluster struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeCluster.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeCluster) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent includes the requested fields of the GraphQL type ConnectionEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeConversation includes the requested fields of the GraphQL type Conversation.
+// The GraphQL type's documentation follows.
+//
+// A support conversation between tenant and support team.
+// Conversations can contain multiple messages and have a status.
+type GetInfrastructureNodeMetrics1hConnectionNodeConversation struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeConversation.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeConversation) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode includes the requested fields of the GraphQL type InfrastructureNode.
+// The GraphQL type's documentation follows.
+//
+// An infrastructure node in a cluster (edge server, origin, transcoder).
+// Nodes handle stream ingest, transcoding, and delivery to viewers.
+type GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode struct {
+	Typename *string `json:"__typename"`
+	// Hourly aggregated metrics for this node.
+	Metrics1hConnection GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection `json:"metrics1hConnection"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMetrics1hConnection returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode.Metrics1hConnection, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode) GetMetrics1hConnection() GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection {
+	return v.Metrics1hConnection
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection includes the requested fields of the GraphQL type NodeMetrics1hConnection.
+type GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection struct {
+	Edges      []GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge `json:"edges"`
+	PageInfo   GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo                    `json:"pageInfo"`
+	TotalCount int                                                                                                          `json:"totalCount"`
+}
+
+// GetEdges returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection.Edges, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection) GetEdges() []GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection) GetPageInfo() GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge includes the requested fields of the GraphQL type NodeMetricHourlyEdge.
+type GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge struct {
+	Cursor string                                                                                                                         `json:"cursor"`
+	Node   GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly `json:"node"`
+}
+
+// GetCursor returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge.Node, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdge) GetNode() GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly {
+	return v.Node
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly includes the requested fields of the GraphQL type NodeMetricHourly.
+type GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly struct {
+	NodeMetricHourlyDefaultFields `json:"-"`
+}
+
+// GetId returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.Id, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetId() string {
+	return v.NodeMetricHourlyDefaultFields.Id
+}
+
+// GetTimestamp returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.Timestamp, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetTimestamp() time.Time {
+	return v.NodeMetricHourlyDefaultFields.Timestamp
+}
+
+// GetNodeId returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.NodeId, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetNodeId() string {
+	return v.NodeMetricHourlyDefaultFields.NodeId
+}
+
+// GetClusterId returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.ClusterId, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetClusterId() *string {
+	return v.NodeMetricHourlyDefaultFields.ClusterId
+}
+
+// GetAvgCpu returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.AvgCpu, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetAvgCpu() float64 {
+	return v.NodeMetricHourlyDefaultFields.AvgCpu
+}
+
+// GetPeakCpu returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.PeakCpu, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetPeakCpu() float64 {
+	return v.NodeMetricHourlyDefaultFields.PeakCpu
+}
+
+// GetAvgMemory returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.AvgMemory, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetAvgMemory() float64 {
+	return v.NodeMetricHourlyDefaultFields.AvgMemory
+}
+
+// GetPeakMemory returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.PeakMemory, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetPeakMemory() float64 {
+	return v.NodeMetricHourlyDefaultFields.PeakMemory
+}
+
+// GetAvgDisk returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.AvgDisk, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetAvgDisk() float64 {
+	return v.NodeMetricHourlyDefaultFields.AvgDisk
+}
+
+// GetPeakDisk returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.PeakDisk, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetPeakDisk() float64 {
+	return v.NodeMetricHourlyDefaultFields.PeakDisk
+}
+
+// GetAvgShm returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.AvgShm, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetAvgShm() float64 {
+	return v.NodeMetricHourlyDefaultFields.AvgShm
+}
+
+// GetPeakShm returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.PeakShm, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetPeakShm() float64 {
+	return v.NodeMetricHourlyDefaultFields.PeakShm
+}
+
+// GetTotalBandwidthIn returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.TotalBandwidthIn, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetTotalBandwidthIn() float64 {
+	return v.NodeMetricHourlyDefaultFields.TotalBandwidthIn
+}
+
+// GetTotalBandwidthOut returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.TotalBandwidthOut, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetTotalBandwidthOut() float64 {
+	return v.NodeMetricHourlyDefaultFields.TotalBandwidthOut
+}
+
+// GetWasHealthy returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly.WasHealthy, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) GetWasHealthy() bool {
+	return v.NodeMetricHourlyDefaultFields.WasHealthy
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NodeMetricHourlyDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly struct {
+	Id string `json:"id"`
+
+	Timestamp time.Time `json:"timestamp"`
+
+	NodeId string `json:"nodeId"`
+
+	ClusterId *string `json:"clusterId"`
+
+	AvgCpu float64 `json:"avgCpu"`
+
+	PeakCpu float64 `json:"peakCpu"`
+
+	AvgMemory float64 `json:"avgMemory"`
+
+	PeakMemory float64 `json:"peakMemory"`
+
+	AvgDisk float64 `json:"avgDisk"`
+
+	PeakDisk float64 `json:"peakDisk"`
+
+	AvgShm float64 `json:"avgShm"`
+
+	PeakShm float64 `json:"peakShm"`
+
+	TotalBandwidthIn float64 `json:"totalBandwidthIn"`
+
+	TotalBandwidthOut float64 `json:"totalBandwidthOut"`
+
+	WasHealthy bool `json:"wasHealthy"`
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly, error) {
+	var retval __premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionEdgesNodeMetricHourlyEdgeNodeNodeMetricHourly
+
+	retval.Id = v.NodeMetricHourlyDefaultFields.Id
+	retval.Timestamp = v.NodeMetricHourlyDefaultFields.Timestamp
+	retval.NodeId = v.NodeMetricHourlyDefaultFields.NodeId
+	retval.ClusterId = v.NodeMetricHourlyDefaultFields.ClusterId
+	retval.AvgCpu = v.NodeMetricHourlyDefaultFields.AvgCpu
+	retval.PeakCpu = v.NodeMetricHourlyDefaultFields.PeakCpu
+	retval.AvgMemory = v.NodeMetricHourlyDefaultFields.AvgMemory
+	retval.PeakMemory = v.NodeMetricHourlyDefaultFields.PeakMemory
+	retval.AvgDisk = v.NodeMetricHourlyDefaultFields.AvgDisk
+	retval.PeakDisk = v.NodeMetricHourlyDefaultFields.PeakDisk
+	retval.AvgShm = v.NodeMetricHourlyDefaultFields.AvgShm
+	retval.PeakShm = v.NodeMetricHourlyDefaultFields.PeakShm
+	retval.TotalBandwidthIn = v.NodeMetricHourlyDefaultFields.TotalBandwidthIn
+	retval.TotalBandwidthOut = v.NodeMetricHourlyDefaultFields.TotalBandwidthOut
+	retval.WasHealthy = v.NodeMetricHourlyDefaultFields.WasHealthy
+	return &retval, nil
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo struct {
+	PageInfoDefaultFields `json:"-"`
+}
+
+// GetStartCursor returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoDefaultFields.StartCursor
+}
+
+// GetEndCursor returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoDefaultFields.EndCursor
+}
+
+// GetHasNextPage returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoDefaultFields.HasNextPage
+}
+
+// GetHasPreviousPage returns GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoDefaultFields.HasPreviousPage
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo, error) {
+	var retval __premarshalGetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNodeMetrics1hConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoDefaultFields.StartCursor
+	retval.EndCursor = v.PageInfoDefaultFields.EndCursor
+	retval.HasNextPage = v.PageInfoDefaultFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoDefaultFields.HasPreviousPage
+	return &retval, nil
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeMessage includes the requested fields of the GraphQL type Message.
+// The GraphQL type's documentation follows.
+//
+// A message within a support conversation.
+type GetInfrastructureNodeMetrics1hConnectionNodeMessage struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeMessage.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeMessage) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric includes the requested fields of the GraphQL type NodeMetric.
+type GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly includes the requested fields of the GraphQL type NodeMetricHourly.
+type GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m includes the requested fields of the GraphQL type NodePerformance5m.
+type GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord includes the requested fields of the GraphQL type ProcessingUsageRecord.
+type GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily includes the requested fields of the GraphQL type QualityTierDaily.
+type GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeSigningKey includes the requested fields of the GraphQL type SigningKey.
+// The GraphQL type's documentation follows.
+//
+// A customer-managed signing key for issuing viewer playback JWTs. The private
+// key is returned exactly once at creation time (in CreateSigningKeySuccess);
+// FrameWorks stores only the public key. Up to 10 active keys per tenant.
+type GetInfrastructureNodeMetrics1hConnectionNodeSigningKey struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeSigningKey.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeSigningKey) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent includes the requested fields of the GraphQL type StorageEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord includes the requested fields of the GraphQL type StorageUsageRecord.
+type GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type GetInfrastructureNodeMetrics1hConnectionNodeStream struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStream.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStream) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily includes the requested fields of the GraphQL type StreamAnalyticsDaily.
+type GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly includes the requested fields of the GraphQL type StreamConnectionHourly.
+type GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent includes the requested fields of the GraphQL type StreamEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m includes the requested fields of the GraphQL type StreamHealth5m.
+type GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric includes the requested fields of the GraphQL type StreamHealthMetric.
+type GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat includes the requested fields of the GraphQL type TenantDailyStat.
+type GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent includes the requested fields of the GraphQL type TrackListEvent.
+type GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly includes the requested fields of the GraphQL type ViewerGeoHourly.
+type GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly includes the requested fields of the GraphQL type ViewerHoursHourly.
+type GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeViewerSession includes the requested fields of the GraphQL type ViewerSession.
+type GetInfrastructureNodeMetrics1hConnectionNodeViewerSession struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeViewerSession.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerSession) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionNodeVodAsset includes the requested fields of the GraphQL type VodAsset.
+// The GraphQL type's documentation follows.
+//
+// A Video-on-Demand asset uploaded by the tenant.
+// VOD assets can be played back using the playbackId in playback URLs.
+type GetInfrastructureNodeMetrics1hConnectionNodeVodAsset struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetrics1hConnectionNodeVodAsset.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionNodeVodAsset) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetrics1hConnectionResponse is returned by GetInfrastructureNodeMetrics1hConnection on success.
+type GetInfrastructureNodeMetrics1hConnectionResponse struct {
+	// Fetch a single node by its global ID.
+	Node *GetInfrastructureNodeMetrics1hConnectionNode `json:"-"`
+}
+
+// GetNode returns GetInfrastructureNodeMetrics1hConnectionResponse.Node, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetrics1hConnectionResponse) GetNode() *GetInfrastructureNodeMetrics1hConnectionNode {
+	return v.Node
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetrics1hConnectionResponse
+		Node json.RawMessage `json:"node"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetrics1hConnectionResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.Node
+		src := firstPass.Node
+		if len(src) != 0 && string(src) != "null" {
+			*dst = new(GetInfrastructureNodeMetrics1hConnectionNode)
+			err = __unmarshalGetInfrastructureNodeMetrics1hConnectionNode(
+				src, *dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal GetInfrastructureNodeMetrics1hConnectionResponse.Node: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetrics1hConnectionResponse struct {
+	Node json.RawMessage `json:"node"`
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetrics1hConnectionResponse) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetrics1hConnectionResponse, error) {
+	var retval __premarshalGetInfrastructureNodeMetrics1hConnectionResponse
+
+	{
+
+		dst := &retval.Node
+		src := v.Node
+		if src != nil {
+			var err error
+			*dst, err = __marshalGetInfrastructureNodeMetrics1hConnectionNode(
+				src)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"unable to marshal GetInfrastructureNodeMetrics1hConnectionResponse.Node: %w", err)
+			}
+		}
+	}
+	return &retval, nil
+}
+
+// GetInfrastructureNodeMetricsConnectionNode includes the requested fields of the GraphQL interface Node.
+//
+// GetInfrastructureNodeMetricsConnectionNode is implemented by the following types:
+// GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord
+// GetInfrastructureNodeMetricsConnectionNodeArtifactEvent
+// GetInfrastructureNodeMetricsConnectionNodeBufferEvent
+// GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m
+// GetInfrastructureNodeMetricsConnectionNodeClip
+// GetInfrastructureNodeMetricsConnectionNodeCluster
+// GetInfrastructureNodeMetricsConnectionNodeConnectionEvent
+// GetInfrastructureNodeMetricsConnectionNodeConversation
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode
+// GetInfrastructureNodeMetricsConnectionNodeMessage
+// GetInfrastructureNodeMetricsConnectionNodeNodeMetric
+// GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly
+// GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m
+// GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord
+// GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily
+// GetInfrastructureNodeMetricsConnectionNodeSigningKey
+// GetInfrastructureNodeMetricsConnectionNodeStorageEvent
+// GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord
+// GetInfrastructureNodeMetricsConnectionNodeStream
+// GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily
+// GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly
+// GetInfrastructureNodeMetricsConnectionNodeStreamEvent
+// GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m
+// GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric
+// GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat
+// GetInfrastructureNodeMetricsConnectionNodeTrackListEvent
+// GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly
+// GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly
+// GetInfrastructureNodeMetricsConnectionNodeViewerSession
+// GetInfrastructureNodeMetricsConnectionNodeVodAsset
+// The GraphQL type's documentation follows.
+//
+// Relay-style global node interface.
+// All fetchable objects implement this interface and can be retrieved by their global ID.
+type GetInfrastructureNodeMetricsConnectionNode interface {
+	implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeArtifactEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeBufferEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeClip) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeCluster) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeConnectionEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeConversation) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeMessage) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeSigningKey) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStorageEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStream) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeTrackListEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerSession) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+func (v *GetInfrastructureNodeMetricsConnectionNodeVodAsset) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
+}
+
+func __unmarshalGetInfrastructureNodeMetricsConnectionNode(b []byte, v *GetInfrastructureNodeMetricsConnectionNode) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "APIUsageRecord":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "ArtifactEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeArtifactEvent)
+		return json.Unmarshal(b, *v)
+	case "BufferEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeBufferEvent)
+		return json.Unmarshal(b, *v)
+	case "ClientMetrics5m":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m)
+		return json.Unmarshal(b, *v)
+	case "Clip":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeClip)
+		return json.Unmarshal(b, *v)
+	case "Cluster":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeCluster)
+		return json.Unmarshal(b, *v)
+	case "ConnectionEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeConnectionEvent)
+		return json.Unmarshal(b, *v)
+	case "Conversation":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeConversation)
+		return json.Unmarshal(b, *v)
+	case "InfrastructureNode":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode)
+		return json.Unmarshal(b, *v)
+	case "Message":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeMessage)
+		return json.Unmarshal(b, *v)
+	case "NodeMetric":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeNodeMetric)
+		return json.Unmarshal(b, *v)
+	case "NodeMetricHourly":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly)
+		return json.Unmarshal(b, *v)
+	case "NodePerformance5m":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m)
+		return json.Unmarshal(b, *v)
+	case "ProcessingUsageRecord":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "QualityTierDaily":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily)
+		return json.Unmarshal(b, *v)
+	case "SigningKey":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeSigningKey)
+		return json.Unmarshal(b, *v)
+	case "StorageEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStorageEvent)
+		return json.Unmarshal(b, *v)
+	case "StorageUsageRecord":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord)
+		return json.Unmarshal(b, *v)
+	case "Stream":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStream)
+		return json.Unmarshal(b, *v)
+	case "StreamAnalyticsDaily":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily)
+		return json.Unmarshal(b, *v)
+	case "StreamConnectionHourly":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly)
+		return json.Unmarshal(b, *v)
+	case "StreamEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStreamEvent)
+		return json.Unmarshal(b, *v)
+	case "StreamHealth5m":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m)
+		return json.Unmarshal(b, *v)
+	case "StreamHealthMetric":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric)
+		return json.Unmarshal(b, *v)
+	case "TenantDailyStat":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat)
+		return json.Unmarshal(b, *v)
+	case "TrackListEvent":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeTrackListEvent)
+		return json.Unmarshal(b, *v)
+	case "ViewerGeoHourly":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly)
+		return json.Unmarshal(b, *v)
+	case "ViewerHoursHourly":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly)
+		return json.Unmarshal(b, *v)
+	case "ViewerSession":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeViewerSession)
+		return json.Unmarshal(b, *v)
+	case "VodAsset":
+		*v = new(GetInfrastructureNodeMetricsConnectionNodeVodAsset)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing Node.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalGetInfrastructureNodeMetricsConnectionNode(v *GetInfrastructureNodeMetricsConnectionNode) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord:
+		typename = "APIUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeArtifactEvent:
+		typename = "ArtifactEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeArtifactEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeBufferEvent:
+		typename = "BufferEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeBufferEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m:
+		typename = "ClientMetrics5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeClip:
+		typename = "Clip"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeClip
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeCluster:
+		typename = "Cluster"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeCluster
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeConnectionEvent:
+		typename = "ConnectionEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeConnectionEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeConversation:
+		typename = "Conversation"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeConversation
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode:
+		typename = "InfrastructureNode"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeMessage:
+		typename = "Message"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeMessage
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeNodeMetric:
+		typename = "NodeMetric"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeNodeMetric
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly:
+		typename = "NodeMetricHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m:
+		typename = "NodePerformance5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord:
+		typename = "ProcessingUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily:
+		typename = "QualityTierDaily"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeSigningKey:
+		typename = "SigningKey"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeSigningKey
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStorageEvent:
+		typename = "StorageEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStorageEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord:
+		typename = "StorageUsageRecord"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStream:
+		typename = "Stream"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStream
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily:
+		typename = "StreamAnalyticsDaily"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly:
+		typename = "StreamConnectionHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStreamEvent:
+		typename = "StreamEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStreamEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m:
+		typename = "StreamHealth5m"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric:
+		typename = "StreamHealthMetric"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat:
+		typename = "TenantDailyStat"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeTrackListEvent:
+		typename = "TrackListEvent"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeTrackListEvent
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly:
+		typename = "ViewerGeoHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly:
+		typename = "ViewerHoursHourly"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeViewerSession:
+		typename = "ViewerSession"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeViewerSession
+		}{typename, v}
+		return json.Marshal(result)
+	case *GetInfrastructureNodeMetricsConnectionNodeVodAsset:
+		typename = "VodAsset"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*GetInfrastructureNodeMetricsConnectionNodeVodAsset
+		}{typename, v}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for GetInfrastructureNodeMetricsConnectionNode: "%T"`, v)
+	}
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord includes the requested fields of the GraphQL type APIUsageRecord.
+type GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeArtifactEvent includes the requested fields of the GraphQL type ArtifactEvent.
+type GetInfrastructureNodeMetricsConnectionNodeArtifactEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeArtifactEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeArtifactEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeBufferEvent includes the requested fields of the GraphQL type BufferEvent.
+type GetInfrastructureNodeMetricsConnectionNodeBufferEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeBufferEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeBufferEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m includes the requested fields of the GraphQL type ClientMetrics5m.
+type GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeClip includes the requested fields of the GraphQL type Clip.
+// The GraphQL type's documentation follows.
+//
+// A video clip extracted from a live stream's DVR buffer.
+// Clips are created from recorded stream segments and stored for playback.
+type GetInfrastructureNodeMetricsConnectionNodeClip struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeClip.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeClip) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetricsConnectionNodeCluster includes the requested fields of the GraphQL type Cluster.
+// The GraphQL type's documentation follows.
+//
+// A streaming cluster containing one or more infrastructure nodes.
+// Clusters provide isolated capacity for streaming workloads.
+type GetInfrastructureNodeMetricsConnectionNodeCluster struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeCluster.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeCluster) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetricsConnectionNodeConnectionEvent includes the requested fields of the GraphQL type ConnectionEvent.
+type GetInfrastructureNodeMetricsConnectionNodeConnectionEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeConnectionEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeConnectionEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeConversation includes the requested fields of the GraphQL type Conversation.
+// The GraphQL type's documentation follows.
+//
+// A support conversation between tenant and support team.
+// Conversations can contain multiple messages and have a status.
+type GetInfrastructureNodeMetricsConnectionNodeConversation struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeConversation.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeConversation) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode includes the requested fields of the GraphQL type InfrastructureNode.
+// The GraphQL type's documentation follows.
+//
+// An infrastructure node in a cluster (edge server, origin, transcoder).
+// Nodes handle stream ingest, transcoding, and delivery to viewers.
+type GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode struct {
+	Typename *string `json:"__typename"`
+	// Paginated time-series metrics for this node.
+	MetricsConnection GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection `json:"metricsConnection"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode) GetTypename() *string {
+	return v.Typename
+}
+
+// GetMetricsConnection returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode.MetricsConnection, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode) GetMetricsConnection() GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection {
+	return v.MetricsConnection
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection includes the requested fields of the GraphQL type NodeMetricsConnection.
+type GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection struct {
+	Edges      []GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge `json:"edges"`
+	PageInfo   GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo              `json:"pageInfo"`
+	TotalCount int                                                                                                `json:"totalCount"`
+}
+
+// GetEdges returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection.Edges, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection) GetEdges() []GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge {
+	return v.Edges
+}
+
+// GetPageInfo returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection) GetPageInfo() GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnection) GetTotalCount() int {
+	return v.TotalCount
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge includes the requested fields of the GraphQL type NodeMetricEdge.
+type GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge struct {
+	Cursor string                                                                                                         `json:"cursor"`
+	Node   GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric `json:"node"`
+}
+
+// GetCursor returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge.Cursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge) GetCursor() string {
+	return v.Cursor
+}
+
+// GetNode returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge.Node, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdge) GetNode() GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric {
+	return v.Node
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric includes the requested fields of the GraphQL type NodeMetric.
+type GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric struct {
+	NodeMetricDefaultFields `json:"-"`
+}
+
+// GetId returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Id, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetId() string {
+	return v.NodeMetricDefaultFields.Id
+}
+
+// GetTimestamp returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Timestamp, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetTimestamp() time.Time {
+	return v.NodeMetricDefaultFields.Timestamp
+}
+
+// GetNodeId returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.NodeId, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetNodeId() string {
+	return v.NodeMetricDefaultFields.NodeId
+}
+
+// GetClusterId returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.ClusterId, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetClusterId() *string {
+	return v.NodeMetricDefaultFields.ClusterId
+}
+
+// GetCpuUsage returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.CpuUsage, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetCpuUsage() float64 {
+	return v.NodeMetricDefaultFields.CpuUsage
+}
+
+// GetMemoryTotal returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.MemoryTotal, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetMemoryTotal() *float64 {
+	return v.NodeMetricDefaultFields.MemoryTotal
+}
+
+// GetMemoryUsed returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.MemoryUsed, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetMemoryUsed() *float64 {
+	return v.NodeMetricDefaultFields.MemoryUsed
+}
+
+// GetDiskTotal returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.DiskTotal, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetDiskTotal() *float64 {
+	return v.NodeMetricDefaultFields.DiskTotal
+}
+
+// GetDiskUsed returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.DiskUsed, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetDiskUsed() *float64 {
+	return v.NodeMetricDefaultFields.DiskUsed
+}
+
+// GetShmTotal returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.ShmTotal, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetShmTotal() *float64 {
+	return v.NodeMetricDefaultFields.ShmTotal
+}
+
+// GetShmUsed returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.ShmUsed, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetShmUsed() *float64 {
+	return v.NodeMetricDefaultFields.ShmUsed
+}
+
+// GetNetworkRx returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.NetworkRx, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetNetworkRx() float64 {
+	return v.NodeMetricDefaultFields.NetworkRx
+}
+
+// GetNetworkTx returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.NetworkTx, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetNetworkTx() float64 {
+	return v.NodeMetricDefaultFields.NetworkTx
+}
+
+// GetUpSpeed returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.UpSpeed, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetUpSpeed() *float64 {
+	return v.NodeMetricDefaultFields.UpSpeed
+}
+
+// GetDownSpeed returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.DownSpeed, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetDownSpeed() *float64 {
+	return v.NodeMetricDefaultFields.DownSpeed
+}
+
+// GetConnectionsCurrent returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.ConnectionsCurrent, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetConnectionsCurrent() *int {
+	return v.NodeMetricDefaultFields.ConnectionsCurrent
+}
+
+// GetStreamCount returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.StreamCount, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetStreamCount() *int {
+	return v.NodeMetricDefaultFields.StreamCount
+}
+
+// GetStatus returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Status, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetStatus() string {
+	return v.NodeMetricDefaultFields.Status
+}
+
+// GetIsHealthy returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.IsHealthy, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetIsHealthy() *bool {
+	return v.NodeMetricDefaultFields.IsHealthy
+}
+
+// GetLatitude returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Latitude, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetLatitude() *float64 {
+	return v.NodeMetricDefaultFields.Latitude
+}
+
+// GetLongitude returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Longitude, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetLongitude() *float64 {
+	return v.NodeMetricDefaultFields.Longitude
+}
+
+// GetMetadata returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric.Metadata, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) GetMetadata() *json.RawMessage {
+	return v.NodeMetricDefaultFields.Metadata
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.NodeMetricDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric struct {
+	Id string `json:"id"`
+
+	Timestamp time.Time `json:"timestamp"`
+
+	NodeId string `json:"nodeId"`
+
+	ClusterId *string `json:"clusterId"`
+
+	CpuUsage float64 `json:"cpuUsage"`
+
+	MemoryTotal *float64 `json:"memoryTotal"`
+
+	MemoryUsed *float64 `json:"memoryUsed"`
+
+	DiskTotal *float64 `json:"diskTotal"`
+
+	DiskUsed *float64 `json:"diskUsed"`
+
+	ShmTotal *float64 `json:"shmTotal"`
+
+	ShmUsed *float64 `json:"shmUsed"`
+
+	NetworkRx float64 `json:"networkRx"`
+
+	NetworkTx float64 `json:"networkTx"`
+
+	UpSpeed *float64 `json:"upSpeed"`
+
+	DownSpeed *float64 `json:"downSpeed"`
+
+	ConnectionsCurrent *int `json:"connectionsCurrent"`
+
+	StreamCount *int `json:"streamCount"`
+
+	Status string `json:"status"`
+
+	IsHealthy *bool `json:"isHealthy"`
+
+	Latitude *float64 `json:"latitude"`
+
+	Longitude *float64 `json:"longitude"`
+
+	Metadata *json.RawMessage `json:"metadata"`
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric, error) {
+	var retval __premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionEdgesNodeMetricEdgeNodeNodeMetric
+
+	retval.Id = v.NodeMetricDefaultFields.Id
+	retval.Timestamp = v.NodeMetricDefaultFields.Timestamp
+	retval.NodeId = v.NodeMetricDefaultFields.NodeId
+	retval.ClusterId = v.NodeMetricDefaultFields.ClusterId
+	retval.CpuUsage = v.NodeMetricDefaultFields.CpuUsage
+	retval.MemoryTotal = v.NodeMetricDefaultFields.MemoryTotal
+	retval.MemoryUsed = v.NodeMetricDefaultFields.MemoryUsed
+	retval.DiskTotal = v.NodeMetricDefaultFields.DiskTotal
+	retval.DiskUsed = v.NodeMetricDefaultFields.DiskUsed
+	retval.ShmTotal = v.NodeMetricDefaultFields.ShmTotal
+	retval.ShmUsed = v.NodeMetricDefaultFields.ShmUsed
+	retval.NetworkRx = v.NodeMetricDefaultFields.NetworkRx
+	retval.NetworkTx = v.NodeMetricDefaultFields.NetworkTx
+	retval.UpSpeed = v.NodeMetricDefaultFields.UpSpeed
+	retval.DownSpeed = v.NodeMetricDefaultFields.DownSpeed
+	retval.ConnectionsCurrent = v.NodeMetricDefaultFields.ConnectionsCurrent
+	retval.StreamCount = v.NodeMetricDefaultFields.StreamCount
+	retval.Status = v.NodeMetricDefaultFields.Status
+	retval.IsHealthy = v.NodeMetricDefaultFields.IsHealthy
+	retval.Latitude = v.NodeMetricDefaultFields.Latitude
+	retval.Longitude = v.NodeMetricDefaultFields.Longitude
+	retval.Metadata = v.NodeMetricDefaultFields.Metadata
+	return &retval, nil
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo struct {
+	PageInfoDefaultFields `json:"-"`
+}
+
+// GetStartCursor returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoDefaultFields.StartCursor
+}
+
+// GetEndCursor returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoDefaultFields.EndCursor
+}
+
+// GetHasNextPage returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoDefaultFields.HasNextPage
+}
+
+// GetHasPreviousPage returns GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoDefaultFields.HasPreviousPage
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo, error) {
+	var retval __premarshalGetInfrastructureNodeMetricsConnectionNodeInfrastructureNodeMetricsConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoDefaultFields.StartCursor
+	retval.EndCursor = v.PageInfoDefaultFields.EndCursor
+	retval.HasNextPage = v.PageInfoDefaultFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoDefaultFields.HasPreviousPage
+	return &retval, nil
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeMessage includes the requested fields of the GraphQL type Message.
+// The GraphQL type's documentation follows.
+//
+// A message within a support conversation.
+type GetInfrastructureNodeMetricsConnectionNodeMessage struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeMessage.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeMessage) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetricsConnectionNodeNodeMetric includes the requested fields of the GraphQL type NodeMetric.
+type GetInfrastructureNodeMetricsConnectionNodeNodeMetric struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeNodeMetric.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetric) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly includes the requested fields of the GraphQL type NodeMetricHourly.
+type GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m includes the requested fields of the GraphQL type NodePerformance5m.
+type GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord includes the requested fields of the GraphQL type ProcessingUsageRecord.
+type GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily includes the requested fields of the GraphQL type QualityTierDaily.
+type GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeSigningKey includes the requested fields of the GraphQL type SigningKey.
+// The GraphQL type's documentation follows.
+//
+// A customer-managed signing key for issuing viewer playback JWTs. The private
+// key is returned exactly once at creation time (in CreateSigningKeySuccess);
+// FrameWorks stores only the public key. Up to 10 active keys per tenant.
+type GetInfrastructureNodeMetricsConnectionNodeSigningKey struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeSigningKey.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeSigningKey) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStorageEvent includes the requested fields of the GraphQL type StorageEvent.
+type GetInfrastructureNodeMetricsConnectionNodeStorageEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStorageEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStorageEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord includes the requested fields of the GraphQL type StorageUsageRecord.
+type GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type GetInfrastructureNodeMetricsConnectionNodeStream struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStream.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStream) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily includes the requested fields of the GraphQL type StreamAnalyticsDaily.
+type GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly includes the requested fields of the GraphQL type StreamConnectionHourly.
+type GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStreamEvent includes the requested fields of the GraphQL type StreamEvent.
+type GetInfrastructureNodeMetricsConnectionNodeStreamEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStreamEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m includes the requested fields of the GraphQL type StreamHealth5m.
+type GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric includes the requested fields of the GraphQL type StreamHealthMetric.
+type GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat includes the requested fields of the GraphQL type TenantDailyStat.
+type GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeTrackListEvent includes the requested fields of the GraphQL type TrackListEvent.
+type GetInfrastructureNodeMetricsConnectionNodeTrackListEvent struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeTrackListEvent.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeTrackListEvent) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly includes the requested fields of the GraphQL type ViewerGeoHourly.
+type GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly includes the requested fields of the GraphQL type ViewerHoursHourly.
+type GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeViewerSession includes the requested fields of the GraphQL type ViewerSession.
+type GetInfrastructureNodeMetricsConnectionNodeViewerSession struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeViewerSession.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeViewerSession) GetTypename() *string {
+	return v.Typename
+}
+
+// GetInfrastructureNodeMetricsConnectionNodeVodAsset includes the requested fields of the GraphQL type VodAsset.
+// The GraphQL type's documentation follows.
+//
+// A Video-on-Demand asset uploaded by the tenant.
+// VOD assets can be played back using the playbackId in playback URLs.
+type GetInfrastructureNodeMetricsConnectionNodeVodAsset struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns GetInfrastructureNodeMetricsConnectionNodeVodAsset.Typename, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionNodeVodAsset) GetTypename() *string { return v.Typename }
+
+// GetInfrastructureNodeMetricsConnectionResponse is returned by GetInfrastructureNodeMetricsConnection on success.
+type GetInfrastructureNodeMetricsConnectionResponse struct {
+	// Fetch a single node by its global ID.
+	Node *GetInfrastructureNodeMetricsConnectionNode `json:"-"`
+}
+
+// GetNode returns GetInfrastructureNodeMetricsConnectionResponse.Node, and is useful for accessing the field via an interface.
+func (v *GetInfrastructureNodeMetricsConnectionResponse) GetNode() *GetInfrastructureNodeMetricsConnectionNode {
+	return v.Node
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetInfrastructureNodeMetricsConnectionResponse
+		Node json.RawMessage `json:"node"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetInfrastructureNodeMetricsConnectionResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.Node
+		src := firstPass.Node
+		if len(src) != 0 && string(src) != "null" {
+			*dst = new(GetInfrastructureNodeMetricsConnectionNode)
+			err = __unmarshalGetInfrastructureNodeMetricsConnectionNode(
+				src, *dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal GetInfrastructureNodeMetricsConnectionResponse.Node: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalGetInfrastructureNodeMetricsConnectionResponse struct {
+	Node json.RawMessage `json:"node"`
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetInfrastructureNodeMetricsConnectionResponse) __premarshalJSON() (*__premarshalGetInfrastructureNodeMetricsConnectionResponse, error) {
+	var retval __premarshalGetInfrastructureNodeMetricsConnectionResponse
+
+	{
+
+		dst := &retval.Node
+		src := v.Node
+		if src != nil {
+			var err error
+			*dst, err = __marshalGetInfrastructureNodeMetricsConnectionNode(
+				src)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"unable to marshal GetInfrastructureNodeMetricsConnectionResponse.Node: %w", err)
+			}
+		}
+	}
+	return &retval, nil
+}
+
 // GetInvoiceInvoice includes the requested fields of the GraphQL type Invoice.
 // The GraphQL type's documentation follows.
 //
@@ -67825,9 +70205,14 @@ func (v *ListPushTargetsResponse) GetStream() *ListPushTargetsStream { return v.
 // A live stream configuration with real-time operational metrics.
 // Streams are the core entity for broadcasting and viewing live content.
 type ListPushTargetsStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ListPushTargetsStreamPushTargetsPushTarget `json:"pushTargets"`
 }
+
+// GetId returns ListPushTargetsStream.Id, and is useful for accessing the field via an interface.
+func (v *ListPushTargetsStream) GetId() string { return v.Id }
 
 // GetPushTargets returns ListPushTargetsStream.PushTargets, and is useful for accessing the field via an interface.
 func (v *ListPushTargetsStream) GetPushTargets() []ListPushTargetsStreamPushTargetsPushTarget {
@@ -118703,6 +121088,42 @@ func (v *__GetIncidentsConnectionInput) GetPage() *ConnectionInput { return v.Pa
 // GetFilter returns __GetIncidentsConnectionInput.Filter, and is useful for accessing the field via an interface.
 func (v *__GetIncidentsConnectionInput) GetFilter() *IncidentFilterInput { return v.Filter }
 
+// __GetInfrastructureNodeMetrics1hConnectionInput is used internally by genqlient
+type __GetInfrastructureNodeMetrics1hConnectionInput struct {
+	Id        string           `json:"id"`
+	Page      *ConnectionInput `json:"page"`
+	TimeRange *TimeRangeInput  `json:"timeRange"`
+}
+
+// GetId returns __GetInfrastructureNodeMetrics1hConnectionInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetrics1hConnectionInput) GetId() string { return v.Id }
+
+// GetPage returns __GetInfrastructureNodeMetrics1hConnectionInput.Page, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetrics1hConnectionInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetTimeRange returns __GetInfrastructureNodeMetrics1hConnectionInput.TimeRange, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetrics1hConnectionInput) GetTimeRange() *TimeRangeInput {
+	return v.TimeRange
+}
+
+// __GetInfrastructureNodeMetricsConnectionInput is used internally by genqlient
+type __GetInfrastructureNodeMetricsConnectionInput struct {
+	Id        string           `json:"id"`
+	Page      *ConnectionInput `json:"page"`
+	TimeRange *TimeRangeInput  `json:"timeRange"`
+}
+
+// GetId returns __GetInfrastructureNodeMetricsConnectionInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetricsConnectionInput) GetId() string { return v.Id }
+
+// GetPage returns __GetInfrastructureNodeMetricsConnectionInput.Page, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetricsConnectionInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetTimeRange returns __GetInfrastructureNodeMetricsConnectionInput.TimeRange, and is useful for accessing the field via an interface.
+func (v *__GetInfrastructureNodeMetricsConnectionInput) GetTimeRange() *TimeRangeInput {
+	return v.TimeRange
+}
+
 // __GetInvoiceInput is used internally by genqlient
 type __GetInvoiceInput struct {
 	Id string `json:"id"`
@@ -126437,6 +128858,169 @@ func GetIncidentsConnection(
 	}
 
 	data_ = &GetIncidentsConnectionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetInfrastructureNodeMetrics1hConnection.
+const GetInfrastructureNodeMetrics1hConnection_Operation = `
+query GetInfrastructureNodeMetrics1hConnection ($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+	node(id: $id) {
+		__typename
+		... on InfrastructureNode {
+			metrics1hConnection(page: $page, timeRange: $timeRange) {
+				edges {
+					cursor
+					node {
+						... NodeMetricHourlyDefaultFields
+					}
+				}
+				pageInfo {
+					... PageInfoDefaultFields
+				}
+				totalCount
+			}
+		}
+	}
+}
+fragment NodeMetricHourlyDefaultFields on NodeMetricHourly {
+	id
+	timestamp
+	nodeId
+	clusterId
+	avgCpu
+	peakCpu
+	avgMemory
+	peakMemory
+	avgDisk
+	peakDisk
+	avgShm
+	peakShm
+	totalBandwidthIn
+	totalBandwidthOut
+	wasHealthy
+}
+fragment PageInfoDefaultFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// GetInfrastructureNodeMetrics1hConnection executes the corresponding GraphQL operation.
+//
+// Hourly aggregated metrics for this node.
+func GetInfrastructureNodeMetrics1hConnection(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	page *ConnectionInput,
+	timeRange *TimeRangeInput,
+) (data_ *GetInfrastructureNodeMetrics1hConnectionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetInfrastructureNodeMetrics1hConnection",
+		Query:  GetInfrastructureNodeMetrics1hConnection_Operation,
+		Variables: &__GetInfrastructureNodeMetrics1hConnectionInput{
+			Id:        id,
+			Page:      page,
+			TimeRange: timeRange,
+		},
+	}
+
+	data_ = &GetInfrastructureNodeMetrics1hConnectionResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetInfrastructureNodeMetricsConnection.
+const GetInfrastructureNodeMetricsConnection_Operation = `
+query GetInfrastructureNodeMetricsConnection ($id: ID!, $page: ConnectionInput, $timeRange: TimeRangeInput) {
+	node(id: $id) {
+		__typename
+		... on InfrastructureNode {
+			metricsConnection(page: $page, timeRange: $timeRange) {
+				edges {
+					cursor
+					node {
+						... NodeMetricDefaultFields
+					}
+				}
+				pageInfo {
+					... PageInfoDefaultFields
+				}
+				totalCount
+			}
+		}
+	}
+}
+fragment NodeMetricDefaultFields on NodeMetric {
+	id
+	timestamp
+	nodeId
+	clusterId
+	cpuUsage
+	memoryTotal
+	memoryUsed
+	diskTotal
+	diskUsed
+	shmTotal
+	shmUsed
+	networkRx
+	networkTx
+	upSpeed
+	downSpeed
+	connectionsCurrent
+	streamCount
+	status
+	isHealthy
+	latitude
+	longitude
+	metadata
+}
+fragment PageInfoDefaultFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// GetInfrastructureNodeMetricsConnection executes the corresponding GraphQL operation.
+//
+// Paginated time-series metrics for this node.
+func GetInfrastructureNodeMetricsConnection(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+	page *ConnectionInput,
+	timeRange *TimeRangeInput,
+) (data_ *GetInfrastructureNodeMetricsConnectionResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetInfrastructureNodeMetricsConnection",
+		Query:  GetInfrastructureNodeMetricsConnection_Operation,
+		Variables: &__GetInfrastructureNodeMetricsConnectionInput{
+			Id:        id,
+			Page:      page,
+			TimeRange: timeRange,
+		},
+	}
+
+	data_ = &GetInfrastructureNodeMetricsConnectionResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -135700,6 +138284,7 @@ func ListDeveloperTokens(
 const ListPushTargets_Operation = `
 query ListPushTargets ($streamId: ID!) {
 	stream(id: $streamId) {
+		id
 		pushTargets {
 			... PushTargetFields
 		}
@@ -140447,6 +143032,10 @@ func (v *UnknownMember) implementsGraphQLInterfaceEnableWebhookEndpointEnableWeb
 func (v *UnknownMember) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }

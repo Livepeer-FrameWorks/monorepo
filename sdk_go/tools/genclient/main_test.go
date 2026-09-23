@@ -17,9 +17,9 @@ type Query {
   viewerCount: Int!
 }
 `})
-	generated := []byte("package example\n\nconst ViewerCount_Operation = `query ViewerCount { viewerCount }`\n\nfunc ViewerCount() {}\n")
+	generated := []byte("package example\n\nconst ViewerCount_Operation = `query ViewerCount { viewerCount }`\n\n// @target query.viewerCount\nfunc ViewerCount() {}\n")
 
-	documented, err := documentOperations(generated, schema)
+	documented, err := documentOperations(generated, schema, map[string]string{"ViewerCount": "query.viewerCount"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +33,12 @@ type Query {
 			t.Fatalf("generated output is missing %q:\n%s", expected, output)
 		}
 	}
+	if strings.Contains(output, "@target") {
+		t.Fatalf("the @target annotation reached the Go doc comment:\n%s", output)
+	}
+	if _, err := documentOperations(generated, schema, nil); err == nil {
+		t.Fatal("an operation without a target was documented")
+	}
 }
 
 func TestDocumentGeneratedOperations(t *testing.T) {
@@ -41,16 +47,27 @@ func TestDocumentGeneratedOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	description, err := operationDescription(
-		schema,
-		`mutation CreateStream($input: CreateStreamInput!) { createStream(input: $input) { __typename } }`,
-		"CreateStream",
-	)
+	targets, err := loadTargets("../../../pkg/graphql/public/schema.public.graphql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	description, err := operationDescription(schema, targets["CreateStream"])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if description == "" {
 		t.Fatal("createStream has no schema description")
+	}
+	// ListPushTargets selects stream { id pushTargets } and targets
+	// pushTargets; the node operations target a field behind ... on.
+	for name, want := range map[string]string{
+		"ListPushTargets":                        "Configured multistream push targets for this stream.",
+		"GetInfrastructureNodeMetricsConnection": "Paginated time-series metrics for this node.",
+	} {
+		got, descErr := operationDescription(schema, targets[name])
+		if descErr != nil || got != want {
+			t.Errorf("%s: description %q (%v), want %q", name, got, descErr, want)
+		}
 	}
 	generated, err := os.ReadFile("../../generated.go")
 	if err != nil {
@@ -67,7 +84,7 @@ func TestDocumentGeneratedOperations(t *testing.T) {
 		t.Fatal("CreateStream operation was not extracted")
 	}
 
-	documented, err := documentOperations(generated, schema)
+	documented, err := documentOperations(generated, schema, targets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,13 +106,15 @@ type Analytics {
 }
 type Views { total: Int! unique: Int! }
 `})
-	description, err := operationDescription(schema,
-		`query GetViews($streamId: ID!) { analytics { views(streamId: $streamId) { total unique } } }`, "GetViews")
+	description, err := operationDescription(schema, "query.analytics.views")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if description != "Views of one stream." {
 		t.Fatalf("description = %q", description)
+	}
+	if _, err := operationDescription(schema, "query.analytics.missing"); err == nil {
+		t.Fatal("a target outside the schema was described")
 	}
 }
 

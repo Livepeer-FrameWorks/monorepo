@@ -13,7 +13,7 @@ type Platform { id: ID! }
 type Analytics { usage(streamId: ID!): Usage }
 type Usage { views: Int! }
 `)
-	ops := mustOps(t, `
+	ops := mustOps(t, schema, `
 query GetStream($id: ID!) { stream(id: $id) { id } }
 query GetUsage($streamId: ID!) { analytics { usage(streamId: $streamId) { views } } }
 `)

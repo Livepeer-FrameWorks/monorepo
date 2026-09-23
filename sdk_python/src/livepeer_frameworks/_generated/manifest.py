@@ -91,6 +91,8 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "GetGeographicDistribution": {"kind": "query", "since": "v0.3.11"},
     "GetIncident": {"kind": "query", "since": "v0.3.11"},
     "GetIncidentsConnection": {"kind": "query", "since": "v0.3.11"},
+    "GetInfrastructureNodeMetrics1hConnection": {"kind": "query", "since": "v0.3.11"},
+    "GetInfrastructureNodeMetricsConnection": {"kind": "query", "since": "v0.3.11"},
     "GetInvoice": {"kind": "query", "since": "v0.3.11"},
     "GetInvoicesConnection": {"kind": "query", "since": "v0.3.11"},
     "GetMarketplaceCluster": {"kind": "query", "since": "v0.3.11"},
