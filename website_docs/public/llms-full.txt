@@ -8614,7 +8614,7 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 
 - Each domain page lists its root queries, mutations, and subscriptions, then the types that only that domain's root fields reach. Types reached from two or more domains are on [Shared types](/builders/api-schema/shared/).
 - A root field shows its GraphQL signature, return type, arguments with defaults, description, and deprecation. Every type name links to its definition.
-- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then.
+- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then. An SDK operation whose root or selected path has such a field is marked the same way in the **SDK** table and in its SDK doc comment; an SDK release on the same line may drop it.
 - **SDK** lists the generated operations that select a root field, with the TypeScript document, Go function, and Python method names. Python generates subscriptions in its async client only. A path in the **Selects** column is the field an operation below the root addresses; a type name in it stands for an inline fragment on that type (`node.<Type>.<field>` selects `node(id:) { ... on <Type> { <field> } }`).
 - Every root field that is not deprecated and returns data of its own has an operation of its own. A namespace root (`Query.analytics`) returns an object whose data sits only behind argument-taking fields, at any depth, so it has no operation of its own; each of those argument fields has one, listed under the root. A deprecated root field has no generated operation; send a GraphQL document through each SDK's raw client. See the [SDK guide](/builders/sdks/).
 
@@ -31948,7 +31948,7 @@ Read by `api_gateway/cmd/bridge`.
 | `BRAND_DOMAIN` | string |  |  | v0.3.0 | Platform root domain for global streaming host names when cluster routing carries no base URL. Re-read after an env-file reload. |
 | `TRUSTED_PROXY_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs or IPs of reverse proxies whose forwarding headers identify the client. Re-read after an env-file reload. |
 | `USAGE_HASH_SECRET` | string |  | secret | v0.3.0 | HMAC key for the user and API token hashes in API usage records. Bridge, Commodore, Purser, and Quartermaster must share one value, so the token hash a domain event records joins Bridge's usage rows for the same token. Empty in Bridge uses a random per-process key: hashes change on restart and match no domain event. |
-| `GRAPHQL_COMPLEXITY_LIMIT` | integer | `1000` |  | v0.3.0 | Maximum GraphQL operation complexity. 0 disables the limit. |
+| `GRAPHQL_COMPLEXITY_LIMIT` | integer | `2000` |  | v0.3.0 | Maximum GraphQL operation complexity. 0 disables the limit. |
 | `GRAPHQL_MAX_DEPTH` | integer | `10` |  | v0.3.0 | Maximum GraphQL selection depth. 0 disables the limit. |
 | `GRAPHQL_PLAYGROUND_ENABLED` | string |  |  | v0.3.0 | Serves the GraphQL playground at /graphql/playground when true. Empty enables it unless GIN_MODE is release. |
 | `TELEMETRY_TOKEN_SECRET` | string |  | secret | v0.3.0 | Shared key that verifies player telemetry tokens. Empty drops serving-cluster attribution from player telemetry. |
