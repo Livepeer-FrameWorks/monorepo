@@ -1,0 +1,1010 @@
+---
+title: Queries
+description: Generated GraphQL query reference.
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/)
+
+## analytics
+
+Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time).
+
+**Returns:** `Analytics!` ([Analytics](/builders/api-schema/types-a-f/#analytics))
+
+**SDK:** Raw GraphQL only
+
+## balanceTransactionsConnection
+
+List balance transactions for the tenant with pagination.
+
+**Returns:** `BalanceTransactionsConnection!` ([BalanceTransactionsConnection](/builders/api-schema/types-a-f/#balancetransactionsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `transactionType`: `String` — Filter by transaction type: topup, usage, refund, adjustment.
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput)) — Time range to query.
+
+## billingDetails
+
+Get billing details for the current tenant. Email and address are required before funding or postpaid setup. A VAT/tax identifier is optional customer-supplied data and is not automatically verified.
+
+**Returns:** `BillingDetails` ([BillingDetails](/builders/api-schema/types-a-f/#billingdetails))
+
+**SDK:** Raw GraphQL only
+
+## billingStatus
+
+Get the current billing status including subscription tier and usage.
+
+**Returns:** `BillingStatus` ([BillingStatus](/builders/api-schema/types-a-f/#billingstatus))
+
+**SDK:** Raw GraphQL only
+
+## billingTiers
+
+List available billing tiers and their pricing.
+
+**Returns:** `[BillingTier!]` ([BillingTier](/builders/api-schema/types-a-f/#billingtier))
+
+**SDK:** Raw GraphQL only
+
+## capabilities
+
+What the current tenant can use, built only from gates the platform enforces. Describes enforcement; it never grants access itself.
+
+**Returns:** `Capabilities!` ([Capabilities](/builders/api-schema/types-a-f/#capabilities))
+
+**SDK:** Raw GraphQL only
+
+## clip
+
+Fetch a single clip by its global ID.
+
+**Returns:** `Clip` ([Clip](/builders/api-schema/types-a-f/#clip))
+
+**Typed SDK document:** `GetClip`
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the clip.
+
+## cluster
+
+Fetch a single cluster by ID.
+
+**Returns:** `Cluster` ([Cluster](/builders/api-schema/types-a-f/#cluster))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The cluster ID.
+
+## clusterInvites
+
+List invites for a cluster.
+
+**Returns:** `[ClusterInvite!]!` ([ClusterInvite](/builders/api-schema/types-a-f/#clusterinvite))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use clusterInvitesConnection instead
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+## clusterInvitesConnection
+
+List invites for a cluster (paginated).
+
+**Returns:** `ClusterInviteConnection!` ([ClusterInviteConnection](/builders/api-schema/types-a-f/#clusterinviteconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `clusterId`: `ID!` — The cluster ID.
+
+## clusterMediaConsent
+
+**Returns:** `MediaCapacityConsentResult!` ([MediaCapacityConsentResult](/builders/api-schema/types-m-r/#mediacapacityconsentresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+## clusterMediaConsentChange
+
+**Returns:** `MediaCapacityConsentChangeResult!` ([MediaCapacityConsentChangeResult](/builders/api-schema/types-m-r/#mediacapacityconsentchangeresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!`
+- `idempotencyKey`: `String!`
+
+## clustersAccess
+
+List clusters the tenant has access to.
+
+**Returns:** `[ClusterAccess!]` ([ClusterAccess](/builders/api-schema/types-a-f/#clusteraccess))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use clustersAccessConnection instead
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+## clustersAccessConnection
+
+List clusters the tenant has access to (paginated).
+
+**Returns:** `ClusterAccessConnection!` ([ClusterAccessConnection](/builders/api-schema/types-a-f/#clusteraccessconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## clustersAvailable
+
+List available clusters for subscription.
+
+**Returns:** `[AvailableCluster!]` ([AvailableCluster](/builders/api-schema/types-a-f/#availablecluster))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use clustersAvailableConnection instead
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+## clustersAvailableConnection
+
+List available clusters for subscription (paginated).
+
+**Returns:** `AvailableClusterConnection!` ([AvailableClusterConnection](/builders/api-schema/types-a-f/#availableclusterconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## clustersConnection
+
+List clusters the tenant has access to.
+
+**Returns:** `ClustersConnection!` ([ClustersConnection](/builders/api-schema/types-a-f/#clustersconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+
+## conversation
+
+Fetch a single conversation by ID.
+
+**Returns:** `Conversation` ([Conversation](/builders/api-schema/types-a-f/#conversation))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The conversation ID.
+
+## conversationsConnection
+
+List all support conversations for the current tenant. Conversations are ordered by last activity, most recent first.
+
+**Returns:** `ConversationsConnection!` ([ConversationsConnection](/builders/api-schema/types-a-f/#conversationsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+
+## developerTokensConnection
+
+List API tokens for programmatic access. Used to authenticate requests to the Developer API.
+
+**Returns:** `DeveloperTokensConnection!` ([DeveloperTokensConnection](/builders/api-schema/types-a-f/#developertokensconnection))
+
+**Typed SDK document:** `ListDeveloperTokens`
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## discoverServicesConnection
+
+Discover service instances by type.
+
+**Returns:** `ServiceInstancesConnection!` ([ServiceInstancesConnection](/builders/api-schema/types-s-z/#serviceinstancesconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `type`: `String!` — Service type to discover (e.g., mistserver, foghorn).
+- `clusterId`: `String` — Filter by cluster ID.
+
+## dvrChapter
+
+Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording&#39;s start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0.
+
+**Returns:** `DVRChapter` ([DVRChapter](/builders/api-schema/types-a-f/#dvrchapter))
+
+**Typed SDK document:** `GetDVRChapter`
+
+**Arguments**
+
+- `dvrId`: `ID!` — DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash.
+- `mode`: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/types-a-f/#dvrchaptermode)) — Historical chapter mode; null defaults to the recording&#39;s policy snapshot.
+- `intervalSeconds`: `Int` — Required for FIXED_INTERVAL mode.
+- `startMs`: `Float!` — UTC epoch milliseconds (start of range).
+- `endMs`: `Float!` — UTC epoch milliseconds (end of range, exclusive).
+
+## dvrChapters
+
+List chapters for a DVR recording. Paginated for unbounded artifact lifetime — default 200 per page, max 1000.
+
+**Returns:** `DVRChaptersPage` ([DVRChaptersPage](/builders/api-schema/types-a-f/#dvrchapterspage))
+
+**Typed SDK document:** `ListDVRChapters`
+
+**Arguments**
+
+- `dvrId`: `ID!` — DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash.
+- `mode`: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/types-a-f/#dvrchaptermode)) — Restrict to chapters of this mode; null = all.
+- `intervalSeconds`: `Int` — Required when filtering by FIXED_INTERVAL.
+- `rangeStartMs`: `Float` — UTC epoch ms lower bound; 0 = no lower bound.
+- `rangeEndMs`: `Float` — UTC epoch ms upper bound; 0 = no upper bound.
+- `pageSize`: `Int` — Default 200. Max 1000.
+- `pageToken`: `String` — Keyset cursor from a previous page&#39;s nextPageToken.
+
+## incident
+
+One incident with its alerts and timeline. Null when the incident does not exist or is not visible to the caller.
+
+**Returns:** `IncidentDetail` ([IncidentDetail](/builders/api-schema/types-g-l/#incidentdetail))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## incidentsConnection
+
+Incidents raised by platform alerting on clusters the current tenant owns, newest first.
+
+**Returns:** `IncidentsConnection!` ([IncidentsConnection](/builders/api-schema/types-g-l/#incidentsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `filter`: `IncidentFilterInput` ([IncidentFilterInput](/builders/api-schema/types-g-l/#incidentfilterinput)) — Optional status and cluster filters.
+
+## invoice
+
+Fetch a single invoice by ID.
+
+**Returns:** `Invoice` ([Invoice](/builders/api-schema/types-g-l/#invoice))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The invoice ID.
+
+## invoicesConnection
+
+List invoices for the current tenant.
+
+**Returns:** `InvoicesConnection!` ([InvoicesConnection](/builders/api-schema/types-g-l/#invoicesconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+
+## marketplaceCluster
+
+Get details for a specific marketplace cluster.
+
+**Returns:** `MarketplaceCluster` ([MarketplaceCluster](/builders/api-schema/types-m-r/#marketplacecluster))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `String!` — The cluster ID.
+
+## marketplaceClusters
+
+List clusters available in the marketplace.
+
+**Returns:** `[MarketplaceCluster!]!` ([MarketplaceCluster](/builders/api-schema/types-m-r/#marketplacecluster))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use marketplaceClustersConnection instead
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+## marketplaceClustersConnection
+
+List clusters available in the marketplace (paginated).
+
+**Returns:** `MarketplaceClusterConnection!` ([MarketplaceClusterConnection](/builders/api-schema/types-m-r/#marketplaceclusterconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+
+## mediaPlacementChange
+
+**Returns:** `MediaPlacementChangeResult!` ([MediaPlacementChangeResult](/builders/api-schema/types-m-r/#mediaplacementchangeresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/types-m-r/#mediaplacementscopeinput))
+- `idempotencyKey`: `String!`
+
+## mediaPlacementOptions
+
+**Returns:** `MediaPlacementOptionsResult!` ([MediaPlacementOptionsResult](/builders/api-schema/types-m-r/#mediaplacementoptionsresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/types-m-r/#mediaplacementscopeinput))
+- `filter`: `MediaPlacementOptionsFilter` ([MediaPlacementOptionsFilter](/builders/api-schema/types-m-r/#mediaplacementoptionsfilter))
+- `after`: `String`
+- `first`: `Int` (default `50`)
+
+## mediaPlacementPolicy
+
+Tenant-bound placement intent and actual enforcement progress.
+
+**Returns:** `MediaPlacementPolicyResult!` ([MediaPlacementPolicyResult](/builders/api-schema/types-m-r/#mediaplacementpolicyresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/types-m-r/#mediaplacementscopeinput))
+
+## mediaRetentionPolicy
+
+Tenant-default retention policy + entitlement bounds + the value the cascade (per-asset override → tenant default → tier entitlement) would resolve to today. Used by the webapp&#39;s &#34;Storage retention defaults&#34; panel to size sliders and explain the allowed range.
+
+**Returns:** `MediaRetentionPolicy!` ([MediaRetentionPolicy](/builders/api-schema/types-m-r/#mediaretentionpolicy))
+
+**SDK:** Raw GraphQL only
+
+## messagesConnection
+
+List messages in a conversation. Messages are ordered chronologically, oldest first.
+
+**Returns:** `MessagesConnection!` ([MessagesConnection](/builders/api-schema/types-m-r/#messagesconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `conversationId`: `ID!` — The conversation ID.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+
+## mollieMandates
+
+List Mollie mandates for the current tenant.
+
+**Returns:** `[MollieMandate!]!` ([MollieMandate](/builders/api-schema/types-m-r/#molliemandate))
+
+**SDK:** Raw GraphQL only
+
+## myClusterInvites
+
+List cluster invites sent to the current tenant.
+
+**Returns:** `[ClusterInvite!]!` ([ClusterInvite](/builders/api-schema/types-a-f/#clusterinvite))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use myClusterInvitesConnection instead
+
+## myClusterInvitesConnection
+
+List cluster invites sent to the current tenant (paginated).
+
+**Returns:** `ClusterInviteConnection!` ([ClusterInviteConnection](/builders/api-schema/types-a-f/#clusterinviteconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## mySubscriptions
+
+List clusters the tenant is subscribed to.
+
+**Returns:** `[Cluster!]!` ([Cluster](/builders/api-schema/types-a-f/#cluster))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use mySubscriptionsConnection instead
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+## mySubscriptionsConnection
+
+List clusters the tenant is subscribed to (paginated).
+
+**Returns:** `MySubscriptionsConnection!` ([MySubscriptionsConnection](/builders/api-schema/types-m-r/#mysubscriptionsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## networkStatus
+
+Public network status: cluster topology, node counts, peer connections. No tenant data exposed. Part of public allowlist.
+
+**Returns:** `NetworkStatus` ([NetworkStatus](/builders/api-schema/types-m-r/#networkstatus))
+
+**SDK:** Raw GraphQL only
+
+## node
+
+Fetch a single node by its global ID.
+
+**Returns:** `Node` ([Node](/builders/api-schema/types-m-r/#node))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the node.
+
+## nodesConnection
+
+List nodes (edge servers) with optional filters.
+
+**Returns:** `NodesConnection!` ([NodesConnection](/builders/api-schema/types-m-r/#nodesconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `clusterId`: `String` — Filter by cluster ID.
+- `status`: `NodeStatus` ([NodeStatus](/builders/api-schema/types-m-r/#nodestatus)) — Filter by node status.
+- `type`: `String` — Filter by node type.
+
+## orchestrator
+
+Fetch a public orchestrator with every known instance and per-(gateway, instance) vantage. Side-panel data source for the federation map.
+
+**Returns:** `OrchestratorWithDetails` ([OrchestratorWithDetails](/builders/api-schema/types-m-r/#orchestratorwithdetails))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `orchAddr`: `String!` — The orchestrator&#39;s eth address (hex).
+
+## orchestratorInstances
+
+List public per-instance rows. Each carries its own price/capabilities/hardware — usually consistent across an orch&#39;s pool but not guaranteed. Use the optional `orchAddr` filter to scope to one orch.
+
+**Returns:** `[OrchestratorInstance!]!` ([OrchestratorInstance](/builders/api-schema/types-m-r/#orchestratorinstance))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `orchAddr`: `String`
+
+## orchestratorPerformanceSeries
+
+Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don&#39;t divide latency_sum/latency_count themselves.
+
+**Returns:** `[OrchestratorPerformancePoint!]!` ([OrchestratorPerformancePoint](/builders/api-schema/types-m-r/#orchestratorperformancepoint))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `orchAddr`: `String!`
+- `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+- `interval`: `String` — Rollup interval. &#34;5m&#34; (default) or &#34;1h&#34;.
+- `gatewayId`: `String` — Optional drill-down filters.
+- `resolvedIp`: `String`
+
+## orchestratorVantages
+
+List per-(gateway, instance) vantage observations. Multi-region observation surfaces here as multiple rows. Use the optional `orchAddr` filter to scope to one orchestrator.
+
+**Returns:** `[OrchestratorVantage!]!` ([OrchestratorVantage](/builders/api-schema/types-m-r/#orchestratorvantage))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `orchAddr`: `String`
+
+## orchestratorsConnection
+
+List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`.
+
+**Returns:** `OrchestratorsConnection!` ([OrchestratorsConnection](/builders/api-schema/types-m-r/#orchestratorsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `orchAddr`: `String` — Optional filter to a single orchestrator (eth address).
+
+## payment
+
+Fetch one invoice payment owned by the current tenant.
+
+**Returns:** `InvoicePayment` ([InvoicePayment](/builders/api-schema/types-g-l/#invoicepayment))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## paymentsConnection
+
+List invoice payments owned by the current tenant.
+
+**Returns:** `InvoicePaymentsConnection!` ([InvoicePaymentsConnection](/builders/api-schema/types-g-l/#invoicepaymentsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+- `invoiceId`: `ID`
+- `status`: `String`
+- `method`: `String`
+
+## pendingSubscriptions
+
+List pending subscription requests for a cluster.
+
+**Returns:** `[ClusterSubscription!]!` ([ClusterSubscription](/builders/api-schema/types-a-f/#clustersubscription))
+
+**SDK:** Raw GraphQL only
+
+**Deprecated:** Use pendingSubscriptionsConnection instead
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+## pendingSubscriptionsConnection
+
+List pending subscription requests (paginated).
+
+**Returns:** `ClusterSubscriptionConnection!` ([ClusterSubscriptionConnection](/builders/api-schema/types-a-f/#clustersubscriptionconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `clusterId`: `ID!` — The cluster ID.
+
+## prepaidBalance
+
+Get the current prepaid balance for the tenant, held in EUR. Only available for tenants with billing_model = &#39;prepaid&#39;.
+
+**Returns:** `PrepaidBalance` ([PrepaidBalance](/builders/api-schema/types-m-r/#prepaidbalance))
+
+**SDK:** Raw GraphQL only
+
+## previewMediaPlacement
+
+Read-only evaluation. Never claims ingest, reserves capacity, or starts a source pull.
+
+**Returns:** `MediaPlacementPreviewResult!` ([MediaPlacementPreviewResult](/builders/api-schema/types-m-r/#mediaplacementpreviewresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `PreviewMediaPlacementInput!` ([PreviewMediaPlacementInput](/builders/api-schema/types-m-r/#previewmediaplacementinput))
+
+## resolveIngestEndpoint
+
+Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol.
+
+**Returns:** `IngestEndpointResponse` ([IngestEndpointResponse](/builders/api-schema/types-g-l/#ingestendpointresponse))
+
+**Typed SDK document:** `ResolveIngestEndpoint`
+
+**Arguments**
+
+- `streamKey`: `String!` — The stream key.
+- `protocol`: `MediaIngestProtocol` ([MediaIngestProtocol](/builders/api-schema/types-m-r/#mediaingestprotocol))
+
+## resolveViewerEndpoint
+
+Resolve a playback ID to viewer endpoints (HLS, DASH, etc.). Used by players to get the optimal CDN endpoint for playback.
+
+**Returns:** `ViewerEndpointResponse` ([ViewerEndpointResponse](/builders/api-schema/types-s-z/#viewerendpointresponse))
+
+**Typed SDK document:** `ResolveViewerEndpoint`
+
+**Arguments**
+
+- `contentId`: `String!` — Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
+- `protocol`: `MediaViewerProtocol` ([MediaViewerProtocol](/builders/api-schema/types-m-r/#mediaviewerprotocol)) — Optional playback constraint. A different format is never substituted. Omit to select a node with any playable Mist output and receive its full catalog.
+
+## reviewClusterMediaConsentChange
+
+**Returns:** `MediaPlacementReviewResult!` ([MediaPlacementReviewResult](/builders/api-schema/types-m-r/#mediaplacementreviewresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `ReviewMediaCapacityConsentInput!` ([ReviewMediaCapacityConsentInput](/builders/api-schema/types-m-r/#reviewmediacapacityconsentinput))
+
+## reviewMediaPlacementChange
+
+**Returns:** `MediaPlacementReviewResult!` ([MediaPlacementReviewResult](/builders/api-schema/types-m-r/#mediaplacementreviewresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `ReviewMediaPlacementChangeInput!` ([ReviewMediaPlacementChangeInput](/builders/api-schema/types-m-r/#reviewmediaplacementchangeinput))
+
+## serverInfo
+
+Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in.
+
+**Returns:** `ServerInfo!` ([ServerInfo](/builders/api-schema/types-s-z/#serverinfo))
+
+**Typed SDK document:** `ServerInfo`
+
+## serviceInstancesHealth
+
+Check health status of service instances for owned infrastructure.
+
+**Returns:** `[ServiceInstanceHealth!]` ([ServiceInstanceHealth](/builders/api-schema/types-s-z/#serviceinstancehealth))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `serviceId`: `String` — Filter by service ID.
+
+## signingKey
+
+Get a single playback signing key by ID. Tenant-scoped.
+
+**Returns:** `SigningKey` ([SigningKey](/builders/api-schema/types-s-z/#signingkey))
+
+**Typed SDK document:** `GetSigningKey`
+
+**Arguments**
+
+- `id`: `ID!`
+
+## signingKeysConnection
+
+List the tenant&#39;s playback signing keys with optional status filter.
+
+**Returns:** `SigningKeysConnection!` ([SigningKeysConnection](/builders/api-schema/types-s-z/#signingkeysconnection))
+
+**Typed SDK document:** `ListSigningKeys`
+
+**Arguments**
+
+- `status`: `String` — Filter by status: &#39;active&#39; or &#39;revoked&#39;. Empty = all.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## skipperConversation
+
+Get a single Skipper conversation with full message history.
+
+**Returns:** `SkipperConversation!` ([SkipperConversation](/builders/api-schema/types-s-z/#skipperconversation))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## skipperConversations
+
+List Skipper AI consultant conversations for the current user.
+
+**Returns:** `[SkipperConversationSummary!]!` ([SkipperConversationSummary](/builders/api-schema/types-s-z/#skipperconversationsummary))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `limit`: `Int`
+- `offset`: `Int`
+
+## skipperReport
+
+Fetch a single Skipper investigation report by id. Returns null when the report does not exist or is not owned by the current tenant.
+
+**Returns:** `SkipperReport` ([SkipperReport](/builders/api-schema/types-s-z/#skipperreport))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## skipperReports
+
+List Skipper investigation reports for the current tenant. Returns newest first with read/unread status and counts.
+
+**Returns:** `SkipperReportsConnection!` ([SkipperReportsConnection](/builders/api-schema/types-s-z/#skipperreportsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `limit`: `Int`
+- `offset`: `Int`
+
+## skipperUnreadReportCount
+
+Get count of unread Skipper investigation reports.
+
+**Returns:** `Int!`
+
+**SDK:** Raw GraphQL only
+
+## storageArtifactsConnection
+
+Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry.
+
+**Returns:** `StorageArtifactsConnection!` ([StorageArtifactsConnection](/builders/api-schema/types-s-z/#storageartifactsconnection))
+
+**Typed SDK document:** `ListArtifacts`
+
+**Arguments**
+
+- `input`: `StorageArtifactsInput` ([StorageArtifactsInput](/builders/api-schema/types-s-z/#storageartifactsinput))
+
+## stream
+
+Fetch a single stream by its global ID.
+
+**Returns:** `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+
+**Typed SDK document:** `GetStream`, `ListPushTargets`
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the stream.
+
+## streamKeysConnection
+
+List all stream keys for a specific stream.
+
+**Returns:** `StreamKeysConnection!` ([StreamKeysConnection](/builders/api-schema/types-s-z/#streamkeysconnection))
+
+**Typed SDK document:** `ListStreamKeys`
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `streamId`: `ID!` — The stream ID to list keys for (Stream.id, Relay global ID).
+
+## streamingConfig
+
+Cluster-aware streaming configuration for the authenticated tenant. Returns preferred and official cluster domains for building protocol-specific URLs. Null when not authenticated or cluster routing unavailable — frontend falls back to env vars.
+
+**Returns:** `StreamingConfig` ([StreamingConfig](/builders/api-schema/types-s-z/#streamingconfig))
+
+**SDK:** Raw GraphQL only
+
+## streamsConnection
+
+List all streams for the current tenant with pagination.
+
+**Returns:** `StreamsConnection!` ([StreamsConnection](/builders/api-schema/types-s-z/#streamsconnection))
+
+**Typed SDK document:** `ListStreams`
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `search`: `String` — Optional server-side name search (title / internal name). Enables an account-wide picker instead of only the first page.
+
+## tenant
+
+Get the current tenant&#39;s profile and settings.
+
+**Returns:** `Tenant` ([Tenant](/builders/api-schema/types-s-z/#tenant))
+
+**SDK:** Raw GraphQL only
+
+## tenantUsage
+
+Get aggregated usage metrics for the tenant.
+
+**Returns:** `TenantUsage` ([TenantUsage](/builders/api-schema/types-s-z/#tenantusage))
+
+**Typed SDK document:** `GetTenantUsage`
+
+**Arguments**
+
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput)) — Time range to query.
+
+## usageAggregates
+
+Get aggregated usage data grouped by time interval.
+
+**Returns:** `[UsageAggregate!]!` ([UsageAggregate](/builders/api-schema/types-s-z/#usageaggregate))
+
+**Typed SDK document:** `GetUsageAggregates`
+
+**Arguments**
+
+- `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput)) — Time range to query (required).
+- `granularity`: `String` (default `&#34;daily&#34;`) — Aggregation granularity: hourly, daily, or monthly.
+- `usageTypes`: `[String!]` — Filter by usage types.
+
+## usageRecordsConnection
+
+List detailed usage records with pagination.
+
+**Returns:** `UsageRecordsConnection!` ([UsageRecordsConnection](/builders/api-schema/types-s-z/#usagerecordsconnection))
+
+**Typed SDK document:** `ListUsageRecords`
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput)) — Pagination options.
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput)) — Time range to query.
+
+## validateStreamKey
+
+Validate a stream key and return the associated stream info.
+
+**Returns:** `StreamValidation` ([StreamValidation](/builders/api-schema/types-s-z/#streamvalidation))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamKey`: `String!` — The stream key to validate.
+
+## vodAsset
+
+Fetch a single VOD asset by ID.
+
+**Returns:** `VodAsset` ([VodAsset](/builders/api-schema/types-s-z/#vodasset))
+
+**Typed SDK document:** `GetVodAsset`
+
+**Arguments**
+
+- `id`: `ID!` — The VOD asset ID.
+
+## vodUploadStatus
+
+Read server-authoritative state of an in-flight VOD upload session. Polling complement to the upload events of tenantEvents; intended for reload-recovery and agent workflows that need a request/response shape.
+
+**Returns:** `VodUploadStatusResult!` ([VodUploadStatusResult](/builders/api-schema/types-s-z/#voduploadstatusresult))
+
+**Typed SDK document:** `GetVodUploadStatus`
+
+**Arguments**
+
+- `uploadId`: `ID!` — Upload session ID returned by createVodUpload.
+
+## webhookDeliveriesConnection
+
+List webhook deliveries newest first, optionally filtered. Only forward pagination is supported.
+
+**Returns:** `WebhookDeliveriesConnection!` ([WebhookDeliveriesConnection](/builders/api-schema/types-s-z/#webhookdeliveriesconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `endpointId`: `ID` — Only deliveries to this endpoint.
+- `statuses`: `[WebhookDeliveryStatus!]` ([WebhookDeliveryStatus](/builders/api-schema/types-s-z/#webhookdeliverystatus)) — Only deliveries in these statuses.
+- `eventType`: `String` — Only deliveries of this event type, e.g. &#34;stream.live&#34;.
+- `eventId`: `ID` — Only deliveries of this event.
+- `createdAfter`: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Only deliveries created at or after this time.
+- `createdBefore`: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Only deliveries created before this time.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## webhookDelivery
+
+Get one webhook delivery with every HTTP attempt.
+
+**Returns:** `WebhookDelivery` ([WebhookDelivery](/builders/api-schema/types-s-z/#webhookdelivery))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## webhookEndpoint
+
+Get one of the tenant&#39;s webhook endpoints.
+
+**Returns:** `WebhookEndpoint` ([WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## webhookEndpointsConnection
+
+List the tenant&#39;s webhook endpoints, oldest first. A tenant has at most 10, so one page holds them all.
+
+**Returns:** `WebhookEndpointsConnection!` ([WebhookEndpointsConnection](/builders/api-schema/types-s-z/#webhookendpointsconnection))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+
+## webhookEventTypes
+
+The public event types an endpoint can subscribe to, as used in eventTypes. &#34;*&#34; subscribes to every type.
+
+**Returns:** `[String!]!`
+
+**SDK:** Raw GraphQL only

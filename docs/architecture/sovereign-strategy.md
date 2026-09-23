@@ -2,13 +2,14 @@
 
 FrameWorks is designed so provider-operated video and control-plane infrastructure can avoid a single-cloud dependency while customer-operated MistServer/Helmsman edges retain local media placement. This document explains why Navigator and Privateer exist inside the provider plane.
 
-Current production deployments still rely on external primitives for S3-compatible object storage and public DNS. Native Ceph-backed storage and provider-operated Anycast DNS are architecture work; this is not a customer whole-stack deployment contract.
+Current production deployments still rely on external primitives for S3-compatible object storage and public DNS. Native Ceph-backed storage and operator-run Anycast DNS are architecture work. The same constraints apply to anyone self-hosting the entire stack as an independent platform.
 
 **Deployment Models**:
 
 - **Shared SaaS**: Multi-tenant clusters on our infrastructure
 - **Dedicated SaaS**: Per-tenant clusters on our infrastructure
 - **Hybrid edge**: Customer-operated MistServer/Helmsman capacity attached to the FrameWorks-operated Foghorn and control plane
+- **Full self-host**: The customer runs the entire stack, including Navigator and Privateer, as an independent platform with its own trust root; it does not federate with the FrameWorks platform
 
 ---
 

@@ -21,7 +21,7 @@ All configuration is through environment variables. The LLM and embedding provid
 
 ### Embeddings
 
-Embedding models convert text into vectors for similarity search. Quality here affects every answer — bad retrieval poisons everything downstream.
+Embedding models convert text into vectors for similarity search. Poor retrieval degrades every answer.
 
 | Option                         | Run where                         | Notes                                                                                       |
 | ------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -51,7 +51,7 @@ Self-hosted via Ollama. No per-token cost — you pay for hardware.
 
 Good for simple lookups. Struggles with multi-hop reasoning across multiple chunks.
 
-**Tier 2 — Sweet Spot (14-32B)** — single 24-48GB GPU **(recommended)**
+**Tier 2 — Recommended (14-32B)** — single 24-48GB GPU **(recommended)**
 
 | Model                 | Context | VRAM (Q4) | Notes                                                |
 | --------------------- | ------: | --------: | ---------------------------------------------------- |
@@ -121,22 +121,25 @@ provider pricing or local inference costs before committing to a support-tier ma
 
 **LLM:**
 
-| Variable         | Purpose                                   | Default          |
-| ---------------- | ----------------------------------------- | ---------------- |
-| `LLM_PROVIDER`   | `openai`, `anthropic`, or `ollama`        | —                |
-| `LLM_MODEL`      | Model identifier                          | —                |
-| `LLM_API_KEY`    | API credentials                           | —                |
-| `LLM_API_URL`    | Custom endpoint (OpenRouter, self-hosted) | Provider default |
-| `LLM_MAX_TOKENS` | Max output tokens per response            | `4096`           |
+| Variable                      | Purpose                                                                                   | Default          |
+| ----------------------------- | ----------------------------------------------------------------------------------------- | ---------------- |
+| `LLM_PROVIDER`                | `openai`, `anthropic`, or `ollama`                                                        | —                |
+| `LLM_MODEL`                   | Model identifier                                                                          | —                |
+| `LLM_API_KEY`                 | API credentials                                                                           | —                |
+| `LLM_API_URL`                 | Custom endpoint (OpenRouter, self-hosted)                                                 | Provider default |
+| `LLM_MAX_TOKENS`              | Max output tokens per response                                                            | `4096`           |
+| `LLM_CONTEXT_WINDOW`          | Chat model context window in tokens; `0` uses the known window for recognized models      | `0`              |
+| `SKIPPER_PROMPT_TOKEN_BUDGET` | Explicit prompt token budget; `0` derives it from the context window and `LLM_MAX_TOKENS` | `0`              |
 
 **Embeddings** (falls back to `LLM_*` when unset):
 
-| Variable             | Purpose                   | Default        |
-| -------------------- | ------------------------- | -------------- |
-| `EMBEDDING_PROVIDER` | `openai` or `ollama`      | `LLM_PROVIDER` |
-| `EMBEDDING_MODEL`    | Embedding model name      | `LLM_MODEL`    |
-| `EMBEDDING_API_KEY`  | Embedding API credentials | `LLM_API_KEY`  |
-| `EMBEDDING_API_URL`  | Embedding endpoint        | `LLM_API_URL`  |
+| Variable               | Purpose                                                                                        | Default        |
+| ---------------------- | ---------------------------------------------------------------------------------------------- | -------------- |
+| `EMBEDDING_PROVIDER`   | `openai` or `ollama`                                                                           | `LLM_PROVIDER` |
+| `EMBEDDING_MODEL`      | Embedding model name                                                                           | `LLM_MODEL`    |
+| `EMBEDDING_API_KEY`    | Embedding API credentials                                                                      | `LLM_API_KEY`  |
+| `EMBEDDING_API_URL`    | Embedding endpoint                                                                             | `LLM_API_URL`  |
+| `EMBEDDING_DIMENSIONS` | Embedding vector size; `0` probes the model at startup. Changing it truncates stored knowledge | `0`            |
 
 **Utility LLM** (for background tasks like contextual retrieval; falls back to `LLM_*` when unset):
 
@@ -191,10 +194,16 @@ provider pricing or local inference costs before committing to a support-tier ma
 | `SKIPPER_REQUIRED_TIER_LEVEL`       | Minimum subscription tier                                                     | `3`                          |
 | `SKIPPER_CHAT_RATE_LIMIT_PER_HOUR`  | Rate limit per tenant                                                         | `0` (unlimited)              |
 | `SKIPPER_CHAT_RATE_LIMIT_OVERRIDES` | Per-tenant overrides (`tenant_id:limit,...`)                                  | —                            |
-| `SKIPPER_ADMIN_TENANT_ID`           | Tenant ID for global/platform knowledge                                       | —                            |
+| `SKIPPER_ADMIN_TENANT_ID`           | Tenant the embedded web UI acts as                                            | `local`                      |
+| `SYSTEM_TENANT_ID`                  | System tenant that owns global/platform knowledge                             | reserved system tenant UUID  |
 | `SKIPPER_MAX_HISTORY_MESSAGES`      | Max conversation messages loaded per request                                  | `20`                         |
 | `GATEWAY_MCP_URL`                   | Internal Gateway MCP endpoint for platform tools                              | derived from Bridge mesh URL |
-| `GATEWAY_PUBLIC_URL`                | Public API Gateway base URL; fallback for MCP when `GATEWAY_MCP_URL` is unset | —                            |
+| `GATEWAY_MCP_URLS`                  | Comma-separated Bridge MCP endpoints; takes precedence over `GATEWAY_MCP_URL` | —                            |
+| `GATEWAY_PUBLIC_URL`                | Public API Gateway base URL; fallback for MCP when neither MCP URL is set     | —                            |
+| `LOOKOUT_GRPC_ADDR`                 | Lookout gRPC address for attaching investigation reports to incidents         | —                            |
+| `KAFKA_BROKERS`                     | Aggregator Kafka brokers carrying the Lookout incident topic                  | —                            |
+
+Lookout-triggered investigations run only when both `LOOKOUT_GRPC_ADDR` and `KAFKA_BROKERS` are set.
 
 **Social posting:**
 
@@ -478,6 +487,7 @@ Skipper ships with curated source files in `config/skipper/sitemaps/`:
 | `srt.txt`        | SRT protocol docs from Haivision                          |
 | `nginx-rtmp.txt` | nginx-rtmp-module wiki                                    |
 | `hls-spec.txt`   | HLS specification (IETF RFCs)                             |
+| `faq.txt`        | Curated local FAQ and troubleshooting articles            |
 
 Set `SKIPPER_SITEMAPS_DIR` to the directory containing these files. In Docker Compose, this is mounted as a read-only volume at `/etc/skipper/sitemaps`.
 
@@ -800,13 +810,19 @@ Independently of per-tenant stream health, the heartbeat checks node-level metri
 
 **Notifications** (email):
 
-| Variable        | Purpose                      | Default |
-| --------------- | ---------------------------- | ------- |
-| `SMTP_HOST`     | SMTP server hostname         | —       |
-| `SMTP_PORT`     | SMTP server port             | `587`   |
-| `SMTP_FROM`     | Sender email address         | —       |
-| `SMTP_USERNAME` | SMTP authentication username | —       |
-| `SMTP_PASSWORD` | SMTP authentication password | —       |
+| Variable                   | Purpose                                                                                            | Default                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `SMTP_HOST`                | SMTP server hostname                                                                               | —                            |
+| `SMTP_PORT`                | SMTP server port                                                                                   | `587`                        |
+| `SMTP_USER`                | SMTP authentication username                                                                       | —                            |
+| `SMTP_PASSWORD`            | SMTP authentication password                                                                       | —                            |
+| `SMTP_ALLOW_INSECURE`      | Send to an SMTP server without STARTTLS; isolated dev/test relays only, never production           | `false`                      |
+| `FROM_EMAIL`               | Sender email address                                                                               | `noreply@frameworks.network` |
+| `FROM_NAME`                | Sender display name                                                                                | `FrameWorks`                 |
+| `TO_EMAIL`                 | Fallback recipient for heartbeat reports and infrastructure alerts when no tenant contact resolves | —                            |
+| `SKIPPER_NOTIFY_EMAIL`     | Default email delivery of heartbeat reports when a tenant has no preference                        | `false`                      |
+| `SKIPPER_NOTIFY_WEBSOCKET` | Default websocket delivery of heartbeat reports when a tenant has no preference                    | `true`                       |
+| `SKIPPER_NOTIFY_MCP`       | Default MCP delivery of heartbeat reports when a tenant has no preference                          | `true`                       |
 
 ---
 

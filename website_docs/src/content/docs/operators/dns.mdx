@@ -77,7 +77,7 @@ Pass `--domain`; default domains are for development and platform-owned checks.
 | `listmonk.example.com`  | Newsletter/admin | Listmonk           |
 | `chatwoot.example.com`  | Support inbox    | Chatwoot           |
 
-Cloudflare remains authoritative for root/API/web/admin/support names. Navigator can reconcile those records through Cloudflare, but media and edge traffic is cluster-scoped and delegated to Bunny DNS.
+Cloudflare remains authoritative for root/API/web/admin/support names. Navigator can reconcile those records through Cloudflare, Media and edge traffic is cluster-scoped; Navigator delegates those zones to Bunny DNS when `BUNNY_API_KEY` is set, and otherwise publishes media cluster records through Cloudflare.
 
 ### Internal Services (Private Network / Mesh)
 
@@ -87,11 +87,11 @@ Edge nodes do **not** join the mesh.
 - Commodore, Purser, Periscope, Quartermaster, Signalman
 - PostgreSQL, ClickHouse, Kafka
 
-Configure via environment variables with private/mesh IPs:
+Services reach each other through `*_GRPC_ADDR` variables on the 190xx gRPC ports (defaults such as `commodore:19001` and `purser:19003`). To point a service at explicit private/mesh addresses:
 
 ```bash
-export COMMODORE_URL=http://10.0.1.10:18001
-export PURSER_URL=http://10.0.1.11:18003
+COMMODORE_GRPC_ADDR=10.0.1.10:19001
+PURSER_GRPC_ADDR=10.0.1.11:19003
 ```
 
 ### Media Cluster DNS

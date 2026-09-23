@@ -53,8 +53,8 @@ component, use the dashboard playback DNS URL directly.
 ### DVR and Clips
 
 ```svelte
-<Player contentType="dvr" contentId="pk_..." />
-<Player contentType="clip" contentId="pk_..." />
+<Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
+<Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
 ## Composable Controls
@@ -76,7 +76,7 @@ Pass a `children` snippet to replace the default controls:
   import "@livepeer-frameworks/player-svelte/player.css";
 </script>
 
-<Player contentId="pk_..." contentType="live">
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live">
   {#snippet children()}
     <div class="my-controls">
       <PlayButton />
@@ -150,7 +150,7 @@ Then use it as children:
   import CustomControls from "./CustomControls.svelte";
 </script>
 
-<Player contentId="pk_..." contentType="live">
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live">
   {#snippet children()}
     <CustomControls />
   {/snippet}
@@ -190,21 +190,21 @@ The context object from `getContext("fw-player-controller")` provides:
 
 ## Props Reference
 
-| Prop                     | Type                                                 | Description                                                                                          |
-| ------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `contentId`              | `string`                                             | Playback ID                                                                                          |
-| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type                                                                                         |
-| `endpoints`              | `ContentEndpoints`                                   | Pre-resolved endpoints                                                                               |
-| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                             |
-| `options`                | `PlayerOptions`                                      | Configuration options                                                                                |
-| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                    |
-| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                           |
-| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                          |
-| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports    |
-| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                    |
-| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster)   |
-| `options.theme`          | `string`                                             | Theme preset                                                                                         |
-| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                            |
-| `options.locale`         | `string`                                             | Built-in UI locale                                                                                   |
-| `options.playbackMode`   | `string`                                             | Initial controls/dev-panel mode label; use the store dev-mode helper for runtime protocol preference |
-| `onStateChange`          | `function`                                           | State transition callback                                                                            |
+| Prop                     | Type                                                 | Description                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contentId`              | `string`                                             | Playback ID                                                                                                                                                           |
+| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type                                                                                                                                                          |
+| `endpoints`              | `ContentEndpoints`                                   | Pre-resolved endpoints                                                                                                                                                |
+| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                                                                                              |
+| `options`                | `PlayerOptions`                                      | Configuration options                                                                                                                                                 |
+| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                                                                                     |
+| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                                                                                            |
+| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                                                                                           |
+| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports                                                                     |
+| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                                                                                     |
+| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster)                                                                    |
+| `options.theme`          | `string`                                             | Theme preset                                                                                                                                                          |
+| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                                                                                             |
+| `options.locale`         | `string`                                             | Built-in UI locale                                                                                                                                                    |
+| `options.playbackMode`   | `string`                                             | Protocol selection mode (see [Playback Modes](/builders/playback-advanced/#playback-modes)); change at runtime with the store's `setDevModeOptions({ playbackMode })` |
+| `onStateChange`          | `function`                                           | State transition callback                                                                                                                                             |

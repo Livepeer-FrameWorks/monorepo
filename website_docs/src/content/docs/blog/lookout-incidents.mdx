@@ -11,7 +11,7 @@ tags:
   - observability
 ---
 
-An alert is a signal. An incident is the work that follows: who owns it, what is still firing,
+An incident tracks the work that follows an alert: who owns it, what is still firing,
 who acknowledged it, what changed, and whether the problem is actually over. FrameWorks already
 had metrics and alert rules, but handing raw Alertmanager notifications to every tenant would have
 mixed infrastructure details, tenant boundaries, and delivery policy into one brittle interface.
@@ -23,8 +23,7 @@ GraphQL, MCP tools, and realtime subscriptions.
 
 ## Tenant ownership is part of ingestion
 
-The difficult part is not inserting an alert into Postgres. Cluster ownership can change while
-alerts are arriving, and a control-plane outage must never make another tenant's incident visible.
+Ownership is the hard part: cluster ownership can change while alerts are arriving, and a control-plane outage must never make another tenant's incident visible.
 
 Lookout keeps a verified cluster-scope record from Quartermaster. Ingestion and ownership changes
 coordinate through database locks and revisions, so an open incident is either written with the

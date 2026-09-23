@@ -4449,9 +4449,10 @@ var PushTargetService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DeveloperService_CreateAPIToken_FullMethodName = "/commodore.DeveloperService/CreateAPIToken"
-	DeveloperService_ListAPITokens_FullMethodName  = "/commodore.DeveloperService/ListAPITokens"
-	DeveloperService_RevokeAPIToken_FullMethodName = "/commodore.DeveloperService/RevokeAPIToken"
+	DeveloperService_CreateAPIToken_FullMethodName     = "/commodore.DeveloperService/CreateAPIToken"
+	DeveloperService_ListAPITokens_FullMethodName      = "/commodore.DeveloperService/ListAPITokens"
+	DeveloperService_RevokeAPIToken_FullMethodName     = "/commodore.DeveloperService/RevokeAPIToken"
+	DeveloperService_AdminListAPITokens_FullMethodName = "/commodore.DeveloperService/AdminListAPITokens"
 )
 
 // DeveloperServiceClient is the client API for DeveloperService service.
@@ -4461,6 +4462,10 @@ type DeveloperServiceClient interface {
 	CreateAPIToken(ctx context.Context, in *CreateAPITokenRequest, opts ...grpc.CallOption) (*CreateAPITokenResponse, error)
 	ListAPITokens(ctx context.Context, in *ListAPITokensRequest, opts ...grpc.CallOption) (*ListAPITokensResponse, error)
 	RevokeAPIToken(ctx context.Context, in *RevokeAPITokenRequest, opts ...grpc.CallOption) (*RevokeAPITokenResponse, error)
+	// AdminListAPITokens lists API token metadata across tenants. Requires a
+	// platform-operator JWT; service and tenant credentials are refused. Token
+	// values and hashes are never returned.
+	AdminListAPITokens(ctx context.Context, in *AdminListAPITokensRequest, opts ...grpc.CallOption) (*AdminListAPITokensResponse, error)
 }
 
 type developerServiceClient struct {
@@ -4501,6 +4506,16 @@ func (c *developerServiceClient) RevokeAPIToken(ctx context.Context, in *RevokeA
 	return out, nil
 }
 
+func (c *developerServiceClient) AdminListAPITokens(ctx context.Context, in *AdminListAPITokensRequest, opts ...grpc.CallOption) (*AdminListAPITokensResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminListAPITokensResponse)
+	err := c.cc.Invoke(ctx, DeveloperService_AdminListAPITokens_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeveloperServiceServer is the server API for DeveloperService service.
 // All implementations must embed UnimplementedDeveloperServiceServer
 // for forward compatibility.
@@ -4508,6 +4523,10 @@ type DeveloperServiceServer interface {
 	CreateAPIToken(context.Context, *CreateAPITokenRequest) (*CreateAPITokenResponse, error)
 	ListAPITokens(context.Context, *ListAPITokensRequest) (*ListAPITokensResponse, error)
 	RevokeAPIToken(context.Context, *RevokeAPITokenRequest) (*RevokeAPITokenResponse, error)
+	// AdminListAPITokens lists API token metadata across tenants. Requires a
+	// platform-operator JWT; service and tenant credentials are refused. Token
+	// values and hashes are never returned.
+	AdminListAPITokens(context.Context, *AdminListAPITokensRequest) (*AdminListAPITokensResponse, error)
 	mustEmbedUnimplementedDeveloperServiceServer()
 }
 
@@ -4526,6 +4545,9 @@ func (UnimplementedDeveloperServiceServer) ListAPITokens(context.Context, *ListA
 }
 func (UnimplementedDeveloperServiceServer) RevokeAPIToken(context.Context, *RevokeAPITokenRequest) (*RevokeAPITokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeAPIToken not implemented")
+}
+func (UnimplementedDeveloperServiceServer) AdminListAPITokens(context.Context, *AdminListAPITokensRequest) (*AdminListAPITokensResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminListAPITokens not implemented")
 }
 func (UnimplementedDeveloperServiceServer) mustEmbedUnimplementedDeveloperServiceServer() {}
 func (UnimplementedDeveloperServiceServer) testEmbeddedByValue()                          {}
@@ -4602,6 +4624,24 @@ func _DeveloperService_RevokeAPIToken_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeveloperService_AdminListAPITokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminListAPITokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeveloperServiceServer).AdminListAPITokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeveloperService_AdminListAPITokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeveloperServiceServer).AdminListAPITokens(ctx, req.(*AdminListAPITokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DeveloperService_ServiceDesc is the grpc.ServiceDesc for DeveloperService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -4620,6 +4660,10 @@ var DeveloperService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeAPIToken",
 			Handler:    _DeveloperService_RevokeAPIToken_Handler,
+		},
+		{
+			MethodName: "AdminListAPITokens",
+			Handler:    _DeveloperService_AdminListAPITokens_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

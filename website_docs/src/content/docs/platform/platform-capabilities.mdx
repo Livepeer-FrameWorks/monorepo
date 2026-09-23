@@ -37,7 +37,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
 | ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
 | ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
-| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips extracted from streams or recordings. |
+| **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL. |
 | **Media retention** | Available | API, Agents (MCP), Dashboard, Docs | Tenant-controlled storage policy for 24/7 DVR archives, clips, and VOD assets, with per-asset overrides and entitlement bounds. |
 | **Thumbnails and sprite previews** | Expanding | API, Agents (MCP), Dashboard, Docs | Auto-generated poster frames and sprite-tile preview strips for live streams, clips, VOD, and DVR playback. |
 
@@ -76,10 +76,10 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
 | ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
-| **BYOC ownership levels** | Expanding | Docs | The supported ownership boundary for bring-your-own edge capacity and adjacent unsupported control-plane models. |
-| ↳ Customer-operated media control plane | Expanding | — | Operate Foghorn and its coupled media/data services outside the FrameWorks provider plane. |
+| **BYOC ownership levels** | Expanding | CLI, Docs | The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them. |
+| ↳ Federating a self-hosted platform with FrameWorks | Not available | — | Run your own Foghorn and control plane and federate them with the FrameWorks platform as one network, sharing routing, capacity, and tenants across both operators. |
 | ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
-| ↳ Customer-operated full platform | Expanding | — | A separate, unsupported trust model in which a customer would operate Foghorn, federation, media dependencies, durable services, and an isolated control plane. |
+| ↳ Full self-host | Available | CLI, Docs | Run the entire public-domain stack — control plane, Foghorn, media edges, Livepeer, Chandler, databases, analytics, and interfaces — as an independent platform, provisioned, upgraded, and backed up with the frameworks CLI from a GitOps repository. |
 | **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
 | ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
 | ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |

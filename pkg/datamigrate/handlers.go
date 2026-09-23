@@ -254,7 +254,7 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 	if !verifyPerScope && m.Verify != nil {
 		if verifyErr := verifyMigration(ctx, db, m, id); verifyErr != nil {
 			_ = MarkJobFailed(context.Background(), db, id, verifyErr) //nolint:errcheck // best-effort failure record
-			return verifyErr
+			return errors.Join(verifyErr, writeReport(ctx, db, out, m, id))
 		}
 	}
 	if !fullRun {
@@ -331,7 +331,7 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 				if recordedErr := verifyMigration(ctx, db, m, id); recordedErr != nil {
 					_ = MarkRunFailed(context.Background(), db, id, scope, recordedErr) //nolint:errcheck // best-effort failure record
 					_ = MarkJobFailed(context.Background(), db, id, recordedErr)        //nolint:errcheck // best-effort failure record
-					return recordedErr
+					return errors.Join(recordedErr, writeReport(ctx, db, out, m, id))
 				}
 			}
 			if err := MarkRunCompleted(ctx, db, id, scope); err != nil {
@@ -374,7 +374,24 @@ func runDryScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, i
 	}
 	fmt.Fprintf(out, "%s/%s dry-run: scanned=%d changed=%d skipped=%d errors=%d done=%v\n",
 		id, scope, prog.Scanned, prog.Changed, prog.Skipped, prog.Errors, prog.Done)
+	for _, line := range prog.Summary {
+		fmt.Fprintf(out, "  %s\n", line)
+	}
+	writeFindings(out, prog.Findings, prog.FindingsTotal)
 	return nil
+}
+
+func writeFindings(out io.Writer, findings []string, total int64) {
+	if total < int64(len(findings)) {
+		total = int64(len(findings))
+	}
+	if total == 0 {
+		return
+	}
+	fmt.Fprintf(out, "  findings: showing %d of %d\n", len(findings), total)
+	for _, finding := range findings {
+		fmt.Fprintf(out, "    %s\n", finding)
+	}
 }
 
 func dryRunCheckpoint(ctx context.Context, db *sql.DB, id string, scope ScopeKey) (json.RawMessage, error) {
@@ -417,12 +434,36 @@ func HandleVerify(ctx context.Context, openDB func() (*sql.DB, error), out io.Wr
 	if err != nil {
 		return fmt.Errorf("open service db: %w", err)
 	}
+	reportErr := writeReport(ctx, db, out, m, id)
 	if err := fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
 		return m.Verify(ctx, tx)
 	}); err != nil {
-		return err
+		return errors.Join(err, reportErr)
+	}
+	if reportErr != nil {
+		return reportErr
 	}
 	fmt.Fprintf(out, "%s verified\n", id)
+	return nil
+}
+
+// writeReport prints the migration's Report lines. It runs in its own
+// read-only transaction so a failed verify statement cannot abort it.
+func writeReport(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id string) error {
+	if m == nil || m.Report == nil {
+		return nil
+	}
+	var lines []string
+	if err := fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var listErr error
+		lines, listErr = m.Report(ctx, tx)
+		return listErr
+	}); err != nil {
+		return fmt.Errorf("report %q: %w", id, err)
+	}
+	for _, line := range lines {
+		fmt.Fprintln(out, line)
+	}
 	return nil
 }
 

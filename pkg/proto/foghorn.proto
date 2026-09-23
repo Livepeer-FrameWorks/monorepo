@@ -75,6 +75,121 @@ service DVRControlService {
   // routing the call here so unauthenticated callers can't use this to
   // probe arbitrary endpoints.
   rpc TestPlaybackAccess(foghorn_control.TestPlaybackAccessRequest) returns (foghorn_control.TestPlaybackAccessResponse);
+
+  // DiagnoseDVR is a read-only operator view of one recording on this cell:
+  // lifecycle and storage state, the segment ledger summary, every chapter's
+  // finalization state, and the chapters waiting in the finalize queue.
+  // Requires a platform-operator JWT; service and tenant credentials are
+  // refused.
+  rpc DiagnoseDVR(DiagnoseDVRRequest) returns (DiagnoseDVRResponse);
+}
+
+message DiagnoseDVRRequest {
+  string dvr_hash = 1;
+}
+
+message DiagnoseDVRResponse {
+  DVRRecordingDiagnosis recording = 1;
+  DVRSegmentSummary segments = 2;
+  // The latest 1000 chapters of the recording, ordered by start_ms. An
+  // always-on recording can hold more.
+  repeated DVRChapterDiagnosis chapters = 3;
+  // Chapters in the finalize queue (state closed or finalizing), in queue
+  // order, at most 1000.
+  repeated DVRPendingFinalize pending_finalize = 4;
+}
+
+message DVRRecordingDiagnosis {
+  string dvr_hash = 1;
+  string tenant_id = 2;
+  string stream_internal_name = 3;
+  string internal_name = 4;
+  string status = 5;
+  string error_message = 6;
+  string origin_cluster_id = 7;
+  string storage_cluster_id = 8;
+  bool federated_pointer = 9;
+  string storage_location = 10;
+  string sync_status = 11;
+  string sync_error = 12;
+  optional google.protobuf.Timestamp last_sync_attempt = 13;
+  string sync_node_id = 14;
+  int32 sync_failure_count = 15;
+  bool dtsh_synced = 16;
+  string dtsh_status = 17;
+  int32 dtsh_failure_count = 18;
+  optional google.protobuf.Timestamp started_at = 19;
+  optional google.protobuf.Timestamp ended_at = 20;
+  int64 duration_seconds = 21;
+  int64 size_bytes = 22;
+  optional google.protobuf.Timestamp retention_until = 23;
+  optional google.protobuf.Timestamp frozen_at = 24;
+  string chapter_mode = 25;
+  int32 chapter_interval_seconds = 26;
+  bool chapter_backfill_complete = 27;
+  string ingest_generation = 28;
+  // "state" key of the durable start-dispatch descriptor ("pending",
+  // "stop_pending"); empty when no dispatch is outstanding.
+  string start_dispatch_state = 29;
+}
+
+message DVRSegmentStatusCount {
+  string status = 1;
+  int64 count = 2;
+}
+
+// DVRSegmentGap is a hole in the segment ledger: media time between the end
+// of every earlier segment and the start of the next one.
+message DVRSegmentGap {
+  int64 start_ms = 1;
+  int64 end_ms = 2;
+  int64 next_sequence = 3;
+}
+
+message DVRSegmentSummary {
+  int64 count = 1;
+  int64 first_media_start_ms = 2;
+  int64 last_media_end_ms = 3;
+  int64 total_duration_ms = 4;
+  int64 total_size_bytes = 5;
+  repeated DVRSegmentStatusCount by_status = 6;
+  // At most the first 100 gaps in media order; gap_count is the total.
+  repeated DVRSegmentGap gaps = 7;
+  int64 gap_count = 8;
+}
+
+message DVRChapterDiagnosis {
+  string chapter_id = 1;
+  string mode = 2;
+  string state = 3;
+  int64 start_ms = 4;
+  int64 end_ms = 5;
+  bool is_current = 6;
+  int32 finalize_attempts = 7;
+  string last_failure_reason = 8;
+  // Job ID of the latest finalize attempt; empty before the first attempt.
+  string finalize_job_id = 9;
+  string finalize_node_id = 10;
+  optional google.protobuf.Timestamp finalize_started_at = 11;
+  optional google.protobuf.Timestamp frozen_at = 12;
+  optional google.protobuf.Timestamp reclaim_started_at = 13;
+  google.protobuf.Timestamp created_at = 14;
+  int32 segment_count = 15;
+  bool has_gaps = 16;
+  string playback_artifact_hash = 17;
+  optional int64 actual_media_start_ms = 18;
+  optional int64 actual_media_end_ms = 19;
+}
+
+message DVRPendingFinalize {
+  string chapter_id = 1;
+  string state = 2;
+  int32 finalize_attempts = 3;
+  string finalize_job_id = 4;
+  string finalize_node_id = 5;
+  optional google.protobuf.Timestamp finalize_started_at = 6;
+  google.protobuf.Timestamp queued_at = 7;
+  string last_failure_reason = 8;
 }
 
 // ViewerControlService handles viewer and ingest endpoint resolution

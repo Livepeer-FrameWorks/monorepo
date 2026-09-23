@@ -498,7 +498,18 @@ func newAdminTokensCreateCmd() *cobra.Command {
 }
 
 func newAdminTokensListCmd() *cobra.Command {
-	return &cobra.Command{Use: "list", Short: "List developer API tokens", RunE: func(cmd *cobra.Command, args []string) error {
+	var allTenants, unsupportedScopes bool
+	var tenantID string
+	cmd := &cobra.Command{Use: "list", Short: "List developer API tokens", RunE: func(cmd *cobra.Command, args []string) error {
+		filter := adminAllTenantTokensFilter{TenantID: strings.TrimSpace(tenantID), UnsupportedScopesOnly: unsupportedScopes}
+		if !allTenants && (filter.TenantID != "" || filter.UnsupportedScopesOnly) {
+			return fmt.Errorf("--tenant-id and --unsupported-scopes require --all-tenants")
+		}
+		if filter.TenantID != "" {
+			if err := validateUUID(filter.TenantID); err != nil {
+				return fmt.Errorf("--tenant-id: %w", err)
+			}
+		}
 		cli, ctxCfg, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
@@ -506,8 +517,15 @@ func newAdminTokensListCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
+		if allTenants {
+			return runTokensListAllTenants(cmd.Context(), cmd.OutOrStdout(), cli, ctxCfg.Auth.JWT, filter, output == "json")
+		}
 		return runTokensList(cmd.Context(), cmd.OutOrStdout(), cli, ctxCfg.Auth.JWT, output == "json")
 	}}
+	cmd.Flags().BoolVar(&allTenants, "all-tenants", false, "list token metadata across every tenant (platform operator)")
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "with --all-tenants: only this tenant's tokens")
+	cmd.Flags().BoolVar(&unsupportedScopes, "unsupported-scopes", false, "with --all-tenants: only tokens holding a permission this release no longer accepts")
+	return cmd
 }
 
 func newAdminTokensRevokeCmd() *cobra.Command {
@@ -1886,6 +1904,7 @@ func newAdminNodesCmd() *cobra.Command {
 	cmd.AddCommand(newAdminNodesListCmd())
 	cmd.AddCommand(newAdminNodesCreateCmd())
 	cmd.AddCommand(newAdminNodesHardwareCmd())
+	cmd.AddCommand(newAdminNodesFingerprintsCmd())
 	return cmd
 }
 

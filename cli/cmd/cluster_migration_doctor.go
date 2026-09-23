@@ -123,11 +123,18 @@ func doctorPostgresMigrations(
 	result.OK = true
 	result.Status = "healthy"
 	if pendingContract > 0 {
-		result.Message = fmt.Sprintf("required ledger consistent up to %s; %d contract migration(s) pending explicit cleanup", targetVersion, pendingContract)
+		result.Message = contractPendingMessage(targetVersion, pendingContract)
 	} else {
 		result.Message = fmt.Sprintf("ledger consistent up to %s", targetVersion)
 	}
 	return result
+}
+
+// contractPendingMessage reports deferred contract migrations as the normal
+// post-release state: release apply never runs them, so they wait out the
+// rollback window until the operator applies them with a fresh backup.
+func contractPendingMessage(targetVersion string, pending int) string {
+	return fmt.Sprintf("ledger consistent up to %s; %d contract migration(s) not run yet — expected during the rollback window; once it closes run `frameworks cluster migrate --phase contract --to-version %s --backup <fresh backup> --yes`", targetVersion, pending, targetVersion)
 }
 
 // postgresDoctorUser returns the local DB user the doctor authenticates as

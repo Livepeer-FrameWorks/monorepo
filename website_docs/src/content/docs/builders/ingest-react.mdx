@@ -168,7 +168,7 @@ function FullyCustomBroadcaster() {
 | `startStreaming()`           | `() => Promise<void>`                        | Go live                   |
 | `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming            |
 | `removeSource(id)`           | `(id: string) => void`                       | Remove a source           |
-| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-1)   |
+| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-2)   |
 | `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source        |
 | `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile    |
 | `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access  |

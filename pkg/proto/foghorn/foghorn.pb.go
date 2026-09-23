@@ -77,6 +77,896 @@ func (MediaAuthorityApplyOutcome) EnumDescriptor() ([]byte, []int) {
 	return file_foghorn_proto_rawDescGZIP(), []int{0}
 }
 
+type DiagnoseDVRRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DvrHash       string                 `protobuf:"bytes,1,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiagnoseDVRRequest) Reset() {
+	*x = DiagnoseDVRRequest{}
+	mi := &file_foghorn_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiagnoseDVRRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiagnoseDVRRequest) ProtoMessage() {}
+
+func (x *DiagnoseDVRRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiagnoseDVRRequest.ProtoReflect.Descriptor instead.
+func (*DiagnoseDVRRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *DiagnoseDVRRequest) GetDvrHash() string {
+	if x != nil {
+		return x.DvrHash
+	}
+	return ""
+}
+
+type DiagnoseDVRResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Recording *DVRRecordingDiagnosis `protobuf:"bytes,1,opt,name=recording,proto3" json:"recording,omitempty"`
+	Segments  *DVRSegmentSummary     `protobuf:"bytes,2,opt,name=segments,proto3" json:"segments,omitempty"`
+	// The latest 1000 chapters of the recording, ordered by start_ms. An
+	// always-on recording can hold more.
+	Chapters []*DVRChapterDiagnosis `protobuf:"bytes,3,rep,name=chapters,proto3" json:"chapters,omitempty"`
+	// Chapters in the finalize queue (state closed or finalizing), in queue
+	// order, at most 1000.
+	PendingFinalize []*DVRPendingFinalize `protobuf:"bytes,4,rep,name=pending_finalize,json=pendingFinalize,proto3" json:"pending_finalize,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DiagnoseDVRResponse) Reset() {
+	*x = DiagnoseDVRResponse{}
+	mi := &file_foghorn_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiagnoseDVRResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiagnoseDVRResponse) ProtoMessage() {}
+
+func (x *DiagnoseDVRResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiagnoseDVRResponse.ProtoReflect.Descriptor instead.
+func (*DiagnoseDVRResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DiagnoseDVRResponse) GetRecording() *DVRRecordingDiagnosis {
+	if x != nil {
+		return x.Recording
+	}
+	return nil
+}
+
+func (x *DiagnoseDVRResponse) GetSegments() *DVRSegmentSummary {
+	if x != nil {
+		return x.Segments
+	}
+	return nil
+}
+
+func (x *DiagnoseDVRResponse) GetChapters() []*DVRChapterDiagnosis {
+	if x != nil {
+		return x.Chapters
+	}
+	return nil
+}
+
+func (x *DiagnoseDVRResponse) GetPendingFinalize() []*DVRPendingFinalize {
+	if x != nil {
+		return x.PendingFinalize
+	}
+	return nil
+}
+
+type DVRRecordingDiagnosis struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	DvrHash                 string                 `protobuf:"bytes,1,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`
+	TenantId                string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamInternalName      string                 `protobuf:"bytes,3,opt,name=stream_internal_name,json=streamInternalName,proto3" json:"stream_internal_name,omitempty"`
+	InternalName            string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	Status                  string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorMessage            string                 `protobuf:"bytes,6,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	OriginClusterId         string                 `protobuf:"bytes,7,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`
+	StorageClusterId        string                 `protobuf:"bytes,8,opt,name=storage_cluster_id,json=storageClusterId,proto3" json:"storage_cluster_id,omitempty"`
+	FederatedPointer        bool                   `protobuf:"varint,9,opt,name=federated_pointer,json=federatedPointer,proto3" json:"federated_pointer,omitempty"`
+	StorageLocation         string                 `protobuf:"bytes,10,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
+	SyncStatus              string                 `protobuf:"bytes,11,opt,name=sync_status,json=syncStatus,proto3" json:"sync_status,omitempty"`
+	SyncError               string                 `protobuf:"bytes,12,opt,name=sync_error,json=syncError,proto3" json:"sync_error,omitempty"`
+	LastSyncAttempt         *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=last_sync_attempt,json=lastSyncAttempt,proto3,oneof" json:"last_sync_attempt,omitempty"`
+	SyncNodeId              string                 `protobuf:"bytes,14,opt,name=sync_node_id,json=syncNodeId,proto3" json:"sync_node_id,omitempty"`
+	SyncFailureCount        int32                  `protobuf:"varint,15,opt,name=sync_failure_count,json=syncFailureCount,proto3" json:"sync_failure_count,omitempty"`
+	DtshSynced              bool                   `protobuf:"varint,16,opt,name=dtsh_synced,json=dtshSynced,proto3" json:"dtsh_synced,omitempty"`
+	DtshStatus              string                 `protobuf:"bytes,17,opt,name=dtsh_status,json=dtshStatus,proto3" json:"dtsh_status,omitempty"`
+	DtshFailureCount        int32                  `protobuf:"varint,18,opt,name=dtsh_failure_count,json=dtshFailureCount,proto3" json:"dtsh_failure_count,omitempty"`
+	StartedAt               *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=started_at,json=startedAt,proto3,oneof" json:"started_at,omitempty"`
+	EndedAt                 *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=ended_at,json=endedAt,proto3,oneof" json:"ended_at,omitempty"`
+	DurationSeconds         int64                  `protobuf:"varint,21,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	SizeBytes               int64                  `protobuf:"varint,22,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	RetentionUntil          *timestamppb.Timestamp `protobuf:"bytes,23,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"`
+	FrozenAt                *timestamppb.Timestamp `protobuf:"bytes,24,opt,name=frozen_at,json=frozenAt,proto3,oneof" json:"frozen_at,omitempty"`
+	ChapterMode             string                 `protobuf:"bytes,25,opt,name=chapter_mode,json=chapterMode,proto3" json:"chapter_mode,omitempty"`
+	ChapterIntervalSeconds  int32                  `protobuf:"varint,26,opt,name=chapter_interval_seconds,json=chapterIntervalSeconds,proto3" json:"chapter_interval_seconds,omitempty"`
+	ChapterBackfillComplete bool                   `protobuf:"varint,27,opt,name=chapter_backfill_complete,json=chapterBackfillComplete,proto3" json:"chapter_backfill_complete,omitempty"`
+	IngestGeneration        string                 `protobuf:"bytes,28,opt,name=ingest_generation,json=ingestGeneration,proto3" json:"ingest_generation,omitempty"`
+	// "state" key of the durable start-dispatch descriptor ("pending",
+	// "stop_pending"); empty when no dispatch is outstanding.
+	StartDispatchState string `protobuf:"bytes,29,opt,name=start_dispatch_state,json=startDispatchState,proto3" json:"start_dispatch_state,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *DVRRecordingDiagnosis) Reset() {
+	*x = DVRRecordingDiagnosis{}
+	mi := &file_foghorn_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRRecordingDiagnosis) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRRecordingDiagnosis) ProtoMessage() {}
+
+func (x *DVRRecordingDiagnosis) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRRecordingDiagnosis.ProtoReflect.Descriptor instead.
+func (*DVRRecordingDiagnosis) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *DVRRecordingDiagnosis) GetDvrHash() string {
+	if x != nil {
+		return x.DvrHash
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetStreamInternalName() string {
+	if x != nil {
+		return x.StreamInternalName
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetInternalName() string {
+	if x != nil {
+		return x.InternalName
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetStorageClusterId() string {
+	if x != nil {
+		return x.StorageClusterId
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetFederatedPointer() bool {
+	if x != nil {
+		return x.FederatedPointer
+	}
+	return false
+}
+
+func (x *DVRRecordingDiagnosis) GetStorageLocation() string {
+	if x != nil {
+		return x.StorageLocation
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetSyncStatus() string {
+	if x != nil {
+		return x.SyncStatus
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetSyncError() string {
+	if x != nil {
+		return x.SyncError
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetLastSyncAttempt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSyncAttempt
+	}
+	return nil
+}
+
+func (x *DVRRecordingDiagnosis) GetSyncNodeId() string {
+	if x != nil {
+		return x.SyncNodeId
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetSyncFailureCount() int32 {
+	if x != nil {
+		return x.SyncFailureCount
+	}
+	return 0
+}
+
+func (x *DVRRecordingDiagnosis) GetDtshSynced() bool {
+	if x != nil {
+		return x.DtshSynced
+	}
+	return false
+}
+
+func (x *DVRRecordingDiagnosis) GetDtshStatus() string {
+	if x != nil {
+		return x.DtshStatus
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetDtshFailureCount() int32 {
+	if x != nil {
+		return x.DtshFailureCount
+	}
+	return 0
+}
+
+func (x *DVRRecordingDiagnosis) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
+}
+
+func (x *DVRRecordingDiagnosis) GetEndedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EndedAt
+	}
+	return nil
+}
+
+func (x *DVRRecordingDiagnosis) GetDurationSeconds() int64 {
+	if x != nil {
+		return x.DurationSeconds
+	}
+	return 0
+}
+
+func (x *DVRRecordingDiagnosis) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *DVRRecordingDiagnosis) GetRetentionUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RetentionUntil
+	}
+	return nil
+}
+
+func (x *DVRRecordingDiagnosis) GetFrozenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FrozenAt
+	}
+	return nil
+}
+
+func (x *DVRRecordingDiagnosis) GetChapterMode() string {
+	if x != nil {
+		return x.ChapterMode
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetChapterIntervalSeconds() int32 {
+	if x != nil {
+		return x.ChapterIntervalSeconds
+	}
+	return 0
+}
+
+func (x *DVRRecordingDiagnosis) GetChapterBackfillComplete() bool {
+	if x != nil {
+		return x.ChapterBackfillComplete
+	}
+	return false
+}
+
+func (x *DVRRecordingDiagnosis) GetIngestGeneration() string {
+	if x != nil {
+		return x.IngestGeneration
+	}
+	return ""
+}
+
+func (x *DVRRecordingDiagnosis) GetStartDispatchState() string {
+	if x != nil {
+		return x.StartDispatchState
+	}
+	return ""
+}
+
+type DVRSegmentStatusCount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Count         int64                  `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DVRSegmentStatusCount) Reset() {
+	*x = DVRSegmentStatusCount{}
+	mi := &file_foghorn_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRSegmentStatusCount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRSegmentStatusCount) ProtoMessage() {}
+
+func (x *DVRSegmentStatusCount) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRSegmentStatusCount.ProtoReflect.Descriptor instead.
+func (*DVRSegmentStatusCount) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DVRSegmentStatusCount) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *DVRSegmentStatusCount) GetCount() int64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+// DVRSegmentGap is a hole in the segment ledger: media time between the end
+// of every earlier segment and the start of the next one.
+type DVRSegmentGap struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StartMs       int64                  `protobuf:"varint,1,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs         int64                  `protobuf:"varint,2,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	NextSequence  int64                  `protobuf:"varint,3,opt,name=next_sequence,json=nextSequence,proto3" json:"next_sequence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DVRSegmentGap) Reset() {
+	*x = DVRSegmentGap{}
+	mi := &file_foghorn_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRSegmentGap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRSegmentGap) ProtoMessage() {}
+
+func (x *DVRSegmentGap) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRSegmentGap.ProtoReflect.Descriptor instead.
+func (*DVRSegmentGap) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *DVRSegmentGap) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *DVRSegmentGap) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *DVRSegmentGap) GetNextSequence() int64 {
+	if x != nil {
+		return x.NextSequence
+	}
+	return 0
+}
+
+type DVRSegmentSummary struct {
+	state             protoimpl.MessageState   `protogen:"open.v1"`
+	Count             int64                    `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	FirstMediaStartMs int64                    `protobuf:"varint,2,opt,name=first_media_start_ms,json=firstMediaStartMs,proto3" json:"first_media_start_ms,omitempty"`
+	LastMediaEndMs    int64                    `protobuf:"varint,3,opt,name=last_media_end_ms,json=lastMediaEndMs,proto3" json:"last_media_end_ms,omitempty"`
+	TotalDurationMs   int64                    `protobuf:"varint,4,opt,name=total_duration_ms,json=totalDurationMs,proto3" json:"total_duration_ms,omitempty"`
+	TotalSizeBytes    int64                    `protobuf:"varint,5,opt,name=total_size_bytes,json=totalSizeBytes,proto3" json:"total_size_bytes,omitempty"`
+	ByStatus          []*DVRSegmentStatusCount `protobuf:"bytes,6,rep,name=by_status,json=byStatus,proto3" json:"by_status,omitempty"`
+	// At most the first 100 gaps in media order; gap_count is the total.
+	Gaps          []*DVRSegmentGap `protobuf:"bytes,7,rep,name=gaps,proto3" json:"gaps,omitempty"`
+	GapCount      int64            `protobuf:"varint,8,opt,name=gap_count,json=gapCount,proto3" json:"gap_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DVRSegmentSummary) Reset() {
+	*x = DVRSegmentSummary{}
+	mi := &file_foghorn_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRSegmentSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRSegmentSummary) ProtoMessage() {}
+
+func (x *DVRSegmentSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRSegmentSummary.ProtoReflect.Descriptor instead.
+func (*DVRSegmentSummary) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DVRSegmentSummary) GetCount() int64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *DVRSegmentSummary) GetFirstMediaStartMs() int64 {
+	if x != nil {
+		return x.FirstMediaStartMs
+	}
+	return 0
+}
+
+func (x *DVRSegmentSummary) GetLastMediaEndMs() int64 {
+	if x != nil {
+		return x.LastMediaEndMs
+	}
+	return 0
+}
+
+func (x *DVRSegmentSummary) GetTotalDurationMs() int64 {
+	if x != nil {
+		return x.TotalDurationMs
+	}
+	return 0
+}
+
+func (x *DVRSegmentSummary) GetTotalSizeBytes() int64 {
+	if x != nil {
+		return x.TotalSizeBytes
+	}
+	return 0
+}
+
+func (x *DVRSegmentSummary) GetByStatus() []*DVRSegmentStatusCount {
+	if x != nil {
+		return x.ByStatus
+	}
+	return nil
+}
+
+func (x *DVRSegmentSummary) GetGaps() []*DVRSegmentGap {
+	if x != nil {
+		return x.Gaps
+	}
+	return nil
+}
+
+func (x *DVRSegmentSummary) GetGapCount() int64 {
+	if x != nil {
+		return x.GapCount
+	}
+	return 0
+}
+
+type DVRChapterDiagnosis struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ChapterId         string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
+	Mode              string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	State             string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	StartMs           int64                  `protobuf:"varint,4,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs             int64                  `protobuf:"varint,5,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	IsCurrent         bool                   `protobuf:"varint,6,opt,name=is_current,json=isCurrent,proto3" json:"is_current,omitempty"`
+	FinalizeAttempts  int32                  `protobuf:"varint,7,opt,name=finalize_attempts,json=finalizeAttempts,proto3" json:"finalize_attempts,omitempty"`
+	LastFailureReason string                 `protobuf:"bytes,8,opt,name=last_failure_reason,json=lastFailureReason,proto3" json:"last_failure_reason,omitempty"`
+	// Job ID of the latest finalize attempt; empty before the first attempt.
+	FinalizeJobId        string                 `protobuf:"bytes,9,opt,name=finalize_job_id,json=finalizeJobId,proto3" json:"finalize_job_id,omitempty"`
+	FinalizeNodeId       string                 `protobuf:"bytes,10,opt,name=finalize_node_id,json=finalizeNodeId,proto3" json:"finalize_node_id,omitempty"`
+	FinalizeStartedAt    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=finalize_started_at,json=finalizeStartedAt,proto3,oneof" json:"finalize_started_at,omitempty"`
+	FrozenAt             *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=frozen_at,json=frozenAt,proto3,oneof" json:"frozen_at,omitempty"`
+	ReclaimStartedAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=reclaim_started_at,json=reclaimStartedAt,proto3,oneof" json:"reclaim_started_at,omitempty"`
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	SegmentCount         int32                  `protobuf:"varint,15,opt,name=segment_count,json=segmentCount,proto3" json:"segment_count,omitempty"`
+	HasGaps              bool                   `protobuf:"varint,16,opt,name=has_gaps,json=hasGaps,proto3" json:"has_gaps,omitempty"`
+	PlaybackArtifactHash string                 `protobuf:"bytes,17,opt,name=playback_artifact_hash,json=playbackArtifactHash,proto3" json:"playback_artifact_hash,omitempty"`
+	ActualMediaStartMs   *int64                 `protobuf:"varint,18,opt,name=actual_media_start_ms,json=actualMediaStartMs,proto3,oneof" json:"actual_media_start_ms,omitempty"`
+	ActualMediaEndMs     *int64                 `protobuf:"varint,19,opt,name=actual_media_end_ms,json=actualMediaEndMs,proto3,oneof" json:"actual_media_end_ms,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *DVRChapterDiagnosis) Reset() {
+	*x = DVRChapterDiagnosis{}
+	mi := &file_foghorn_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRChapterDiagnosis) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRChapterDiagnosis) ProtoMessage() {}
+
+func (x *DVRChapterDiagnosis) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRChapterDiagnosis.ProtoReflect.Descriptor instead.
+func (*DVRChapterDiagnosis) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DVRChapterDiagnosis) GetChapterId() string {
+	if x != nil {
+		return x.ChapterId
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *DVRChapterDiagnosis) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *DVRChapterDiagnosis) GetIsCurrent() bool {
+	if x != nil {
+		return x.IsCurrent
+	}
+	return false
+}
+
+func (x *DVRChapterDiagnosis) GetFinalizeAttempts() int32 {
+	if x != nil {
+		return x.FinalizeAttempts
+	}
+	return 0
+}
+
+func (x *DVRChapterDiagnosis) GetLastFailureReason() string {
+	if x != nil {
+		return x.LastFailureReason
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetFinalizeJobId() string {
+	if x != nil {
+		return x.FinalizeJobId
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetFinalizeNodeId() string {
+	if x != nil {
+		return x.FinalizeNodeId
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetFinalizeStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinalizeStartedAt
+	}
+	return nil
+}
+
+func (x *DVRChapterDiagnosis) GetFrozenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FrozenAt
+	}
+	return nil
+}
+
+func (x *DVRChapterDiagnosis) GetReclaimStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReclaimStartedAt
+	}
+	return nil
+}
+
+func (x *DVRChapterDiagnosis) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *DVRChapterDiagnosis) GetSegmentCount() int32 {
+	if x != nil {
+		return x.SegmentCount
+	}
+	return 0
+}
+
+func (x *DVRChapterDiagnosis) GetHasGaps() bool {
+	if x != nil {
+		return x.HasGaps
+	}
+	return false
+}
+
+func (x *DVRChapterDiagnosis) GetPlaybackArtifactHash() string {
+	if x != nil {
+		return x.PlaybackArtifactHash
+	}
+	return ""
+}
+
+func (x *DVRChapterDiagnosis) GetActualMediaStartMs() int64 {
+	if x != nil && x.ActualMediaStartMs != nil {
+		return *x.ActualMediaStartMs
+	}
+	return 0
+}
+
+func (x *DVRChapterDiagnosis) GetActualMediaEndMs() int64 {
+	if x != nil && x.ActualMediaEndMs != nil {
+		return *x.ActualMediaEndMs
+	}
+	return 0
+}
+
+type DVRPendingFinalize struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ChapterId         string                 `protobuf:"bytes,1,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
+	State             string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	FinalizeAttempts  int32                  `protobuf:"varint,3,opt,name=finalize_attempts,json=finalizeAttempts,proto3" json:"finalize_attempts,omitempty"`
+	FinalizeJobId     string                 `protobuf:"bytes,4,opt,name=finalize_job_id,json=finalizeJobId,proto3" json:"finalize_job_id,omitempty"`
+	FinalizeNodeId    string                 `protobuf:"bytes,5,opt,name=finalize_node_id,json=finalizeNodeId,proto3" json:"finalize_node_id,omitempty"`
+	FinalizeStartedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=finalize_started_at,json=finalizeStartedAt,proto3,oneof" json:"finalize_started_at,omitempty"`
+	QueuedAt          *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=queued_at,json=queuedAt,proto3" json:"queued_at,omitempty"`
+	LastFailureReason string                 `protobuf:"bytes,8,opt,name=last_failure_reason,json=lastFailureReason,proto3" json:"last_failure_reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *DVRPendingFinalize) Reset() {
+	*x = DVRPendingFinalize{}
+	mi := &file_foghorn_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRPendingFinalize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRPendingFinalize) ProtoMessage() {}
+
+func (x *DVRPendingFinalize) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRPendingFinalize.ProtoReflect.Descriptor instead.
+func (*DVRPendingFinalize) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DVRPendingFinalize) GetChapterId() string {
+	if x != nil {
+		return x.ChapterId
+	}
+	return ""
+}
+
+func (x *DVRPendingFinalize) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *DVRPendingFinalize) GetFinalizeAttempts() int32 {
+	if x != nil {
+		return x.FinalizeAttempts
+	}
+	return 0
+}
+
+func (x *DVRPendingFinalize) GetFinalizeJobId() string {
+	if x != nil {
+		return x.FinalizeJobId
+	}
+	return ""
+}
+
+func (x *DVRPendingFinalize) GetFinalizeNodeId() string {
+	if x != nil {
+		return x.FinalizeNodeId
+	}
+	return ""
+}
+
+func (x *DVRPendingFinalize) GetFinalizeStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinalizeStartedAt
+	}
+	return nil
+}
+
+func (x *DVRPendingFinalize) GetQueuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.QueuedAt
+	}
+	return nil
+}
+
+func (x *DVRPendingFinalize) GetLastFailureReason() string {
+	if x != nil {
+		return x.LastFailureReason
+	}
+	return ""
+}
+
 type PreRegisterEdgeRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`   // Bootstrap token for edge enrollment
@@ -88,7 +978,7 @@ type PreRegisterEdgeRequest struct {
 
 func (x *PreRegisterEdgeRequest) Reset() {
 	*x = PreRegisterEdgeRequest{}
-	mi := &file_foghorn_proto_msgTypes[0]
+	mi := &file_foghorn_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -100,7 +990,7 @@ func (x *PreRegisterEdgeRequest) String() string {
 func (*PreRegisterEdgeRequest) ProtoMessage() {}
 
 func (x *PreRegisterEdgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[0]
+	mi := &file_foghorn_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -113,7 +1003,7 @@ func (x *PreRegisterEdgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreRegisterEdgeRequest.ProtoReflect.Descriptor instead.
 func (*PreRegisterEdgeRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{0}
+	return file_foghorn_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PreRegisterEdgeRequest) GetEnrollmentToken() string {
@@ -157,7 +1047,7 @@ type PreRegisterEdgeResponse struct {
 
 func (x *PreRegisterEdgeResponse) Reset() {
 	*x = PreRegisterEdgeResponse{}
-	mi := &file_foghorn_proto_msgTypes[1]
+	mi := &file_foghorn_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -169,7 +1059,7 @@ func (x *PreRegisterEdgeResponse) String() string {
 func (*PreRegisterEdgeResponse) ProtoMessage() {}
 
 func (x *PreRegisterEdgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[1]
+	mi := &file_foghorn_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -182,7 +1072,7 @@ func (x *PreRegisterEdgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreRegisterEdgeResponse.ProtoReflect.Descriptor instead.
 func (*PreRegisterEdgeResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{1}
+	return file_foghorn_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PreRegisterEdgeResponse) GetNodeId() string {
@@ -266,7 +1156,7 @@ type ApplyMediaAuthorityRequest struct {
 
 func (x *ApplyMediaAuthorityRequest) Reset() {
 	*x = ApplyMediaAuthorityRequest{}
-	mi := &file_foghorn_proto_msgTypes[2]
+	mi := &file_foghorn_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +1168,7 @@ func (x *ApplyMediaAuthorityRequest) String() string {
 func (*ApplyMediaAuthorityRequest) ProtoMessage() {}
 
 func (x *ApplyMediaAuthorityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[2]
+	mi := &file_foghorn_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +1181,7 @@ func (x *ApplyMediaAuthorityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyMediaAuthorityRequest.ProtoReflect.Descriptor instead.
 func (*ApplyMediaAuthorityRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{2}
+	return file_foghorn_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ApplyMediaAuthorityRequest) GetAuthority() *media_authority.SignedAuthorityEnvelope {
@@ -317,7 +1207,7 @@ type ApplyMediaAuthorityResponse struct {
 
 func (x *ApplyMediaAuthorityResponse) Reset() {
 	*x = ApplyMediaAuthorityResponse{}
-	mi := &file_foghorn_proto_msgTypes[3]
+	mi := &file_foghorn_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -329,7 +1219,7 @@ func (x *ApplyMediaAuthorityResponse) String() string {
 func (*ApplyMediaAuthorityResponse) ProtoMessage() {}
 
 func (x *ApplyMediaAuthorityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[3]
+	mi := &file_foghorn_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -342,7 +1232,7 @@ func (x *ApplyMediaAuthorityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyMediaAuthorityResponse.ProtoReflect.Descriptor instead.
 func (*ApplyMediaAuthorityResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{3}
+	return file_foghorn_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ApplyMediaAuthorityResponse) GetOutcome() MediaAuthorityApplyOutcome {
@@ -415,7 +1305,7 @@ type MediaCellPlacementCapability struct {
 
 func (x *MediaCellPlacementCapability) Reset() {
 	*x = MediaCellPlacementCapability{}
-	mi := &file_foghorn_proto_msgTypes[4]
+	mi := &file_foghorn_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +1317,7 @@ func (x *MediaCellPlacementCapability) String() string {
 func (*MediaCellPlacementCapability) ProtoMessage() {}
 
 func (x *MediaCellPlacementCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[4]
+	mi := &file_foghorn_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +1330,7 @@ func (x *MediaCellPlacementCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MediaCellPlacementCapability.ProtoReflect.Descriptor instead.
 func (*MediaCellPlacementCapability) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{4}
+	return file_foghorn_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MediaCellPlacementCapability) GetSupportedSchemaVersions() []uint32 {
@@ -505,7 +1395,7 @@ type InvalidatePlaybackAuthRequest struct {
 
 func (x *InvalidatePlaybackAuthRequest) Reset() {
 	*x = InvalidatePlaybackAuthRequest{}
-	mi := &file_foghorn_proto_msgTypes[5]
+	mi := &file_foghorn_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +1407,7 @@ func (x *InvalidatePlaybackAuthRequest) String() string {
 func (*InvalidatePlaybackAuthRequest) ProtoMessage() {}
 
 func (x *InvalidatePlaybackAuthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[5]
+	mi := &file_foghorn_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +1420,7 @@ func (x *InvalidatePlaybackAuthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidatePlaybackAuthRequest.ProtoReflect.Descriptor instead.
 func (*InvalidatePlaybackAuthRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{5}
+	return file_foghorn_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *InvalidatePlaybackAuthRequest) GetTenantId() string {
@@ -581,7 +1471,7 @@ type InvalidatePlaybackAuthResponse struct {
 
 func (x *InvalidatePlaybackAuthResponse) Reset() {
 	*x = InvalidatePlaybackAuthResponse{}
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -593,7 +1483,7 @@ func (x *InvalidatePlaybackAuthResponse) String() string {
 func (*InvalidatePlaybackAuthResponse) ProtoMessage() {}
 
 func (x *InvalidatePlaybackAuthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -606,7 +1496,7 @@ func (x *InvalidatePlaybackAuthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidatePlaybackAuthResponse.ProtoReflect.Descriptor instead.
 func (*InvalidatePlaybackAuthResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{6}
+	return file_foghorn_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *InvalidatePlaybackAuthResponse) GetStreamsInvalidated() int32 {
@@ -665,7 +1555,7 @@ type OverrideArtifactRetentionRequest struct {
 
 func (x *OverrideArtifactRetentionRequest) Reset() {
 	*x = OverrideArtifactRetentionRequest{}
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -677,7 +1567,7 @@ func (x *OverrideArtifactRetentionRequest) String() string {
 func (*OverrideArtifactRetentionRequest) ProtoMessage() {}
 
 func (x *OverrideArtifactRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -690,7 +1580,7 @@ func (x *OverrideArtifactRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OverrideArtifactRetentionRequest.ProtoReflect.Descriptor instead.
 func (*OverrideArtifactRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{7}
+	return file_foghorn_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *OverrideArtifactRetentionRequest) GetTenantId() string {
@@ -752,7 +1642,7 @@ type OverrideArtifactRetentionResponse struct {
 
 func (x *OverrideArtifactRetentionResponse) Reset() {
 	*x = OverrideArtifactRetentionResponse{}
-	mi := &file_foghorn_proto_msgTypes[8]
+	mi := &file_foghorn_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -764,7 +1654,7 @@ func (x *OverrideArtifactRetentionResponse) String() string {
 func (*OverrideArtifactRetentionResponse) ProtoMessage() {}
 
 func (x *OverrideArtifactRetentionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[8]
+	mi := &file_foghorn_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -777,7 +1667,7 @@ func (x *OverrideArtifactRetentionResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use OverrideArtifactRetentionResponse.ProtoReflect.Descriptor instead.
 func (*OverrideArtifactRetentionResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{8}
+	return file_foghorn_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *OverrideArtifactRetentionResponse) GetApplied() bool {
@@ -798,7 +1688,116 @@ var File_foghorn_proto protoreflect.FileDescriptor
 
 const file_foghorn_proto_rawDesc = "" +
 	"\n" +
-	"\rfoghorn.proto\x12\afoghorn\x1a\fcommon.proto\x1a\fshared.proto\x1a\x15foghorn_control.proto\x1a\x15media_authority.proto\x1a\x15media_placement.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x90\x01\n" +
+	"\rfoghorn.proto\x12\afoghorn\x1a\fcommon.proto\x1a\fshared.proto\x1a\x15foghorn_control.proto\x1a\x15media_authority.proto\x1a\x15media_placement.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"/\n" +
+	"\x12DiagnoseDVRRequest\x12\x19\n" +
+	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\"\x8d\x02\n" +
+	"\x13DiagnoseDVRResponse\x12<\n" +
+	"\trecording\x18\x01 \x01(\v2\x1e.foghorn.DVRRecordingDiagnosisR\trecording\x126\n" +
+	"\bsegments\x18\x02 \x01(\v2\x1a.foghorn.DVRSegmentSummaryR\bsegments\x128\n" +
+	"\bchapters\x18\x03 \x03(\v2\x1c.foghorn.DVRChapterDiagnosisR\bchapters\x12F\n" +
+	"\x10pending_finalize\x18\x04 \x03(\v2\x1b.foghorn.DVRPendingFinalizeR\x0fpendingFinalize\"\xfc\n" +
+	"\n" +
+	"\x15DVRRecordingDiagnosis\x12\x19\n" +
+	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x120\n" +
+	"\x14stream_internal_name\x18\x03 \x01(\tR\x12streamInternalName\x12#\n" +
+	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\x12#\n" +
+	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\x12*\n" +
+	"\x11origin_cluster_id\x18\a \x01(\tR\x0foriginClusterId\x12,\n" +
+	"\x12storage_cluster_id\x18\b \x01(\tR\x10storageClusterId\x12+\n" +
+	"\x11federated_pointer\x18\t \x01(\bR\x10federatedPointer\x12)\n" +
+	"\x10storage_location\x18\n" +
+	" \x01(\tR\x0fstorageLocation\x12\x1f\n" +
+	"\vsync_status\x18\v \x01(\tR\n" +
+	"syncStatus\x12\x1d\n" +
+	"\n" +
+	"sync_error\x18\f \x01(\tR\tsyncError\x12K\n" +
+	"\x11last_sync_attempt\x18\r \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0flastSyncAttempt\x88\x01\x01\x12 \n" +
+	"\fsync_node_id\x18\x0e \x01(\tR\n" +
+	"syncNodeId\x12,\n" +
+	"\x12sync_failure_count\x18\x0f \x01(\x05R\x10syncFailureCount\x12\x1f\n" +
+	"\vdtsh_synced\x18\x10 \x01(\bR\n" +
+	"dtshSynced\x12\x1f\n" +
+	"\vdtsh_status\x18\x11 \x01(\tR\n" +
+	"dtshStatus\x12,\n" +
+	"\x12dtsh_failure_count\x18\x12 \x01(\x05R\x10dtshFailureCount\x12>\n" +
+	"\n" +
+	"started_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\tstartedAt\x88\x01\x01\x12:\n" +
+	"\bended_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampH\x02R\aendedAt\x88\x01\x01\x12)\n" +
+	"\x10duration_seconds\x18\x15 \x01(\x03R\x0fdurationSeconds\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x16 \x01(\x03R\tsizeBytes\x12H\n" +
+	"\x0fretention_until\x18\x17 \x01(\v2\x1a.google.protobuf.TimestampH\x03R\x0eretentionUntil\x88\x01\x01\x12<\n" +
+	"\tfrozen_at\x18\x18 \x01(\v2\x1a.google.protobuf.TimestampH\x04R\bfrozenAt\x88\x01\x01\x12!\n" +
+	"\fchapter_mode\x18\x19 \x01(\tR\vchapterMode\x128\n" +
+	"\x18chapter_interval_seconds\x18\x1a \x01(\x05R\x16chapterIntervalSeconds\x12:\n" +
+	"\x19chapter_backfill_complete\x18\x1b \x01(\bR\x17chapterBackfillComplete\x12+\n" +
+	"\x11ingest_generation\x18\x1c \x01(\tR\x10ingestGeneration\x120\n" +
+	"\x14start_dispatch_state\x18\x1d \x01(\tR\x12startDispatchStateB\x14\n" +
+	"\x12_last_sync_attemptB\r\n" +
+	"\v_started_atB\v\n" +
+	"\t_ended_atB\x12\n" +
+	"\x10_retention_untilB\f\n" +
+	"\n" +
+	"_frozen_at\"E\n" +
+	"\x15DVRSegmentStatusCount\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x14\n" +
+	"\x05count\x18\x02 \x01(\x03R\x05count\"f\n" +
+	"\rDVRSegmentGap\x12\x19\n" +
+	"\bstart_ms\x18\x01 \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\x02 \x01(\x03R\x05endMs\x12#\n" +
+	"\rnext_sequence\x18\x03 \x01(\x03R\fnextSequence\"\xe1\x02\n" +
+	"\x11DVRSegmentSummary\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x03R\x05count\x12/\n" +
+	"\x14first_media_start_ms\x18\x02 \x01(\x03R\x11firstMediaStartMs\x12)\n" +
+	"\x11last_media_end_ms\x18\x03 \x01(\x03R\x0elastMediaEndMs\x12*\n" +
+	"\x11total_duration_ms\x18\x04 \x01(\x03R\x0ftotalDurationMs\x12(\n" +
+	"\x10total_size_bytes\x18\x05 \x01(\x03R\x0etotalSizeBytes\x12;\n" +
+	"\tby_status\x18\x06 \x03(\v2\x1e.foghorn.DVRSegmentStatusCountR\bbyStatus\x12*\n" +
+	"\x04gaps\x18\a \x03(\v2\x16.foghorn.DVRSegmentGapR\x04gaps\x12\x1b\n" +
+	"\tgap_count\x18\b \x01(\x03R\bgapCount\"\xc8\a\n" +
+	"\x13DVRChapterDiagnosis\x12\x1d\n" +
+	"\n" +
+	"chapter_id\x18\x01 \x01(\tR\tchapterId\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x14\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12\x19\n" +
+	"\bstart_ms\x18\x04 \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\x05 \x01(\x03R\x05endMs\x12\x1d\n" +
+	"\n" +
+	"is_current\x18\x06 \x01(\bR\tisCurrent\x12+\n" +
+	"\x11finalize_attempts\x18\a \x01(\x05R\x10finalizeAttempts\x12.\n" +
+	"\x13last_failure_reason\x18\b \x01(\tR\x11lastFailureReason\x12&\n" +
+	"\x0ffinalize_job_id\x18\t \x01(\tR\rfinalizeJobId\x12(\n" +
+	"\x10finalize_node_id\x18\n" +
+	" \x01(\tR\x0efinalizeNodeId\x12O\n" +
+	"\x13finalize_started_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x11finalizeStartedAt\x88\x01\x01\x12<\n" +
+	"\tfrozen_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampH\x01R\bfrozenAt\x88\x01\x01\x12M\n" +
+	"\x12reclaim_started_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampH\x02R\x10reclaimStartedAt\x88\x01\x01\x129\n" +
+	"\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12#\n" +
+	"\rsegment_count\x18\x0f \x01(\x05R\fsegmentCount\x12\x19\n" +
+	"\bhas_gaps\x18\x10 \x01(\bR\ahasGaps\x124\n" +
+	"\x16playback_artifact_hash\x18\x11 \x01(\tR\x14playbackArtifactHash\x126\n" +
+	"\x15actual_media_start_ms\x18\x12 \x01(\x03H\x03R\x12actualMediaStartMs\x88\x01\x01\x122\n" +
+	"\x13actual_media_end_ms\x18\x13 \x01(\x03H\x04R\x10actualMediaEndMs\x88\x01\x01B\x16\n" +
+	"\x14_finalize_started_atB\f\n" +
+	"\n" +
+	"_frozen_atB\x15\n" +
+	"\x13_reclaim_started_atB\x18\n" +
+	"\x16_actual_media_start_msB\x16\n" +
+	"\x14_actual_media_end_ms\"\x9a\x03\n" +
+	"\x12DVRPendingFinalize\x12\x1d\n" +
+	"\n" +
+	"chapter_id\x18\x01 \x01(\tR\tchapterId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12+\n" +
+	"\x11finalize_attempts\x18\x03 \x01(\x05R\x10finalizeAttempts\x12&\n" +
+	"\x0ffinalize_job_id\x18\x04 \x01(\tR\rfinalizeJobId\x12(\n" +
+	"\x10finalize_node_id\x18\x05 \x01(\tR\x0efinalizeNodeId\x12O\n" +
+	"\x13finalize_started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x11finalizeStartedAt\x88\x01\x01\x127\n" +
+	"\tqueued_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\bqueuedAt\x12.\n" +
+	"\x13last_failure_reason\x18\b \x01(\tR\x11lastFailureReasonB\x16\n" +
+	"\x14_finalize_started_at\"\x90\x01\n" +
 	"\x16PreRegisterEdgeRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vexternal_ip\x18\x02 \x01(\tR\n" +
@@ -871,7 +1870,7 @@ const file_foghorn_proto_rawDesc = "" +
 	"CreateClip\x12\x19.shared.CreateClipRequest\x1a\x1a.shared.CreateClipResponse\x12C\n" +
 	"\n" +
 	"DeleteClip\x12\x19.shared.DeleteClipRequest\x1a\x1a.shared.DeleteClipResponse\x12g\n" +
-	"\x16DeleteStreamThumbnails\x12%.shared.DeleteStreamThumbnailsRequest\x1a&.shared.DeleteStreamThumbnailsResponse2\x88\x05\n" +
+	"\x16DeleteStreamThumbnails\x12%.shared.DeleteStreamThumbnailsRequest\x1a&.shared.DeleteStreamThumbnailsResponse2\xd2\x05\n" +
 	"\x11DVRControlService\x12=\n" +
 	"\bStartDVR\x12\x17.shared.StartDVRRequest\x1a\x18.shared.StartDVRResponse\x12:\n" +
 	"\aStopDVR\x12\x16.shared.StopDVRRequest\x1a\x17.shared.StopDVRResponse\x12@\n" +
@@ -879,7 +1878,8 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x12RetrieveDVRChapter\x12*.foghorn_control.RetrieveDVRChapterRequest\x1a+.foghorn_control.RetrieveDVRChapterResponse\x12d\n" +
 	"\x0fListDVRChapters\x12'.foghorn_control.ListDVRChaptersRequest\x1a(.foghorn_control.ListDVRChaptersResponse\x12r\n" +
 	"\x19OverrideArtifactRetention\x12).foghorn.OverrideArtifactRetentionRequest\x1a*.foghorn.OverrideArtifactRetentionResponse\x12m\n" +
-	"\x12TestPlaybackAccess\x12*.foghorn_control.TestPlaybackAccessRequest\x1a+.foghorn_control.TestPlaybackAccessResponse2\xc6\x01\n" +
+	"\x12TestPlaybackAccess\x12*.foghorn_control.TestPlaybackAccessRequest\x1a+.foghorn_control.TestPlaybackAccessResponse\x12H\n" +
+	"\vDiagnoseDVR\x12\x1b.foghorn.DiagnoseDVRRequest\x1a\x1c.foghorn.DiagnoseDVRResponse2\xc6\x01\n" +
 	"\x14ViewerControlService\x12V\n" +
 	"\x15ResolveViewerEndpoint\x12\x1d.shared.ViewerEndpointRequest\x1a\x1e.shared.ViewerEndpointResponse\x12V\n" +
 	"\x15ResolveIngestEndpoint\x12\x1d.shared.IngestEndpointRequest\x1a\x1e.shared.IngestEndpointResponse2\xc0\x03\n" +
@@ -915,135 +1915,162 @@ func file_foghorn_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_foghorn_proto_goTypes = []any{
 	(MediaAuthorityApplyOutcome)(0),                        // 0: foghorn.MediaAuthorityApplyOutcome
-	(*PreRegisterEdgeRequest)(nil),                         // 1: foghorn.PreRegisterEdgeRequest
-	(*PreRegisterEdgeResponse)(nil),                        // 2: foghorn.PreRegisterEdgeResponse
-	(*ApplyMediaAuthorityRequest)(nil),                     // 3: foghorn.ApplyMediaAuthorityRequest
-	(*ApplyMediaAuthorityResponse)(nil),                    // 4: foghorn.ApplyMediaAuthorityResponse
-	(*MediaCellPlacementCapability)(nil),                   // 5: foghorn.MediaCellPlacementCapability
-	(*InvalidatePlaybackAuthRequest)(nil),                  // 6: foghorn.InvalidatePlaybackAuthRequest
-	(*InvalidatePlaybackAuthResponse)(nil),                 // 7: foghorn.InvalidatePlaybackAuthResponse
-	(*OverrideArtifactRetentionRequest)(nil),               // 8: foghorn.OverrideArtifactRetentionRequest
-	(*OverrideArtifactRetentionResponse)(nil),              // 9: foghorn.OverrideArtifactRetentionResponse
-	(*common.EdgeTelemetryConfig)(nil),                     // 10: common.EdgeTelemetryConfig
-	(*media_authority.SignedAuthorityEnvelope)(nil),        // 11: media_authority.SignedAuthorityEnvelope
-	(media_authority.AuthorityKind)(0),                     // 12: media_authority.AuthorityKind
-	(*timestamppb.Timestamp)(nil),                          // 13: google.protobuf.Timestamp
-	(*media_placement.CapacityPreviewQuery)(nil),           // 14: media_placement.CapacityPreviewQuery
-	(*media_placement.PushSourcePreviewQuery)(nil),         // 15: media_placement.PushSourcePreviewQuery
-	(*shared.CreateClipRequest)(nil),                       // 16: shared.CreateClipRequest
-	(*shared.DeleteClipRequest)(nil),                       // 17: shared.DeleteClipRequest
-	(*shared.DeleteStreamThumbnailsRequest)(nil),           // 18: shared.DeleteStreamThumbnailsRequest
-	(*shared.StartDVRRequest)(nil),                         // 19: shared.StartDVRRequest
-	(*shared.StopDVRRequest)(nil),                          // 20: shared.StopDVRRequest
-	(*shared.DeleteDVRRequest)(nil),                        // 21: shared.DeleteDVRRequest
-	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 22: foghorn_control.RetrieveDVRChapterRequest
-	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 23: foghorn_control.ListDVRChaptersRequest
-	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 24: foghorn_control.TestPlaybackAccessRequest
-	(*shared.ViewerEndpointRequest)(nil),                   // 25: shared.ViewerEndpointRequest
-	(*shared.IngestEndpointRequest)(nil),                   // 26: shared.IngestEndpointRequest
-	(*shared.CreateVodUploadRequest)(nil),                  // 27: shared.CreateVodUploadRequest
-	(*shared.CompleteVodUploadRequest)(nil),                // 28: shared.CompleteVodUploadRequest
-	(*shared.AbortVodUploadRequest)(nil),                   // 29: shared.AbortVodUploadRequest
-	(*shared.GetVodUploadStatusRequest)(nil),               // 30: shared.GetVodUploadStatusRequest
-	(*shared.DeleteVodAssetRequest)(nil),                   // 31: shared.DeleteVodAssetRequest
-	(*foghorn_control.SetNodeModeRequest)(nil),             // 32: foghorn_control.SetNodeModeRequest
-	(*foghorn_control.GetNodeHealthRequest)(nil),           // 33: foghorn_control.GetNodeHealthRequest
-	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 34: foghorn_control.TerminateTenantStreamsRequest
-	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 35: foghorn_control.InvalidateTenantCacheRequest
-	(*emptypb.Empty)(nil),                                  // 36: google.protobuf.Empty
-	(*media_placement.CapacityPreviewObservation)(nil),     // 37: media_placement.CapacityPreviewObservation
-	(*media_placement.PushSourcePreviewObservation)(nil),   // 38: media_placement.PushSourcePreviewObservation
-	(*shared.CreateClipResponse)(nil),                      // 39: shared.CreateClipResponse
-	(*shared.DeleteClipResponse)(nil),                      // 40: shared.DeleteClipResponse
-	(*shared.DeleteStreamThumbnailsResponse)(nil),          // 41: shared.DeleteStreamThumbnailsResponse
-	(*shared.StartDVRResponse)(nil),                        // 42: shared.StartDVRResponse
-	(*shared.StopDVRResponse)(nil),                         // 43: shared.StopDVRResponse
-	(*shared.DeleteDVRResponse)(nil),                       // 44: shared.DeleteDVRResponse
-	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 45: foghorn_control.RetrieveDVRChapterResponse
-	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 46: foghorn_control.ListDVRChaptersResponse
-	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 47: foghorn_control.TestPlaybackAccessResponse
-	(*shared.ViewerEndpointResponse)(nil),                  // 48: shared.ViewerEndpointResponse
-	(*shared.IngestEndpointResponse)(nil),                  // 49: shared.IngestEndpointResponse
-	(*shared.CreateVodUploadResponse)(nil),                 // 50: shared.CreateVodUploadResponse
-	(*shared.CompleteVodUploadResponse)(nil),               // 51: shared.CompleteVodUploadResponse
-	(*shared.AbortVodUploadResponse)(nil),                  // 52: shared.AbortVodUploadResponse
-	(*shared.GetVodUploadStatusResponse)(nil),              // 53: shared.GetVodUploadStatusResponse
-	(*shared.DeleteVodAssetResponse)(nil),                  // 54: shared.DeleteVodAssetResponse
-	(*foghorn_control.SetNodeModeResponse)(nil),            // 55: foghorn_control.SetNodeModeResponse
-	(*foghorn_control.GetNodeHealthResponse)(nil),          // 56: foghorn_control.GetNodeHealthResponse
-	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 57: foghorn_control.TerminateTenantStreamsResponse
-	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 58: foghorn_control.InvalidateTenantCacheResponse
+	(*DiagnoseDVRRequest)(nil),                             // 1: foghorn.DiagnoseDVRRequest
+	(*DiagnoseDVRResponse)(nil),                            // 2: foghorn.DiagnoseDVRResponse
+	(*DVRRecordingDiagnosis)(nil),                          // 3: foghorn.DVRRecordingDiagnosis
+	(*DVRSegmentStatusCount)(nil),                          // 4: foghorn.DVRSegmentStatusCount
+	(*DVRSegmentGap)(nil),                                  // 5: foghorn.DVRSegmentGap
+	(*DVRSegmentSummary)(nil),                              // 6: foghorn.DVRSegmentSummary
+	(*DVRChapterDiagnosis)(nil),                            // 7: foghorn.DVRChapterDiagnosis
+	(*DVRPendingFinalize)(nil),                             // 8: foghorn.DVRPendingFinalize
+	(*PreRegisterEdgeRequest)(nil),                         // 9: foghorn.PreRegisterEdgeRequest
+	(*PreRegisterEdgeResponse)(nil),                        // 10: foghorn.PreRegisterEdgeResponse
+	(*ApplyMediaAuthorityRequest)(nil),                     // 11: foghorn.ApplyMediaAuthorityRequest
+	(*ApplyMediaAuthorityResponse)(nil),                    // 12: foghorn.ApplyMediaAuthorityResponse
+	(*MediaCellPlacementCapability)(nil),                   // 13: foghorn.MediaCellPlacementCapability
+	(*InvalidatePlaybackAuthRequest)(nil),                  // 14: foghorn.InvalidatePlaybackAuthRequest
+	(*InvalidatePlaybackAuthResponse)(nil),                 // 15: foghorn.InvalidatePlaybackAuthResponse
+	(*OverrideArtifactRetentionRequest)(nil),               // 16: foghorn.OverrideArtifactRetentionRequest
+	(*OverrideArtifactRetentionResponse)(nil),              // 17: foghorn.OverrideArtifactRetentionResponse
+	(*timestamppb.Timestamp)(nil),                          // 18: google.protobuf.Timestamp
+	(*common.EdgeTelemetryConfig)(nil),                     // 19: common.EdgeTelemetryConfig
+	(*media_authority.SignedAuthorityEnvelope)(nil),        // 20: media_authority.SignedAuthorityEnvelope
+	(media_authority.AuthorityKind)(0),                     // 21: media_authority.AuthorityKind
+	(*media_placement.CapacityPreviewQuery)(nil),           // 22: media_placement.CapacityPreviewQuery
+	(*media_placement.PushSourcePreviewQuery)(nil),         // 23: media_placement.PushSourcePreviewQuery
+	(*shared.CreateClipRequest)(nil),                       // 24: shared.CreateClipRequest
+	(*shared.DeleteClipRequest)(nil),                       // 25: shared.DeleteClipRequest
+	(*shared.DeleteStreamThumbnailsRequest)(nil),           // 26: shared.DeleteStreamThumbnailsRequest
+	(*shared.StartDVRRequest)(nil),                         // 27: shared.StartDVRRequest
+	(*shared.StopDVRRequest)(nil),                          // 28: shared.StopDVRRequest
+	(*shared.DeleteDVRRequest)(nil),                        // 29: shared.DeleteDVRRequest
+	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 30: foghorn_control.RetrieveDVRChapterRequest
+	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 31: foghorn_control.ListDVRChaptersRequest
+	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 32: foghorn_control.TestPlaybackAccessRequest
+	(*shared.ViewerEndpointRequest)(nil),                   // 33: shared.ViewerEndpointRequest
+	(*shared.IngestEndpointRequest)(nil),                   // 34: shared.IngestEndpointRequest
+	(*shared.CreateVodUploadRequest)(nil),                  // 35: shared.CreateVodUploadRequest
+	(*shared.CompleteVodUploadRequest)(nil),                // 36: shared.CompleteVodUploadRequest
+	(*shared.AbortVodUploadRequest)(nil),                   // 37: shared.AbortVodUploadRequest
+	(*shared.GetVodUploadStatusRequest)(nil),               // 38: shared.GetVodUploadStatusRequest
+	(*shared.DeleteVodAssetRequest)(nil),                   // 39: shared.DeleteVodAssetRequest
+	(*foghorn_control.SetNodeModeRequest)(nil),             // 40: foghorn_control.SetNodeModeRequest
+	(*foghorn_control.GetNodeHealthRequest)(nil),           // 41: foghorn_control.GetNodeHealthRequest
+	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 42: foghorn_control.TerminateTenantStreamsRequest
+	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 43: foghorn_control.InvalidateTenantCacheRequest
+	(*emptypb.Empty)(nil),                                  // 44: google.protobuf.Empty
+	(*media_placement.CapacityPreviewObservation)(nil),     // 45: media_placement.CapacityPreviewObservation
+	(*media_placement.PushSourcePreviewObservation)(nil),   // 46: media_placement.PushSourcePreviewObservation
+	(*shared.CreateClipResponse)(nil),                      // 47: shared.CreateClipResponse
+	(*shared.DeleteClipResponse)(nil),                      // 48: shared.DeleteClipResponse
+	(*shared.DeleteStreamThumbnailsResponse)(nil),          // 49: shared.DeleteStreamThumbnailsResponse
+	(*shared.StartDVRResponse)(nil),                        // 50: shared.StartDVRResponse
+	(*shared.StopDVRResponse)(nil),                         // 51: shared.StopDVRResponse
+	(*shared.DeleteDVRResponse)(nil),                       // 52: shared.DeleteDVRResponse
+	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 53: foghorn_control.RetrieveDVRChapterResponse
+	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 54: foghorn_control.ListDVRChaptersResponse
+	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 55: foghorn_control.TestPlaybackAccessResponse
+	(*shared.ViewerEndpointResponse)(nil),                  // 56: shared.ViewerEndpointResponse
+	(*shared.IngestEndpointResponse)(nil),                  // 57: shared.IngestEndpointResponse
+	(*shared.CreateVodUploadResponse)(nil),                 // 58: shared.CreateVodUploadResponse
+	(*shared.CompleteVodUploadResponse)(nil),               // 59: shared.CompleteVodUploadResponse
+	(*shared.AbortVodUploadResponse)(nil),                  // 60: shared.AbortVodUploadResponse
+	(*shared.GetVodUploadStatusResponse)(nil),              // 61: shared.GetVodUploadStatusResponse
+	(*shared.DeleteVodAssetResponse)(nil),                  // 62: shared.DeleteVodAssetResponse
+	(*foghorn_control.SetNodeModeResponse)(nil),            // 63: foghorn_control.SetNodeModeResponse
+	(*foghorn_control.GetNodeHealthResponse)(nil),          // 64: foghorn_control.GetNodeHealthResponse
+	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 65: foghorn_control.TerminateTenantStreamsResponse
+	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 66: foghorn_control.InvalidateTenantCacheResponse
 }
 var file_foghorn_proto_depIdxs = []int32{
-	10, // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
-	11, // 1: foghorn.ApplyMediaAuthorityRequest.authority:type_name -> media_authority.SignedAuthorityEnvelope
-	0,  // 2: foghorn.ApplyMediaAuthorityResponse.outcome:type_name -> foghorn.MediaAuthorityApplyOutcome
-	12, // 3: foghorn.ApplyMediaAuthorityResponse.authority_kind:type_name -> media_authority.AuthorityKind
-	5,  // 4: foghorn.ApplyMediaAuthorityResponse.placement_capability:type_name -> foghorn.MediaCellPlacementCapability
-	13, // 5: foghorn.OverrideArtifactRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
-	13, // 6: foghorn.OverrideArtifactRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
-	14, // 7: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:input_type -> media_placement.CapacityPreviewQuery
-	15, // 8: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:input_type -> media_placement.PushSourcePreviewQuery
-	16, // 9: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
-	17, // 10: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
-	18, // 11: foghorn.ClipControlService.DeleteStreamThumbnails:input_type -> shared.DeleteStreamThumbnailsRequest
-	19, // 12: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
-	20, // 13: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
-	21, // 14: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	22, // 15: foghorn.DVRControlService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
-	23, // 16: foghorn.DVRControlService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
-	8,  // 17: foghorn.DVRControlService.OverrideArtifactRetention:input_type -> foghorn.OverrideArtifactRetentionRequest
-	24, // 18: foghorn.DVRControlService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
-	25, // 19: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	26, // 20: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	27, // 21: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	28, // 22: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	29, // 23: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	30, // 24: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
-	31, // 25: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,  // 26: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
-	32, // 27: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
-	33, // 28: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
-	34, // 29: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
-	35, // 30: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
-	6,  // 31: foghorn.TenantControlService.InvalidatePlaybackAuth:input_type -> foghorn.InvalidatePlaybackAuthRequest
-	3,  // 32: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:input_type -> foghorn.ApplyMediaAuthorityRequest
-	36, // 33: foghorn.MediaAuthorityControlService.GetMediaCellPlacementCapability:input_type -> google.protobuf.Empty
-	37, // 34: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:output_type -> media_placement.CapacityPreviewObservation
-	38, // 35: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:output_type -> media_placement.PushSourcePreviewObservation
-	39, // 36: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
-	40, // 37: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
-	41, // 38: foghorn.ClipControlService.DeleteStreamThumbnails:output_type -> shared.DeleteStreamThumbnailsResponse
-	42, // 39: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
-	43, // 40: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
-	44, // 41: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	45, // 42: foghorn.DVRControlService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
-	46, // 43: foghorn.DVRControlService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
-	9,  // 44: foghorn.DVRControlService.OverrideArtifactRetention:output_type -> foghorn.OverrideArtifactRetentionResponse
-	47, // 45: foghorn.DVRControlService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
-	48, // 46: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	49, // 47: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	50, // 48: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	51, // 49: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	52, // 50: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	53, // 51: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
-	54, // 52: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	2,  // 53: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
-	55, // 54: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
-	56, // 55: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
-	57, // 56: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
-	58, // 57: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
-	7,  // 58: foghorn.TenantControlService.InvalidatePlaybackAuth:output_type -> foghorn.InvalidatePlaybackAuthResponse
-	4,  // 59: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:output_type -> foghorn.ApplyMediaAuthorityResponse
-	5,  // 60: foghorn.MediaAuthorityControlService.GetMediaCellPlacementCapability:output_type -> foghorn.MediaCellPlacementCapability
-	34, // [34:61] is the sub-list for method output_type
-	7,  // [7:34] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	3,  // 0: foghorn.DiagnoseDVRResponse.recording:type_name -> foghorn.DVRRecordingDiagnosis
+	6,  // 1: foghorn.DiagnoseDVRResponse.segments:type_name -> foghorn.DVRSegmentSummary
+	7,  // 2: foghorn.DiagnoseDVRResponse.chapters:type_name -> foghorn.DVRChapterDiagnosis
+	8,  // 3: foghorn.DiagnoseDVRResponse.pending_finalize:type_name -> foghorn.DVRPendingFinalize
+	18, // 4: foghorn.DVRRecordingDiagnosis.last_sync_attempt:type_name -> google.protobuf.Timestamp
+	18, // 5: foghorn.DVRRecordingDiagnosis.started_at:type_name -> google.protobuf.Timestamp
+	18, // 6: foghorn.DVRRecordingDiagnosis.ended_at:type_name -> google.protobuf.Timestamp
+	18, // 7: foghorn.DVRRecordingDiagnosis.retention_until:type_name -> google.protobuf.Timestamp
+	18, // 8: foghorn.DVRRecordingDiagnosis.frozen_at:type_name -> google.protobuf.Timestamp
+	4,  // 9: foghorn.DVRSegmentSummary.by_status:type_name -> foghorn.DVRSegmentStatusCount
+	5,  // 10: foghorn.DVRSegmentSummary.gaps:type_name -> foghorn.DVRSegmentGap
+	18, // 11: foghorn.DVRChapterDiagnosis.finalize_started_at:type_name -> google.protobuf.Timestamp
+	18, // 12: foghorn.DVRChapterDiagnosis.frozen_at:type_name -> google.protobuf.Timestamp
+	18, // 13: foghorn.DVRChapterDiagnosis.reclaim_started_at:type_name -> google.protobuf.Timestamp
+	18, // 14: foghorn.DVRChapterDiagnosis.created_at:type_name -> google.protobuf.Timestamp
+	18, // 15: foghorn.DVRPendingFinalize.finalize_started_at:type_name -> google.protobuf.Timestamp
+	18, // 16: foghorn.DVRPendingFinalize.queued_at:type_name -> google.protobuf.Timestamp
+	19, // 17: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
+	20, // 18: foghorn.ApplyMediaAuthorityRequest.authority:type_name -> media_authority.SignedAuthorityEnvelope
+	0,  // 19: foghorn.ApplyMediaAuthorityResponse.outcome:type_name -> foghorn.MediaAuthorityApplyOutcome
+	21, // 20: foghorn.ApplyMediaAuthorityResponse.authority_kind:type_name -> media_authority.AuthorityKind
+	13, // 21: foghorn.ApplyMediaAuthorityResponse.placement_capability:type_name -> foghorn.MediaCellPlacementCapability
+	18, // 22: foghorn.OverrideArtifactRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	18, // 23: foghorn.OverrideArtifactRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
+	22, // 24: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:input_type -> media_placement.CapacityPreviewQuery
+	23, // 25: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:input_type -> media_placement.PushSourcePreviewQuery
+	24, // 26: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
+	25, // 27: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
+	26, // 28: foghorn.ClipControlService.DeleteStreamThumbnails:input_type -> shared.DeleteStreamThumbnailsRequest
+	27, // 29: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
+	28, // 30: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
+	29, // 31: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	30, // 32: foghorn.DVRControlService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
+	31, // 33: foghorn.DVRControlService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
+	16, // 34: foghorn.DVRControlService.OverrideArtifactRetention:input_type -> foghorn.OverrideArtifactRetentionRequest
+	32, // 35: foghorn.DVRControlService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
+	1,  // 36: foghorn.DVRControlService.DiagnoseDVR:input_type -> foghorn.DiagnoseDVRRequest
+	33, // 37: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	34, // 38: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	35, // 39: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	36, // 40: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	37, // 41: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	38, // 42: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
+	39, // 43: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	9,  // 44: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
+	40, // 45: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
+	41, // 46: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
+	42, // 47: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
+	43, // 48: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
+	14, // 49: foghorn.TenantControlService.InvalidatePlaybackAuth:input_type -> foghorn.InvalidatePlaybackAuthRequest
+	11, // 50: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:input_type -> foghorn.ApplyMediaAuthorityRequest
+	44, // 51: foghorn.MediaAuthorityControlService.GetMediaCellPlacementCapability:input_type -> google.protobuf.Empty
+	45, // 52: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:output_type -> media_placement.CapacityPreviewObservation
+	46, // 53: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:output_type -> media_placement.PushSourcePreviewObservation
+	47, // 54: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
+	48, // 55: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
+	49, // 56: foghorn.ClipControlService.DeleteStreamThumbnails:output_type -> shared.DeleteStreamThumbnailsResponse
+	50, // 57: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
+	51, // 58: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
+	52, // 59: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	53, // 60: foghorn.DVRControlService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
+	54, // 61: foghorn.DVRControlService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
+	17, // 62: foghorn.DVRControlService.OverrideArtifactRetention:output_type -> foghorn.OverrideArtifactRetentionResponse
+	55, // 63: foghorn.DVRControlService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
+	2,  // 64: foghorn.DVRControlService.DiagnoseDVR:output_type -> foghorn.DiagnoseDVRResponse
+	56, // 65: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	57, // 66: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	58, // 67: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	59, // 68: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	60, // 69: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	61, // 70: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
+	62, // 71: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	10, // 72: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
+	63, // 73: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
+	64, // 74: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
+	65, // 75: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
+	66, // 76: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
+	15, // 77: foghorn.TenantControlService.InvalidatePlaybackAuth:output_type -> foghorn.InvalidatePlaybackAuthResponse
+	12, // 78: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:output_type -> foghorn.ApplyMediaAuthorityResponse
+	13, // 79: foghorn.MediaAuthorityControlService.GetMediaCellPlacementCapability:output_type -> foghorn.MediaCellPlacementCapability
+	52, // [52:80] is the sub-list for method output_type
+	24, // [24:52] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_proto_init() }
@@ -1051,13 +2078,16 @@ func file_foghorn_proto_init() {
 	if File_foghorn_proto != nil {
 		return
 	}
+	file_foghorn_proto_msgTypes[2].OneofWrappers = []any{}
+	file_foghorn_proto_msgTypes[6].OneofWrappers = []any{}
+	file_foghorn_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_proto_rawDesc), len(file_foghorn_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   9,
 		},

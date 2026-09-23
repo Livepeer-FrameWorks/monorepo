@@ -11,21 +11,21 @@ tags:
   - ai
 ---
 
-A question we see constantly, in some form: "my viewers keep buffering, what's wrong?" There is no docs page that answers that. Answering it means looking at the stream — rebuffer ratio, packet loss, which edges the viewers landed on, whether the encoder is keeping up. Half of a good answer lives in documentation; the other half lives in the running system.
+A question we see often, in some form, is "my viewers keep buffering, what's wrong?" No docs page answers that. Answering it means looking at the stream (rebuffer ratio, packet loss, which edges the viewers landed on, whether the encoder is keeping up) as well as the documentation.
 
-Skipper puts both halves behind one interface. It's an AI video consultant built into FrameWorks: it searches curated streaming documentation, runs diagnostics against your live streams, generates API operations from the current schema, and, in authenticated dashboard chat, can manage streams and billing for you.
+Skipper does both. It's an AI video consultant built into FrameWorks: it searches curated streaming documentation, runs diagnostics against your live streams, generates API operations from the current schema, and, in authenticated dashboard chat, can manage streams and billing for you.
 
-It connects through the same [MCP gateway](/agents/mcp) that external agents use. Same GraphQL API, same tool registry, same authorization checks. Skipper has no private backdoor into the platform, so anything it can do, your own agents can do too. In the dashboard it operates with your authenticated account context. On the docs site it runs read-only. Over MCP, `ask_consultant` runs the full consultant pipeline with mutation tools blocked; agents that intend to change platform state call the dedicated Gateway tools, which carry their own authorization.
+It connects through the same [MCP gateway](/agents/mcp) that external agents use. Same GraphQL API, same tool registry, same authorization checks. Skipper has no private access path into the platform; anything it can do, your own agents can do too. In the dashboard it operates with your authenticated account context. On the docs site it runs read-only. Over MCP, `ask_consultant` runs the full consultant pipeline with mutation tools blocked; agents that intend to change platform state call the dedicated Gateway tools, which carry their own authorization.
 
 ## What it does
 
 Ask "why is stream X buffering" and Skipper pulls real data: rebuffering patterns, packet loss, buffer health, routing decisions. The kind of diagnosis that takes 30 minutes of dashboard-hopping by hand comes back as one answer with the evidence attached.
 
-Ask "give me a Python script that creates a stream" and it introspects the live GraphQL schema, generates the operation, and wraps it in working code. The schema introspection happens at query time, so the output matches your current API version rather than whatever the training data remembers.
+Ask "give me a Python script that creates a stream" and it introspects the live GraphQL schema, generates the operation, and wraps it in working code. The schema introspection happens at query time, so the output matches your current API version rather than an API shape from the model's training data.
 
 Knowledge questions go to a curated corpus spanning 10+ streaming domains: FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, DASH, WebRTC, nginx-rtmp, Livepeer. Retrieval is semantic, and source-backed answers include citations.
 
-And in authenticated dashboard chat it can act: create streams, refresh keys, clip the last 30 seconds of a broadcast, start DVR recording, upload VOD assets, check your balance, initiate supported crypto top-ups, or resolve x402 payment flows — through the same GraphQL API you'd call directly, just conversationally.
+And in authenticated dashboard chat it can act: create streams, refresh keys, clip the last 30 seconds of a broadcast, start DVR recording, upload VOD assets, check your balance, initiate supported crypto top-ups, or resolve x402 payment flows, all through the same GraphQL API you'd call directly.
 
 ## It tells you when it's guessing
 
@@ -68,7 +68,7 @@ graph TD
     end
 ```
 
-That sounds like standard RAG because it mostly is. A scheduled crawler indexes the documentation sources; it handles static sites and JavaScript-heavy SPAs by detecting pages that need rendering and processing those in headless Chrome. Content extraction uses Mozilla's Readability to strip navigation and boilerplate. Pages are chunked to roughly 500 tokens, embedded, and stored in Postgres with pgvector, and three layers of change detection (source TTL, HTTP 304, content hashing) keep unchanged pages from being re-embedded.
+The retrieval pipeline is standard RAG. A scheduled crawler indexes the documentation sources; it handles static sites and JavaScript-heavy SPAs by detecting pages that need rendering and processing those in headless Chrome. Content extraction uses Mozilla's Readability to strip navigation and boilerplate. Pages are chunked to roughly 500 tokens, embedded, and stored in Postgres with pgvector, and three layers of change detection (source TTL, HTTP 304, content hashing) keep unchanged pages from being re-embedded.
 
 At query time, retrieval combines vector cosine similarity with Postgres full-text search, then reranks and deduplicates per source before the model sees any context. Topics the knowledge base doesn't cover fall back to web search via Tavily, Brave, or SearXNG.
 
@@ -78,11 +78,11 @@ Every conversation is persisted with token counts, confidence levels, source met
 
 ## Heartbeat monitoring
 
-The other half of Skipper is watching streams nobody is asking about. For eligible tenants, a heartbeat agent runs every `HEARTBEAT_INTERVAL` (default 30 minutes), fetches stream health and client QoE metrics from Periscope, and compares them against Welford running baselines it builds over time. The triage is deterministic and runs before any LLM gets involved:
+Skipper also monitors streams on a schedule. For eligible tenants, a heartbeat agent runs every `HEARTBEAT_INTERVAL` (default 30 minutes), fetches stream health and client QoE metrics from Periscope, and compares them against Welford running baselines it builds over time. The triage is deterministic and runs before any LLM gets involved:
 
 - **Threshold violations** — hard limits on rebuffer ratio, packet loss, and similar metrics trigger an investigation directly.
 - **Cross-metric correlations** — deviation patterns are matched against 5 failure hypotheses (network degradation, encoder overload, viewer-side issues, ingest instability, CDN pressure). Confidence is matched signals over expected signals; 50% or more triggers investigation.
-- **Baseline deviations** — metrics beyond 2σ from the running mean are flagged, with a 5-sample minimum so warmup noise doesn't page anyone.
+- **Baseline deviations** — metrics beyond 2σ from the running mean are flagged, with a 5-sample minimum so warmup noise doesn't trigger an investigation.
 
 When investigation is warranted, Skipper hands the orchestrator the diagnostic context — deviations, correlations, per-stream anomalies — and produces a structured report with root cause and recommendations. Per-stream drill-down compares each stream against the tenant-wide baseline and surfaces the most anomalous ones, up to 20. Infrastructure monitoring separately checks node-level CPU, memory, and disk across clusters, with persistence confirmation so a transient spike doesn't fire an alert. Notifications go out via configured email, WebSocket, or MCP channels.
 

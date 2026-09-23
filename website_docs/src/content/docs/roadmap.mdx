@@ -31,18 +31,14 @@ What ships today in this area: [Platform capabilities → Streaming](/platform/f
 
 ### Pull-Input Streams <Badge text="Now" variant="success" />
 
-Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics.
-
-The remaining diagnostics should make failures from RTSP cameras, SRT/RIST feeds, HLS origins,
-MPEG-TS sources, and Mist/DTSC sources easier to identify.
+Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics across RTSP cameras, SRT/RIST feeds, HLS origins, MPEG-TS sources, and Mist/DTSC sources.
 
 ### Device Discovery and Contribution Inputs <Badge text="Next" variant="tip" />
 
 The media engine already has experimental local discovery and local-source creation paths. The
 FrameWorks work is productizing that capability around an Edge node: packaging it into the edge
 runtime, exposing it through the API and dashboard, and making it usable from the Tray app and CLI.
-It composes with the rest of the edge story: a discovered camera becomes a managed stream, and the
-same node can run live AI on that feed.
+A discovered camera becomes a managed stream, and the same node can run live AI on that feed.
 
 This depends on edge clusters and the Tray/CLI companion runtime. An on-prem FrameWorks Edge will
 discover cameras, PTZ devices, NDI sources, USB capture,
@@ -55,10 +51,7 @@ What ships today in this area: [Platform capabilities → Playback](/platform/fe
 
 ### DRM <Badge text="Next" variant="tip" />
 
-FairPlay, Widevine, and PlayReady support is in development. Until DRM lands, premium playback workflows that require it should stay on their existing provider.
-
-Built on playback access control and the player SDKs, DRM will protect premium playback without
-moving delivery out of the FrameWorks control plane.
+FairPlay, Widevine, and PlayReady support is in development, built on playback access control and the player SDKs. Until DRM lands, premium playback workflows that require it should stay on their existing provider.
 
 ## Media Library
 
@@ -68,9 +61,6 @@ What ships today in this area: [Platform capabilities → Media Library](/platfo
 
 Two scheduling layers are planned on the recording and VOD foundations. Scheduled recordings are calendar-driven DVR captures for places of worship, periodic events, classes, and any workflow where a stream goes live on a known schedule: recording starts and stops automatically against a stream that may already be live 24/7, and the operator does not need to be at the desk when the window opens. Scheduled VOD streams are linear live channels assembled from existing VOD assets: the scheduler selects finalized artifacts, verifies or pre-hydrates frozen assets before their playout window, and materializes a rolling live stream without bypassing artifact ownership, retention, or billing semantics.
 
-A weekly service or lecture will be able to record on its own schedule, while a VOD catalog can
-become a programmed live channel. Resulting assets stay in the normal library lifecycle.
-
 ## Processing & AI
 
 What ships today in this area: [Platform capabilities → Processing & AI](/platform/feature-matrix#processing--ai).
@@ -79,27 +69,17 @@ What ships today in this area: [Platform capabilities → Processing & AI](/plat
 
 Livepeer Gateway integration is active. We are expanding native controls, plan-aware defaults, and dashboard/API workflows for adaptive renditions.
 
-This makes ABR available when the source bitrate or viewer networks make one rendition impractical.
-
 ### Live AI Processing <Badge text="Next" variant="tip" />
 
 An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work. Pilot access is available via contact.
 
-The work builds on processing orchestration and edge clusters: small models run where the stream
-already is, while heavier models can move to dedicated compute under the same control plane.
-
 ### Workload Cost Model <Badge text="Next" variant="tip" />
 
-Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. GPU and VRAM become first-class, measured resources.
-
-This extends processing orchestration and the capacity score used by viewer routing so transcode and
-AI jobs can be placed before they overload a node.
+Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. The scheduler will measure and allocate GPU and VRAM. The model extends processing orchestration and the capacity score used by viewer routing, so transcode and AI jobs are placed before they overload a node.
 
 ### Composition and SSAI <Badge text="Later" variant="note" />
 
 Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
-
-These tools would put more production work under the same controls as ingest, delivery, assets, and analytics.
 
 ## Analytics & Observability
 
@@ -108,9 +88,6 @@ What ships today in this area: [Platform capabilities → Analytics & Observabil
 ### View-Level QoE Analytics <Badge text="Now" variant="success" />
 
 Stream and routing analytics already exist, and first-party view-level QoE now ships for the FrameWorks player — rebuffering, frame drops, startup time-to-first-frame, and per-asset VOD retention/watch-density. The active telemetry pass is reducing time-to-first-frame and measuring and reducing cross-region stream-replication time. What's still ahead is the breadth: QoE capture from third-party / non-FrameWorks players and deeper per-view tracing.
-
-The broader coverage should explain which viewers buffered, why, and which route or rendition they
-used, including viewers outside the FrameWorks player.
 
 ### Incidents and Alerts <Badge text="Now" variant="success" />
 
@@ -130,77 +107,47 @@ What ships today in this area: [Platform capabilities → Infrastructure & BYOC]
 
 ### Bring Your Own Edge <Badge text="Now" variant="success" />
 
-The supported BYOC level is edge-only: bring your own MistServer and Helmsman nodes while FrameWorks operates Foghorn, federation, DNS/TLS, Livepeer, Chandler, durable storage, analytics, billing, and access control. Virtual private clusters are logical tenant-private slices of that provider-operated routing plane. Teams can mix their edge capacity with managed FrameWorks regions or list spare edge capacity without operating a federation peer.
-
-The result is a production MistServer edge without a separate integration project for DNS,
-certificates, routing, observability, billing, and access control.
+Bring your own MistServer and Helmsman nodes while FrameWorks operates Foghorn, federation, DNS/TLS, Livepeer, Chandler, durable storage, analytics, billing, and access control. Virtual private clusters are logical tenant-private slices of that FrameWorks-operated routing plane. Teams can mix their edge capacity with managed FrameWorks regions or list spare edge capacity without operating a federation peer. Teams that want to run Foghorn and the rest of the platform themselves can self-host the entire stack as an independent platform with the [operator guides](/operators/deployment).
 
 ### Dedicated Provider Capacity <Badge text="Next" variant="tip" />
 
-FrameWorks-provisioned dedicated capacity remains future work: isolated provider-operated nodes for one tenant, with reserved-capacity pricing and an operator console. Customer-operated Foghorn is not part of this roadmap because it also implies self-hosting federation identity, Livepeer, Chandler, object storage, DNS, analytics, and the control plane.
-
-This builds on edge clusters, virtual private routing slices, and the planned Edge images. It gives
-tenants reserved provider capacity without requiring a hand-built control plane.
+FrameWorks-provisioned dedicated capacity remains future work: isolated provider-operated nodes for one tenant, with reserved-capacity pricing and an operator console, built on edge clusters, virtual private routing slices, and the planned Edge images. Running Foghorn on your own infrastructure is covered by full self-hosting, which also means running federation identity, Livepeer, Chandler, object storage, DNS, analytics, and the control plane yourself.
 
 ### Edge ISO and Cloud Images <Badge text="Next" variant="tip" />
 
 Edge enrollment and bootstrap exist today; the packaging is next: a bootable FrameWorks Edge ISO for bare metal and prebuilt images with cloud-marketplace listings (AWS, GCP, DigitalOcean, Hetzner, Linode, Vultr) so a media cluster can scale on demand. The same images serve FrameWorks' own capacity and BYOC deployments, and they are groundwork for hosted-private-cluster provisioning automation.
 
-The packaging will let operators boot an edge from an ISO or marketplace image and add media
-capacity without assembling the host by hand.
-
 ### Public Cluster Marketplace <Badge text="Next" variant="tip" />
 
 Marketplace primitives — listing, invites, subscription requests, approvals, preferred-cluster routing, pricing models, and metered/custom rating — ship today. The remaining work is the public operating model: operator vetting, published commercial terms, support boundaries, and a production onboarding workflow for third-party capacity.
 
-The public program will add a defined support and trust contract to the marketplace plumbing that
-already ships.
-
 ### Placement Policy and Storage Tiering <Badge text="Next" variant="tip" />
 
-Where content lives becomes policy-driven from two sides: cluster owners declare what workload they accept, content owners declare where their material may go — data residency, minimum durable copies — and both compile into signed enforcement bundles evaluated at every decision point (serve, ingest, process, store, replicate, peer). Underneath sits a storage tier ladder from cold archive to hot in-memory, with a ledger of which copies exist where.
-
-Built on BYOC ownership levels and the cluster marketplace, one policy model will cover managed
-SaaS, customer edge capacity, and authorized federation peers.
+Where content lives becomes policy-driven from two sides: cluster owners declare what workload they accept, content owners declare where their material may go — data residency, minimum durable copies — and both compile into signed enforcement bundles evaluated at every decision point (serve, ingest, process, store, replicate, peer). Underneath sits a storage tier ladder from cold archive to hot in-memory, with a ledger of which copies exist where. The same policy model will cover managed SaaS, customer edge capacity, and authorized federation peers.
 
 ### Stream Replication Orchestration <Badge text="Next" variant="tip" />
 
 Replication today is on-demand: a viewer shows up, the edge pulls the stream. Orchestration adds the proactive half — pre-emptively spreading a stream to a cell or region ahead of expected demand, explicit hop topology between origin and edge, and per-stream replication policy (replica caps, allowed regions).
 
-This extends federation and viewer routing so streams can be positioned ahead of expected demand
-under an explicit per-stream policy.
-
 ### Federation State Synchronization <Badge text="Next" variant="tip" />
 
 Federation-wide configuration and state distribution today flows through one central management point. This work makes it decentral: clusters and servers of independent parties join, leave, or drop offline at will; concurrent changes from multiple parties resolve automatically without a central coordinator; and parts of the network that diverge during a partition reconverge when connectivity returns.
-
-The goal is a federation that can continue changing and later converge when one participant is
-offline or partitioned.
 
 ### NAT-Aware Routing and Traversal <Badge text="Next" variant="tip" />
 
 Self-hosted nodes often sit behind NAT, where reachability depends on NAT type and connection direction. The control plane gains NAT-type classification as a routing and placement signal, coordination of traversal attempts between the right node pairs, and platform-managed probe/relay infrastructure that also measures inter-server network performance (latency, throughput) as an input to routing and capacity decisions — so a node in an office network participates fully in the federated network.
 
-This builds on edge clusters and federation. Routing and placement will account for reachability
-instead of assuming every node accepts an inbound connection.
-
 ### Platform Trust and Operations Hardening <Badge text="Next" variant="tip" />
 
 Two operational deepenings of the platform itself: live rotation of trust material (intermediate CA rotation with overlapping validity, asymmetric token signing where keys never leave the issuing service, cluster-bound service identity) and drain-integrated OS updates, where each server role defines what a safe restart means — media sessions run out, database replicas gate on recovery, brokers hand over leadership — while cluster capacity floors hold during the update wave.
-
-Together, these changes let long-lived clusters rotate trust and patch hosts while preserving
-capacity during the update wave.
 
 ### Managed DNS, Proxying, and Storage Services <Badge text="Later" variant="note" />
 
 Managed DNS, generic CDN/proxying, and standalone object/block storage are backlog items adjacent to video delivery. FrameWorks already runs DNS automation, service proxying, and media storage internally for operated deployments; the roadmap work is turning the right parts into customer-facing products with domains, origins, Ceph-backed storage resources, self-hosted/Anycast DNS paths, policies, billing, and support boundaries.
 
-Each service needs an explicit customer API, policy, billing model, and support boundary before it
-can move beyond internal operator infrastructure.
-
 ### Product Boundary: Customer-Operated Control Plane
 
-Customer-operated Foghorn, federation identity, Livepeer, Chandler, object storage, DNS, analytics stores, and the FrameWorks control plane are not part of the edge roadmap. They form a separate whole-platform distribution and trust model rather than a deeper edge tier. The supported BYOC path remains MistServer/Helmsman edge capacity attached to the FrameWorks-operated provider plane.
+FrameWorks supports three ways to run: hosted, self-hosted edges attached to the FrameWorks platform, and full self-hosting of the entire stack (control plane, Foghorn, edges, Livepeer, Chandler, databases, analytics, and interfaces) as an independent platform deployed with the `frameworks` CLI; see the [operator guides](/operators/deployment). A self-hosted platform has its own Foghorn, federation identity, and trust root. Federating an independently operated platform with the FrameWorks platform as one network, such as a customer Foghorn joining the FrameWorks network or mixing trust roots, is not supported and is not on the roadmap.
 
 ## Commerce & Billing
 
@@ -210,14 +157,9 @@ What ships today in this area: [Platform capabilities → Commerce & Billing](/p
 
 In a federated network, one viewer session can cross clusters run by different operators. Settlement attributes every served byte to the operator who actually carried it — manipulation-resistant, so no participant can claim traffic they didn't serve — and closes the loop: credit accrual, operator-visible reporting, and payout execution. The accrual ledger exists internally today; the attribution hardening, reporting surface, and payouts are the roadmap work.
 
-Built on the marketplace and federation network, the finished workflow will let operators verify
-the traffic attributed to them before payout.
-
 ### Stream-Level Balances <Badge text="Later" variant="note" />
 
 Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
-
-This would let audience or sponsor funding pay for a stream before drawing from the tenant balance.
 
 ## Developer Platform & Agents
 
@@ -229,11 +171,9 @@ We are expanding agent-facing workflows around operational diagnostics, billing 
 
 Agents use the same underlying controls as humans, with confirmation gates retained for sensitive or billable actions.
 
-### Backend SDKs <Badge text="Later" variant="note" />
+### More SDK languages <Badge text="Later" variant="note" />
 
-Server-side SDKs are planned for Node, Python, PHP, Ruby, Elixir, Java, and C#, wrapping the GraphQL API, webhook verification, uploads, and access-token/JWT workflows. Delivery is phased, starting with Node and Python. Frontend packages for the player and StreamCrafter ship today.
-
-The SDKs will wrap common GraphQL, upload, webhook-verification, and token flows.
+The [TypeScript, Go, and Python SDKs](/builders/sdks) ship today. SDKs for PHP, Ruby, Elixir, Java, and C# would be generated from the same operation set and pass the same conformance fixtures. Until then, those languages use the GraphQL API directly and a Standard Webhooks library for webhook verification.
 
 ## Engagement & Interactivity
 
@@ -243,20 +183,13 @@ What ships today in this area: [Platform capabilities → Engagement & Interacti
 
 The next major feature theme after the current telemetry pass. Conferencing brings multi-party WebRTC rooms and remote contribution — a commentator or guest joins a room and their audio (video later) is mixed into the managed stream. Viewer chat ships alongside it as the first surface of the rooms service.
 
-The planned workflow brings guests and commentators into the managed stream and adds first-party viewer chat.
-
 ### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 
 Beyond chat, the rooms service grows into engagement primitives synced to the stream: channel points, hype trains, leaderboards, viewer flair, viewer games, and moderation views with per-viewer history. Events bind to the stream timeline per viewer — everyone sees a reaction at the moment it belongs to, regardless of how far behind the live edge they watch.
 
-These primitives will keep engagement state aligned with each viewer's position in the stream timeline.
-
 ### Live Commerce (Shopping and Auctions) <Badge text="Next" variant="tip" />
 
-Shopping and auctions attached to live streams: product showcases, carts and orders, and server-authoritative auction mechanics. The hard problem is latency fairness — viewers watch at different distances behind the live edge, so interactive events must bind to the stream timeline, and competitive interactions like auction closes need one authoritative truth that treats differently-delayed bidders fairly.
-
-This depends on rooms, timeline-aware interactivity, and stream-level balances. Auction state remains
-server-authoritative so viewers at different playback delays receive a consistent result.
+Shopping and auctions attached to live streams: product showcases, carts and orders, and server-authoritative auction mechanics. The hard problem is latency fairness — viewers watch at different distances behind the live edge, so interactive events must bind to the stream timeline, and competitive interactions like auction closes need one authoritative truth that treats differently-delayed bidders fairly. This depends on rooms, timeline-aware interactivity, and stream-level balances.
 
 ## Account & Apps
 
@@ -264,12 +197,8 @@ What ships today in this area: [Platform capabilities → Account & Apps](/platf
 
 ### Team Accounts and Permissions <Badge text="Next" variant="tip" />
 
-Multi-user accounts, role-based permissions, and audit visibility are planned for tenants that need shared operations.
-
-Roles will separate owner, operator, developer, and finance access without a shared credential.
+Multi-user accounts, role-based permissions (owner, operator, developer, finance), and audit visibility are planned for tenants that need shared operations.
 
 ### Mobile Apps and Help Center <Badge text="Later" variant="note" />
 
 Native mobile apps and an integrated help center are planned, but they come after the core platform surfaces are complete.
-
-The mobile and help surfaces will reuse the same account and platform controls.

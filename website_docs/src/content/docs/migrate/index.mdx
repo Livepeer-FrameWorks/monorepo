@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-Moving to FrameWorks from another platform? This section is the home of our **migration program**: dedicated guides for the platforms we see most often, a generic guide for the ones we haven't written up yet, and a standing offer to help you 1:1 if your case doesn't fit a template.
+This section holds the FrameWorks **migration program**: dedicated guides for the platforms we see most often, a generic guide for the rest, and 1:1 help when your case doesn't fit a guide.
 
 ## Why teams move
 
-- **One branded URL across every operator you use.** Paid tenants get `{tenant}.cdn.frameworks.network` plus per-service aliases (`edge-ingest.{tenant}.cdn.frameworks.network`, `foghorn.{tenant}.cdn.frameworks.network`, ...) that geo-balance across every cluster you subscribe to — your own self-hosted nodes, FrameWorks platform clusters, and any third-party marketplace clusters. One URL, one cert, one operational view. No competitor spans operator trust boundaries this way.
+- **One branded URL across every operator you use.** Paid tenants get `{tenant}.cdn.frameworks.network` plus per-service aliases (`edge-ingest.{tenant}.cdn.frameworks.network`, `foghorn.{tenant}.cdn.frameworks.network`, ...) that geo-balance across every cluster you subscribe to — your own self-hosted nodes, FrameWorks platform clusters, and any third-party marketplace clusters.
 - **Always-on DVR without arbitrary rollover.** Run long-lived live channels, keep one continuous archive, and replay historical windows through finalized chapter artifacts.
 - **API and agent parity.** The dashboard, GraphQL API, and MCP tools expose the same platform controls, so human operators and autonomous agents can use the same workflows.
 - **Hybrid edge options.** Use managed regions, your own edge clusters, or both, while keeping routing, analytics, and playback access control in one control plane.
@@ -33,7 +33,7 @@ Moving to FrameWorks from another platform? This section is the home of our **mi
   <LinkCard
     title="Bunny Stream"
     href="/migrate/bunny-stream"
-    description="Available now — VOD/CDN swap, plus first-class live ingest you don't get from Bunny Stream today."
+    description="Available now — VOD/CDN swap, plus RTMP/SRT/WHIP live ingest, which Bunny Stream doesn't offer today."
   />
   <LinkCard
     title="Mux"
@@ -81,7 +81,7 @@ encoder-config converter.
 Regardless of where you're coming from, the moves are the same:
 
 1. **Create a FrameWorks account and a first stream.** Wallet sign-in works if you'd rather skip email.
-2. **Repoint your encoder.** RTMP, RTMPS, E-RTMP, WHIP, or SRT — the URL changes; the protocols stay.
+2. **Repoint your encoder.** RTMP, E-RTMP, WHIP, or SRT — the URL changes; the protocols stay. RTMPS encoders move to RTMP, or to SRT or WHIP for an encrypted link.
 3. **Swap the player.** `@livepeer-frameworks/player-*` ships React, Svelte, Web Components, and a vanilla core.
 4. **Rewire your API integration.** Most platforms are REST; FrameWorks is GraphQL-first. See [Any video API](/migrate/generic) for the universals.
 5. **Review playback access policies.** Public playback IDs are straightforward; JWT/webhook gating needs a separate plan.
@@ -97,7 +97,7 @@ A few things differ from most peers, so we surface them once here instead of rep
   recordings, uploads, multistream targets, billing, account) arrive as Standard Webhooks-signed
   [webhooks](/builders/webhooks) or live over the `tenantEvents` subscription, with the same
   payloads. High-volume telemetry such as viewer connections stays subscription-only.
-- **Wallet auth + x402 for agents.** Autonomous callers don't need an account. Sign with an EVM wallet (EIP-191) or attach a gasless USDC payment (EIP-3009) and go. See [Agent Access](/agents/overview).
+- **Wallet auth + x402 for agents.** Autonomous callers don't need an email signup. Sign with an EVM wallet (EIP-191) to get a tenant, then top it up with a gasless USDC payment (EIP-3009); x402 funds an authenticated tenant and is never a login credential. See [Agent Access](/agents/overview).
 - **Managed hybrid edges.** You can run MistServer and Helmsman edge nodes on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane.
 - **Skipper.** The in-product AI consultant runs diagnostics (rebuffering, packet loss, routing), explains the API, and is reachable from the dashboard, the docs (`⌘J`), or via MCP. Treat it as a first-line support channel.
 

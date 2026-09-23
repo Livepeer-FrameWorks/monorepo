@@ -91,6 +91,33 @@ mutation {
 `allowedKids` empty = any active tenant key. Restricting it to specific kids
 limits which keys can mint tokens for this object.
 
+To require an audience or custom claim values, add `requiredAudience` and
+`requiredClaimsJson`. Each `requiredClaimsJson` entry is a
+`PlaybackJwtClaimRequirementInput` with the claim `name` and its expected
+value as JSON in `jsonValue` (a string value keeps its quotes):
+
+```graphql
+mutation {
+  setPlaybackPolicy(
+    input: {
+      streamId: "stream_abc123"
+      policy: {
+        type: JWT
+        jwt: {
+          allowedKids: ["KID_FROM_STEP_1"]
+          requiredAudience: ["viewer"]
+          requiredClaimsJson: [{ name: "tier", jsonValue: "\"pro\"" }]
+        }
+      }
+    }
+  ) {
+    ... on Stream {
+      id
+    }
+  }
+}
+```
+
 Setting a policy automatically:
 
 - Flips the stream's `requiresAuth` marker to `true`.
@@ -104,6 +131,9 @@ ES256 only. Header must include `kid` matching one of the policy's allowed
 kids. Standard claims: `exp` (required), `iat`, `nbf`, `aud` (if your policy
 requires it), plus any custom claims your policy specifies.
 
+The [TypeScript, Go, and Python SDKs](/builders/sdks#sign-playback-tokens) include a signer that
+sets the `kid` header and these claims for you. Without an SDK, any ES256-capable JWT library works:
+
 **Node.js example** (`jsonwebtoken`):
 
 ```js
@@ -116,7 +146,7 @@ const token = jwt.sign(
   {
     sub: viewerId, // your internal viewer ID
     aud: "viewer", // optional, matches policy.requiredAudience
-    tier: "pro", // optional, matches policy.requiredClaims
+    tier: "pro", // optional, matches policy.requiredClaimsJson
   },
   privateKey,
   {
@@ -133,6 +163,8 @@ const token = jwt.sign(
 import (
     "crypto/x509"
     "encoding/pem"
+    "time"
+
     "github.com/golang-jwt/jwt/v5"
 )
 
@@ -240,11 +272,13 @@ your endpoint directly.
 import crypto from "crypto";
 
 app.post("/playback-access", express.raw({ type: "application/json" }), (req, res) => {
-  const sig = req.headers["x-frameworks-signature"]; // "sha256=<hex>"
-  const expected =
+  const sig = Buffer.from(req.get("x-frameworks-signature") ?? ""); // "sha256=<hex>"
+  const expected = Buffer.from(
     "sha256=" +
-    crypto.createHmac("sha256", process.env.FW_WEBHOOK_SECRET).update(req.body).digest("hex");
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+      crypto.createHmac("sha256", process.env.FW_WEBHOOK_SECRET).update(req.body).digest("hex")
+  );
+  // timingSafeEqual throws on buffers of different length, so check the length first.
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(sig, expected)) {
     return res.sendStatus(403);
   }
 
@@ -311,11 +345,13 @@ play without a token (subject to a brief reconnect blip).
   healthy network is sub-second; a partitioned cluster catches up as soon
   as it is reachable again. Sessions on the affected edges drop and
   re-fire `USER_NEW` against the fresh policy.
-- **Distinct deny reasons.** Logs distinguish missing-token, bad-kid,
-  wrong-alg, sig-fail, exp, claim-mismatch, webhook-deny-403,
-  webhook-error-status, webhook-timeout, webhook-network, and
-  webhook-blocked-ssrf so you can tell customer-misconfigured from
-  attack-attempt from infrastructure-error.
+- **Distinct deny reasons.** Logs distinguish `missing-token`,
+  `jwt-unknown-kid`, `jwt-wrong-alg`, `jwt-sig-fail`, `jwt-expired`,
+  `jwt-claim-mismatch`, `webhook-deny-403`, `webhook-error-status`,
+  `webhook-timeout`, `webhook-network`, and `webhook-blocked-ssrf`, among
+  others, so you can tell customer misconfiguration from attack attempts
+  from infrastructure errors. The full list is under
+  [Testing a policy](#testing-a-policy).
 - **Derived asset boundary.** Authorized endpoint resolution may return
   thumbnail metadata and Chandler thumbnail URLs. Media playback is enforced
   at resolve time and `USER_NEW`; Chandler thumbnail URLs and already-shared
@@ -383,19 +419,26 @@ mutation TestJWT {
 
 Common deny reasons map 1:1 with what's logged on real denies:
 
-| Reason               | Meaning                                                                |
-| -------------------- | ---------------------------------------------------------------------- |
-| `missing-token`      | Policy is JWT but no token was provided                                |
-| `jwt-not-a-jws`      | String isn't a valid JOSE compact serialization                        |
-| `jwt-missing-kid`    | Header has no `kid` claim                                              |
-| `jwt-unknown-kid`    | `kid` doesn't match any active signing key                             |
-| `jwt-wrong-alg`      | Algorithm header isn't ES256                                           |
-| `jwt-sig-fail`       | Signature didn't verify against the matching public key                |
-| `jwt-expired`        | `exp` is in the past (60s skew tolerance)                              |
-| `jwt-not-yet-valid`  | `nbf` is in the future                                                 |
-| `jwt-aud-mismatch`   | `aud` claim doesn't match `requiredAudience`                           |
-| `jwt-claim-mismatch` | A `requiredClaims` entry didn't match the token's claim value          |
-| `no-active-keys`     | Policy is JWT but no active signing keys are configured for the tenant |
+| Reason                   | Meaning                                                                             |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `missing-token`          | Policy is JWT but no token was provided                                             |
+| `jwt-not-a-jws`          | String isn't a valid JOSE compact serialization                                     |
+| `jwt-missing-kid`        | Header has no `kid` claim                                                           |
+| `jwt-unknown-kid`        | `kid` doesn't match any active signing key                                          |
+| `jwt-wrong-alg`          | Algorithm header isn't ES256                                                        |
+| `jwt-sig-fail`           | Signature didn't verify against the matching public key                             |
+| `jwt-missing-exp`        | The token has no `exp` claim                                                        |
+| `jwt-expired`            | `exp` is in the past (60s skew tolerance)                                           |
+| `jwt-not-yet-valid`      | `nbf` is in the future                                                              |
+| `jwt-aud-mismatch`       | `aud` claim doesn't match `requiredAudience`                                        |
+| `jwt-claim-mismatch`     | A `requiredClaimsJson` entry didn't match the token's claim value                   |
+| `jwt-bad-public-key`     | The stored signing key for the `kid` is not a parseable ES256 public key            |
+| `jwt-verify-error`       | Verification failed for a reason not listed above                                   |
+| `no-active-keys`         | Policy is JWT but no active signing keys are configured for the tenant              |
+| `webhook-no-url`         | Policy is webhook but has no URL configured                                         |
+| `policy-fetch-failed`    | The stream requires auth but its policy could not be loaded                         |
+| `policy-marker-unknown`  | Whether the stream requires auth is unknown and its policy could not be loaded      |
+| `local-authority-denied` | The edge's local signed media authority denies playback, or has passed its validity |
 
 ### Test a webhook
 
@@ -420,7 +463,7 @@ mutation TestWebhook {
 }
 ```
 
-`fireWebhook: false` returns the resolved policy shape with `reason: "webhook-test-skipped"` so you can confirm what URL would be called without actually firing it. `fireWebhook: true` makes the same SSRF-hardened request the live evaluator uses — private/loopback/CGNAT IPs are blocked at dial time.
+`fireWebhook: false` makes no request and returns `allowed: false`, `policyType: "webhook"`, and `reason: "webhook-test-skipped"`. It confirms that a webhook policy is in effect; it does not return the configured URL. `fireWebhook: true` makes the same SSRF-hardened request the live evaluator uses — private/loopback/CGNAT IPs are blocked at dial time.
 
 The webapp exposes both flows under the **Playback Auth** tab on a stream's detail page.
 

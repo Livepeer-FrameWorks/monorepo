@@ -40,8 +40,10 @@ Open your deployed Listmonk URL and sign in with:
 - Password: `LISTMONK_ADMIN_PASSWORD`
 
 If the browser redirects to `http://localhost:9000`, force-refresh the login
-page. If it persists, verify `settings.app.root_url` in the `listmonk`
-database.
+page. If it persists, check that `LISTMONK_FRONTEND_URL` in GitOps is your
+public Listmonk URL and re-run `frameworks cluster provision`, which writes it
+to `app.root_url`. If you can sign in, you can also correct **Root URL** under
+**Settings → General**.
 
 ## General Settings
 

@@ -125,7 +125,7 @@ If you prefer a traditional token flow:
 }
 ```
 
-Get API tokens from **Developer → API** in the dashboard.
+Get API tokens from **Developer → Credentials** in the dashboard.
 
 ## Auto-Provisioning
 
@@ -133,7 +133,7 @@ When a new wallet authenticates for the first time:
 
 1. A new **tenant** is created with `billing_model = 'prepaid'`.
 2. A new **user** is created (email is `NULL`).
-3. **Prepaid balance** is initialized at $0.
+3. **Prepaid balance** is initialized at €0.
 4. A **wallet identity** record links the wallet address to the user and tenant.
 
 The agent can immediately read `account://status`. `account_ready` remains true

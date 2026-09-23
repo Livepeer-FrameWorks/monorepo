@@ -11,13 +11,13 @@ tags:
   - kafka
 ---
 
-FrameWorks now runs two regions: eu-west and us-east. A viewer in Virginia gets a US edge, a US Foghorn routing decision, US Redis, and a US Kafka cluster absorbing the event firehose. What they don't get is a second source of truth — and the design work in this expansion was mostly about that second half.
+FrameWorks now runs two regions: eu-west and us-east. A viewer in Virginia gets a US edge, a US Foghorn routing decision, US Redis, and a US Kafka cluster absorbing the event firehose. State and billing stay in one place; most of the design work went into keeping it that way.
 
 ## What runs where
 
 Each region is a full media cell: Foghorn for routing, edge nodes, a Livepeer gateway for transcoding, Redis with Sentinel (a master, two replicas, and a three-sentinel quorum per region), the realtime layer, the event ingest path, and its own Kafka cluster. Kafka runs KRaft — three brokers and three controllers per region, replication factor 3, `min_insync_replicas: 2`, and no ZooKeeper anywhere. We retired the last ZooKeeper reference this spring; consensus lives in the controllers now.
 
-The center of gravity stays in the EU: the distributed SQL cluster that backs the platform services, ClickHouse for analytics, and the control plane — provisioning, tenant management, billing, DNS. Media and events are regional; state and money are central.
+Central services stay in the EU: the distributed SQL cluster that backs the platform services, ClickHouse for analytics, and the control plane (provisioning, tenant management, billing, DNS).
 
 The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology
 manifest; every other region is `role: regional`. MirrorMaker2 runs as coordinated workers in each
@@ -80,15 +80,15 @@ model.
 
 Mirroring is at-least-once, regions can partition, and billing sits downstream of all of it. Most of the design effort went into the guarantees.
 
-Every event carries an envelope with a UUIDv7 `event_id`, its source region, and its source cluster. ClickHouse tables dedup on `event_id` (with ingest-side dedup in front), which turns at-least-once mirroring into effectively-once analytics: a replayed or double-mirrored event collapses into the same row. Ordering is only guaranteed per partition, and nothing pretends otherwise — consumers reconstruct truth on read rather than trusting arrival order.
+Every event carries an envelope with a UUIDv7 `event_id`, its source region, and its source cluster. ClickHouse tables dedup on `event_id` (with ingest-side dedup in front), which turns at-least-once mirroring into effectively-once analytics: a replayed or double-mirrored event collapses into the same row. Ordering is only guaranteed per partition, so consumers reconstruct state on read rather than trusting arrival order.
 
 Events that carry state (billing, artifact lifecycle, provisioning) don't go fire-and-forget. Producers write them to a local outbox table in the same transaction as the state change; a drain worker ships them to Decklog and catches up after any outage, so a regional event-pipeline blip delays those events without losing them. Loss-tolerant telemetry — API usage counters, load-balancing samples — skips the outbox and accepts the loss window.
 
-The billing read model takes one more step. Finalized facts (a viewer session ended, a processing segment completed) land in append-only tables — deliberately _not_ ClickHouse's self-deduplicating table engine, because two parser instances racing during a consumer-group rebalance plus a merge-timing window can eat a fact before anyone notices. Readers materialize the current truth with `min`/`argMax` at query time, and when two writers disagree about a fact, the divergence is recorded in an audit table and surfaced as a metric rather than silently overwritten.
+The billing read model takes one more step. Finalized facts (a viewer session ended, a processing segment completed) land in append-only tables — deliberately _not_ ClickHouse's self-deduplicating table engine, because two parser instances racing during a consumer-group rebalance plus a merge-timing window can drop a fact without any error. Readers materialize the current truth with `min`/`argMax` at query time, and when two writers disagree about a fact, the divergence is recorded in an audit table and surfaced as a metric rather than silently overwritten.
 
 ## What it looks like from outside
 
-Media startup and routing decisions never wait on the ocean. Cross-region realtime dashboard
+Media startup and routing decisions never wait on a cross-region round trip. Cross-region realtime dashboard
 updates traverse the narrow MM2 link asynchronously, while local updates remain local. Analytics
 dashboards aggregate both regions because the durable data converges on the aggregator. A tenant's
 bill covers usage in every region because Purser reads the aggregate path. And

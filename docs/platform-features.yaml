@@ -525,7 +525,7 @@ features:
   - slug: clips
     name: Clips
     area: media-library
-    description: Time-range clips extracted from streams or recordings.
+    description: Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL.
     status: shipped
     required_surfaces:
       graphql: { required: true }
@@ -1255,13 +1255,15 @@ features:
   - slug: byoc-ownership
     name: BYOC ownership levels
     area: infrastructure
-    description: The supported ownership boundary for bring-your-own edge capacity and adjacent unsupported control-plane models.
+    description: The three supported ways to own a FrameWorks deployment — hosted, self-hosted edges attached to the FrameWorks platform, or the entire stack self-hosted — and the one unsupported combination between them.
     status: partial
     gap_reason: |
-      Edge-only self-hosting ships today: customers operate MistServer and Helmsman while FrameWorks operates Foghorn,
-      federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane. A virtual private
-      cluster is a tenant-private provider-Foghorn routing slice, not a customer Foghorn. Customer-operated Foghorn and
-      sovereign media/control planes are not supported product scope.
+      Three ownership levels ship. Hosted: FrameWorks runs everything. Self-hosted edge: you run the edge bundle
+      (Caddy, MistServer, Helmsman) and FrameWorks runs Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS,
+      analytics, billing, and the control plane; a virtual private cluster is a tenant-private slice of that
+      provider-run Foghorn plane. Full self-host: you run the whole public-domain stack as an independent platform,
+      provisioned and upgraded with the frameworks CLI from a GitOps repository. Not supported: federating an
+      independently operated platform (its own Foghorn and control plane) with the FrameWorks platform as one network.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -1272,10 +1274,10 @@ features:
         pages: [hybrid/overview.mdx]
     subitems:
       - slug: byo-media-cluster
-        name: Customer-operated media control plane
-        description: Operate Foghorn and its coupled media/data services outside the FrameWorks provider plane.
+        name: Federating a self-hosted platform with FrameWorks
+        description: Run your own Foghorn and control plane and federate them with the FrameWorks platform as one network, sharing routing, capacity, and tenants across both operators.
         status: gap
-        gap_reason: Not a supported extension of self-hosted edge. Operating Foghorn also requires a separate federation trust root plus compatible Livepeer, Chandler, object storage, DNS, analytics, and control-plane services.
+        gap_reason: Not supported. A fully self-hosted deployment runs as an independent platform with its own federation trust root, Livepeer, Chandler, storage, DNS, analytics, and control plane; federation between independently operated platforms does not exist. Attach edges to the FrameWorks platform, or run the entire stack yourself.
         depends_on: [edge-clusters, federation-network]
         required_surfaces:
           graphql: { required: true }
@@ -1296,16 +1298,31 @@ features:
           docs: { required: true }
 
       - slug: sovereign-self-host
-        name: Customer-operated full platform
-        description: A separate, unsupported trust model in which a customer would operate Foghorn, federation, media dependencies, durable services, and an isolated control plane.
-        status: gap
-        gap_reason: Not supported product scope. Full sovereignty requires an independent identity/control plane plus customer-operated Foghorn federation, Livepeer, Chandler, DNS, object storage, analytics stores, and databases. FrameWorks operates those services for the edge product.
+        name: Full self-host
+        description: Run the entire public-domain stack — control plane, Foghorn, media edges, Livepeer, Chandler, databases, analytics, and interfaces — as an independent platform, provisioned, upgraded, and backed up with the frameworks CLI from a GitOps repository.
+        status: shipped
         depends_on: [standalone-storage-services, managed-dns-routing]
         required_surfaces:
-          graphql: { required: true }
-          mcp: { required: true }
-          webapp: { required: true }
+          graphql:
+            {
+              required: false,
+              reason: "Deployment is operator tooling; the deployed platform exposes the full API.",
+            }
+          mcp: { required: false, reason: "Deployment is operator tooling, not an agent workflow." }
+          webapp:
+            { required: false, reason: "Clusters are managed from the CLI and GitOps manifests." }
+          cli: { required: true }
           docs: { required: true }
+        surfaces:
+          cli:
+            commands: ["cluster provision", "cluster release apply", "cluster backup create"]
+          docs:
+            pages:
+              [
+                operators/deployment.mdx,
+                operators/cluster-manifest.mdx,
+                operators/running-upgrades.mdx,
+              ]
 
   - slug: adjacent-infra-services
     name: Adjacent infrastructure services

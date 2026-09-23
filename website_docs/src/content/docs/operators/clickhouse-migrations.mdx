@@ -89,8 +89,9 @@ or a release-specific recovery runbook:
 2. **Confirm the phase**. Routine rolling upgrades apply `expand` migrations
    before deploying new binaries. `postdeploy` migrations cover heavy
    `MODIFY COLUMN` rewrites or `ALTER TABLE … UPDATE/DELETE` mutations and run
-   after binaries are live. `contract` migrations are explicit cleanup with
-   `--yes` required.
+   after binaries are live. `contract` migrations are explicit cleanup that
+   requires `--yes` and a fresh `--backup` (taken within the last hour) of the
+   databases they change.
 3. **Apply migrations** through the CLI:
 
 ```bash
@@ -180,11 +181,14 @@ CREATE TABLE IF NOT EXISTS _migrations (
   filename      String,
   checksum      FixedString(64),
   applied_at    DateTime64(3) DEFAULT now64()
-) ENGINE = ReplacingMergeTree(applied_at)
+) ENGINE = ReplicatedReplacingMergeTree(applied_at)
 ORDER BY (version, phase, seq);
 ```
 
-`ReplacingMergeTree` collapses retried-insert duplicates on merge. Reads use
+The engine is `ReplicatedReplacingMergeTree(applied_at)` when Keeper nodes are
+configured, which is every supported analytics topology, and plain
+`ReplacingMergeTree(applied_at)` only in the role's Keeper-less mode. Either
+engine collapses retried-insert duplicates on merge. Reads use
 `argMax(checksum, applied_at)` and surface `uniqExact(checksum)` so a crashed
 mid-write that left two distinct checksums under the same key is flagged as a
 hard failure, not silently resolved.
@@ -272,20 +276,18 @@ Code: 16. DB::Exception: Unknown column 'filename' in column list
 ```
 
 Cause: Service deployed before migration was applied.
-Fix: Apply the migration, then restart the service.
+Fix: Rerun `frameworks cluster migrate --phase expand` (migrations are
+idempotent), then restart the service.
 
 **Check ledger contents:**
 
-```sql
-SELECT version, phase, seq, filename, checksum, applied_at
-FROM periscope._migrations
-ORDER BY version, phase, seq
-FORMAT Vertical;
-```
+Run `frameworks cluster snapshot --skip-logs`. The snapshot includes each
+ClickHouse database's `_migrations` ledger and its pending mutations.
 
-**Check if a column exists:**
+**The ledger lists the migration but the column is missing:**
 
-```sql
-SELECT name, type FROM system.columns
-WHERE database = 'periscope' AND table = 'artifact_events' AND name = 'filename';
-```
+Run `frameworks cluster doctor --deep`. Its read-only ClickHouse capability pack
+exercises the tables and columns the services query and names the ones that
+fail. Capture `frameworks cluster snapshot --skip-logs` with that output: a
+ledger row for a column that does not exist means the database was changed
+outside the migration path.

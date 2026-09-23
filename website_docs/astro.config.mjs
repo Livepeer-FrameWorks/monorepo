@@ -55,7 +55,6 @@ const hlsPath = STREAMING_HLS_PATH;
 const webrtcPath = STREAMING_WEBRTC_PATH;
 
 // Build full URLs for docs examples
-const rtmpProto = ingest.useTls ? "rtmps" : "rtmp";
 const httpProto = ingest.useTls ? "https" : "http";
 const edgeHttpProto = edge.useTls ? "https" : "http";
 const edgePortPart = edge.port ? `:${edge.port}` : "";
@@ -69,7 +68,8 @@ const envVarMap = {
   GATEWAY_WS_URL: gatewayWsUrl,
   API_URL: gatewayUrl,
   // Streaming - constructed URLs for protocol-specific examples
-  RTMP_URL: `${rtmpProto}://${ingest.hostname}:${rtmpPort}${rtmpPath}`,
+  // Always rtmp://: the Mist RTMP listener has no TLS, whatever scheme the HTTP ingest URL uses.
+  RTMP_URL: `rtmp://${ingest.hostname}:${rtmpPort}${rtmpPath}`,
   SRT_HOST: `${ingest.hostname}:${srtPort}`,
   WHIP_URL: `${httpProto}://${ingest.hostname}${ingestPortPart}${webrtcPath}`,
   EDGE_URL: `${edgeHttpProto}://${edge.hostname}${edgePortPart}`,
@@ -144,6 +144,26 @@ function rehypeBaseLinks() {
   };
 }
 
+// Rehype plugin that keeps inline components out of heading slugs. Astro slugs
+// a heading from its text nodes only, so the space in `### DRM <Badge />` would
+// end the id with a hyphen (`drm-`). A non-breaking space renders the same and
+// is dropped by the slugger, so the id becomes `drm`. It must run before
+// Astro's own heading-id plugin, which user rehype plugins do.
+function rehypeInlineComponentHeadingIds() {
+  return (tree) => {
+    visit(tree, "element", (node) => {
+      if (!/^h[1-6]$/.test(node.tagName)) return;
+      const children = node.children ?? [];
+      for (let i = 0; i < children.length - 1; i++) {
+        const child = children[i];
+        const next = children[i + 1];
+        if (child.type !== "text" || next.type !== "mdxJsxTextElement") continue;
+        child.value = child.value.replace(/\s+$/, " ");
+      }
+    });
+  };
+}
+
 // https://astro.build/config
 export default defineConfig({
   site: siteOrigin,
@@ -175,7 +195,7 @@ export default defineConfig({
   },
   markdown: {
     remarkPlugins: [remarkEnvReplace],
-    rehypePlugins: [rehypeBaseLinks],
+    rehypePlugins: [rehypeInlineComponentHeadingIds, rehypeBaseLinks],
   },
   vite: {
     resolve: {
@@ -338,6 +358,10 @@ export default defineConfig({
             { slug: "builders/storage-and-retention" },
             { slug: "builders/playback-access-control" },
             { slug: "builders/api-reference" },
+            {
+              label: "GraphQL schema reference",
+              autogenerate: { directory: "builders/api-schema" },
+            },
             { slug: "builders/sdks" },
             { slug: "builders/events" },
             { slug: "builders/webhooks" },

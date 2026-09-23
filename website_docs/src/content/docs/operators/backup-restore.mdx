@@ -100,7 +100,7 @@ The one-hour limit is fixed. Nothing is written to the database; the gate only r
 
 ```bash
 frameworks cluster backup create --to /var/backups/frameworks --all
-frameworks cluster migrate --phase contract --to-version v0.3.11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
+frameworks cluster migrate --phase contract --to-version v0.3.11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z --yes
 frameworks cluster data-migrate run purser.purser_eur_ledger_conversion_v0_3_11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
 ```
 

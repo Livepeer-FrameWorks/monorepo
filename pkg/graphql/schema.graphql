@@ -4066,7 +4066,7 @@ type Stream implements Node {
   """
   Recent pull-source resolution events for pull streams. Captures the
   customer-facing resolution outcome (resolved, not_found, disabled,
-  blocked_uri, private_not_allowed, commodore_error,
+  blocked_uri, cluster_not_allowed_delegate, commodore_error,
   foghorn_base_unresolved). Null for push streams.
   """
   recentPullSourceEvents(limit: Int = 50): [PullSourceEvent!]
@@ -4094,7 +4094,7 @@ re-evaluated (typically on each Mist input start).
 type PullSourceEvent {
   id: ID!
   internalName: String!
-  "'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'private_not_allowed' | 'commodore_error' | 'foghorn_base_unresolved'"
+  "'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'cluster_not_allowed_delegate' | 'commodore_error' | 'foghorn_base_unresolved'"
   eventKind: String!
   detail: String
   createdAt: Time!

@@ -11,13 +11,13 @@ Both the Player and StreamCrafter ship with built-in theme presets. Apply with a
 
 ```tsx
 // React
-<Player contentId="pk_..." contentType="live" options={{ theme: "dracula" }} />
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live" options={{ theme: "dracula" }} />
 <StreamCrafter whipUrl="..." theme="tokyo-night" />
 ```
 
 ```html
 <!-- Web Components -->
-<fw-player content-id="pk_..." theme="nord"></fw-player>
+<fw-player content-id="a1b2c3d4e5f6g7h8" theme="nord"></fw-player>
 <fw-streamcrafter whip-url="..." theme="catppuccin"></fw-streamcrafter>
 ```
 
@@ -29,25 +29,25 @@ const studio = createStreamCrafter({ ..., theme: "gruvbox" });
 
 ### Available Themes
 
-| Theme               | Mode  | Accent      |
-| ------------------- | ----- | ----------- |
-| `default`           | Dark  | Blue        |
-| `light`             | Light | Blue        |
-| `neutral-dark`      | Dark  | Gray        |
-| `tokyo-night`       | Dark  | Purple      |
-| `tokyo-night-light` | Light | Purple      |
-| `dracula`           | Dark  | Pink        |
-| `nord`              | Dark  | Frost blue  |
-| `catppuccin`        | Dark  | Mauve       |
-| `catppuccin-light`  | Light | Mauve       |
-| `gruvbox`           | Dark  | Orange      |
-| `gruvbox-light`     | Light | Orange      |
-| `one-dark`          | Dark  | Blue        |
-| `github-dark`       | Dark  | Blue        |
-| `rose-pine`         | Dark  | Rose        |
-| `solarized`         | Dark  | Yellow      |
-| `solarized-light`   | Light | Yellow      |
-| `ayu-mirage`        | Dark  | Blue-orange |
+| Theme               | Mode  | Accent        |
+| ------------------- | ----- | ------------- |
+| `default`           | Dark  | Blue          |
+| `light`             | Light | Blue          |
+| `neutral-dark`      | Dark  | Blue          |
+| `tokyo-night`       | Dark  | Blue          |
+| `tokyo-night-light` | Light | Blue          |
+| `dracula`           | Dark  | Purple        |
+| `nord`              | Dark  | Frost blue    |
+| `catppuccin`        | Dark  | Mauve         |
+| `catppuccin-light`  | Light | Mauve         |
+| `gruvbox`           | Dark  | Yellow        |
+| `gruvbox-light`     | Light | Yellow        |
+| `one-dark`          | Dark  | Blue          |
+| `github-dark`       | Dark  | Blue          |
+| `rose-pine`         | Dark  | Iris (purple) |
+| `solarized`         | Dark  | Cyan          |
+| `solarized-light`   | Light | Cyan          |
+| `ayu-mirage`        | Dark  | Orange        |
 
 ### Runtime Theme Switching
 
@@ -61,7 +61,8 @@ studio.theme = "catppuccin";
 
 ## Design Tokens (CSS Custom Properties)
 
-All tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for opacity support.
+Color tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for opacity support.
+`--fw-radius` is a CSS length (for example `8px`).
 
 ### Player Tokens (`--fw-*`)
 
@@ -74,7 +75,10 @@ All tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for o
 | `--fw-success`          | Success indicators            |
 | `--fw-danger`           | Error and destructive actions |
 | `--fw-warning`          | Warning indicators            |
+| `--fw-info`             | Informational indicators      |
 | `--fw-live`             | Live badge and pulse          |
+| `--fw-on-accent`        | Text/icons on accent fills    |
+| `--fw-on-live`          | Text/icons on live fills      |
 
 **Surfaces**
 
@@ -96,45 +100,54 @@ All tokens use bare HSL triplets. Consume via `hsl(var(--fw-*) / <alpha>)` for o
 
 **Layout**
 
-| Token               | Purpose         |
-| ------------------- | --------------- |
-| `--fw-shadow-color` | Shadow HSL base |
-| `--fw-radius`       | Border radius   |
+| Token               | Purpose                                 |
+| ------------------- | --------------------------------------- |
+| `--fw-shadow-color` | Shadow HSL base                         |
+| `--fw-radius`       | Border radius (CSS length, default `0`) |
 
 ### Studio Tokens (`--fw-sc-*`)
 
-| Token                    | Purpose                   |
-| ------------------------ | ------------------------- |
-| `--fw-sc-surface-deep`   | Deepest background        |
-| `--fw-sc-surface`        | Panel surfaces            |
-| `--fw-sc-surface-raised` | Elevated surfaces         |
-| `--fw-sc-surface-active` | Active/pressed state      |
-| `--fw-sc-border`         | Border color              |
-| `--fw-sc-text`           | Primary text              |
-| `--fw-sc-text-muted`     | Secondary text            |
-| `--fw-sc-accent`         | Interactive elements      |
-| `--fw-sc-success`        | Success/live indicators   |
-| `--fw-sc-danger`         | Error/destructive actions |
+| Token                      | Purpose                   |
+| -------------------------- | ------------------------- |
+| `--fw-sc-surface-deep`     | Deepest background        |
+| `--fw-sc-surface`          | Panel surfaces            |
+| `--fw-sc-surface-raised`   | Elevated surfaces         |
+| `--fw-sc-surface-active`   | Active/pressed state      |
+| `--fw-sc-border`           | Border color              |
+| `--fw-sc-text`             | Primary text              |
+| `--fw-sc-text-bright`      | High-emphasis text        |
+| `--fw-sc-text-muted`       | Secondary text            |
+| `--fw-sc-text-faint`       | Disabled and hint text    |
+| `--fw-sc-accent`           | Interactive elements      |
+| `--fw-sc-accent-secondary` | Secondary accent          |
+| `--fw-sc-success`          | Success indicators        |
+| `--fw-sc-danger`           | Error/destructive actions |
+| `--fw-sc-warning`          | Warning indicators        |
+| `--fw-sc-info`             | Informational indicators  |
+| `--fw-sc-live`             | Live indicator            |
 
 ### Custom Overrides
 
-**CSS (global)**
+**CSS (global, React/Svelte/vanilla)**
 
 ```css
-/* Player */
-fw-player,
+/* Player: load after player.css */
 .fw-player-root {
   --fw-accent: 280 70% 60%;
   --fw-surface: 0 0% 10%;
 }
 
 /* Studio */
-fw-streamcrafter,
 .fw-sc-root {
   --fw-sc-accent: 262 80% 60%;
   --fw-sc-surface-deep: 230 15% 12%;
 }
 ```
+
+Page CSS cannot theme the web components this way. `<fw-player>` and `<fw-streamcrafter>` redeclare
+every token on their root element inside the shadow root, so custom properties set on the host
+element have no effect. Use the `theme` attribute (both elements) or the `themeOverrides` property
+(`<fw-player>`) instead.
 
 **JavaScript (per-instance)**
 
@@ -163,7 +176,7 @@ Five built-in locale packs: `en`, `es`, `fr`, `de`, `nl`.
 ```tsx
 // React
 <Player
-  contentId="pk_..."
+  contentId="a1b2c3d4e5f6g7h8"
   contentType="live"
   options={{
     locale: "de",
@@ -196,7 +209,7 @@ const deTranslations = getLocalePack("de");
 ```svelte
 <!-- Svelte -->
 <Player
-  contentId="pk_..."
+  contentId="a1b2c3d4e5f6g7h8"
   contentType="live"
   options={{
     locale: "de",

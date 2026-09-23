@@ -367,6 +367,7 @@ const (
 	DVRControlService_ListDVRChapters_FullMethodName           = "/foghorn.DVRControlService/ListDVRChapters"
 	DVRControlService_OverrideArtifactRetention_FullMethodName = "/foghorn.DVRControlService/OverrideArtifactRetention"
 	DVRControlService_TestPlaybackAccess_FullMethodName        = "/foghorn.DVRControlService/TestPlaybackAccess"
+	DVRControlService_DiagnoseDVR_FullMethodName               = "/foghorn.DVRControlService/DiagnoseDVR"
 )
 
 // DVRControlServiceClient is the client API for DVRControlService service.
@@ -401,6 +402,12 @@ type DVRControlServiceClient interface {
 	// routing the call here so unauthenticated callers can't use this to
 	// probe arbitrary endpoints.
 	TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error)
+	// DiagnoseDVR is a read-only operator view of one recording on this cell:
+	// lifecycle and storage state, the segment ledger summary, every chapter's
+	// finalization state, and the chapters waiting in the finalize queue.
+	// Requires a platform-operator JWT; service and tenant credentials are
+	// refused.
+	DiagnoseDVR(ctx context.Context, in *DiagnoseDVRRequest, opts ...grpc.CallOption) (*DiagnoseDVRResponse, error)
 }
 
 type dVRControlServiceClient struct {
@@ -481,6 +488,16 @@ func (c *dVRControlServiceClient) TestPlaybackAccess(ctx context.Context, in *fo
 	return out, nil
 }
 
+func (c *dVRControlServiceClient) DiagnoseDVR(ctx context.Context, in *DiagnoseDVRRequest, opts ...grpc.CallOption) (*DiagnoseDVRResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiagnoseDVRResponse)
+	err := c.cc.Invoke(ctx, DVRControlService_DiagnoseDVR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DVRControlServiceServer is the server API for DVRControlService service.
 // All implementations must embed UnimplementedDVRControlServiceServer
 // for forward compatibility.
@@ -513,6 +530,12 @@ type DVRControlServiceServer interface {
 	// routing the call here so unauthenticated callers can't use this to
 	// probe arbitrary endpoints.
 	TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error)
+	// DiagnoseDVR is a read-only operator view of one recording on this cell:
+	// lifecycle and storage state, the segment ledger summary, every chapter's
+	// finalization state, and the chapters waiting in the finalize queue.
+	// Requires a platform-operator JWT; service and tenant credentials are
+	// refused.
+	DiagnoseDVR(context.Context, *DiagnoseDVRRequest) (*DiagnoseDVRResponse, error)
 	mustEmbedUnimplementedDVRControlServiceServer()
 }
 
@@ -543,6 +566,9 @@ func (UnimplementedDVRControlServiceServer) OverrideArtifactRetention(context.Co
 }
 func (UnimplementedDVRControlServiceServer) TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
+}
+func (UnimplementedDVRControlServiceServer) DiagnoseDVR(context.Context, *DiagnoseDVRRequest) (*DiagnoseDVRResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiagnoseDVR not implemented")
 }
 func (UnimplementedDVRControlServiceServer) mustEmbedUnimplementedDVRControlServiceServer() {}
 func (UnimplementedDVRControlServiceServer) testEmbeddedByValue()                           {}
@@ -691,6 +717,24 @@ func _DVRControlService_TestPlaybackAccess_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DVRControlService_DiagnoseDVR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiagnoseDVRRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRControlServiceServer).DiagnoseDVR(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRControlService_DiagnoseDVR_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRControlServiceServer).DiagnoseDVR(ctx, req.(*DiagnoseDVRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DVRControlService_ServiceDesc is the grpc.ServiceDesc for DVRControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -725,6 +769,10 @@ var DVRControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TestPlaybackAccess",
 			Handler:    _DVRControlService_TestPlaybackAccess_Handler,
+		},
+		{
+			MethodName: "DiagnoseDVR",
+			Handler:    _DVRControlService_DiagnoseDVR_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -31,6 +31,7 @@ Supported diagnostics:
   kafka      - Check Kafka cluster health, topic lag, broker status
   media      - Capture media/DNS/federation service state without provisioning
   media-authority - Trace media-authority refresh, versioning, delivery, and apply state
+  dvr <dvr-hash>  - Show a DVR recording's segments, chapters, and finalize queue on its cell
 
 Diagnostics help troubleshoot issues and identify problems before they
 cause outages.`,
@@ -53,6 +54,7 @@ cause outages.`,
 	cmd.Flags().StringVar(&opts.TenantID, "tenant-id", "", "Tenant ID to include in stream database probes")
 	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "Journal time window for media diagnostics")
 	cmd.Flags().IntVar(&opts.WindowHours, "window-hours", opts.WindowHours, "Database lookback in hours for media-authority diagnostics")
+	cmd.AddCommand(newClusterDiagnoseDVRCmd())
 
 	return cmd
 }

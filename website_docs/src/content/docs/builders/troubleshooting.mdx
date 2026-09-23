@@ -142,7 +142,7 @@ These visual glitches are typically caused by outdated GPU drivers or a corrupte
 
 ### Stream shows "offline" but I'm streaming
 
-The dashboard polls every few seconds. Give it 10 seconds and refresh.
+The stream page updates from the `liveStreamEvents` subscription and falls back to polling every 60 seconds. If the subscription connection dropped, refresh the page.
 
 If still offline:
 
@@ -163,11 +163,11 @@ For older streams:
 
 ### 401 Unauthorized
 
-Token missing, invalid, or revoked.
+The token is invalid, expired, or revoked, or the request carried a payment header without a credential. A request with no credential at all on a non-public operation gets HTTP 402 with an x402 challenge instead.
 
 **For API tokens (programmatic access):**
 
-1. Create a new token from **Developer → API** in the dashboard
+1. Create a new token from **Developer → Credentials** in the dashboard
 2. Token values are shown only once. If you lost your key, you can revoke it and create a new one in the webapp
 3. Check if the token was revoked (it won't be in your active tokens list)
 4. By default, API tokens never expire unless you set an expiration when creating
@@ -179,9 +179,9 @@ Token missing, invalid, or revoked.
 
 Make sure the header is `Authorization: Bearer YOUR_TOKEN` (not just the token).
 
-### 403 Forbidden
+### FORBIDDEN
 
-You don't have access to this resource.
+A missing permission is not an HTTP 403: the response is HTTP 200 with a GraphQL error whose `extensions.code` is `FORBIDDEN` (see [API Reference — Error Handling](/builders/api-reference#error-handling)). You don't have access to this resource.
 
 - Are you accessing another tenant's data by mistake?
 - Does your API token have the required permissions?

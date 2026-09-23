@@ -147,6 +147,21 @@ func TestFindProtocolURL(t *testing.T) {
 	if got := findProtocolURL(cmafOnly, "dash"); got != "https://edge/view/cmaf/s/" {
 		t.Errorf("findProtocolURL(dash, cmaf-only) = %q, want CMAF base url", got)
 	}
+
+	// WHEP and Mist WebRTC use different signalling; when both exist, map
+	// iteration order must not let one answer for the other.
+	webrtcBoth := map[string]*sharedpb.OutputEndpoint{
+		"WHEP":        {Url: "https://edge/webrtc/s"},
+		"MIST_WEBRTC": {Url: "wss://edge/webrtc/s"},
+	}
+	for range 50 {
+		if got := findProtocolURL(webrtcBoth, "webrtc"); got != "wss://edge/webrtc/s" {
+			t.Fatalf("findProtocolURL(webrtc) = %q, want Mist WebRTC", got)
+		}
+		if got := findProtocolURL(webrtcBoth, "whep"); got != "https://edge/webrtc/s" {
+			t.Fatalf("findProtocolURL(whep) = %q, want WHEP", got)
+		}
+	}
 }
 
 // The redirect handler appends the manifest path BEFORE the correlation ID, so

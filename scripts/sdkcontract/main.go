@@ -36,6 +36,10 @@ func main() {
 
 	var err error
 	switch cmd {
+	case "audit":
+		err = runAudit(*repo)
+	case "reference":
+		err = runReference(*repo, *check)
 	case "lint":
 		err = runLint(*repo)
 	case "manifest":
@@ -56,7 +60,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: sdkcontract lint|manifest|emit|api-compat|schema-compat [-repo DIR] [-check] [-lang ts|go|py]")
+	fmt.Fprintln(os.Stderr, "usage: sdkcontract audit|reference|lint|manifest|emit|api-compat|schema-compat [-repo DIR] [-check] [-lang ts|go|py]")
 	os.Exit(2)
 }
 

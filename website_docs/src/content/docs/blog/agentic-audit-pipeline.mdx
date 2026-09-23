@@ -11,19 +11,15 @@ tags:
   - architecture
 ---
 
-Live video systems collect awkward edge cases.
+Live video systems collect awkward edge cases. A viewer connects from a location that sits on the wrong side of a geofence boundary. A DVR recording starts at the same moment a stream is shutting down. Two usage events for the same tenant arrive close enough together that billing code has to prove it is actually idempotent. None of those cases are hard to understand on their own. The failures come from these cases interacting across services.
 
-A viewer connects from a location that sits on the wrong side of a geofence boundary. A DVR recording starts at the same moment a stream is shutting down. Two usage events for the same tenant arrive close enough together that billing code has to prove it is actually idempotent. None of those cases are hard to understand on their own. The hard part is that they do not stay on their own.
-
-FrameWorks is split across routing, ingest, VOD, edge orchestration, analytics, billing, auth, MCP agent access, DNS, Skipper, WebSocket routing, and tenant management. Each subsystem has tests and reviews, but the interesting failures tend to sit between them.
+FrameWorks is split across routing, ingest, VOD, edge orchestration, analytics, billing, auth, MCP agent access, DNS, Skipper, WebSocket routing, and tenant management. Each subsystem has tests and reviews, but most of the failures we found sit between them.
 
 We ran the first audit pass by hand: seven roles, 26 batches, 90 tasks, 12 subsystems. One agent traced a domain, another checked the report, another wrote a fix if the finding held up, another reviewed the patch. CI and a human reviewer still owned the merge.
 
-The rule that made the output usable was simple: no finding without evidence.
+Every finding had to include evidence. A report had to name the files and functions, describe the failing input or interleaving, explain the tenant or operator impact, and say what test would prove the fix. "This might race" went nowhere. "Two prepaid usage reports can reserve against the same tenant balance before the ledger state is visible" was at least reviewable.
 
-A report had to name the files and functions, describe the failing input or interleaving, explain the tenant or operator impact, and say what test would prove the fix. "This might race" went nowhere. "Two prepaid usage reports can reserve against the same tenant balance before the ledger state is visible" was at least reviewable.
-
-That rule cut out a surprising amount of noise. It made the agents more useful because their job stopped being "sound smart about the codebase" and became "keep reading until you can point at the code."
+That rule removed most of the noise. Agents had to keep reading until they could point at the code instead of reporting general impressions of the codebase.
 
 The findings were mostly the kind you expect after a platform gets broad enough:
 
@@ -38,16 +34,14 @@ The findings were mostly the kind you expect after a platform gets broad enough:
 | Auth bypass vectors  | 4     | GraphQL complexity bypass through deep nesting with small page sizes    |
 | DNS propagation      | 3     | Stale DNS pointing at decommissioned nodes                              |
 
-Some of the best results were not bug fixes. A reviewer would chase a claim and find the lower layer already enforced the invariant. That still helped. It turned a hidden assumption into something we could preserve during the next change.
+Some of the best results were not bug fixes. A reviewer would chase a claim and find the lower layer already enforced the invariant. That turned a hidden assumption into something we could preserve during the next change.
 
-The agents were good at long, boring traces. GraphQL to gRPC to a service event. Kafka to ClickHouse to Purser. Foghorn state to Helmsman rewrites to the player fallback path. A person can do that too, but it is easy to stop when the first function looks fine. The agent did not get tired of following one more edge.
+The agents were good at long, boring traces. GraphQL to gRPC to a service event. Kafka to ClickHouse to Purser. Foghorn state to Helmsman rewrites to the player fallback path. A person can do that too, but it is easy to stop when the first function looks fine; the agents kept following each path to the end.
 
 The weak point was severity. LLMs like to make findings sound bigger than they are. The review pass had to push hard on impact: can a tenant hit this, does it cross a trust boundary, is there data loss, is it only a noisy log, is the bad state already repaired one layer later?
 
-The first run also taught us what a finding report should look like. Early reports came padded with process notes and architecture recaps — fine while designing the workflow, useless when the question is "is this bug real?" The format we settled on: one paragraph for the claim, the exact files and functions, the failing interleaving or input, the tenant impact, the smallest reasonable fix, and the test that proves it. Batch size mattered too. Three tasks per batch kept the human reviewer ahead of the queue; bigger batches just moved the bottleneck to whoever had to merge.
+The first run also taught us what a finding report should look like. Early reports came padded with process notes and architecture recaps, which did not help decide whether a bug was real. The format we settled on has one paragraph for the claim, the exact files and functions, the failing interleaving or input, the tenant impact, the smallest reasonable fix, and the test that proves it. Batch size mattered too. Three tasks per batch kept the human reviewer ahead of the queue; bigger batches just moved the bottleneck to whoever had to merge.
 
 The lasting change was in review questions. We now ask more often whether a cache key includes `tenant_id`, whether a handler survives Kafka retry, whether stream lifecycle events can arrive out of order, and whether an edge can keep serving a previously approved playback path when the control plane is temporarily out.
 
-Next up is lightweight automation: track when each subsystem was last audited, weight the riskier areas like billing and auth, and open work only when there is a useful review to run. Most audit cycles should behave like Skipper's runtime monitoring — wake up, look at the current state, and go back to sleep.
-
-The agents gave us more coverage. The process worked because evidence, independent review, tests, and human merge stayed in the loop.
+Next up is lightweight automation: track when each subsystem was last audited, weight the riskier areas like billing and auth, and open work only when there is a useful review to run. Most audit cycles should work like Skipper's runtime monitoring: check the current state and open work only when something needs attention.

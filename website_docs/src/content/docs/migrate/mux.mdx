@@ -7,20 +7,15 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-If you ship live or on-demand video on [Mux](https://www.mux.com) today and are evaluating
-FrameWorks, this page is for you. Mux is the platform that made modern video infrastructure
-feel like a normal SaaS dev product, with the QoE analytics layer to match. The two products
-overlap on the live-streaming basics but the API shape, the playback codec/protocol surface,
+[Mux](https://www.mux.com) pairs a video API with the Mux Data QoE product. Mux and FrameWorks
+overlap on the live-streaming basics, but the API shape, the playback codec/protocol surface,
 and a few access-control features differ enough that an endpoint-by-endpoint swap won't get
-you all the way there.
-
-This guide covers what stays, what changes, what you gain, and exactly how to do the swap —
-including the pieces of Mux (Mux Data, broad SDK coverage, productized DRM) that are still
+you all the way there. Some Mux pieces (Mux Data, broad SDK coverage, productized DRM) are
 worth keeping during the cut-over.
 
 ## TL;DR
 
-- **What stays:** RTMP/RTMPS and SRT ingest, HLS playback, signed JWT playback, simulcast
+- **What stays:** RTMP and SRT ingest, HLS playback, signed JWT playback, simulcast
   targets, live-to-VOD recording, clips.
 - **What changes:** REST → GraphQL · API access token (HTTP Basic) → developer token (Bearer)
   or wallet sign-in · Mux webhooks → FrameWorks webhooks with Standard Webhooks signatures (or
@@ -33,7 +28,7 @@ worth keeping during the cut-over.
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
+- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
   Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
   Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
@@ -112,7 +107,7 @@ API, playback policies for viewers.
 | `playback_policy: "public"`                                                                                | Default public playback ID                                                                                                                                   |
 | `playback_policy: "signed"`                                                                                | `setPlaybackPolicy({ streamId, policy: { type: JWT, jwt: { allowedKids } } })` — see [Playback Access Control](/builders/playback-access-control)            |
 | `POST /system/v1/signing-keys` — RSA-2048, **RS256**                                                       | `createSigningKey(input: { name })` — **ES256**, ECDSA P-256 (asymmetric, customer holds private key)                                                        |
-| JWT claims `sub` (playback ID) · `aud` (`v` / `t` / `g` / `s` / `d`) · `exp` · `kid`                       | JWT claims `sub` (playback ID) · `kid` · `exp`. One signed URL is the auth boundary across HLS, LL-HLS, DASH, WHEP, and MP4 — no per-asset-type `aud` switch |
+| JWT claims `sub` (playback ID) · `aud` (`v` / `t` / `g` / `s` / `d`) · `exp` · `kid`                       | `kid` header and `exp` claim required; `aud` only if your policy requires it; `sub` can hold a viewer ID. One signed URL covers HLS, LL-HLS, DASH, WHEP, MP4 |
 | `?token=<jwt>` query param                                                                                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback paths can carry headers                                                                   |
 | Built-in playback restrictions (referrer-domain allowlist, user-agent rules) via `playback_restriction_id` | `WEBHOOK` policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies. Implement referrer/UA logic in your endpoint                      |
 | DRM (Widevine + PlayReady + FairPlay)                                                                      | DRM in development — not GA                                                                                                                                  |
@@ -173,8 +168,10 @@ viewers).
 
 Mux's RTMP ingest is on `rtmp://global-live.mux.com:5222/app` (note the non-standard port
 5222), RTMPS on `rtmps://global-live.mux.com:443/app`, and Mux also accepts SRT. FrameWorks
-publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS
-and SRT remain the low-effort path; FrameWorks additionally accepts **E-RTMP** (HEVC/AV1
+publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. FrameWorks
+RTMP ingest is plain RTMP on port 1935 with no RTMPS listener, so an encoder using Mux's RTMPS
+URL moves to RTMP, or to SRT or WHIP when the link must be encrypted. RTMP and SRT remain the
+low-effort path; FrameWorks additionally accepts **E-RTMP** (HEVC/AV1
 contribution over RTMP) and **WHIP** (WebRTC ingest) where your encoder supports them.
 
 OBS / FFmpeg / hardware encoder → swap the URL, keep the rest. Watch the port — Mux's `5222`
@@ -191,7 +188,7 @@ If you were using `@mux/mux-player-react`:
 + <Player contentType="vod" contentId={playbackId} options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
 ```
 
-Svelte and Web Components are first-class:
+The player also ships as:
 
 - `@livepeer-frameworks/player-svelte`
 - `@livepeer-frameworks/player-wc` (`<fw-player>`)
@@ -354,8 +351,8 @@ over once you trust the numbers.
   cue file, generated for every recording, ready for hover-scrub UIs.
 - **Self-hosted edge and hybrid hosting.** Run MistServer and Helmsman edge capacity on your
   own hardware while FrameWorks operates Foghorn, federation, DNS/TLS, storage, analytics,
-  and the control plane. Customer-operated Foghorn/full-stack self-hosting is not part of the
-  edge product.
+  and the control plane. To run Foghorn and the control plane yourself, self-host the entire
+  stack as an independent platform; see [Deployment](/operators/deployment).
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge
   wins automatically.
 - **Agent-first surface.** MCP server at
@@ -363,12 +360,12 @@ over once you trust the numbers.
   gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from
   the dashboard, the docs (`⌘J`), or MCP.
-- **Player on Svelte and as Web Components**, not just React.
+- **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
 ## What's not yet at parity, and what's coming
 
-Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Be honest with
-your stack about which of these you depend on before cutting over.
+Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Check which of
+these you depend on before cutting over.
 
 - **Mux Data-class view-level QoE analytics.** Mux Data is best-in-class here — view-level
   traces, ad observability, and a player-agnostic SDK that spans Video.js, hls.js, Shaka,
@@ -388,7 +385,7 @@ your stack about which of these you depend on before cutting over.
   custom-domain delivery. FrameWorks materializes explicit platform-subdomain and BYO-domain
   entitlements from the active subscription; downgrade tears down served DNS/TLS state while
   retaining the requested name for later re-entitlement.
-- **Breadth of first-class server-side SDKs.** Mux ships official SDKs for Node, Python,
+- **Number of official server-side SDKs.** Mux ships official SDKs for Node, Python,
   Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
   ships [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the
   player suite (`@livepeer-frameworks/player-*`); for Ruby, PHP, Elixir, Java, and .NET, use
@@ -404,8 +401,6 @@ your stack about which of these you depend on before cutting over.
   feature.
 
 ## Beta and tricky bits
-
-Heads-up so nothing surprises you:
 
 - **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances
   you signed up for.
@@ -438,8 +433,6 @@ Heads-up so nothing surprises you:
   receives events from the moment it is created, so create it before you move traffic.
 
 ## Get help
-
-Pick whichever channel fits.
 
 | Channel                     | Best for                                                                                    | Where                                                        |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |

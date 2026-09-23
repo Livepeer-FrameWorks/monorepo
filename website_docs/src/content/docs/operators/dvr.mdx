@@ -89,43 +89,36 @@ requested → starting → recording → finalizing
 | `failed`                 | No playable segments; recording produced nothing usable                                                                                     |
 | `deleted`                | Past retention; soft-deleted by the retention job                                                                                           |
 
+## Triage: start with `cluster diagnose dvr`
+
+For any DVR problem, first read the recording as its origin cell's Foghorn sees it:
+
+```bash
+frameworks cluster diagnose dvr <dvr_hash>
+```
+
+Commodore resolves the hash to the recording's origin cluster and the command asks the manifest Foghorn entry that serves it (`--service foghorn-eu` picks an entry explicitly; `--output json` returns the full report). It needs a platform-operator login (`frameworks login`) and reaches Commodore and Foghorn through the context's SSH tunnel. The report shows:
+
+- the recording: status and error, start/end, storage location, sync status with last attempt, node, failure count, and error, `.dtsh` state, `retention_until`, and the chapter policy snapshot;
+- the segment ledger: count, first/last media time, counts per segment status, and the gaps (first 100 plus the total), each with the sequence it precedes;
+- every chapter: state, `[start, end)` bounds, finalize attempts, latest finalize job ID, assigned node, and last failure reason;
+- the finalize queue: chapters in `closed` or `finalizing` with queued/started times.
+
+The sections below use that output. The GraphQL `dvrChapters(dvrId: "<dvr_hash>")` query is the tenant-facing view of the same chapters; use it to confirm what a viewer's application sees.
+
 ## Triage: what `completed_partial` means
 
 A `completed_partial` artifact has at least one segment that was force-evicted from local disk before the sidecar could upload it (disk pressure or retention edge case during recording). Chapter finalization first tries to recover those segments from S3; chapters that overlap an unrecoverable segment are marked `failed_source_missing` and produce no playback artifact (operator triage path).
 
-To inspect:
-
-```sql
-SELECT segment_name, media_start_ms, media_end_ms, drop_reason, dropped_at
-  FROM foghorn.dvr_segments
- WHERE artifact_hash = '<dvr_hash>'
-   AND status = 'lost_local'
- ORDER BY media_start_ms;
-```
+To inspect, run `frameworks cluster diagnose dvr <dvr_hash>`. The segment summary counts segments per status (force-evicted segments appear as `lost_local`) and lists the gaps in the ledger; chapters in `failed_source_missing` overlap a lost segment, with the reason in `last_failure`. Through the GraphQL API, `dvrChapters(dvrId: "<dvr_hash>")` shows the same chapters with `hasGaps: true` or `state: FAILED_SOURCE_MISSING`.
 
 Cross-reference with disk-pressure metrics on the recording sidecar (`storage_node_out_of_space` lifecycle events) to find root cause.
 
 ## Triage: chapter not appearing for a viewer
 
-1. Confirm the recording has a chapter mode snapshot:
+1. Confirm the recording has historical chapters enabled. The chapter mode is snapshotted from the Stream (`Stream.dvrChapterMode`) at StartDVR. If `dvrChapters(dvrId: "<dvr_hash>")` returns no chapters for a recording that has been running longer than one chapter interval, the recording was started with historical chapters off: the active rolling DVR window still records and serves live time-shift, but no finalized replay chapter artifacts will appear after media rolls out of that window. Configure `dvrChapterMode` on the Stream via `updateStream`; the change applies to the **next** recording, not this one.
 
-   ```sql
-   SELECT dvr_chapter_mode, dvr_chapter_interval, dvr_window_seconds
-     FROM foghorn.artifacts
-    WHERE artifact_hash = '<dvr_hash>';
-   ```
-
-   `dvr_chapter_mode` is snapshotted from the Stream at StartDVR. If it's NULL, the recording was started with historical chapters off: the active rolling DVR window still records and serves live time-shift, but no finalized replay chapter artifacts will appear after media rolls out of that window. Configure `dvrChapterMode` on the Stream via `updateStream`; the change applies to the **next** recording, not this one.
-
-2. Inspect the chapter row's state:
-
-   ```sql
-   SELECT chapter_id, start_ms, end_ms, is_current, state,
-          playback_artifact_hash, finalize_attempts, last_failure_reason
-     FROM foghorn.dvr_chapters
-    WHERE artifact_hash = '<dvr_hash>'
-    ORDER BY start_ms DESC LIMIT 20;
-   ```
+2. Inspect the chapter's state with `frameworks cluster diagnose dvr <dvr_hash>`, which lists each chapter's state, bounds, finalize attempts, job ID, node, and last failure. The `dvrChapters` query shows the tenant's view: each `DVRChapterRef` carries `state`, `startMs`/`endMs`, `isCurrent`, `playbackId`, `hasGaps`, `segmentCount`, and `lastFailureReason`.
 
 3. Map the state to action:
 
@@ -134,24 +127,17 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
    | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                                          |
    | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                               |
    | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use its Commodore-minted `playback_id` as the player input; the parent DVR's snapshotted policy still applies. |
-   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`.              |
-   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.                        |
+   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `lastFailureReason`.                |
+   | `failed_permanent`                   | Repeated retries exhausted (5 finalize attempts) or invalid ledger input. Inspect `lastFailureReason`.                              |
 
 ## Triage: chapter finalization stuck
 
-Chapter finalizations that hang in `state='finalizing'` past the dispatch deadline (default `max(2*chapter_duration, 30 min)` capped at 24h) are auto-re-queued by the next tick. To check manually:
-
-```sql
-SELECT chapter_id, state, finalize_attempts, last_failure_reason, created_at
-  FROM foghorn.dvr_chapters
- WHERE state = 'finalizing'
- ORDER BY created_at;
-```
+Chapter finalizations that hang in `state='finalizing'` past the dispatch deadline (default `max(2*chapter_duration, 30 min)` capped at 24h) are auto-re-queued by the next tick. To check a recording, run `frameworks cluster diagnose dvr <dvr_hash>` and read its finalize queue: chapters that stay in `finalizing`, their `started` time, the attempt count, the job ID, the node running it, and `last_failure`. Running it again shows whether the attempt count is climbing.
 
 While a finalization is active, Helmsman renews an attempt-fenced progress lease
 through recovery and readiness and reports five-second progress while pushing.
 A healthy long remux therefore remains owned even when its media position has
-not advanced yet. If `finalize_attempts` is climbing,
+not advanced yet. If the attempt number in the job ID keeps climbing,
 check Foghorn for rejected progress/failure fences and Helmsman for expired
 dispatches, superseded local attempts, admission failures, disk pressure, or an
 unavailable source. Correlate both services with the job ID
@@ -161,7 +147,7 @@ unavailable source. Correlate both services with the job ID
 
 1. `dropPressuredDVRSegments` on the recording sidecar will start evicting **uploaded-and-aged** segments first (safe local cleanup; the recovery-bridge S3 object remains intact).
 2. If pressure persists, the sidecar may be forced to evict **unsynced** segments — these emit `DVRSegmentDropped(was_uploaded=false)` and become `lost_local` ledger rows. Chapter finalization for overlapping chapters will surface this as `failed_source_missing` once recovery is exhausted.
-3. If the sidecar can't keep up at all, it stops the push cleanly and emits `storage_node_out_of_space` — the artifact may end as `failed_storage_pressure`.
+3. If the sidecar can't keep up at all, it stops the push cleanly and emits `storage_node_out_of_space`. The artifact then finalizes as `completed_partial` if some segments survived, or `failed` if none did.
 
 Lifecycle event types to alert on:
 
@@ -172,9 +158,9 @@ Lifecycle event types to alert on:
 ## S3 layout
 
 ```
-s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_artifact_id}/segments/{segment_name}
-s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}.mkv
-s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}.dtsh
+s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_hash}/segments/{segment_name}
+s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}/{chapter_artifact_hash}.mkv
+s3://bucket/vod/{tenant_id}/{chapter_artifact_hash}/{chapter_artifact_hash}.mkv.dtsh
 ```
 
 The DVR segment prefix holds the **recovery-bridge** TS segments uploaded during recording. These are NOT playback objects: viewers never read them. Chapter finalization fetches them (or recovers from local disk) to build the canonical `.mkv`. Once a chapter reaches `state='frozen'` the reclaim sweep deletes both the local TS file and the corresponding S3 segment object.
@@ -189,13 +175,6 @@ Retention only acts on terminal artifacts. An active DVR (status `recording` / `
 
 `retention_until` is computed at FinalizeDVR as `ended_at + dvr_retention_days*24h`, where `dvr_retention_days` is snapshotted on `foghorn.artifacts` at DVR start. Commodore resolves that value through the per-class cascade (per-stream override → tenant per-class default → 30-day system default → tier cap) before passing it to Foghorn; once stamped, the tenant's plan is **never** re-resolved at end. A `dvr_retention_days` of `0` or NULL means "keep forever" and the retention job skips the artifact entirely.
 
-If you need to extend retention on a specific terminal artifact, update `retention_until` directly:
-
-```sql
-UPDATE foghorn.artifacts
-   SET retention_until = NOW() + INTERVAL '90 days'
- WHERE artifact_hash = '<dvr_hash>'
-   AND status IN ('completed', 'completed_partial');
-```
+To extend or shorten retention on a specific finalized recording, apply a per-asset override with the `updateMediaRetention` mutation (`targetType: DVR`, `targetId: "<dvr_hash>"`, and `retentionDays` or `retentionUntil`); `resetMediaRetentionOverride` clears it. See [Storage and retention](/builders/storage-and-retention#per-asset-override). Active recordings are rejected.
 
 The retention job picks up the new value on its next tick (default hourly).

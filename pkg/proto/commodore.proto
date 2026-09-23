@@ -2116,6 +2116,35 @@ service DeveloperService {
   rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse);
   rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse);
   rpc RevokeAPIToken(RevokeAPITokenRequest) returns (RevokeAPITokenResponse);
+  // AdminListAPITokens lists API token metadata across tenants. Requires a
+  // platform-operator JWT; service and tenant credentials are refused. Token
+  // values and hashes are never returned.
+  rpc AdminListAPITokens(AdminListAPITokensRequest) returns (AdminListAPITokensResponse);
+}
+
+message AdminListAPITokensRequest {
+  string tenant_id = 1;                 // optional tenant filter
+  // Only tokens holding a permission outside the set CreateAPIToken accepts.
+  bool unsupported_scopes_only = 2;
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message AdminAPITokenInfo {
+  string id = 1;
+  string tenant_id = 2;
+  string token_name = 3;
+  repeated string permissions = 4;
+  // Subset of permissions CreateAPIToken no longer accepts.
+  repeated string unsupported_permissions = 5;
+  string status = 6;                    // active | inactive
+  optional google.protobuf.Timestamp last_used_at = 7;
+  optional google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message AdminListAPITokensResponse {
+  repeated AdminAPITokenInfo tokens = 1;
+  common.CursorPaginationResponse pagination = 2;
 }
 
 // From pkg/models/users.go - CreateAPITokenRequest pattern
@@ -2334,7 +2363,7 @@ message RecordPullSourceEventRequest {
   string tenant_id = 1;
   string stream_id = 2;            // optional — empty when resolution couldn't reach a tenant
   string internal_name = 3;
-  // 'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'private_not_allowed' | 'commodore_error' | 'foghorn_base_unresolved'
+  // 'resolved' | 'not_found' | 'disabled' | 'blocked_uri' | 'cluster_not_allowed_delegate' | 'commodore_error' | 'foghorn_base_unresolved'
   string event_kind = 4;
   string detail = 5;
 }

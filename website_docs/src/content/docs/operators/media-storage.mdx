@@ -213,10 +213,11 @@ catches up. The two relevant metrics:
 
 ```
 s3://bucket/clips/{tenant_id}/{stream_internal_name}/{clip_hash}.{container}
-s3://bucket/vod/{tenant_id}/{vod_hash}.{container}
+s3://bucket/vod/{tenant_id}/{vod_hash}/{vod_hash}.{container}
 s3://bucket/dvr/{tenant_id}/{stream_internal_name}/{dvr_hash}/segments/{segment_name}
-s3://bucket/uploads/{tenant_id}/{upload_hash}.{container}
 ```
+
+Direct uploads land under the `vod/` prefix with the same key shape as other VOD artifacts.
 
 Sidecars (`.dtsh`, `.gop`) live next to their media object with the
 sidecar suffix appended. Don't hand-manipulate these prefixes — use
@@ -312,8 +313,10 @@ home cluster — and off the edges entirely — while still letting
 freshly-recorded artifacts serve viewers across the federation
 immediately; a grant's access ends when its short TTL expires (there is no explicit revoke).
 
-Operationally, this means cross-cluster playback adds S3 egress at the
-home cluster's S3 region but does not add cross-cluster bandwidth
-between Helmsman processes. For repeated cross-cluster playback of the
+Operationally, cross-cluster playback of an artifact that is already
+synced to S3 adds S3 egress at the home cluster's S3 region but no
+cross-cluster bandwidth between Helmsman processes. An artifact that
+has not synced yet is read from the origin node's Helmsman over the
+relay grant, so that first pass does cross clusters. For repeated cross-cluster playback of the
 same artifact, the requesting edge's block cache absorbs it after the
 first cold pass.

@@ -74,7 +74,7 @@ Hardware minimums:
 
 ## Supported Ownership Boundary
 
-The supported self-hosted product is edge-only. You operate MistServer, Helmsman, Caddy, and the host they run on. FrameWorks operates Foghorn and its federation identity, Commodore, Livepeer integration, Chandler, object storage, DNS/TLS automation, billing, analytics stores, and the rest of the control plane.
+FrameWorks can be run three ways: hosted, as self-hosted edges attached to the FrameWorks platform (this section), or fully self-hosted as an independent platform. In the self-hosted edge mode, you operate MistServer, Helmsman, Caddy, and the host they run on. FrameWorks operates Foghorn and its federation identity, Commodore, Livepeer integration, Chandler, object storage, DNS/TLS automation, billing, analytics stores, and the rest of the control plane.
 
 A **virtual private cluster** is a tenant-private placement and routing slice in the FrameWorks-operated Foghorn plane. It isolates authority and capacity for your tenant; it is not a customer-operated Foghorn.
 
@@ -86,6 +86,6 @@ A **virtual private cluster** is a tenant-private placement and routing slice in
 | Livepeer, Chandler, and durable object storage   | —             | Operates              |
 | DNS, certificates, billing, and analytics stores | —             | Operates              |
 
-Running Foghorn yourself is not a supported extension of edge self-hosting. It would also require a customer-operated federation trust root and compatible Livepeer, Chandler, storage, DNS, and control-plane services; those are outside this product boundary.
+Running Foghorn yourself is not an extension of edge self-hosting. Foghorn needs its own federation trust root and compatible Livepeer, Chandler, storage, DNS, and control-plane services, so running it means self-hosting the entire stack as an independent platform with the `frameworks` CLI; see the [deployment guide](/operators/deployment). A self-hosted platform cannot join the FrameWorks network: attaching your own Foghorn to the FrameWorks platform or mixing trust roots is not supported.
 
-FrameWorks infrastructure operators should use the [edge hardening rollout runbook](/operators/selfhosted-edge-rollout) when deploying the v0.3.0 authorization, enrollment, inventory, and DNS entitlement transitions.
+Platform operators (FrameWorks, or you if you self-host the entire stack) should use the [edge hardening rollout runbook](/operators/selfhosted-edge-rollout) when deploying the v0.3.0 authorization, enrollment, inventory, and DNS entitlement transitions.

@@ -3,19 +3,60 @@ package handlers
 import (
 	"errors"
 	"net/url"
+	"regexp"
 
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/protobuf/proto"
 )
 
-// Clone before adding viewer-specific credentials; endpoint catalogs can be shared
+var (
+	playbackNumberParam = regexp.MustCompile(`^-?[0-9]{1,15}(\.[0-9]{1,6})?$`)
+	playbackFileParam   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+	playbackTrackParam  = regexp.MustCompile(`^[A-Za-z0-9,!*_.+<>=-]{1,64}$`)
+)
+
+// forwardedPlaybackParams are the MistServer output parameters a viewer may put on
+// a /play URL: time-range cuts, download naming, pacing, and track selection. Any
+// other query parameter stays at Foghorn, so a /play URL cannot set Mist options
+// the platform does not document.
+var forwardedPlaybackParams = map[string]*regexp.Regexp{
+	"startunix": playbackNumberParam,
+	"stopunix":  playbackNumberParam,
+	"start":     playbackNumberParam,
+	"stop":      playbackNumberParam,
+	"duration":  playbackNumberParam,
+	"rate":      playbackNumberParam,
+	"dl":        playbackFileParam,
+	"audio":     playbackTrackParam,
+	"video":     playbackTrackParam,
+	"subtitle":  playbackTrackParam,
+}
+
+// viewerForwardedParams returns the allowlisted parameters of a /play request, or
+// the name of the first one that is repeated or malformed.
+func viewerForwardedParams(query url.Values) (url.Values, string) {
+	forwarded := url.Values{}
+	for name, pattern := range forwardedPlaybackParams {
+		values, ok := query[name]
+		if !ok {
+			continue
+		}
+		if len(values) != 1 || !pattern.MatchString(values[0]) {
+			return nil, name
+		}
+		forwarded.Set(name, values[0])
+	}
+	return forwarded, ""
+}
+
+// Clone before adding viewer-specific parameters; endpoint catalogs can be shared
 // with other resolutions. Base URLs and metadata are not playback destinations.
-func withViewerQueryCredential(response *sharedpb.ViewerEndpointResponse, token string) (*sharedpb.ViewerEndpointResponse, error) {
+func withViewerQueryParams(response *sharedpb.ViewerEndpointResponse, params url.Values) (*sharedpb.ViewerEndpointResponse, error) {
+	if len(params) == 0 {
+		return response, nil
+	}
 	if response == nil || response.Primary == nil {
 		return nil, errors.New("missing playback destination")
-	}
-	if token == "" {
-		return response, nil
 	}
 	result, ok := proto.Clone(response).(*sharedpb.ViewerEndpointResponse)
 	if !ok {
@@ -38,7 +79,9 @@ func withViewerQueryCredential(response *sharedpb.ViewerEndpointResponse, token 
 		if err != nil {
 			return "", errors.New("invalid playback destination query")
 		}
-		query.Set("jwt", token)
+		for name, values := range params {
+			query[name] = append([]string(nil), values...)
+		}
 		u.RawQuery = query.Encode()
 		return u.String(), nil
 	}

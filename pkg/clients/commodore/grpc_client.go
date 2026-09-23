@@ -1175,6 +1175,16 @@ func (c *GRPCClient) ListAPITokens(ctx context.Context, pagination *commonpb.Cur
 	})
 }
 
+// AdminListAPITokens lists API token metadata across tenants. Commodore admits
+// only a platform-operator JWT (ctxkeys.KeyJWTToken).
+func (c *GRPCClient) AdminListAPITokens(ctx context.Context, tenantID string, unsupportedScopesOnly bool, pagination *commonpb.CursorPaginationRequest) (*commodorepb.AdminListAPITokensResponse, error) {
+	return c.developer.AdminListAPITokens(ctx, &commodorepb.AdminListAPITokensRequest{
+		TenantId:              tenantID,
+		UnsupportedScopesOnly: unsupportedScopesOnly,
+		Pagination:            pagination,
+	})
+}
+
 // RevokeAPIToken revokes an API token
 func (c *GRPCClient) RevokeAPIToken(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error) {
 	return c.developer.RevokeAPIToken(ctx, &commodorepb.RevokeAPITokenRequest{

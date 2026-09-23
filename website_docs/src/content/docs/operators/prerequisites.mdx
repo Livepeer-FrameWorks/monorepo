@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps } from "@astrojs/starlight/components";
 
-Before you fire up the CLI, let's make sure your environment is ready. FrameWorks has specific requirements for network topology and access control to function correctly.
+Check these hardware, network, and access requirements before running the CLI.
 
 ## Hardware & OS Requirements
 
@@ -183,10 +183,10 @@ FrameWorks requires several external services. See [External Services](/operator
 - Bunny DNS (optional; when configured, Navigator delegates media cluster DNS to Bunny)
 - S3-compatible object storage (Cloudflare R2, Hetzner, or another compatible provider)
 - SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy, or bring your own)
+- SMTP provider (production; used for contact forms, auth emails, billing notifications, and support/newsletter email)
 
 **Optional:**
 
-- SMTP provider (required for contact forms, auth emails, billing notifications, and support/newsletter email)
 - Stripe (billing)
 - MaxMind GeoIP (geographic routing)
 

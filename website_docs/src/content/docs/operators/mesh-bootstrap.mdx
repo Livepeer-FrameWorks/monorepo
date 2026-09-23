@@ -102,8 +102,9 @@ The runtime-layer source field on `/var/lib/privateer/last_known_mesh.json`
 (`"seed"` or `"dynamic"`) is independent and describes how the last sync was
 applied — it does not persist across Quartermaster state.
 
-Mental model: **seed boots, managed runs, enrollment grows, reconcile
-promotes.**
+In short: the seed layer boots the mesh, the Quartermaster-managed layer runs
+it, runtime enrollment adds nodes, and `mesh reconcile` promotes enrolled
+nodes into GitOps.
 
 ### Precedence
 

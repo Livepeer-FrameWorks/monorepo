@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -307,6 +308,115 @@ func TestManualQueryAdapters_RealPG(t *testing.T) {
 	}
 	if err := queries.StopStaleFoghornControlListeners(ctx, StopStaleFoghornControlListenersParams(cleanup)); err != nil {
 		t.Fatalf("stop stale control listeners: %v", err)
+	}
+	runNodeFingerprintOperatorAdapters(t, ctx, tx, tenantID)
+}
+
+// runNodeFingerprintOperatorAdapters seeds the duplicates a pre-v0.3.0
+// database can hold. The unique indexes are dropped inside the rolled-back
+// transaction because the current baseline would reject those rows.
+func runNodeFingerprintOperatorAdapters(t *testing.T, ctx context.Context, tx *sql.Tx, tenantID string) {
+	t.Helper()
+	if _, err := tx.ExecContext(ctx, `
+		DROP INDEX quartermaster.uq_qm_fingerprints_machine;
+		DROP INDEX quartermaster.uq_qm_fingerprints_macs;
+		INSERT INTO quartermaster.infrastructure_clusters (cluster_id, cluster_name, cluster_type, base_url)
+		VALUES ('fp-a', 'FP A', 'edge', 'https://fp-a.example'), ('fp-b', 'FP B', 'edge', 'https://fp-b.example');
+		INSERT INTO quartermaster.infrastructure_nodes (node_id, cluster_id, node_name, node_type) VALUES
+			('fp-n1', 'fp-a', 'n1', 'edge'), ('fp-n2', 'fp-b', 'n2', 'edge'), ('fp-n3', 'fp-a', 'n3', 'edge'),
+			('fp-n4', 'fp-a', 'n4', 'edge'), ('fp-n6', 'fp-a', 'n6', 'edge');
+	`); err != nil {
+		t.Fatalf("seed fingerprint clusters: %v", err)
+	}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, row := range []struct {
+		id, node          string
+		tenant            any
+		machine, macs     any
+		key               any
+		firstSeenHoursAdd int
+	}{
+		{"f0000000-0000-4000-8000-000000000001", "fp-n1", tenantID, "m-dup", "macs-1", make([]byte, 32), 1},
+		{"f0000000-0000-4000-8000-000000000002", "fp-n2", nil, "m-dup", "macs-2", nil, 2},
+		// Two blank machine hashes share a raw value but sit outside the index predicate.
+		{"f0000000-0000-4000-8000-000000000003", "fp-n3", tenantID, "", "", nil, 3},
+		{"f0000000-0000-4000-8000-000000000004", "fp-n4", tenantID, "  ", "mac-dup", nil, 4},
+		// fp-n5 has no node row left: a stale binding.
+		{"f0000000-0000-4000-8000-000000000005", "fp-n5", nil, "m-5", "mac-dup", nil, 5},
+		{"f0000000-0000-4000-8000-000000000006", "fp-n6", nil, "", nil, nil, 6},
+	} {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.node_fingerprints
+				(id, node_id, tenant_id, fingerprint_machine_sha256, fingerprint_macs_sha256, node_identity_public_key_ed25519, first_seen)
+			VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7)`,
+			row.id, row.node, row.tenant, row.machine, row.macs, row.key, base.Add(time.Duration(row.firstSeenHoursAdd)*time.Hour)); err != nil {
+			t.Fatalf("seed fingerprint %d: %v", i, err)
+		}
+	}
+	queries := New(tx)
+	list := func(filter NodeFingerprintBindingFilter) ([]string, int32, []NodeFingerprintBindingRow) {
+		t.Helper()
+		if filter.Limit == 0 {
+			filter.Limit = 50
+		}
+		rows, total, err := queries.ListNodeFingerprintBindingsPage(ctx, filter)
+		if err != nil {
+			t.Fatalf("list fingerprints %+v: %v", filter, err)
+		}
+		ids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.NodeID)
+		}
+		return ids, total, rows
+	}
+	if ids, total, _ := list(NodeFingerprintBindingFilter{}); total != 6 || strings.Join(ids, ",") != "fp-n6,fp-n5,fp-n4,fp-n3,fp-n2,fp-n1" {
+		t.Fatalf("all bindings = %v total %d", ids, total)
+	}
+	ids, total, rows := list(NodeFingerprintBindingFilter{DuplicatesOnly: true})
+	if total != 4 || strings.Join(ids, ",") != "fp-n5,fp-n4,fp-n2,fp-n1" {
+		t.Fatalf("duplicates = %v total %d", ids, total)
+	}
+	for _, row := range rows {
+		switch row.NodeID {
+		case "fp-n1":
+			if row.MachineDuplicates != 2 || row.MACsDupes != 0 || !row.HasIdentityKey || row.ClusterID != "fp-a" || row.TenantID != tenantID {
+				t.Fatalf("fp-n1 row = %+v", row)
+			}
+		case "fp-n5":
+			if row.MachineDuplicates != 0 || row.MACsDupes != 2 || row.ClusterID != "" || row.TenantID != "" {
+				t.Fatalf("stale fp-n5 row = %+v", row)
+			}
+		}
+	}
+	// The cluster filter narrows after duplicate counting: fp-n1's twin lives in fp-b.
+	if ids, total, _ := list(NodeFingerprintBindingFilter{DuplicatesOnly: true, ClusterID: "fp-a"}); total != 2 || strings.Join(ids, ",") != "fp-n4,fp-n1" {
+		t.Fatalf("duplicates in fp-a = %v total %d", ids, total)
+	}
+	firstPage, _, pageRows := list(NodeFingerprintBindingFilter{DuplicatesOnly: true, Limit: 2})
+	if strings.Join(firstPage, ",") != "fp-n5,fp-n4" {
+		t.Fatalf("first page = %v", firstPage)
+	}
+	cursor := pageRows[1]
+	if next, _, _ := list(NodeFingerprintBindingFilter{DuplicatesOnly: true, Limit: 2, CursorTime: &cursor.SortTime, CursorID: cursor.ID}); strings.Join(next, ",") != "fp-n2,fp-n1" {
+		t.Fatalf("second page = %v", next)
+	}
+	if back, _, _ := list(NodeFingerprintBindingFilter{DuplicatesOnly: true, Backward: true, CursorTime: &cursor.SortTime, CursorID: cursor.ID}); strings.Join(back, ",") != "fp-n5" {
+		t.Fatalf("backward page = %v", back)
+	}
+
+	if _, err := queries.DeleteNodeFingerprintBinding(ctx, "f0000000-0000-4000-8000-000000000002", "fp-n1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("mismatched node delete err = %v, want sql.ErrNoRows", err)
+	}
+	unbound, err := queries.DeleteNodeFingerprintBinding(ctx, "f0000000-0000-4000-8000-000000000002", "fp-n2")
+	if err != nil || unbound.ClusterID != "fp-b" || unbound.TenantID != "" {
+		t.Fatalf("unbind fp-n2 = %+v, %v", unbound, err)
+	}
+	unbound, err = queries.DeleteNodeFingerprintBinding(ctx, "f0000000-0000-4000-8000-000000000001", "fp-n1")
+	if err != nil || unbound.ClusterID != "fp-a" || unbound.TenantID != tenantID {
+		t.Fatalf("unbind fp-n1 = %+v, %v", unbound, err)
+	}
+	if ids, total, _ := list(NodeFingerprintBindingFilter{DuplicatesOnly: true}); total != 2 || strings.Join(ids, ",") != "fp-n5,fp-n4" {
+		t.Fatalf("duplicates after unbinding the machine pair = %v total %d", ids, total)
 	}
 }
 

@@ -192,6 +192,42 @@ and HA gates, while a service-owned repository change runs only that service's
 real-Yugabyte contracts. Scheduled
 and manually dispatched CI continue to run the exhaustive gates.
 
+## Migration prechecks
+
+A PostgreSQL/YugabyteDB migration that cannot succeed while certain rows exist (a unique
+index over data that may hold duplicates) gets a precheck instead of an in-migration guard.
+Shipped migration files are immutable, so the precheck lives beside them:
+
+```
+pkg/database/sql/prechecks/<database>/<version>/<phase>/<migration filename>
+```
+
+The path mirrors the migration's path under `migrations/`, including the `.notx.sql`
+suffix; that is the whole binding, and adding a precheck does not change the migration's
+bytes or ledger checksum. `cli/pkg/provisioner/migration_precheck.go` loads the files and
+`migrate_helpers.go` attaches each one to its item as `precheck_query`/`precheck_path`.
+
+Rules:
+
+- The file is exactly one `SELECT` that returns the rows the migration would fail on, and
+  nothing when the migration is safe. No `SELECT … INTO`, no `FOR UPDATE`/`FOR SHARE`/
+  `FOR NO KEY UPDATE`/`FOR KEY SHARE`, no dollar-quoted body. Put the remediation command
+  in a leading comment.
+- Return columns an operator can act on (IDs, cluster, last seen). The roles wrap the
+  query with `count(*) OVER ()` and `row_to_json`, and print the total plus the first 50
+  rows as JSON.
+- Both roles apply items one at a time through `tasks/migrate_item.yml`: the precheck runs
+  in a `READ ONLY` transaction immediately before its item, after every earlier item has
+  applied, and a non-empty result fails the item before its first statement. Prechecks
+  are skipped in check mode (`--dry-run`).
+- `make validate-migrations` (`cluster migrate validate`) rejects a precheck that is not a
+  single `SELECT`, that names no migration file, or whose migration is below the baseline
+  floor and therefore never offered.
+
+The v0.3.0 Quartermaster prechecks for `005_node_identity_unique_indexes.notx.sql` and
+`006_node_identity_macs_unique_index.notx.sql` are the reference. A precheck covers
+PostgreSQL and YugabyteDB; ClickHouse migrations have no precheck mechanism.
+
 ## The baseline floor
 
 `schemaMigrationBaselineFloor` in `cli/pkg/provisioner/migrate.go` is the consolidation

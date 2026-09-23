@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -239,7 +238,7 @@ func authorizeChapterTranscode(ctx context.Context, artifactHash string, claims 
 	row, err := foghorndb.New(db).ActiveChapterTranscodeJobContext(ctx, artifactHash)
 	if err != nil || row.TenantID != claims.TenantID || row.ProcessingNodeID != claims.NodeID ||
 		strconv.Itoa(int(row.FinalizeAttempts)) != claims.AttemptOrGeneration ||
-		fmt.Sprintf("chapter-finalize-v2-%d-%s", row.FinalizeAttempts, row.ChapterID) != claims.JobID {
+		foghorndb.ChapterFinalizeJobID(row.FinalizeAttempts, row.ChapterID) != claims.JobID {
 		return nil
 	}
 	digest, err := mist.LivepeerJobSpecDigest(row.ProcessesJson)

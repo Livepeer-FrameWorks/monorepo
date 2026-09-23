@@ -55,6 +55,10 @@ type ServiceTarget struct {
 	Name string
 	// DefaultGRPCPort is used when manifest.Services[Name].GRPCPort is unset.
 	DefaultGRPCPort int
+	// ServerName overrides the TLS server name, which otherwise is
+	// "<Name>.internal". Per-cell entries (foghorn-eu) carry the leaf
+	// certificate of their deploy type (foghorn.internal).
+	ServerName string
 }
 
 // Session holds one or more tunnels for the duration of a provisioning phase.
@@ -216,9 +220,9 @@ func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int
 		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no gRPC port (default %d)", t.Name, t.DefaultGRPCPort)
 	}
 
-	serverName = fmt.Sprintf("%s.internal", t.Name)
-	if serverName == "" && !s.allowInsecure {
-		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no usable address for TLS server name", t.Name)
+	serverName = t.ServerName
+	if serverName == "" {
+		serverName = fmt.Sprintf("%s.internal", t.Name)
 	}
 	return hostKey, remotePort, serverName, nil
 }

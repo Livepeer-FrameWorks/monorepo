@@ -18,6 +18,9 @@ Two ways deliver them, with the same payloads:
 
 ## Subscribe
 
+The [SDKs](/builders/sdks#subscribe-to-events) wrap this subscription: they reconnect with backoff
+and read the current token again on every reconnect. Over raw GraphQL:
+
 ```graphql
 subscription ClipEvents($streamId: ID) {
   tenantEvents(types: ["clip.ready", "clip.failed"], streamId: $streamId) {
@@ -31,7 +34,6 @@ subscription ClipEvents($streamId: ID) {
         artifact {
           artifactId
           streamId
-          playbackId
         }
         durationMs
         sizeBytes
@@ -102,7 +104,10 @@ Clip, recording, and upload events share one `artifact` object:
 | `artifactId` | The artifact's public hash, the `hash` of its `storageArtifactsConnection` row. |
 | `kind`       | `ARTIFACT_KIND_CLIP`, `ARTIFACT_KIND_RECORDING`, or `ARTIFACT_KIND_UPLOAD`.     |
 | `streamId`   | The source stream; empty for uploads.                                           |
-| `playbackId` | The playback ID, once one is assigned.                                          |
+| `playbackId` | Always empty on clip, recording, and upload events.                             |
+
+The event does not carry the artifact's playback ID. Look it up by `artifactId`: query
+`storageArtifactsConnection` with `artifactHash` set to the `artifactId`, or `clip(id:)` for a clip.
 
 Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_FAILED`,
 `_STORAGE_FAILED`, `_INVALID_INPUT`, `_QUOTA_EXCEEDED`, `_TIMED_OUT` (each prefixed
@@ -115,12 +120,17 @@ Subject: `streams/<stream id>`.
 | Type                 | Fires when                                                        | Payload                                                                   |
 | -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                          |
-| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (the changed fields by API name)              |
+| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                |
 | `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                |
 | `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                |
 | `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
 | `stream.live`        | The stream becomes playable.                                      | `streamId`                                                                |
 | `stream.idle`        | The ingest session ends.                                          | `streamId`                                                                |
+
+`changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
+`description`, `is_recording_enabled`, `pull_source`, `source_location`,
+`dvr_chapter_mode`, `dvr_chapter_interval_seconds`, `monitoring_enabled`, `playback_policy`,
+`stream_keys`, and `push_targets`.
 
 `stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session.
 

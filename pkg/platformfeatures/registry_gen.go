@@ -28,6 +28,7 @@ var shipped = []string{
 	"playback-access-control",
 	"player-sdks",
 	"signing-keys",
+	"sovereign-self-host",
 	"stream-keys",
 	"streamcrafter",
 	"streams",

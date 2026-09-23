@@ -7,8 +7,12 @@ sidebar:
 
 ## What Is a Cluster?
 
-A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly
-the media plane. Commodore, Quartermaster, and Purser remain central. Today the
+A **media cluster** is a set of edge nodes plus the cluster-scoped services
+assigned to it, strictly the media plane. Every media cluster is served by a
+platform-run Foghorn control cell (one Foghorn instance or HA set). One cell can
+serve several virtual media clusters, including customer private clusters, so
+the Foghorn process cluster is never a substitute for an edge node's cluster
+identity. Commodore, Quartermaster, and Purser remain central. Today the
 unsharded ClickHouse deployment also provides one logical Periscope metering
 source. When ClickHouse is split by wider region, each logical regional
 deployment runs local Periscope Ingest, Query, and Metering services; the
@@ -26,8 +30,8 @@ Cross-cluster coordination is handled exclusively by the **FoghornFederation** g
 | Model                | Description                                                                                                                                                                                               |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                              |
-| **Dedicated**        | Enterprise tier. Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is not part of this model.                                                                     |
-| **Hybrid**           | Tenant runs self-hosted MistServer/Helmsman edges that connect to provider Foghorn and can fall back to managed capacity; the control/data plane remains provider-operated.                               |
+| **Dedicated**        | Enterprise tier. Isolated provider-operated capacity and routing for one tenant. To run Foghorn yourself, self-host the entire stack.                                                                     |
+| **Hybrid**           | Tenant runs self-hosted Caddy/MistServer/Helmsman edges that connect to provider Foghorn and can fall back to managed capacity; the control/data plane remains provider-operated.                         |
 | **Open Marketplace** | Operators publish listed clusters with access controls, invites, subscription requests, and pricing metadata. A vetted public marketplace program for third-party capacity is on the [roadmap](/roadmap). |
 
 ---

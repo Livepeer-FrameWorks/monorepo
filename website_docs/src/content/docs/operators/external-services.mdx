@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-External service credentials required by the provider-operated platform today. Architecture work may reduce this surface with native Ceph-backed storage and provider-operated Anycast DNS; it is not a customer whole-stack hosting roadmap.
+External service credentials required by a full FrameWorks deployment today, whether operated by FrameWorks or self-hosted. Architecture work may reduce this surface with native Ceph-backed storage and operator-run Anycast DNS.
 
 ## Credential Delivery
 
@@ -31,14 +31,14 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 | **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `TELEMETRY_TOKEN_SECRET`            | You — in shared env files for non-dev deployments |
 | **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`                                           | CLI — from manifest                               |
 
-For dev-profile manifests, the CLI can replace missing or placeholder shared platform secrets with `crypto/rand` values for that provision run. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
+For dev-profile manifests, the CLI generates missing or placeholder shared platform secrets with `crypto/rand` and saves them to `.frameworks/dev-generated-secrets.env` next to the manifest, so later provision, apply, and restart runs reuse the same values. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
 
 ### Infrastructure Credential Flow
 
 During `frameworks cluster provision`, the CLI also provisions database users:
 
 - **Postgres/YugabyteDB**: Creates a per-database owner/migration role using `DATABASE_PASSWORD` plus a least-privilege runtime role (by default `<owner>_runtime`) using the independent `DATABASE_RUNTIME_PASSWORD`. Runtime password precedence is the per-database override, owner alias, named Postgres instance override, matching cluster default, then shared default; provisioning and service DSNs use the same resolver. Provisioning rejects equal owner/runtime credentials. The runtime role can connect and perform application DML in its service schema, but cannot create schema objects or own them. Add `runtime_role` to the database manifest entry only after provisioning and `frameworks cluster doctor --deep` succeed; omitting it keeps services on the owner role.
-- **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
+- **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly` user restricted to localhost connections (password from `CLICKHOUSE_READONLY_PASSWORD`). Remote analytics readers use the `frameworks_analytics` user described below.
 - **Operator analytics (optional)**: When `ANALYTICS_RO_PASSWORD` and `CLICKHOUSE_ANALYTICS_PASSWORD` are both set, provisioning additionally creates the read-only `frameworks_analytics_ro` Postgres role (quartermaster/commodore/purser grants, applied by `cluster seed`), the ClickHouse named collections that reach it, and a dedicated `frameworks_analytics` ClickHouse user. Use `frameworks_analytics` as the Metabase datasource credential for the tenant-activity cards (synced by `frameworks cluster metabase sync`) — the runtime `frameworks` user is deliberately denied the Postgres reach-through.
 
 This ensures runtime services can connect with the same credentials the CLI provisioned.
@@ -47,7 +47,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Set at minimum in `gitops/secrets/production.env`: distinct `DATABASE_PASSWORD` and `DATABASE_RUNTIME_PASSWORD` values, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
+3. Generate the complete shared-secret set with `frameworks cluster secrets generate-shared --out <new-file>` and import every value into `gitops/secrets/production.env`. The generated set covers `SERVICE_TOKEN`, `DATABASE_RUNTIME_PASSWORD`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`, `CLUSTER_ACCESS_MATERIALIZATION_SECRET`, `FOGHORN_BALANCER_CAPABILITY_SECRET`, `FOGHORN_STATE_ENCRYPTION_KEY`, the four `MEDIA_AUTHORITY_*` keys (seal root secret, signing key ID, signing private key, trust set), `EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`, and the `CAPACITY_CONSENT_REVIEW_*` signer. Then set the operator-chosen values: `DATABASE_PASSWORD` (distinct from `DATABASE_RUNTIME_PASSWORD`) and `CLICKHOUSE_PASSWORD`. Remove the plaintext fragment after import.
 
    When rotating `JWT_SECRET` before the v0.3.0 field migration has completed,
    first add the outgoing value to the JSON array
@@ -61,7 +61,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
      - config/production.env
      - secrets/production.env
    ```
-6. Run `frameworks cluster provision` — the CLI creates database users, generates missing secrets, and pushes merged env vars to all hosts
+6. Run `frameworks cluster provision` — the CLI creates database users, validates that the shared secrets are present, and pushes merged env vars to all hosts. Non-dev provisioning fails on a missing secret instead of generating one.
 
 ### Encrypting secrets with SOPS + age
 
@@ -351,29 +351,29 @@ When `CLUSTER_ID` is set, Chandler takes the full descriptor tuple (`s3_bucket` 
 
 - **Foghorn** (`api_balancing`) — geo-aware viewer routing decisions
 - **Quartermaster** (`api_tenants`) — geolocates nodes at bootstrap for federation map placement
-- **Purser** (`api_billing`) — records the payer country on crypto top-up invoices
+- **Purser** (`api_billing`) — records the payer country on crypto top-up invoices. Purser is not a default `sync-geoip` target; include it with `--services purser` or list it in the manifest's `geoip.services`.
 
-If `GEOIP_MMDB_PATH` is empty, GeoIP is disabled and services fall back to non-geographic behavior. A service whose `GEOIP_MMDB_PATH` is set to a file that is missing or cannot be opened refuses to start.
+If `GEOIP_MMDB_PATH` is empty, GeoIP is disabled and services fall back to non-geographic behavior. If `GEOIP_MMDB_PATH` points to a file that is missing or cannot be opened, Foghorn, Purser, and Quartermaster log a warning (`GeoIP unavailable; continuing without geolocation`) and run without GeoIP.
 
 **CLI Provisioning (recommended):**
 
 ```bash
-# Download from MaxMind and distribute to all Foghorn + Quartermaster hosts
+# Download from MaxMind and distribute to Foghorn, Quartermaster, and livepeer-gateway hosts
 frameworks cluster sync-geoip --license-key YOUR_MAXMIND_KEY
 
 # Use a local MMDB file instead
 frameworks cluster sync-geoip --source file --file /path/to/GeoLite2-City.mmdb
 
 # Target specific services, restart after upload
-frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster --restart
+frameworks cluster sync-geoip --license-key KEY --services foghorn,quartermaster,purser --restart
 ```
 
-The CLI reads your cluster manifest to find the hosts running the target services, uploads the MMDB via SSH, and optionally restarts those workloads. You can also make GeoIP part of normal cluster provisioning with a `geoip:` block in the manifest so `frameworks cluster provision` stages the MMDB before Foghorn and Quartermaster start.
+The CLI reads your cluster manifest to find the hosts running the target services, uploads the MMDB via SSH, and optionally restarts those workloads. Without `--services`, it targets the manifest's `geoip.services` list, or else whichever of `foghorn`, `quartermaster`, and `livepeer-gateway` the manifest deploys. You can also make GeoIP part of normal cluster provisioning with a `geoip:` block in the manifest so `frameworks cluster provision` stages the MMDB before those services start.
 
 **Manual Provisioning:**
 
 1. Download a City-level MMDB file from your provider
-2. Place it on each Foghorn and Quartermaster host at `/var/lib/GeoIP/GeoLite2-City.mmdb`
+2. Place it on each consuming host (Foghorn, Quartermaster, and Purser if used) at `/var/lib/GeoIP/GeoLite2-City.mmdb`
 3. Set environment variables on the target services:
    ```bash
    GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
@@ -381,7 +381,7 @@ The CLI reads your cluster manifest to find the hosts running the target service
 
 **Cache Tuning (optional):**
 
-The shared `pkg/geoip` reader caches lookups. Defaults are sensible for most deployments:
+Foghorn caches GeoIP lookups; no other service reads these variables. Defaults are sensible for most deployments:
 
 ```bash
 GEOIP_CACHE_TTL=300s       # Positive cache TTL (default: 300s)

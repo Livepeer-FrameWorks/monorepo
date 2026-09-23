@@ -136,8 +136,13 @@ frameworks cluster migrate --phase expand
 4. **Verify** the changes:
 
 ```bash
-psql -h <host> -d purser -c "SELECT version, phase, seq, filename, checksum FROM _migrations ORDER BY version, phase, seq;"
+frameworks cluster doctor
 ```
+
+`cluster doctor` checks the `_migrations` ledger of every database against the
+target release and reports missing entries. To capture the ledger rows
+themselves, run `frameworks cluster snapshot --skip-logs`; the snapshot
+includes each database's migration ledger.
 
 5. **Deploy** a specifically diagnosed service version:
 
@@ -154,6 +159,36 @@ frameworks cluster upgrade quartermaster --version v1.1.0
 Do not substitute `cluster upgrade --all` for `cluster release apply`: direct
 upgrade does not run declared release transitions and fails closed when one
 gates a downstream service.
+
+## Migration prechecks
+
+Some migrations cannot succeed while certain rows exist, for example a unique
+index over data that still has duplicates. Such a migration can have a
+precheck: a read-only query that returns exactly the rows the migration would
+fail on. The PostgreSQL and YugabyteDB migrate roles apply pending migrations
+one at a time, and run an item's precheck in a `READ ONLY` transaction
+immediately before that item, after every earlier item has applied.
+
+When the precheck returns rows, the item is refused before its first statement
+and nothing of it runs. The failure names the migration and the precheck file,
+the total number of offending rows, and up to 50 of them as JSON:
+
+```text
+quartermaster/v0.3.0/expand/005_node_identity_unique_indexes.notx.sql was not applied: its precheck
+prechecks/quartermaster/v0.3.0/expand/005_node_identity_unique_indexes.notx.sql found 2 row(s) the
+migration would fail on. Nothing of this item ran. Resolve these rows, then rerun the migration.
+First 2: {"node_id":"...","cluster_id":"...","last_seen":"...","fingerprint_id":"...",...}; ...
+```
+
+Earlier items in the same run stay applied and recorded; the refused item and
+later items stay pending. Resolve the rows with the command the release's
+upgrade notes name, then rerun the migration (`cluster release apply` or
+`cluster migrate`). Prechecks do not run under `--dry-run`, so a dry-run does
+not show a refusal in advance.
+
+The v0.3.0 prechecks guard the Quartermaster node-fingerprint unique indexes;
+their remediation is described in
+[Running Cluster Upgrades](/operators/running-upgrades#control-plane-first-then-edges).
 
 ## Writing migrations
 
@@ -272,10 +307,14 @@ ERROR: relation "quartermaster.bootstrap_tenant_aliases" does not exist
 ```
 
 Cause: Service deployed before migration was applied.
-Fix: Apply the migration, then restart the service.
+Fix: Rerun `frameworks cluster migrate --phase expand` (migrations are
+idempotent), confirm the ledger with `frameworks cluster doctor`, then restart
+the service.
 
-**Check table structure:**
+**The ledger lists the migration but the object is missing:**
 
-```sql
-\d quartermaster.bootstrap_tenant_aliases
-```
+Run `frameworks cluster doctor --deep`. Its read-only schema capability packs
+exercise the objects and grants each service needs against the live engine and
+name the ones that fail. Capture `frameworks cluster snapshot --skip-logs` with
+that output: a ledger row for an object that does not exist means the database
+was changed outside the migration path.

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-Autonomous agents can create streams, record video, query analytics, and pay per-use — all without a human in the loop. FrameWorks exposes the same platform via MCP tools, GraphQL, and HTTP, with wallet-based identity and x402 micropayments so an agent can self-onboard, get challenged for payment on a billable call, and retry with payment attached.
+Autonomous agents can create streams, record video, query analytics, and pay per-use without a human signup. FrameWorks exposes the same platform via MCP tools, GraphQL, and HTTP, with wallet-based identity and x402 micropayments so an agent can self-onboard, get challenged for payment on a billable call, top up via `submit_payment`, then retry.
 
 <CardGrid>
   <LinkCard
@@ -43,7 +43,7 @@ FrameWorks publishes metadata following the [Agent Skills](https://agentskills.i
 | --------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------- |
 | [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)                                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
 | [`/.well-known/did.json`](%GATEWAY_URL%/.well-known/did.json)                                 | W3C DID      | Decentralized identity and service endpoints                            |
-| [`/.well-known/oauth-protected-resource`](%GATEWAY_URL%/.well-known/oauth-protected-resource) | RFC 8707     | OAuth resource metadata with wallet and x402 extensions                 |
+| [`/.well-known/oauth-protected-resource`](%GATEWAY_URL%/.well-known/oauth-protected-resource) | RFC 9728     | OAuth resource metadata with wallet and x402 extensions                 |
 | [`/.well-known/security.txt`](%GATEWAY_URL%/.well-known/security.txt)                         | RFC 9116     | Security contact and advisories                                         |
 | [`/skill.json`](%MARKETING_URL%/skill.json)                                                   | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
 | [`/SKILL.md`](%MARKETING_URL%/SKILL.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
@@ -87,13 +87,14 @@ Once installed, the agent can activate the skill on demand to connect to and ope
 
 ## Authentication Methods
 
-Three methods, all stateless, no registration required:
+Two methods, both stateless, no registration required:
 
 | Method               | Best For                  | Details                                                                          |
 | -------------------- | ------------------------- | -------------------------------------------------------------------------------- |
 | **Wallet** (EIP-191) | Autonomous agents         | Sign a message, auto-provision a tenant. See [Wallet Auth](/agents/wallet-auth). |
-| **x402** (EIP-3009)  | Pay-per-use agents        | Gasless USDC on Base/Arbitrum. See [Payments](/agents/payments).                 |
 | **Bearer** (JWT)     | Dashboard users, API keys | From login or account settings.                                                  |
+
+x402 (EIP-3009 USDC on Base/Arbitrum) tops up an authenticated tenant; it is never a login credential. The one anonymous payment is `viewer://` playback, which credits the content owner without establishing an identity. See [Payments](/agents/payments).
 
 ## Platform Capabilities
 

@@ -7,15 +7,13 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-If you're running on [Livepeer Studio](https://livepeer.studio) today and considering FrameWorks, this page is for you. The two platforms overlap on live streaming basics, but the API shape and a few access-control features differ enough that a straight endpoint swap is not enough.
+[Livepeer Studio](https://livepeer.studio) and FrameWorks overlap on live streaming basics, but the API shape and a few access-control features differ enough that a straight endpoint swap is not enough.
 
-This guide covers what stays, what changes, what you gain, and exactly how to do the swap.
-
-Livepeer Studio is the canonical Livepeer gateway: steward of the public transcoding pipeline, and the team that made building on the protocol easy. For most teams, "building on Livepeer" has meant building on Studio. FrameWorks is another gateway on the same network, with a different product shape around it. The rest of this page maps Studio's surface to FrameWorks: what's a clean swap, what changes shape, and where they diverge.
+Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on the same network, with a different product shape around it. The rest of this page maps Studio's surface to FrameWorks: what's a clean swap, what changes shape, and where they diverge.
 
 ## TL;DR
 
-- **What stays:** RTMP/RTMPS and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
+- **What stays:** RTMP and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
@@ -134,7 +132,7 @@ You get back a `streamKey` (secret — for your encoder) and a `playbackId` (pub
 
 ### 2. Repoint your encoder
 
-Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP/RTMPS and WHIP remain the low-effort path; FrameWorks additionally accepts E-RTMP (HEVC/AV1 contribution over RTMP) and SRT when your encoder supports them.
+Studio uses GeoDNS-routed `rtmp://rtmp.livepeer.com/live` and a WHIP endpoint at `https://playback.livepeer.studio/webrtc/{streamKey}`. FrameWorks publishes its equivalents via the dashboard or `resolveIngestEndpoint(streamKey)`. RTMP and WHIP remain the low-effort path; FrameWorks additionally accepts E-RTMP (HEVC/AV1 contribution over RTMP) and SRT when your encoder supports them.
 
 OBS / FFmpeg / hardware encoder → swap the URL, keep the rest.
 
@@ -146,10 +144,10 @@ If your existing integration uses the older `@livepeer/react` package:
 - import { Player } from "@livepeer/react";
 - <Player playbackId={playbackId} />
 + import { Player } from "@livepeer-frameworks/player-react";
-+ <Player playbackId={playbackId} gatewayUrl="%GATEWAY_URL%" />
++ <Player contentType="live" contentId={playbackId} options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
 ```
 
-Svelte and Web Components are first-class too:
+The player also ships as:
 
 - `@livepeer-frameworks/player-svelte`
 - `@livepeer-frameworks/player-wc` (`<fw-player>`)
@@ -281,7 +279,7 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
 - **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
-- **Player on Svelte and as Web Components**, not just React.
+- **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
 ## What's not yet at parity, and what's coming
 
@@ -303,8 +301,6 @@ Current gaps to account for:
 
 ## Beta and tricky bits
 
-Heads-up so nothing surprises you:
-
 - **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances
   you signed up for.
 - **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
@@ -322,8 +318,6 @@ Heads-up so nothing surprises you:
 - **No webhook history backfill.** Past Studio events stay on Studio. A FrameWorks webhook endpoint receives events from the moment it is created, so create it before you move traffic.
 
 ## Get help
-
-Pick whichever channel fits.
 
 | Channel                     | Best for                                                                                    | Where                                                        |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |

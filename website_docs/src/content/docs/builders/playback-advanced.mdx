@@ -42,7 +42,7 @@ registerSkin("mybrand", {
 // Use it
 const player = createPlayer({
   target: "#player",
-  contentId: "pk_...",
+  contentId: "a1b2c3d4e5f6g7h8",
   skin: "mybrand",
 });
 ```
@@ -54,7 +54,7 @@ Pass a `SkinDefinition` directly:
 ```ts
 const player = createPlayer({
   target: "#player",
-  contentId: "pk_...",
+  contentId: "a1b2c3d4e5f6g7h8",
   skin: {
     inherit: "default",
     blueprints: {
@@ -75,11 +75,14 @@ interface SkinDefinition {
   inherit?: string; // Parent skin name
   structure?: { main: StructureDescriptor }; // Layout override
   blueprints?: Record<string, BlueprintFactory>; // UI factory overrides
-  icons?: Record<string, { svg: string; size?: number }>; // Icon overrides
+  icons?: Record<string, { svg: string; size?: number }>; // Accepted, but not read by the renderer
   tokens?: Record<string, string>; // CSS custom properties
   css?: { skin?: string }; // Additional CSS
 }
 ```
+
+The `icons` field is merged through skin inheritance but no built-in blueprint reads it. To change
+an icon, override the blueprint that renders it.
 
 ### Headless / No UI
 
@@ -144,7 +147,7 @@ Every blueprint factory receives this context object:
 | `options`                   | `CreatePlayerConfig`       | Config passed to `createPlayer`                      |
 | `container`                 | `HTMLElement`              | Player container element                             |
 | `translate(key, fallback?)` | `function`                 | i18n helper                                          |
-| `buildIcon(name, size?)`    | `function`                 | SVG icon builder                                     |
+| `buildIcon(name, size?)`    | `function`                 | Reserved; currently always returns `null`            |
 | `log(msg)`                  | `function`                 | Debug logger (no-op when debug off)                  |
 | `timers`                    | `object`                   | `setTimeout`/`setInterval` (auto-cleaned on destroy) |
 
@@ -241,12 +244,13 @@ interface SimplePlayerDefinition {
 
 ## Reactive State API
 
-The `player.subscribe` object provides per-property reactive subscriptions. Callbacks fire immediately with the current value, then on every change (with shallow equality deduplication).
+The `player.subscribe` object provides per-property reactive subscriptions. Callbacks fire immediately with the current value, then whenever the value changes. Deduplication uses strict equality (`===`), so object and array
+values (such as `tracks`) notify whenever a new object is produced.
 
 ```ts
-// Subscribe to a property
-const unsub = player.subscribe.on("currentTime", (t) => {
-  myTimeLabel.textContent = `${t.toFixed(1)}s`;
+// Subscribe to a property (currentTime and duration are in milliseconds)
+const unsub = player.subscribe.on("currentTime", (ms) => {
+  myTimeLabel.textContent = `${(ms / 1000).toFixed(1)}s`;
 });
 
 // Read current value synchronously
@@ -266,14 +270,17 @@ Available properties: `paused`, `playing`, `currentTime`, `duration`, `volume`, 
 
 ## Playback Modes
 
-`playbackMode` controls the protocol preference order:
+`playbackMode` weights the protocol scoring axes (latency, boot time, stability, VOD suitability).
+Track compatibility, readiness penalties, and routing are applied on top and are the same in every
+mode. With every output available, each mode typically selects:
 
-| Mode          | Preference                                 | Use Case              |
-| ------------- | ------------------------------------------ | --------------------- |
-| `low-latency` | WebCodecs/WS → WHEP/WebRTC → MP4/WS → HLS  | Real-time interaction |
-| `quality`     | MP4/WS and WebCodecs/WS → HLS/MP4 → WebRTC | Stable, high quality  |
-| `vod`         | MP4/HLS/DASH → MP4/WS → WHEP/WebRTC        | Pre-recorded content  |
-| `auto`        | Balanced score-based                       | Default               |
+| Mode          | Typical winner                                 | Use Case              |
+| ------------- | ---------------------------------------------- | --------------------- |
+| `low-latency` | WHEP                                           | Real-time interaction |
+| `balanced`    | CMAF (LL-HLS)                                  | Low latency, stable   |
+| `quality`     | HLS (TS)                                       | Stable, high quality  |
+| `vod`         | HLS (TS) for long content, MP4 for short clips | Pre-recorded content  |
+| `auto`        | HLS (TS)                                       | Default               |
 
 LL-HLS and DASH are served from MistServer's CMAF output (`/play/{id}/cmaf/index.m3u8` and
 `/play/{id}/cmaf/index.mpd`) on every helmsman-managed edge.
@@ -313,7 +320,7 @@ player.abrMode; // "auto"
 
 // Switch to manual
 player.abrMode = "manual";
-player.selectQuality("720p");
+player.selectQuality(player.getQualities()[1].id);
 
 // Switch back to auto
 player.abrMode = "auto";
@@ -324,11 +331,18 @@ player.abrMode = "auto";
 ```ts
 // List available qualities
 const qualities = player.getQualities();
-// [{ id: "1080p", label: "1080p", width: 1920, height: 1080, bitrate: 4000000 }, ...]
+// [{ id: "auto", label: "Auto", ... }, { id: "0", label: "1080p", width: 1920, height: 1080, bitrate: 4000000 }, ...]
 
-// Lock to specific quality
-player.selectQuality("720p");
+// Lock to a specific quality by its id
+player.selectQuality(qualities[1].id);
+
+// Return to automatic selection
+player.selectQuality("auto");
 ```
+
+Quality ids are engine-specific, not resolution labels: with hls.js they are HLS level indexes
+(`"0"`, `"1"`, ...), and with Mist-based engines they are Mist video track indexes. Always take ids
+from `getQualities()`.
 
 ## Player States
 
@@ -410,7 +424,7 @@ with plain cues received before Mist track metadata arrives.
 ```tsx
 // React
 <Player
-  contentId="pk_..."
+  contentId="a1b2c3d4e5f6g7h8"
   contentType="live"
   thumbnailUrl="https://your-cdn.com/poster.jpg"
   options={{ autoplay: false }}
@@ -468,8 +482,9 @@ player.on("fullscreenChange", ({ isFullscreen }) => {
 ## Error Handling
 
 ```ts
-player.on("error", (error) => {
-  console.error("Playback error:", error.message);
+player.on("error", ({ error, code }) => {
+  // error is a message string; code is an optional error code
+  console.error("Playback error:", code, error);
 
   // Retry current source
   player.retry();
@@ -514,7 +529,7 @@ Browser telemetry is opt-in and intentionally lossy. Enable only the signals you
 ```ts
 const player = createPlayer({
   target: "#player",
-  contentId: "pk_...",
+  contentId: "a1b2c3d4e5f6g7h8",
   telemetry: {
     boot: true, // Startup waterfall and time to first frame
     session: true, // Rebuffering, frame, bitrate, and retention deltas
@@ -549,9 +564,9 @@ diagnostic enrichment query fails, the QoE page is still returned with empty con
 | `vod`  | Video on demand — full seeking, duration display     |
 
 ```tsx
-<Player contentType="dvr" contentId="pk_..." />
-<Player contentType="clip" contentId="pk_..." />
-<Player contentType="vod" contentId="pk_..." />
+<Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
+<Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
+<Player contentType="vod" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
 ## Source Resolution Modes
@@ -562,7 +577,7 @@ FrameWorks Gateway.
 
 | Priority | Option       | Resolution                                          | When to Use                                                                |
 | -------- | ------------ | --------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1        | `endpoints`  | None — uses the endpoints as-is                     | You already have resolved edge node URLs from your own orchestration layer |
+| 1        | `endpoints`  | No Gateway lookup; fetches Mist JSON from the edge  | You already have resolved edge node URLs from your own orchestration layer |
 | 2        | `mistUrl`    | Fetches Mist JSON metadata directly from MistServer | Standalone setups pointing at a known MistServer node                      |
 | 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Provider-managed private Gateways or local development previews            |
 
@@ -579,7 +594,7 @@ Gateway preview:
 ```ts
 createPlayer({
   target: "#player",
-  contentId: "pk_abc123",
+  contentId: "a1b2c3d4e5f6g7h8",
   gatewayUrl: "https://gateway.private.example/graphql",
 });
 ```
@@ -598,7 +613,13 @@ createPlayer({
 
 ### `endpoints` (pre-resolved)
 
-Bypasses all resolution. You provide the endpoint structure directly. The player builds a synthetic source list from the `outputs` map.
+Skips Gateway and Foghorn resolution: you provide the endpoint structure directly. The player
+still fetches Mist JSON stream info from the primary edge (its `baseUrl`, or the origin of its
+`url`) to get the full source and track list. If that fetch fails, it builds a synthetic source
+list from the `outputs` map.
+
+`primary` requires `nodeId`, `protocol`, and `url`; each entry in `outputs` requires `protocol` and
+`url`.
 
 ```ts
 createPlayer({
@@ -608,10 +629,12 @@ createPlayer({
   endpoints: {
     primary: {
       nodeId: "edge-1",
-      baseUrl: "https://edge1.example.com",
+      baseUrl: "https://edge1.example.com/",
+      protocol: "HLS",
+      url: "https://edge1.example.com/hls/stream/index.m3u8",
       outputs: {
-        HLS: { url: "https://edge1.example.com/hls/stream/index.m3u8" },
-        WHEP: { url: "https://edge1.example.com/webrtc/stream" },
+        HLS: { protocol: "HLS", url: "https://edge1.example.com/hls/stream/index.m3u8" },
+        WHEP: { protocol: "WHEP", url: "https://edge1.example.com/webrtc/stream" },
       },
     },
     fallbacks: [],
@@ -620,7 +643,7 @@ createPlayer({
 ```
 
 <Aside type="caution" title="endpoints limitations">
-  When using `endpoints`, the player cannot discover MistServer-specific source types like
-  `ws/video/raw`. Only the protocols present in the `outputs` map are available to the scoring
-  algorithm.
+  If the edge's Mist JSON cannot be fetched, the player cannot discover MistServer-specific source
+  types like `ws/video/raw`, and only the protocols present in the `outputs` map are available to
+  the scoring algorithm.
 </Aside>

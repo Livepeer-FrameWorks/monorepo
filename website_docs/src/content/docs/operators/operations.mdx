@@ -128,8 +128,8 @@ sudo sysctl --system
 
 ```bash
 # Check status and logs
-sudo systemctl status quartermaster
-sudo journalctl -u quartermaster -f --no-pager -n 100
+sudo systemctl status frameworks-quartermaster
+sudo journalctl -u frameworks-quartermaster -f --no-pager -n 100
 
 # Check if port is in use
 sudo ss -tlnp | grep 18002
@@ -138,11 +138,11 @@ sudo ss -tlnp | grep 18002
 **Database connection issues:**
 
 ```bash
-# Test YugabyteDB/Postgres connectivity
-psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -c "SELECT 1;"
+# Probe Postgres/YugabyteDB, ClickHouse, Kafka, and Redis reachability
+frameworks cluster doctor
 
-# Test ClickHouse
-clickhouse-client -h <clickhouse-host> -q "SELECT 1;"
+# Also run capability probes as each service's runtime database role
+frameworks cluster doctor --deep
 ```
 
 <Aside type="tip" title="Schema migrations">
@@ -153,12 +153,16 @@ clickhouse-client -h <clickhouse-host> -q "SELECT 1;"
 **Inter-service communication:**
 
 ```bash
-# Test gRPC from Bridge to Quartermaster
-grpcurl -plaintext localhost:19002 grpc.health.v1.Health/Check
+# Check Quartermaster's HTTP health endpoint
+curl -fsS http://localhost:18002/health
+
+# Test gRPC to Quartermaster over the internal-CA TLS listener
+grpcurl -cacert /etc/frameworks/pki/ca.crt -servername quartermaster.internal \
+  <quartermaster-host>:19002 grpc.health.v1.Health/Check
 
 # Check if WireGuard is up
 wg show
-ping 10.18.0.1  # Central node (adjust for your mesh)
+ping <peer-mesh-ip>  # mesh addresses are in 10.88.0.0/16 by default
 ```
 
 **Kafka issues:**

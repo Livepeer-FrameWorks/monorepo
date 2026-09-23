@@ -99,7 +99,10 @@ payment provider. Paid postpaid tiers still require confirmed provider collectio
 x402 (HTTP 402 Payment Required) is an authenticated prepaid top-up protocol on FrameWorks. The platform issues a tenant-bound 402 response; the caller submits a signed payment proof; the server waits for confirmation, credits the balance, and reevaluates the original request. It is not a login method.
 
 An authenticated tenant member may settle a `viewer://` playback requirement;
-the payment credits the tenant that owns the resolved playback resource. Direct
+the payment credits the tenant that owns the resolved playback resource. An
+unauthenticated viewer may also settle a `viewer://` requirement on the public
+playback path; that payment credits the content owner and establishes no
+identity for the viewer. Direct
 top-ups and non-viewer resources require `billing:write` and tenant owner/admin
 authority. Demo mode never bypasses settlement authorization.
 

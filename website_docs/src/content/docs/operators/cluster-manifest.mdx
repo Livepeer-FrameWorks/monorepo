@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAML file that tells the CLI how to provision infrastructure, services, and interfaces.
+The cluster manifest is the YAML file the CLI reads to provision hosts, services, and interfaces.
 
 <Aside type="tip">
-  FrameWorks uses a GitOps-friendly approach. We recommend committing your cluster manifest private
-  repository to track changes over time.
+  FrameWorks uses a GitOps-friendly approach. We recommend committing your cluster manifest to a
+  private repository to track changes over time.
 </Aside>
 
 ## File Structure
@@ -287,6 +287,9 @@ clusters:
 - `default` (optional) - Mark as the default cluster. New tenants auto-subscribe to this cluster on signup. At most one cluster may have `default: true`.
 - `platform_official` (optional) - Mark as a platform-operated cluster. Used by billing tier access and unauthenticated service discovery.
 - `allow_private_pull_sources` (optional) - Capability flag allowing pull-input streams on this media cluster to use private literal source addresses such as RFC1918, ULA, or non-link-local multicast. Keep this `false` for platform-managed clusters and enable it only on self-hosted edges that can reach those sources. This does not place a pull stream by itself; a private source must also restrict its source location to consenting clusters (`source_location.clusters` in the bootstrap overlay, `sourceLocation` with mode `RESTRICTED` through the API).
+- `public_topology` (optional) - Show this cluster on public map and coverage views.
+- `env_files` (optional) - Env files merged into every cluster-scoped service replica for this cluster, after the top-level `env_files` and before per-service `env_file`. Use them for per-cluster credentials such as region-specific `STORAGE_S3_*` access keys. Paths are relative to the manifest directory; absolute paths are rejected. SOPS-encrypted files are decrypted during provisioning.
+- `s3_bucket`, `s3_endpoint`, `s3_region`, `s3_prefix` (optional) - Artifact storage descriptor reconciled into the Quartermaster cluster row. When `s3_bucket` is set, `s3_prefix` must be set explicitly (use `s3_prefix: ""` for no prefix). Access keys stay in env files. See [Media storage](/operators/media-storage/).
 - `owner_tenant` (optional) - Owning tenant. Use `frameworks` for the system tenant, or a tenant UUID.
 - `pricing` (optional) - Purser cluster pricing config. When present, provision reconciles it authoritatively. When absent, existing pricing is left untouched.
   - `model` (required) - `free_unmetered`, `metered`, `monthly`, `tier_inherit`, or `custom`
@@ -377,6 +380,7 @@ infrastructure:
 - `version` (required)
 - `host` (required for single-node Postgres) - Host name from `hosts`
 - `nodes` (required for multi-node YugabyteDB) - List of `{host, id, rpc_port}` entries
+- `instances` (optional) - Additional named vanilla PostgreSQL instances. Each entry takes `name`, `host`, and optional `port`, `version`, `mode`, `password`, `databases` (same shape as below), `tuning`, and `config`
 - `port` (required)
 - `replication_factor` (optional) - Defaults to the number of `nodes`
 - `databases` (optional) - Each entry declares `name` and its schema/migration
@@ -411,7 +415,9 @@ infrastructure:
     enabled: true
     mode: native
     version: "25.9.2.1"
-    host: central-01
+    nodes:
+      - host: central-01
+        id: 1
     port: 9000
     databases: [periscope]
 ```
@@ -421,7 +427,9 @@ infrastructure:
 - `enabled` (required)
 - `mode` (required) - `native`
 - `version` (required)
-- `host` (required)
+- `nodes` (required, at least one) - Replicated cluster nodes as `{host, id}` entries. `host` is a key from `hosts`; `id` (1 or higher) drives task names, the Keeper server ID, and the replica name. Every node uses the cluster-level `port`. The removed `host` field is rejected with a message pointing to `nodes`.
+- `read_endpoint` (optional) - Host key that `periscope-query` uses instead of `nodes`
+- `write_endpoint` (optional) - Host key that `periscope-ingest` and `periscope-metering` use instead of `nodes`. Both endpoint overrides exist for [moving the ClickHouse node](/operators/clickhouse-migrations#moving-the-physical-clickhouse-node).
 - `port` (required)
 - `databases` (optional)
 - `sql_access` (optional) - `direct` by default, or `ssh`
@@ -460,9 +468,14 @@ infrastructure:
 - `instances` (required)
   - `name` (required)
   - `engine` (optional) - Instance-level engine override
-  - `host` (required) - Host name from `hosts`
+  - `mode` (optional) - `single` (default) or `sentinel` for a primary with replicas and a Sentinel quorum
+  - `host` (required) - Host name from `hosts`; the initial master in `sentinel` mode
   - `port` (required)
   - `password` (optional)
+  - `cluster` (optional) - Limit the instance to consumers in this cluster; empty applies globally
+  - `master_name` (optional) - Sentinel master name; defaults to `name`
+  - `replica_hosts` (optional) - Sentinel replica hosts, excluding `host`
+  - `sentinels` (optional) - Sentinel quorum members as `{host, port}` entries (`port` defaults to `26379`); consumers connect through these
   - `config` (optional) - key/value overrides such as `maxmemory` or `appendonly`
 
 ---
@@ -530,6 +543,16 @@ infrastructure:
 - `mode` (required) - `native`
 - `version` (required) - Apache Kafka version (4.x+)
 - `cluster_id` (required) - KRaft cluster UUID. Generate with `kafka-storage.sh random-uuid`
+- `region_id` (optional) - Region of this Kafka cluster, for example `eu-west`. Empty infers it from broker host labels
+- `role` (optional) - `aggregator` or `regional`. The top-level cluster defaults to `aggregator`
+- `regional` (optional) - Additional Kafka clusters in other regions. Each entry is an independent KRaft deployment with `region_id` (required), `role` (default `regional`), `cluster_id`, and the same `controllers`, `controller_port`, `brokers`, `topics`, and replication settings as the top level
+- `mirrormaker` (optional) - MirrorMaker2 links between Kafka regions; nothing is mirrored when absent or disabled
+  - `enabled` (required)
+  - `mode` (optional) - `native` (default)
+  - `heap_opts` (optional) - JVM heap; default `-Xmx1G -Xms1G`
+  - `replicas` (optional) - Replication factor for mirrored topics on the target; defaults to the target broker count
+  - `task_count` (optional) - Default `tasks.max` for links that do not set one
+  - `links` (required when enabled) - One entry per ordered pair of regions, each with `source` and `target` region IDs, `hosts` (worker hosts, all in the target region), optional `topics` (empty uses the canonical set for that direction), and optional `task_count`
 - `controllers` (optional) - dedicated controller nodes. If present, requires at least 3. Controller IDs must not overlap with broker IDs
   - `host` (required) - host name from hosts map
   - `id` (required) - controller node ID
@@ -590,6 +613,7 @@ services:
 - `binary_url` (optional) - Binary download URL (native mode)
 - `deploy` (optional) - Override deploy slug (container/binary name)
 - `cluster` (optional) - Explicit cluster assignment. Must reference a key in `clusters`. When omitted, the service's role determines its cluster automatically
+- `clusters` (optional) - List form of `cluster` for cluster-scoped media services that serve several clusters. Cannot be combined with `cluster`. Foghorn and Chandler deployments must declare exactly one cluster; use one service entry per cell
 - `host` (optional) - Single host
 - `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`)
 - `replicas` (optional) - Replica count
@@ -597,6 +621,8 @@ services:
 - `grpc_port` (optional)
 - `env_file` (optional) - Per-service env file (overrides the top-level `env_files`)
 - `depends_on` (optional)
+- `public` (optional) - Marks the service as having a public-facing endpoint
+- `update_strategy` (optional) - Rollout override for `cluster apply`: `max_unavailable`, `canary`, `region_stagger`, `primary_last`
 - `config` (optional) - Inline key/value overrides (highest priority)
 
 <Aside type="note" title="Privateer auto-deploy">

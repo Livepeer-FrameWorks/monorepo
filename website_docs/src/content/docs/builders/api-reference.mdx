@@ -38,10 +38,10 @@ Most requests need a token in the Authorization header:
 Authorization: Bearer YOUR_JWT_OR_API_TOKEN
 ```
 
-Get your API token from **Developer → API** in the dashboard.
+Get your API token from **Developer → Credentials** in the dashboard.
 
 The dashboard may authenticate via httpOnly cookies.  
-Public allowlist (no auth required): `serverInfo`, `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and the orchestrator queries (queries only).
+Public allowlist (no auth required): the queries `serverInfo`, `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and the orchestrator queries, plus the mutations `bootstrapEdge` and `walletLogin`, which each carry their own per-call credential in the input.
 
 Subscriptions send the token in the `connection_init` payload of the WebSocket connection:
 
@@ -62,7 +62,7 @@ for every reconnect.
 
 ## Try It Out
 
-The dashboard has a built-in GraphQL explorer. Go to **Developer → API** to run queries against your account.
+The dashboard has a built-in GraphQL explorer. Go to **Developer → Playground** to run queries against your account.
 
 Or use any GraphQL client:
 
@@ -172,7 +172,7 @@ mutation {
 
 ### Get Stream Analytics
 
-Analytics queries require you to specify a time range. Data is returned in aggregated form to help you visualize viewer engagement and usage.
+Most analytics queries take an optional `timeRange`; it is required on `usageAggregates` and `streamAnalyticsSummariesConnection` (and on the federation event, federation summary, and orchestrator performance series queries). Data is returned in aggregated form to help you visualize viewer engagement and usage.
 
 ```graphql
 query {
@@ -203,11 +203,11 @@ Note: analytics `streamId` filters use the Stream global ID (`Stream.id`). Respo
 
 ## Playback Resolution
 
-When building a custom player, use the `resolveViewerEndpoint` query. This ensures your viewers are routed to the geographically closest and healthiest edge node for the best possible experience.
+When building a custom player, use the `resolveViewerEndpoint` query. This ensures your viewers are routed to the geographically closest and healthiest edge node.
 
 ```graphql
 query {
-  resolveViewerEndpoint(contentId: "pk_your_playback_id") {
+  resolveViewerEndpoint(contentId: "a1b2c3d4e5f6g7h8") {
     primary {
       nodeId
       baseUrl
@@ -240,7 +240,7 @@ Returns a primary endpoint (optimal for the viewer's location) plus fallbacks. U
 
 `contentId` is a **playbackId** for live streams, VOD uploads, clips, and DVR recordings (not the raw hash).
 
-If the gateway can’t determine a viewer IP (for GeoIP routing), this query will error.
+If the gateway can’t determine a viewer IP for GeoIP routing, the query still resolves: node selection falls back to scoring without the geographic component.
 
 ## Error Handling
 
@@ -251,8 +251,8 @@ often `message` and `code`, and no `errors` array:
 
 | Status | Meaning                                                                                                            |
 | ------ | ------------------------------------------------------------------------------------------------------------------ |
-| 401    | The token is missing or invalid (`{"error": "authentication failed"}`).                                            |
-| 402    | The operation needs credit, a payment method, or an x402 payment; `code` says which (`INSUFFICIENT_BALANCE`, ...). |
+| 401    | The token is invalid, expired, or revoked, or a payment header arrived without a credential.                       |
+| 402    | No credential on a non-public operation (with its x402 challenge), or the tenant needs credit or a payment method. |
 | 429    | Rate limited. `Retry-After` gives the seconds to wait.                                                             |
 | 5xx    | The gateway or a service behind it failed. Queries are safe to retry.                                              |
 
@@ -319,7 +319,7 @@ language.
 
 The fastest way to build queries for your integration:
 
-1. **API Explorer** — Go to **Developer → API** in the dashboard. The built-in GraphQL explorer has full schema docs, autocompletion, and lets you run queries against your account. Copy working queries directly into your code.
+1. **API Explorer** — Go to **Developer → Playground** in the dashboard. The built-in GraphQL explorer has full schema docs, autocompletion, and lets you run queries against your account. Copy working queries directly into your code.
 2. **Ask Skipper** — Tell Skipper what you want to do (e.g. "create a stream from Python" or "list my clips with curl") and it will generate a working snippet in your language, using the live schema.
 
 Both tools stay in sync with the actual schema, so the queries they produce always work.
@@ -392,7 +392,11 @@ languages, use any GraphQL client or generate typed bindings from the schema.
 
 ## Schema Reference
 
-The full schema is available via introspection:
+Browse the [generated GraphQL schema reference](/builders/api-schema/) for public entry points,
+arguments, return types, descriptions, and deprecations. It labels fields with typed SDK
+operation documents. Operator-only and service-token-only entry points are excluded.
+
+The live schema is also available via introspection:
 
 ```graphql
 {
@@ -405,4 +409,4 @@ The full schema is available via introspection:
 }
 ```
 
-Or use the dashboard's **API Explorer** (Developer → API) which shows docs inline.
+Or use the dashboard's **API Explorer** (Developer → Playground) which shows docs inline.

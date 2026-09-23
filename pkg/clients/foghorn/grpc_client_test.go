@@ -103,6 +103,17 @@ func TestOutgoingAuthTokenPrefersConfiguredServiceToken(t *testing.T) {
 	}
 }
 
+func TestOutgoingAuthTokenSendsExplicitOperatorBearer(t *testing.T) {
+	ctx := WithOperatorBearer(context.Background(), "operator-jwt")
+	if got := outgoingAuthToken(ctx, "configured-service"); got != "operator-jwt" {
+		t.Fatalf("outgoingAuthToken() = %q, want the explicit operator bearer", got)
+	}
+	ctx = context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "caller-jwt")
+	if got := outgoingAuthToken(ctx, "configured-service"); got != "configured-service" {
+		t.Fatalf("outgoingAuthToken() = %q, a caller JWT without the operator marker must not be sent", got)
+	}
+}
+
 func TestOutgoingAuthTokenDoesNotForwardCallerJWT(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "user-jwt")
 	if got := outgoingAuthToken(ctx, ""); got != "" {

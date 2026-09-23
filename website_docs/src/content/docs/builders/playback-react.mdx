@@ -53,8 +53,8 @@ component, use the dashboard playback DNS URL directly.
 ### DVR and Clips
 
 ```tsx
-<Player contentType="dvr" contentId="pk_..." />
-<Player contentType="clip" contentId="pk_..." />
+<Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
+<Player contentType="clip" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
 ## Composable Controls
@@ -76,7 +76,7 @@ import {
 
 function CustomPlayer() {
   return (
-    <Player contentId="pk_..." contentType="live">
+    <Player contentId="a1b2c3d4e5f6g7h8" contentType="live">
       <ControlBar>
         <PlayButton />
         <SkipButton direction="back" />
@@ -105,7 +105,7 @@ function CustomPlayer() {
 | `SettingsMenu`     | Quality, speed, and track selection                        |
 | `ControlBar`       | Horizontal flex container for controls                     |
 
-All sub-components read state from the nearest `<Player>` parent via `usePlayerContextOptional()`. They render nothing if used outside a `<Player>`.
+All sub-components read state from the nearest `<Player>` parent via `usePlayerContextOptional()`. Outside a `<Player>` they still render, but only reflect and act on the props you pass them (for example `isPlaying` and `onToggle` on `PlayButton`).
 
 ## Custom UI with Hooks
 
@@ -116,7 +116,7 @@ import { usePlayerController } from "@livepeer-frameworks/player-react";
 
 function FullyCustomPlayer() {
   const { containerRef, state, controller } = usePlayerController({
-    contentId: "pk_...",
+    contentId: "a1b2c3d4e5f6g7h8",
     contentType: "live",
     autoplay: true,
     muted: true,
@@ -163,34 +163,34 @@ function FullyCustomPlayer() {
 
 ## Props Reference
 
-| Prop                     | Type                                                 | Description                                                                                        |
-| ------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `contentId`              | `string`                                             | Playback ID (live/clip/DVR/VOD)                                                                    |
-| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type (affects presets and UI)                                                              |
-| `endpoints`              | `ContentEndpoints`                                   | Advanced: pass pre-resolved endpoints                                                              |
-| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                           |
-| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                  |
-| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                         |
-| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                        |
-| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports  |
-| `options.autoplay`       | `boolean`                                            | Auto-start playback                                                                                |
-| `options.muted`          | `boolean`                                            | Start muted (required for autoplay)                                                                |
-| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                  |
-| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster) |
-| `options.theme`          | `string`                                             | Theme preset name                                                                                  |
-| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                          |
-| `options.locale`         | `string`                                             | Built-in UI locale                                                                                 |
-| `options.playbackMode`   | `string`                                             | Initial controls/dev-panel mode label; use `setDevModeOptions` for runtime protocol preference     |
-| `options.debug`          | `boolean`                                            | Debug logging                                                                                      |
-| `onStateChange`          | `function`                                           | State transition callback                                                                          |
+| Prop                     | Type                                                 | Description                                                                                                                   |
+| ------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `contentId`              | `string`                                             | Playback ID (live/clip/DVR/VOD)                                                                                               |
+| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type (affects presets and UI)                                                                                         |
+| `endpoints`              | `ContentEndpoints`                                   | Advanced: pass pre-resolved endpoints                                                                                         |
+| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                                                      |
+| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                                             |
+| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                                                    |
+| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                                                   |
+| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports                             |
+| `options.autoplay`       | `boolean`                                            | Auto-start playback                                                                                                           |
+| `options.muted`          | `boolean`                                            | Start muted (required for autoplay)                                                                                           |
+| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                                             |
+| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster)                            |
+| `options.theme`          | `string`                                             | Theme preset name                                                                                                             |
+| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                                                     |
+| `options.locale`         | `string`                                             | Built-in UI locale                                                                                                            |
+| `options.playbackMode`   | `string`                                             | Protocol selection mode (see [Playback Modes](#playback-modes)); change at runtime with `setDevModeOptions({ playbackMode })` |
+| `options.debug`          | `boolean`                                            | Debug logging                                                                                                                 |
+| `onStateChange`          | `function`                                           | State transition callback                                                                                                     |
 
 ## State Callbacks
 
 ```tsx
 <Player
-  contentId="pk_..."
+  contentId="a1b2c3d4e5f6g7h8"
   contentType="live"
-  onStateChange={(state, context) => {
+  onStateChange={(state) => {
     // States: booting, gateway_loading, gateway_ready, gateway_error,
     //         no_endpoint, selecting_player, connecting, buffering,
     //         playing, paused, ended, error, destroyed
@@ -201,27 +201,29 @@ function FullyCustomPlayer() {
 
 ## Playback Modes
 
-`playbackMode` controls protocol preference order:
+`playbackMode` weights the protocol scoring axes (latency, boot time, stability, VOD suitability).
+With every output available, each mode typically selects:
 
-| Mode          | Preference                                 | Use Case              |
-| ------------- | ------------------------------------------ | --------------------- |
-| `low-latency` | WebCodecs/WS → WHEP/WebRTC → MP4/WS → HLS  | Real-time interaction |
-| `quality`     | MP4/WS and WebCodecs/WS → HLS/MP4 → WebRTC | Stable, high quality  |
-| `vod`         | MP4/HLS/DASH → MP4/WS → WHEP/WebRTC        | Pre-recorded content  |
-| `auto`        | Balanced score-based                       | Default               |
+| Mode          | Typical winner                                 | Use Case              |
+| ------------- | ---------------------------------------------- | --------------------- |
+| `low-latency` | WHEP                                           | Real-time interaction |
+| `balanced`    | CMAF (LL-HLS)                                  | Low latency, stable   |
+| `quality`     | HLS (TS)                                       | Stable, high quality  |
+| `vod`         | HLS (TS) for long content, MP4 for short clips | Pre-recorded content  |
+| `auto`        | HLS (TS)                                       | Default               |
 
 LL-HLS and DASH are served from MistServer's CMAF output (`/play/{id}/cmaf/index.m3u8` and
 `/play/{id}/cmaf/index.mpd`) on every helmsman-managed edge.
 
 ```tsx
-<Player contentId="pk_..." contentType="live" options={{ playbackMode: "low-latency" }} />
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live" options={{ playbackMode: "low-latency" }} />
 ```
 
 ### Runtime Protocol Overrides
 
 ```tsx
 const { setDevModeOptions } = usePlayerController({
-  contentId: "pk_...",
+  contentId: "a1b2c3d4e5f6g7h8",
   contentType: "live",
 });
 

@@ -1,0 +1,151 @@
+---
+title: Subscriptions
+description: Generated GraphQL subscription reference.
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/)
+
+## liveConnectionEvents
+
+Individual viewer connection/disconnection events. High volume - filter by streamId in production for performance.
+
+**Returns:** `ConnectionEvent!` ([ConnectionEvent](/builders/api-schema/types-a-f/#connectionevent))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID`
+
+## liveConversationUpdates
+
+Real-time conversation lifecycle updates (created/updated/status changes). Optionally filter by conversationId.
+
+**Returns:** `Conversation!` ([Conversation](/builders/api-schema/types-a-f/#conversation))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `conversationId`: `ID` — The conversation ID to watch (optional).
+
+## liveFirehose
+
+Firehose subscription receiving ALL tenant events in a single stream. Combines stream, analytics, and system events for unified dashboards. Use the type and channel fields to filter/route events client-side.
+
+**Returns:** `TenantEvent!` ([TenantEvent](/builders/api-schema/types-s-z/#tenantevent))
+
+**SDK:** Raw GraphQL only
+
+## liveIncidentUpdates
+
+Changes to incidents on clusters the current tenant owns. For platform operators, changes to every incident: platform scope and every tenant.
+
+**Returns:** `IncidentUpdatedEvent!` ([IncidentUpdatedEvent](/builders/api-schema/types-g-l/#incidentupdatedevent))
+
+**SDK:** Raw GraphQL only
+
+## liveMessageReceived
+
+Real-time message events for a conversation. Fires when agent replies are received.
+
+**Returns:** `Message!` ([Message](/builders/api-schema/types-m-r/#message))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `conversationId`: `ID!` — The conversation ID to watch.
+
+## liveProcessingEvents
+
+Transcoding and processing usage events. Optionally filter by streamId.
+
+**Returns:** `ProcessingUsageRecord!` ([ProcessingUsageRecord](/builders/api-schema/types-m-r/#processingusagerecord))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID`
+
+## liveStorageEvents
+
+Storage events for recordings and artifacts. Optionally filter by streamId.
+
+**Returns:** `StorageEvent!` ([StorageEvent](/builders/api-schema/types-s-z/#storageevent))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID`
+
+## liveStreamEvents
+
+Stream lifecycle events including start, stop, and health changes. Optionally filter to a specific stream, or receive all tenant streams.
+
+**Returns:** `StreamEvent!` ([StreamEvent](/builders/api-schema/types-s-z/#streamevent))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID`
+
+## liveSystemHealth
+
+System-wide health and infrastructure events. Requires authentication; tenant-scoped updates.
+
+**Returns:** `SystemHealthEvent!` ([SystemHealthEvent](/builders/api-schema/types-s-z/#systemhealthevent))
+
+**SDK:** Raw GraphQL only
+
+## liveTrackListUpdates
+
+Track list updates when stream quality tiers change. Fires when tracks are added, removed, or quality changes.
+
+**Returns:** `TrackListUpdate!` ([TrackListUpdate](/builders/api-schema/types-s-z/#tracklistupdate))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID!`
+
+## liveViewerMetrics
+
+Real-time viewer count and engagement metrics for a stream. Updates every few seconds while the stream is live.
+
+**Returns:** `ViewerMetrics!` ([ViewerMetrics](/builders/api-schema/types-s-z/#viewermetrics))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `streamId`: `ID!`
+
+## skipperChat
+
+Stream chat events from the Skipper AI consultant. Receives token chunks, tool lifecycle events, metadata, and completion signal. Creates a new conversation if conversationId is omitted.
+
+**Returns:** `SkipperChatEvent!` ([SkipperChatEvent](/builders/api-schema/types-s-z/#skipperchatevent))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `SkipperChatInput!` ([SkipperChatInput](/builders/api-schema/types-s-z/#skipperchatinput))
+
+## tenantEvents
+
+Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event&#39;s data is the registered payload of its type. Pass types to receive only those event types (e.g. [&#34;clip.ready&#34;, &#34;clip.failed&#34;]); pass streamId to receive only events whose payload names that stream.
+
+**Returns:** `PublicEvent!` ([PublicEvent](/builders/api-schema/types-m-r/#publicevent))
+
+**Typed SDK document:** `TenantEvents`
+
+**Arguments**
+
+- `types`: `[String!]`
+- `streamId`: `ID`

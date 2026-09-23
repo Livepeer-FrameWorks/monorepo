@@ -7,9 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Storage is one of the larger billing line items for live-streaming workloads, especially when you use the 24/7 DVR model. FrameWorks lets you keep the archive value without giving up cost control: live DVR can run continuously, completed assets can expire on a tenant default, and individual DVR / clip / VOD assets can be kept longer or shorter when they matter.
-
-This page explains the underlying model so you can make informed retention decisions.
+Storage is one of the larger billing line items for live-streaming workloads, especially when you use the 24/7 DVR model. FrameWorks lets you run DVR continuously and control cost with retention defaults and per-asset overrides: completed assets expire on a tenant default, and individual DVR / clip / VOD assets can be kept longer or shorter.
 
 <Aside type="caution">
   Retention reduces cost but it also deletes data. When an asset reaches its retention horizon it
@@ -59,7 +57,11 @@ Each asset class has its own default. VOD uploads are user-created library asset
 
 ## Tier cap
 
-Every tier carries a single retention cap (`bounds.maxRecordingRetentionDays` on `mediaRetentionPolicy`). On paid tiers it is `0` — no cap. Free has a finite cap as an anti-abuse guardrail. The cap clamps everything below it (system default, tenant default, per-stream override, per-asset override), so a Free tenant who sets a per-asset override of 365 days lands at the Free cap instead.
+Every tier carries a single retention cap (`bounds.maxRecordingRetentionDays` on `mediaRetentionPolicy`). On paid tiers it is `0` — no cap. Free has a finite cap as an anti-abuse guardrail. The cap applies differently per level:
+
+- **Tenant default** (`setMediaRetentionPolicy`): a value above the cap is rejected with an `InvalidArgument` error. `0` ("keep forever") is stored as the cap.
+- **Per-stream and per-asset overrides**: values above the cap, and `0`, are clamped to the cap, so a Free tenant who sets a per-asset override of 365 days lands at the Free cap instead.
+- **System default**: clamped to the cap when the retention is resolved.
 
 ## Cascade
 

@@ -63,6 +63,10 @@ func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, ph
 	// Compare against the target's BASE version: a canary (e.g. v1.2.3-rc1, which sorts BEFORE the final v1.2.3)
 	// still runs every migration the v1.2.3 line introduces — the rc binary needs that schema.
 	baseTarget := releases.BaseVersion(targetVersion)
+	prechecks, err := embeddedMigrationPrechecks()
+	if err != nil {
+		return nil, fmt.Errorf("load migration prechecks: %w", err)
+	}
 
 	items := make([]map[string]any, 0, len(all))
 	for _, m := range all {
@@ -87,7 +91,7 @@ func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, ph
 			m.content = rewritten
 		}
 		for _, target := range targets {
-			item, err := migrationItem(target, m)
+			item, err := migrationItem(target, m, prechecks[m.Path])
 			if err != nil {
 				return nil, err
 			}
@@ -144,7 +148,7 @@ func migrationLedgerItem(target SchemaDatabase, m Migration) map[string]any {
 }
 
 // migrationItem is a migration ready for the roles to apply: its ledger identity plus the statements to execute.
-func migrationItem(target SchemaDatabase, m Migration) (map[string]any, error) {
+func migrationItem(target SchemaDatabase, m Migration, precheck migrationPrecheck) (map[string]any, error) {
 	statements, guards, err := migrationStatements(m)
 	if err != nil {
 		return nil, fmt.Errorf("migration %s/%s/%s/%s: %w", m.Database, m.Version, m.Phase, m.Filename, err)
@@ -154,6 +158,10 @@ func migrationItem(target SchemaDatabase, m Migration) (map[string]any, error) {
 	// invalid_index_guards names the indexes this item builds concurrently. An interrupted build leaves an invalid
 	// index that IF NOT EXISTS would skip, so the roles drop an invalid one before applying the item.
 	item["invalid_index_guards"] = guards
+	// precheck_query, when set, is the read-only report the roles run immediately before this item; any row it returns
+	// fails the item before its first statement. Empty means the item has no precheck.
+	item["precheck_path"] = precheck.Path
+	item["precheck_query"] = precheck.Query
 	return item, nil
 }
 

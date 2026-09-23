@@ -3754,7 +3754,7 @@ func (p *Processor) livepeerProcessingProcessConfig(streamName, artifactHash, re
 				if node == nil || node.ClusterID == "" {
 					return "", fmt.Errorf("chapter transcode node has no cluster")
 				}
-				jobID := fmt.Sprintf("chapter-finalize-v2-%d-%s", chapter.FinalizeAttempts, chapter.ChapterID)
+				jobID := foghorndb.ChapterFinalizeJobID(chapter.FinalizeAttempts, chapter.ChapterID)
 				return stampSignedLivepeerJob(chapter.ProcessesJson, control.TranscodeJobClaims{
 					ManifestID: streamName, JobID: jobID, AttemptOrGeneration: strconv.Itoa(int(chapter.FinalizeAttempts)),
 					Session: jobID, NodeID: requestingNodeID, ClusterID: node.ClusterID, TenantID: chapter.TenantID,

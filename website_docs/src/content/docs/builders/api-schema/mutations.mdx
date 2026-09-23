@@ -1,0 +1,1002 @@
+---
+title: Mutations
+description: Generated GraphQL mutation reference.
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/)
+
+## abortVodUpload
+
+Abort an in-progress VOD upload.
+
+**Returns:** `AbortVodUploadResult!` ([AbortVodUploadResult](/builders/api-schema/types-a-f/#abortvoduploadresult))
+
+**Typed SDK document:** `AbortVodUpload`
+
+**Arguments**
+
+- `uploadId`: `ID!` — The upload ID to abort.
+
+## acceptClusterInvite
+
+Accept a cluster invite.
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/types-a-f/#clustersubscriptionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `inviteToken`: `String!` — The invite token.
+
+## acknowledgeIncident
+
+Acknowledge an incident. The incident stays open until its alerts resolve or someone resolves it.
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/types-g-l/#incidentmutationresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## addIncidentNote
+
+Add a note to an incident&#39;s timeline.
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/types-g-l/#incidentmutationresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+- `body`: `String!`
+
+## applyClusterMediaConsentChange
+
+**Returns:** `MediaCapacityConsentChangeResult!` ([MediaCapacityConsentChangeResult](/builders/api-schema/types-m-r/#mediacapacityconsentchangeresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `ApplyMediaCapacityConsentInput!` ([ApplyMediaCapacityConsentInput](/builders/api-schema/types-a-f/#applymediacapacityconsentinput))
+
+## applyMediaPlacementChange
+
+Atomically saves the requested verbs. Saved does not mean effective on every cell.
+
+**Returns:** `MediaPlacementChangeResult!` ([MediaPlacementChangeResult](/builders/api-schema/types-m-r/#mediaplacementchangeresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `ApplyMediaPlacementChangeInput!` ([ApplyMediaPlacementChangeInput](/builders/api-schema/types-a-f/#applymediaplacementchangeinput))
+
+## approveClusterSubscription
+
+Approve a pending cluster subscription request.
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/types-a-f/#clustersubscriptionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `subscriptionId`: `ID!` — The subscription ID to approve.
+
+## assignIncident
+
+Assign an incident to a user of the incident&#39;s tenant. A null assignee clears the assignment.
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/types-g-l/#incidentmutationresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+- `assigneeUserId`: `ID`
+
+## bootstrapEdge
+
+Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token&#39;s cluster via Quartermaster, finds the cluster&#39;s assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology.
+
+**Returns:** `BootstrapEdgeResult!` ([BootstrapEdgeResult](/builders/api-schema/types-a-f/#bootstrapedgeresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `BootstrapEdgeInput!` ([BootstrapEdgeInput](/builders/api-schema/types-a-f/#bootstrapedgeinput))
+
+## changeBillingTier
+
+Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes.
+
+**Returns:** `ChangeBillingTierResult!` ([ChangeBillingTierResult](/builders/api-schema/types-a-f/#changebillingtierresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tierId`: `ID!` — The target billing tier. Must be an active postpaid tier (tier_level &gt;= 1).
+
+## completeVodUpload
+
+Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation.
+
+**Returns:** `CompleteVodUploadResult!` ([CompleteVodUploadResult](/builders/api-schema/types-a-f/#completevoduploadresult))
+
+**Typed SDK document:** `CompleteVodUpload`
+
+**Arguments**
+
+- `input`: `CompleteVodUploadInput!` ([CompleteVodUploadInput](/builders/api-schema/types-a-f/#completevoduploadinput)) — Upload completion data.
+
+## createCardTopup
+
+Create a card checkout session for prepaid balance top-up. Returns a URL to redirect the user to Stripe/Mollie checkout. After successful payment, balance is credited automatically via webhook.
+
+**Returns:** `CardTopupResult!` ([CardTopupResult](/builders/api-schema/types-a-f/#cardtopupresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateCardTopupInput!` ([CreateCardTopupInput](/builders/api-schema/types-a-f/#createcardtopupinput))
+
+## createClip
+
+Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream.
+
+**Returns:** `CreateClipResult!` ([CreateClipResult](/builders/api-schema/types-a-f/#createclipresult))
+
+**Typed SDK document:** `CreateClip`
+
+**Arguments**
+
+- `input`: `CreateClipInput!` ([CreateClipInput](/builders/api-schema/types-a-f/#createclipinput)) — Clip configuration including time range.
+
+## createClusterInvite
+
+Create an invite for a cluster.
+
+**Returns:** `CreateClusterInviteResult!` ([CreateClusterInviteResult](/builders/api-schema/types-a-f/#createclusterinviteresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateClusterInviteInput!` ([CreateClusterInviteInput](/builders/api-schema/types-a-f/#createclusterinviteinput)) — Invite configuration.
+
+## createConversation
+
+Create a new support conversation. Optionally include an initial message.
+
+**Returns:** `CreateConversationResult!` ([CreateConversationResult](/builders/api-schema/types-a-f/#createconversationresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateConversationInput!` ([CreateConversationInput](/builders/api-schema/types-a-f/#createconversationinput)) — Conversation configuration.
+
+## createCryptoTopup
+
+Create a crypto deposit address for prepaid balance top-up. Returns an HD-derived address for the agent to send crypto. This is the agent-friendly payment method - no human-in-the-loop required.
+
+**Returns:** `CryptoTopupResult!` ([CryptoTopupResult](/builders/api-schema/types-a-f/#cryptotopupresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateCryptoTopupInput!` ([CreateCryptoTopupInput](/builders/api-schema/types-a-f/#createcryptotopupinput))
+
+## createDeveloperToken
+
+Create a new API token for programmatic access.
+
+**Returns:** `CreateDeveloperTokenResult!` ([CreateDeveloperTokenResult](/builders/api-schema/types-a-f/#createdevelopertokenresult))
+
+**Typed SDK document:** `CreateDeveloperToken`
+
+**Arguments**
+
+- `input`: `CreateDeveloperTokenInput!` ([CreateDeveloperTokenInput](/builders/api-schema/types-a-f/#createdevelopertokeninput)) — Token configuration.
+
+## createEdgeCluster
+
+Create an edge cluster with automatic Foghorn assignment and enrollment token.
+
+**Returns:** `CreateEdgeClusterResult!` ([CreateEdgeClusterResult](/builders/api-schema/types-a-f/#createedgeclusterresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateEdgeClusterInput!` ([CreateEdgeClusterInput](/builders/api-schema/types-a-f/#createedgeclusterinput)) — Edge cluster configuration.
+
+## createEnrollmentToken
+
+Create an enrollment token for an existing cluster. Requires active subscription to the cluster.
+
+**Returns:** `CreateEnrollmentTokenResult!` ([CreateEnrollmentTokenResult](/builders/api-schema/types-a-f/#createenrollmenttokenresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — Cluster to create the token for.
+- `name`: `String` — Token display name.
+- `ttl`: `String` — Time-to-live (e.g. &#34;24h&#34;, &#34;7d&#34;). Defaults to 30 days.
+
+## createMollieFirstPayment
+
+Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing.
+
+**Returns:** `MollieFirstPaymentResult!` ([MollieFirstPaymentResult](/builders/api-schema/types-m-r/#molliefirstpaymentresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `method`: `String!` — Payment method: &#39;ideal&#39;, &#39;creditcard&#39;, &#39;bancontact&#39;.
+- `redirectUrl`: `String!` — URL to redirect to after payment.
+
+## createMollieSubscription
+
+Create a Mollie subscription after mandate is valid. Call this after the first payment webhook confirms mandate creation.
+
+**Returns:** `MollieSubscriptionResult!` ([MollieSubscriptionResult](/builders/api-schema/types-m-r/#molliesubscriptionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `mandateId`: `String!` — The mandate ID from the first payment.
+- `description`: `String` — Optional description for the subscription.
+
+## createPayment
+
+Create a payment for subscription or usage.
+
+**Returns:** `CreatePaymentResult!` ([CreatePaymentResult](/builders/api-schema/types-a-f/#createpaymentresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreatePaymentInput!` ([CreatePaymentInput](/builders/api-schema/types-a-f/#createpaymentinput)) — Payment details.
+
+## createPushTarget
+
+Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets.
+
+**Returns:** `PushTarget!` ([PushTarget](/builders/api-schema/types-m-r/#pushtarget))
+
+**Typed SDK document:** `CreatePushTarget`
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `input`: `CreatePushTargetInput!` ([CreatePushTargetInput](/builders/api-schema/types-a-f/#createpushtargetinput)) — Push target configuration.
+
+## createSigningKey
+
+Generate a new ES256 playback signing keypair. The private key is returned ONCE in the response and never stored or returned again — capture it. Up to 10 active keys per tenant; revoke before re-creating.
+
+**Returns:** `CreateSigningKeyResult!` ([CreateSigningKeyResult](/builders/api-schema/types-a-f/#createsigningkeyresult))
+
+**Typed SDK document:** `CreateSigningKey`
+
+**Arguments**
+
+- `input`: `CreateSigningKeyInput!` ([CreateSigningKeyInput](/builders/api-schema/types-a-f/#createsigningkeyinput))
+
+## createStream
+
+Create a new stream for live broadcasting.
+
+**Returns:** `CreateStreamResult!` ([CreateStreamResult](/builders/api-schema/types-a-f/#createstreamresult))
+
+**Typed SDK document:** `CreateStream`
+
+**Arguments**
+
+- `input`: `CreateStreamInput!` ([CreateStreamInput](/builders/api-schema/types-a-f/#createstreaminput)) — Stream configuration.
+
+## createStreamKey
+
+Create an additional stream key for a stream.
+
+**Returns:** `CreateStreamKeyResult!` ([CreateStreamKeyResult](/builders/api-schema/types-a-f/#createstreamkeyresult))
+
+**Typed SDK document:** `CreateStreamKey`
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `input`: `CreateStreamKeyInput!` ([CreateStreamKeyInput](/builders/api-schema/types-a-f/#createstreamkeyinput)) — Stream key configuration.
+
+## createStripeBillingPortal
+
+Create a Stripe Billing Portal session. Returns a URL to redirect the user to manage their subscription.
+
+**Returns:** `StripeBillingPortalResult!` ([StripeBillingPortalResult](/builders/api-schema/types-s-z/#stripebillingportalresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `returnUrl`: `String!` — URL to redirect to when user is done.
+
+## createStripeCheckout
+
+Create a Stripe Checkout Session for subscription setup. Returns a URL to redirect the user to Stripe&#39;s hosted checkout page. After successful payment, user is redirected to successUrl.
+
+**Returns:** `StripeCheckoutResult!` ([StripeCheckoutResult](/builders/api-schema/types-s-z/#stripecheckoutresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `billingPeriod`: `String!` — Billing period: &#39;monthly&#39; or &#39;yearly&#39;.
+- `successUrl`: `String!` — URL to redirect to after successful checkout.
+- `cancelUrl`: `String!` — URL to redirect to if user cancels.
+
+## createVodUpload
+
+Create a new VOD upload session. Returns presigned URLs for multipart upload.
+
+**Returns:** `CreateVodUploadResult!` ([CreateVodUploadResult](/builders/api-schema/types-a-f/#createvoduploadresult))
+
+**Typed SDK document:** `CreateVodUpload`
+
+**Arguments**
+
+- `input`: `CreateVodUploadInput!` ([CreateVodUploadInput](/builders/api-schema/types-a-f/#createvoduploadinput)) — Upload configuration.
+
+## createWebhookEndpoint
+
+Create an outbound webhook endpoint. The response carries the signing secret once; it is never returned again. A tenant can have at most 10 endpoints.
+
+**Returns:** `CreateWebhookEndpointResult!` ([CreateWebhookEndpointResult](/builders/api-schema/types-a-f/#createwebhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `CreateWebhookEndpointInput!` ([CreateWebhookEndpointInput](/builders/api-schema/types-a-f/#createwebhookendpointinput))
+
+## cryptoTopupStatus
+
+Check the status of a crypto top-up (for polling). Returns current status, confirmations, and credited amount when complete.
+
+**Returns:** `CryptoTopupStatus!` ([CryptoTopupStatus](/builders/api-schema/types-a-f/#cryptotopupstatus))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `topupId`: `ID!`
+
+## deleteClip
+
+Delete a clip.
+
+**Returns:** `DeleteClipResult!` ([DeleteClipResult](/builders/api-schema/types-a-f/#deleteclipresult))
+
+**Typed SDK document:** `DeleteClip`
+
+**Arguments**
+
+- `id`: `ID!` — The clip ID to delete.
+
+## deleteDVR
+
+Delete a DVR recording.
+
+**Returns:** `DeleteDVRResult!` ([DeleteDVRResult](/builders/api-schema/types-a-f/#deletedvrresult))
+
+**Typed SDK document:** `DeleteDVR`
+
+**Arguments**
+
+- `dvrHash`: `ID!` — The DVR hash to delete.
+
+## deletePushTarget
+
+Delete a multistream push target.
+
+**Returns:** `DeleteSuccess!` ([DeleteSuccess](/builders/api-schema/types-a-f/#deletesuccess))
+
+**Typed SDK document:** `DeletePushTarget`
+
+**Arguments**
+
+- `id`: `ID!` — The push target ID.
+
+## deleteSkipperConversation
+
+Delete a Skipper conversation.
+
+**Returns:** `Boolean!`
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## deleteStream
+
+Delete a stream and all associated data.
+
+**Returns:** `DeleteStreamResult!` ([DeleteStreamResult](/builders/api-schema/types-a-f/#deletestreamresult))
+
+**Typed SDK document:** `DeleteStream`
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID to delete.
+
+## deleteStreamKey
+
+Delete a stream key.
+
+**Returns:** `DeleteStreamKeyResult!` ([DeleteStreamKeyResult](/builders/api-schema/types-a-f/#deletestreamkeyresult))
+
+**Typed SDK document:** `DeleteStreamKey`
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `keyId`: `ID!` — The key ID to delete.
+
+## deleteVodAsset
+
+Delete a VOD asset.
+
+**Returns:** `DeleteVodAssetResult!` ([DeleteVodAssetResult](/builders/api-schema/types-a-f/#deletevodassetresult))
+
+**Typed SDK document:** `DeleteVodAsset`
+
+**Arguments**
+
+- `id`: `ID!` — The VOD asset ID to delete.
+
+## deleteWebhookEndpoint
+
+Delete an endpoint with its signing secrets and delivery log.
+
+**Returns:** `DeleteWebhookEndpointResult!` ([DeleteWebhookEndpointResult](/builders/api-schema/types-a-f/#deletewebhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+## disableWebhookEndpoint
+
+Disable an endpoint. Its pending deliveries are skipped.
+
+**Returns:** `WebhookEndpointResult!` ([WebhookEndpointResult](/builders/api-schema/types-s-z/#webhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+## enableWebhookEndpoint
+
+Enable a disabled endpoint. Deliveries skipped while it was disabled are not sent again; replay them with replayWebhookDeliveries.
+
+**Returns:** `WebhookEndpointResult!` ([WebhookEndpointResult](/builders/api-schema/types-s-z/#webhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+## linkEmail
+
+Link an email to a wallet-only account. This enables the upgrade path from prepaid to postpaid billing. A verification email will be sent to confirm the address.
+
+**Returns:** `LinkEmailResult!` ([LinkEmailResult](/builders/api-schema/types-g-l/#linkemailresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `LinkEmailInput!` ([LinkEmailInput](/builders/api-schema/types-g-l/#linkemailinput)) — Email and password to set on the account.
+
+## linkWallet
+
+Link an additional wallet to the current user&#39;s account. Requires an existing authenticated session.
+
+**Returns:** `LinkWalletResult!` ([LinkWalletResult](/builders/api-schema/types-g-l/#linkwalletresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `WalletLoginInput!` ([WalletLoginInput](/builders/api-schema/types-s-z/#walletlogininput)) — The wallet input containing address, message, and signature.
+
+## markSkipperReportsRead
+
+Mark Skipper investigation reports as read. Pass specific IDs, or omit to mark all as read. Returns the number of reports marked.
+
+**Returns:** `Int!`
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `ids`: `[ID!]`
+
+## openMistAdminSession
+
+Open the MistServer admin UI on a specific edge node. Returns a short-TTL session token plus the per-edge POST URL the webapp must submit the token to (NOT a query parameter, so the token doesn&#39;t leak via referrers / URL history / access logs). On success the browser sets a `fw_mist_admin` cookie scoped to /_mist and is redirected to /_mist/. Authority is infrastructure ownership, not subscriber access: Mist admin access is effectively shell on the edge box, so only owner/admin users in the cluster owner tenant can open it. Holders of the platform_operator grant are allowed as break-glass. Anything else returns AuthError without exposing whether the node exists.
+
+**Returns:** `OpenMistAdminSessionResult!` ([OpenMistAdminSessionResult](/builders/api-schema/types-m-r/#openmistadminsessionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `OpenMistAdminSessionInput!` ([OpenMistAdminSessionInput](/builders/api-schema/types-m-r/#openmistadminsessioninput))
+
+## promoteToPaid
+
+Switch from prepaid to a selected postpaid tier. A verified email is always required. Free needs no billing profile or payment provider; paid tiers require confirmed provider collection. Existing prepaid balance is carried forward as account credit.
+
+**Returns:** `PromoteToPaidResult!` ([PromoteToPaidResult](/builders/api-schema/types-m-r/#promotetopaidresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+
+## refreshStreamKey
+
+Generate a new stream key, invalidating the old one.
+
+**Returns:** `UpdateStreamResult!` ([UpdateStreamResult](/builders/api-schema/types-s-z/#updatestreamresult))
+
+**Typed SDK document:** `RefreshStreamKey`
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID.
+
+## rejectClusterSubscription
+
+Reject a pending cluster subscription request.
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/types-a-f/#clustersubscriptionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `subscriptionId`: `ID!` — The subscription ID to reject.
+- `reason`: `String` — Optional rejection reason.
+
+## replayWebhookDeliveries
+
+Send again the failed and skipped deliveries of one endpoint created in [createdAfter, createdBefore), oldest first, at most 1000 per call. Call again while hasMore is true.
+
+**Returns:** `ReplayWebhookDeliveriesResult!` ([ReplayWebhookDeliveriesResult](/builders/api-schema/types-m-r/#replaywebhookdeliveriesresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `endpointId`: `ID!`
+- `createdAfter`: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- `createdBefore`: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## replayWebhookDelivery
+
+Send a finished delivery again under the same ID, so the receiver sees the same webhook-id. The endpoint must be enabled.
+
+**Returns:** `ReplayWebhookDeliveryResult!` ([ReplayWebhookDeliveryResult](/builders/api-schema/types-m-r/#replaywebhookdeliveryresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The delivery ID.
+
+## requestClusterSubscription
+
+Request to subscribe to a cluster.
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/types-a-f/#clustersubscriptionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID.
+- `inviteToken`: `String` — Optional invite token.
+
+## resetMediaRetentionOverride
+
+Clear a per-asset retention override and recompute the horizon from the tenant default (or tier entitlement when no tenant default is set).
+
+**Returns:** `UpdateMediaRetentionResult!` ([UpdateMediaRetentionResult](/builders/api-schema/types-s-z/#updatemediaretentionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `ResetMediaRetentionOverrideInput!` ([ResetMediaRetentionOverrideInput](/builders/api-schema/types-m-r/#resetmediaretentionoverrideinput))
+
+## resolveIncident
+
+Resolve an incident manually. Repeats of the same firing alerts do not reopen it; a new alert opens a new incident.
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/types-g-l/#incidentmutationresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+
+## revokeClusterInvite
+
+Revoke a cluster invite.
+
+**Returns:** `RevokeClusterInviteResult!` ([RevokeClusterInviteResult](/builders/api-schema/types-m-r/#revokeclusterinviteresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `inviteId`: `ID!` — The invite ID to revoke.
+
+## revokeDeveloperToken
+
+Revoke an API token.
+
+**Returns:** `RevokeDeveloperTokenResult!` ([RevokeDeveloperTokenResult](/builders/api-schema/types-m-r/#revokedevelopertokenresult))
+
+**Typed SDK document:** `RevokeDeveloperToken`
+
+**Arguments**
+
+- `id`: `ID!` — The token ID to revoke.
+
+## revokeSigningKey
+
+Mark an active signing key as revoked. Triggers session re-evaluation across the tenant&#39;s protected playback objects: viewers with valid auth continue (possibly with a brief reconnect), revoked viewers are denied.
+
+**Returns:** `RevokeSigningKeyResult!` ([RevokeSigningKeyResult](/builders/api-schema/types-m-r/#revokesigningkeyresult))
+
+**Typed SDK document:** `RevokeSigningKey`
+
+**Arguments**
+
+- `id`: `ID!`
+
+## rotateWebhookEndpointSecret
+
+Replace an endpoint&#39;s signing secret and return the new one once. The previous secret keeps signing alongside it for 24 hours, unless revokePrevious is true.
+
+**Returns:** `RotateWebhookEndpointSecretResult!` ([RotateWebhookEndpointSecretResult](/builders/api-schema/types-m-r/#rotatewebhookendpointsecretresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+- `revokePrevious`: `Boolean` (default `false`) — Stop signing with the previous secret immediately.
+
+## sendMessage
+
+Send a message in an existing conversation. Messages are delivered to support agents in real-time.
+
+**Returns:** `SendMessageResult!` ([SendMessageResult](/builders/api-schema/types-s-z/#sendmessageresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `SendMessageInput!` ([SendMessageInput](/builders/api-schema/types-s-z/#sendmessageinput)) — Message configuration.
+
+## setMediaRetentionPolicy
+
+Set the tenant per-class retention default. `targetType` picks the asset class (VOD, DVR, or CLIP). `days` is in [0, tier cap] where 0 means &#34;keep forever&#34; — only honored on uncapped (paid) tiers; Free clamps to its cap at write time. `clear: true` NULLs the column so the tenant inherits the per-class system default (VOD: keep forever; DVR/clip: 30d). The tier cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
+
+**Returns:** `SetMediaRetentionPolicyResult!` ([SetMediaRetentionPolicyResult](/builders/api-schema/types-s-z/#setmediaretentionpolicyresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `SetMediaRetentionPolicyInput!` ([SetMediaRetentionPolicyInput](/builders/api-schema/types-s-z/#setmediaretentionpolicyinput))
+
+## setNodeMode
+
+Set a node&#39;s operational mode. Drains/maintenance bleed traffic away from the node; restoring with NORMAL re-admits it to routing. Reason is recorded in Foghorn&#39;s audit trail.
+
+**Returns:** `SetNodeModeResult!` ([SetNodeModeResult](/builders/api-schema/types-s-z/#setnodemoderesult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `SetNodeModeInput!` ([SetNodeModeInput](/builders/api-schema/types-s-z/#setnodemodeinput))
+
+## setPlaybackPolicy
+
+Set or clear the playback access policy on a stream, VOD asset, or clip. Exactly one of streamId / vodAssetId / clipId must be set in the input. Webhook secrets are write-only on input and never returned in queries. Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for affected sessions; valid viewers continue, invalid ones are denied.
+
+**Returns:** `SetPlaybackPolicyResult!` ([SetPlaybackPolicyResult](/builders/api-schema/types-s-z/#setplaybackpolicyresult))
+
+**Typed SDK document:** `SetPlaybackPolicy`
+
+**Arguments**
+
+- `input`: `SetPlaybackPolicyInput!` ([SetPlaybackPolicyInput](/builders/api-schema/types-s-z/#setplaybackpolicyinput))
+
+## setPreferredCluster
+
+Set the tenant&#39;s preferred cluster. Must be a subscribed cluster. Used by routing services when choosing tenant-preferred infrastructure.
+
+**Returns:** `SetPreferredClusterResult!` ([SetPreferredClusterResult](/builders/api-schema/types-s-z/#setpreferredclusterresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to set as preferred.
+
+## setStreamRetentionOverrides
+
+Write per-stream retention overrides for DVR and clip artifacts created on this stream. Unspecified input fields are left alone; passing -1 on a field clears the override (falls back to the tenant default). Values exceeding the tier cap are clamped at write time.
+
+**Returns:** `SetStreamRetentionOverridesResult!` ([SetStreamRetentionOverridesResult](/builders/api-schema/types-s-z/#setstreamretentionoverridesresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `SetStreamRetentionOverridesInput!` ([SetStreamRetentionOverridesInput](/builders/api-schema/types-s-z/#setstreamretentionoverridesinput))
+
+## startDVR
+
+Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters.
+
+**Returns:** `StartDVRResult!` ([StartDVRResult](/builders/api-schema/types-s-z/#startdvrresult))
+
+**Typed SDK document:** `StartDVR`
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID to start DVR for (Stream.id, Relay global ID).
+
+## stopDVR
+
+Stop DVR recording for a stream.
+
+**Returns:** `StopDVRResult!` ([StopDVRResult](/builders/api-schema/types-s-z/#stopdvrresult))
+
+**Typed SDK document:** `StopDVR`
+
+**Arguments**
+
+- `dvrHash`: `ID!` — The DVR hash to stop.
+
+## submitX402Payment
+
+Submit an x402 payment payload to settle a 402 response or top up balance. Authenticated members may settle viewer resources; direct top-ups and non-viewer resources require billing management authority on the target tenant.
+
+**Returns:** `SubmitX402PaymentResult!` ([SubmitX402PaymentResult](/builders/api-schema/types-s-z/#submitx402paymentresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `payment`: `String!` — Base64-encoded x402 payment payload.
+- `resource`: `String` — Optional resource being paid for. Viewer resources credit their resolved owner tenant; omission defaults to the authenticated tenant.
+
+## subscribeToCluster
+
+Subscribe to a cluster for streaming access.
+
+**Returns:** `Boolean!`
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to subscribe to.
+
+## testPlaybackAccess
+
+Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side.
+
+**Returns:** `TestPlaybackAccessResult!` ([TestPlaybackAccessResult](/builders/api-schema/types-s-z/#testplaybackaccessresult))
+
+**Typed SDK document:** `TestPlaybackAccess`
+
+**Arguments**
+
+- `input`: `TestPlaybackAccessInput!` ([TestPlaybackAccessInput](/builders/api-schema/types-s-z/#testplaybackaccessinput))
+
+## testWebhookEndpoint
+
+Send a signed webhook.test event to the endpoint and wait for the result. At most one test per endpoint every 10 seconds.
+
+**Returns:** `TestWebhookEndpointResult!` ([TestWebhookEndpointResult](/builders/api-schema/types-s-z/#testwebhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+## unlinkWallet
+
+Unlink a wallet from the current user&#39;s account. Cannot unlink the last wallet if user has no email.
+
+**Returns:** `UnlinkWalletResult!` ([UnlinkWalletResult](/builders/api-schema/types-s-z/#unlinkwalletresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `walletId`: `ID!` — The wallet identity ID to unlink.
+
+## unsubscribeFromCluster
+
+Unsubscribe from a cluster.
+
+**Returns:** `Boolean!`
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to unsubscribe from.
+
+## updateBillingDetails
+
+Update billing details for the current tenant. Required before any payment for VAT invoicing.
+
+**Returns:** `BillingDetails!` ([BillingDetails](/builders/api-schema/types-a-f/#billingdetails))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `UpdateBillingDetailsInput!` ([UpdateBillingDetailsInput](/builders/api-schema/types-s-z/#updatebillingdetailsinput))
+
+## updateClusterMarketplace
+
+Update marketplace settings for a cluster.
+
+**Returns:** `UpdateClusterResult!` ([UpdateClusterResult](/builders/api-schema/types-s-z/#updateclusterresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID.
+- `input`: `UpdateClusterMarketplaceInput!` ([UpdateClusterMarketplaceInput](/builders/api-schema/types-s-z/#updateclustermarketplaceinput)) — Updated marketplace settings.
+
+## updateMediaRetention
+
+Apply a per-asset retention override on a finalized DVR recording, clip, or VOD asset (set targetType accordingly). Override beats tenant default beats tier entitlement. Active assets are rejected — retention applies post-finalize.
+
+**Returns:** `UpdateMediaRetentionResult!` ([UpdateMediaRetentionResult](/builders/api-schema/types-s-z/#updatemediaretentionresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `UpdateMediaRetentionInput!` ([UpdateMediaRetentionInput](/builders/api-schema/types-s-z/#updatemediaretentioninput))
+
+## updatePushTarget
+
+Update a multistream push target.
+
+**Returns:** `PushTarget!` ([PushTarget](/builders/api-schema/types-m-r/#pushtarget))
+
+**Typed SDK document:** `UpdatePushTarget`
+
+**Arguments**
+
+- `id`: `ID!` — The push target ID.
+- `input`: `UpdatePushTargetInput!` ([UpdatePushTargetInput](/builders/api-schema/types-s-z/#updatepushtargetinput)) — Fields to update.
+
+## updateSkipperConversation
+
+Update the title of a Skipper conversation.
+
+**Returns:** `SkipperConversationSummary!` ([SkipperConversationSummary](/builders/api-schema/types-s-z/#skipperconversationsummary))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!`
+- `title`: `String!`
+
+## updateStream
+
+Update an existing stream&#39;s configuration.
+
+**Returns:** `UpdateStreamResult!` ([UpdateStreamResult](/builders/api-schema/types-s-z/#updatestreamresult))
+
+**Typed SDK document:** `UpdateStream`
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID.
+- `input`: `UpdateStreamInput!` ([UpdateStreamInput](/builders/api-schema/types-s-z/#updatestreaminput)) — Updated stream configuration.
+
+## updateSubscriptionCustomTerms
+
+Update custom billing terms for a tenant subscription.
+
+**Returns:** `TenantSubscription` ([TenantSubscription](/builders/api-schema/types-s-z/#tenantsubscription))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `tenantId`: `ID!` — The tenant ID.
+- `input`: `UpdateSubscriptionCustomTermsInput!` ([UpdateSubscriptionCustomTermsInput](/builders/api-schema/types-s-z/#updatesubscriptioncustomtermsinput)) — Updated subscription terms.
+
+## updateTenant
+
+Update the current tenant&#39;s profile.
+
+**Returns:** `UpdateTenantResult!` ([UpdateTenantResult](/builders/api-schema/types-s-z/#updatetenantresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `UpdateTenantInput!` ([UpdateTenantInput](/builders/api-schema/types-s-z/#updatetenantinput)) — Updated tenant configuration.
+
+## updateWebhookEndpoint
+
+Change an endpoint&#39;s URL, description, or event types. Omitted fields keep their value.
+
+**Returns:** `UpdateWebhookEndpointResult!` ([UpdateWebhookEndpointResult](/builders/api-schema/types-s-z/#updatewebhookendpointresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+- `input`: `UpdateWebhookEndpointInput!` ([UpdateWebhookEndpointInput](/builders/api-schema/types-s-z/#updatewebhookendpointinput))
+
+## walletLogin
+
+Authenticate using a signed message from an Ethereum wallet. Returns a JWT token for API access. Creates a new account if the wallet has not been seen before (auto-provisioning).
+
+**Returns:** `WalletLoginResult!` ([WalletLoginResult](/builders/api-schema/types-s-z/#walletloginresult))
+
+**SDK:** Raw GraphQL only
+
+**Arguments**
+
+- `input`: `WalletLoginInput!` ([WalletLoginInput](/builders/api-schema/types-s-z/#walletlogininput)) — The wallet input containing address, message, and signature.

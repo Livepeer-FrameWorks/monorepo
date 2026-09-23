@@ -96,7 +96,7 @@ The body of a `clip.ready` event:
       "artifactId": "c7f3a9e2b41d4f6a8e0b5d2c9a1f7e34",
       "kind": "ARTIFACT_KIND_CLIP",
       "streamId": "5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13",
-      "playbackId": "k3v9x2m7q4w8"
+      "playbackId": ""
     },
     "durationMs": "30000",
     "sizeBytes": "7340032"
@@ -110,8 +110,11 @@ sent with the example secret `whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw`, were:
 ```
 webhook-id: 0199a3c2-7e41-7d2a-9b3e-5f8c1d2e4a67
 webhook-timestamp: 1789826608
-webhook-signature: v1,NSZG8yLlem8faHh7EcOnDIbFIp4Wa/3hhM320Atl5LM=
+webhook-signature: v1,He6+qzzEV3oT+kg/zD4Sd/hJNCLcjDehxhA4waNbaqw=
 ```
+
+`artifact.playbackId` is always empty on clip, recording, and upload events. Look the playback ID
+up by `artifactId` (see [Events](/builders/events#the-payload-fields-are-the-contract)).
 
 | Field         | Meaning                                                                                    |
 | ------------- | ------------------------------------------------------------------------------------------ |
@@ -140,6 +143,10 @@ Within a version, fields are only added. Parse bodies so that unknown fields are
 Verify against the raw request bytes, before any JSON parsing: re-serializing the body changes
 the bytes and breaks the signature. The libraries below also reject a `webhook-timestamp` more
 than five minutes away from your clock, which limits replay of a captured request.
+
+The [TypeScript, Go, and Python SDKs](/builders/sdks#receive-webhooks) wrap these libraries and
+also parse the verified body into a typed event. The examples below use the libraries directly,
+for receivers that do not use an SDK.
 
 <Tabs>
   <TabItem label="TypeScript">
@@ -186,12 +193,8 @@ app.post("/webhooks/frameworks", express.raw({ type: "application/json" }), asyn
       await markStreamLive(event.data.streamId as string);
       break;
     case "clip.ready": {
-      const artifact = event.data.artifact as { artifactId: string; playbackId: string };
-      await publishClip(
-        artifact.artifactId,
-        artifact.playbackId,
-        BigInt(event.data.sizeBytes as string)
-      );
+      const artifact = event.data.artifact as { artifactId: string };
+      await publishClip(artifact.artifactId, BigInt(event.data.sizeBytes as string));
       break;
     }
   }
@@ -256,7 +259,6 @@ func main() {
 			var data struct {
 				Artifact struct {
 					ArtifactID string `json:"artifactId"`
-					PlaybackID string `json:"playbackId"`
 				} `json:"artifact"`
 				SizeBytes string `json:"sizeBytes"` // int64 values arrive as strings
 			}
@@ -264,7 +266,7 @@ func main() {
 				http.Error(w, "invalid data", http.StatusBadRequest)
 				return
 			}
-			enqueueClipReady(data.Artifact.ArtifactID, data.Artifact.PlaybackID)
+			enqueueClipReady(data.Artifact.ArtifactID, data.SizeBytes)
 		}
 		markProcessed(ev.ID)
 		w.WriteHeader(http.StatusNoContent)
@@ -303,7 +305,7 @@ def frameworks_webhook():
     if event["type"] == "clip.ready":
         artifact = event["data"]["artifact"]
         size_bytes = int(event["data"]["sizeBytes"])  # int64 values arrive as strings
-        publish_clip(artifact["artifactId"], artifact["playbackId"], size_bytes)
+        publish_clip(artifact["artifactId"], size_bytes)
     mark_processed(event["id"])
     return "", 204
 ```

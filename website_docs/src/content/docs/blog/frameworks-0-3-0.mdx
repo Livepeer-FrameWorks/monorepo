@@ -3,15 +3,15 @@ title: "FrameWorks 0.3.0"
 date: 2026-07-05
 authors:
   - frameworks
-excerpt: "The next FrameWorks tag focuses on the operating layer: platform admin, analytics, resilient edge playback, safer agent workflows, and the real-time foundation for chat and conferencing."
-description: "The next FrameWorks tag focuses on the operating layer: platform admin, analytics, resilient edge playback, safer agent workflows, and the real-time foundation for chat and conferencing."
+excerpt: "FrameWorks 0.3.0 adds platform admin, analytics, resilient edge playback, media placement, safer agent workflows, and the real-time foundation for chat and conferencing."
+description: "FrameWorks 0.3.0 adds platform admin, analytics, resilient edge playback, media placement, safer agent workflows, and the real-time foundation for chat and conferencing."
 tags:
   - announcements
   - releases
   - roadmap
 ---
 
-0.3.0 is the next FrameWorks tag.
+FrameWorks 0.3.0 is out.
 
 ## Upgrade note: edge protocol v4 hard cut
 
@@ -26,13 +26,13 @@ plane rollout. The same applies to an older edge that was offline during the rol
 returns later. It cannot reconnect until it has been updated to v4. This one-time edge
 interruption is an explicit release decision; the generation fence remains fail closed.
 
-The theme is the operating layer: the pieces that make FrameWorks easier to run as a live-video platform. Platform admin, analytics, edge resilience, agent workflows, and the real-time foundation for chat and conferencing.
+0.3.0 adds platform admin, analytics, edge resilience, media placement, agent workflows, and groundwork for chat and conferencing.
 
-Platform admin is the most direct change. The cross-tenant admin API, admin console, and explicit operator grant model give operators a supported place to inspect tenants, clusters, billing, and content. That matters for hosted operations and for anyone running more than one cluster. Admin access should be a permission with a paper trail, not an accident of which account was created first.
+Platform admin is the most direct change. The cross-tenant admin API, admin console, and explicit operator grant model give operators a supported place to inspect tenants, clusters, billing, and content. That matters for hosted operations and for anyone running more than one cluster. Admin access is now an explicit grant with an audit log.
 
 Analytics is also moving out of the "internal-only" bucket. Playback QoE, tenant activity, operator activity, stream monitoring controls, and the consolidated dashboard charts make the platform state more visible to the people who can act on it. The goal is answering normal operational questions without opening three private dashboards and a SQL console.
 
-Edge playback is getting stricter about partial failure. Foghorn and Helmsman now have better behavior when the stream is healthy but the control plane is having a short bad moment: registry stale-serving for transient resolve failures, bounded Helmsman recovery for previously approved play rewrites, HA state sync through Redis changelogs, federation advertisements for resilient playback, and native edge install improvements across Linux and macOS.
+Edge playback is getting stricter about partial failure. Foghorn and Helmsman now have better behavior when the stream is healthy but the control plane is briefly unavailable: registry stale-serving for transient resolve failures, bounded Helmsman recovery for previously approved play rewrites, HA state sync through Redis changelogs, federation advertisements for resilient playback, and native edge install improvements across Linux and macOS.
 
 Media placement is the other routing change in this tag. Where a request is answered, where a stream originates, and where a viewer receives it are three different places, and 0.3.0 stops treating a cluster boundary as a distance penalty. On top of that sits a typed placement policy per account and per stream: prefer your own capacity, spill over only on capacity or a defined geographic hole, never touch platform-official capacity, or rank marketplace capacity by effective price. Policies reach final admission through signed authority, and a cell only receives policy-bearing authority once its Foghorn replicas have attested that they enforce it. The full account is in [Your stream, your edge](/blog/your-stream-your-edge). Storage and processing placement are deliberately not in this tag.
 
@@ -40,8 +40,6 @@ Skipper and MCP are part of 0.3.0 because agents are becoming an operations surf
 
 Chat and conferencing are next because FrameWorks already has pieces of the real-time stack: support conversations, message lifecycle events, Signalman subscriptions, and Skipper conversations. Conferencing needs room state, participant identity, moderation, recording rules, pricing, and media routing built around active participants. 0.3.0 sets up that direction by tightening the real-time and operator foundations first.
 
-Composer stays on the roadmap. It is still one of the more interesting media features: overlays, lower thirds, SSAI, transcription, object detection, picture-in-picture, automated clipping. It also has a lot of product contract behind it: API shape, placement model, lifecycle, billing meters, permissions, dashboard controls, and MCP access. We would rather land it with those boundaries right than ship a demo-shaped control surface.
+Composer stays on the roadmap. It is still one of the more interesting media features: overlays, lower thirds, SSAI, transcription, object detection, picture-in-picture, automated clipping. It also has a lot of product contract behind it: API shape, placement model, lifecycle, billing meters, permissions, dashboard controls, and MCP access. It ships once those contracts are defined.
 
 BYOC also gets clearer in this line. Bring-your-own MistServer/Helmsman edge nodes are the supported boundary. FrameWorks still operates Foghorn, federation, Livepeer, Chandler, storage, DNS, analytics, billing, and the control plane; customer-operated versions of that coupled stack are not a deeper edge tier.
-
-So 0.3.0 is about making the platform less mysterious to operate. Better admin tools, better observability, safer agents, more resilient playback, and a clearer path toward chat, conferencing, and composer.

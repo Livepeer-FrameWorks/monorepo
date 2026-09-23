@@ -252,7 +252,7 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 			if !strings.Contains(migrateBody, applyLoop) {
 				t.Fatalf("%s migrate task must apply only the precomputed pending list", tc.name)
 			}
-			if !strings.Contains(migrateBody, "pg_advisory_lock(hashtext('frameworks_migrations')") {
+			if !strings.Contains(readRoleTask(t, ansibleRoots[0], tc.role, "migrate_item.yml"), "pg_advisory_lock(hashtext('frameworks_migrations')") {
 				t.Fatalf("%s migrate task must serialize schema changes with an advisory lock", tc.name)
 			}
 			if !strings.Contains(migrateBody, "Report pending migrations") {

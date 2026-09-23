@@ -11,8 +11,8 @@ sidebar:
 FrameWorks uses the same logical planes across environments, but the physical placement varies by deployment:
 
 - **Local development:** Docker Compose brings up the full stack on one host.
-- **Provider-operated deployments:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
-- **Customer-operated edge capacity:** The supported hybrid path runs MistServer and Helmsman on customer infrastructure while FrameWorks operates the control plane. A customer-operated control plane is a separate distribution model, not a deeper hybrid tier.
+- **Full-stack deployments** (the FrameWorks hosted platform, or an independent self-hosted platform): The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Customer-operated edge capacity:** The supported hybrid path runs the edge bundle (Caddy, MistServer, and Helmsman) on customer infrastructure while FrameWorks operates the control plane. Running your own control plane and Foghorn means self-hosting the entire stack as an independent platform; that platform cannot join the FrameWorks network as a federation peer.
 - **Coordination:** Quartermaster remains the system of record for tenants, clusters, and service discovery. Management paths query it directly; Commodore compiles the media-serving subset with Purser and catalog policy into signed, versioned Foghorn-local authority so an established media cell does not require a live control-plane query for every request.
 
 ## Multi-Plane Architecture
@@ -46,12 +46,13 @@ flowchart TB
         D[Decklog → regional Kafka]
         P[Periscope<br/>analytics]
         S[Signalman<br/>realtime events]
+        LG[Livepeer Gateway<br/>pool-assigned]
     end
 
     subgraph E[Edge capacity]
+        CAD[Caddy]
         H[Helmsman]
         M[MistServer]
-        LG[Livepeer Gateway]
     end
 
     B --> COM
@@ -62,6 +63,7 @@ flowchart TB
     QM --> F
     NAV --> E
     F <--> H
+    CAD --> M
     H --> M
     M --> LG
     F --> D
@@ -83,6 +85,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Commodore               | 18001 (HTTP), 19001 (gRPC) | Central          | Control / API                 | Auth, streams, API tokens, media registry, and business workflows |
 | Quartermaster           | 18002 (HTTP), 19002 (gRPC) | Central          | Control / API                 | Tenants, clusters, nodes, service discovery, and bootstrap state  |
 | Purser                  | 18003 (HTTP), 19003 (gRPC) | Central          | Control / API                 | Billing, usage, invoices, payments, and x402 state                |
+| Bosun                   | 18013 (HTTP), 19009 (gRPC) | Central          | Control / API                 | Outbound webhook delivery, delivery log, and replay               |
 | Periscope Query         | 18004 (HTTP), 19004 (gRPC) | Central          | Event & Analytics             | Analytics and reporting API                                       |
 | Periscope Ingest        | 18005                      | Regional         | Event & Analytics             | Kafka event processing and ClickHouse writes                      |
 | Periscope Metering      | 18021                      | Regional         | Event & Analytics             | Local ClickHouse aggregation and durable reports to Purser        |
@@ -101,13 +104,14 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Deckhand                | 18015 (HTTP), 19006 (gRPC) | Central          | Support & Experience Services | Support messaging API (Chatwoot adapter)                          |
 | Skipper                 | 18018 (HTTP), 19007 (gRPC) | Central          | Support & Experience Services | AI video consultant API                                           |
 | Forms                   | 18032                      | Central          | Support & Experience Services | Contact form and newsletter handling                              |
+| Lookout                 | 18022 (HTTP), 19008 (gRPC) | Central          | Observability & Operations    | Incidents from Alertmanager and operator notifications            |
 
 ### Infrastructure Components
 
 | Component                                    | Role                                                                                              | Plane                         | Port(s)                                           | Deploy Location                         |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | --------------------------------------- |
 | MistServer                                   | Media processing, ingest, and edge delivery                                                       | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                    |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                              | Edge (co-located with MistServer)       |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                              | Regional (pool-assigned to clusters)    |
 | Livepeer Signer                              | Keystore-backed ETH transaction signer; keyless ticket-batch signing is not yet wired to gateways | Control / API                 | 18016                                             | Central (not included in local Compose) |
 | PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate                                          | Infrastructure                | Operator-defined                                  | Central                                 |
 | ClickHouse                                   | Time-series analytics database                                                                    | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                 |
@@ -143,10 +147,10 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Deployment Tiers
 
-- **Central**: Commodore, Quartermaster, Purser, Navigator, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
-- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Periscope Metering, Signalman, Chandler, Kafka, Web Console, Marketing Site. Today the unsharded ClickHouse deployment is central, so there is one metering source there; when ClickHouse becomes regional, each logical deployment gets a local worker with a unique source ID.
+- **Central**: Commodore, Quartermaster, Purser, Bosun, Lookout, Navigator, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
+- **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Periscope Metering, Signalman, Chandler, Livepeer Gateway, Kafka, Web Console, Marketing Site. Foghorn, Chandler, and Livepeer Gateway are pool-assigned to the media clusters they serve. Today the unsharded ClickHouse deployment is central, so there is one metering source there; when ClickHouse becomes regional, each logical deployment gets a local worker with a unique source ID.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
-- **Edge**: MistServer, Helmsman, Livepeer Gateway.
+- **Edge**: the edge bundle of Caddy, MistServer, and Helmsman.
 
 ---
 
@@ -164,7 +168,7 @@ Purser remains the central financial authority.
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 
 - **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
-- **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
+- **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then arranges a DTSC origin-pull so the viewer is served from its own cluster.
 - **Cross-cluster artifacts**: clips, VODs, and DVR chapters on remote clusters are all accessed via `PrepareArtifact`. Origin returns a presigned S3 URL when the artifact is synced, or a short-lived peer-relay URL + opaque capability grant pointing at the specific origin node when the canonical file is on disk but S3 sync is still pending (the origin Foghorn authorizes each pull online; no signing key on the edge) — viewers don't wait on sync. DVR chapter listing flows through the GraphQL chapter API (Commodore → origin Foghorn for the chapter row metadata); each finalized chapter is a regular VOD-shaped artifact with its own Commodore-minted, shareable `playbackId`, while the snapshotted parent-DVR policy still controls authorization. Chapter playback follows the same federation rules as any other VOD.
 - **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
 
@@ -178,8 +182,8 @@ addresses.
 | Model                | Description                                                                                                                                                                       |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                      |
-| **Dedicated**        | Enterprise tier. Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is not part of this model.                                             |
-| **Hybrid**           | Tenant runs self-hosted MistServer/Helmsman edges that connect to provider Foghorn and can fall back to managed capacity; the control/data plane remains provider-operated.       |
+| **Dedicated**        | Enterprise tier. Isolated provider-operated capacity and routing for one tenant. To run Foghorn yourself, self-host the entire stack.                                             |
+| **Hybrid**           | Tenant runs self-hosted Caddy/MistServer/Helmsman edges that connect to provider Foghorn and can fall back to managed capacity; the control/data plane remains provider-operated. |
 | **Open Marketplace** | Operators publish listed clusters with access controls, invites, subscription requests, and pricing metadata. Tenants browse listings and subscribe through the dashboard or API. |
 
 ---
@@ -388,7 +392,8 @@ graph LR
 | ------------------------------------ | ----------------------- | -------------------- |
 | `GET /play/{viewkey}`                | JSON with all endpoints | Direct integration   |
 | `GET /play/{viewkey}/hls/index.m3u8` | 307 redirect to edge    | Direct HLS playback  |
-| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Direct WebRTC (WHEP) |
+| `GET /play/{viewkey}/whep`           | 307 redirect to edge    | Native WHEP playback |
+| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Mist WebRTC playback |
 
 There is no hostname-only viewer route. The MistServer compatibility surface is a node-bound
 source lookup on a signed per-node path, which answers a media node asking where to pull a

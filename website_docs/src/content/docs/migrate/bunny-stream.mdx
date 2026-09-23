@@ -7,18 +7,18 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-If you're running on [Bunny Stream](https://bunny.net/stream/) today and considering FrameWorks, this page is for you. The platforms overlap on VOD basics (transcode, store, deliver HLS/DASH/MP4, sign URLs, embed a player), but their centers of gravity are different enough that a straight endpoint swap is not the right mental model.
+[Bunny Stream](https://bunny.net/stream/) and FrameWorks overlap on VOD basics (transcode, store, deliver HLS/DASH/MP4, sign URLs, embed a player). Bunny Stream is VOD-first and FrameWorks is live-first, so an endpoint-by-endpoint swap won't cover everything.
 
-Bunny.net is, first and foremost, an excellent global CDN, storage, and DNS company — Bunny Stream is the VOD product that sits on top of that stack. If you chose Bunny, it was probably for a practical reason: strong edge delivery, simple VOD hosting, integrated security options, automated media tooling, useful video analytics, and a broader platform account that also covers non-video workloads.
+Bunny.net is mainly a CDN, storage, and DNS provider; Bunny Stream is its VOD product. Teams usually pick Bunny for edge delivery, simple VOD hosting, integrated security options, automated media tooling, video analytics, and one account that also covers non-video workloads.
 
-FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently expose a first-class live-ingest product; Bunny's current [FAQ says RTMP streams are not supported](https://bunny.net/faq/). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
+FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-input from RTSP/SRT/RIST/HLS/MPEG-TS — with DVR, clipping, multistream, LL-HLS, DASH, WHEP/WebRTC, and MP4 progressive delivery. Bunny Stream's public surface does not currently include a live-ingest product; Bunny's current [FAQ says RTMP streams are not supported](https://bunny.net/faq/). The rest of this page maps Bunny Stream's surface to FrameWorks: what's a clean swap, what changes shape, where the live side opens up, and which Bunny products are worth **keeping** rather than replacing.
 
 ## TL;DR
 
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
-- **What you gain:** RTMP/RTMPS, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · first-class PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · VOD URL-pull import · watermarking as a managed feature.
+- **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
+- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · VOD URL-pull import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -55,11 +55,11 @@ Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `
 
 ### Live ingest and pull sources
 
-Bunny Stream does not currently expose a first-class live-ingest product, so this row is a **what you gain** zone rather than a translation. The FrameWorks side:
+Bunny Stream does not currently offer live ingest, so this row is a **what you gain** zone rather than a translation. The FrameWorks side:
 
 | FrameWorks                                                                            |
 | ------------------------------------------------------------------------------------- |
-| Push ingest: RTMP, RTMPS, E-RTMP (HEVC/AV1 over RTMP), SRT, WHIP                      |
+| Push ingest: RTMP, E-RTMP (HEVC/AV1 over RTMP), SRT, WHIP                             |
 | Pull-input: RTSP, SRT, RIST, DTSC, HLS, single-file TS, EBML/WebM, TS-over-UDP        |
 | DVR with time-shift on every recorded stream — see [Recordings](/builders/recordings) |
 | Clip API (`CLIP_NOW`, `DURATION`, `ABSOLUTE`, `RELATIVE`)                             |
@@ -149,7 +149,7 @@ Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM w
 ### 2. Decide your shape
 
 - **Pure VOD migration** — you only ever uploaded prerecorded files to Bunny Stream. Move the asset library and re-embed.
-- **Live-first cutover** — you've been doing OBS-record-then-upload because Bunny doesn't offer live ingest. This is the strongest fit; you switch to first-class RTMP/SRT/WHIP plus DVR.
+- **Live-first cutover** — you've been doing OBS-record-then-upload because Bunny doesn't offer live ingest. This is the strongest fit; you switch to RTMP/SRT/WHIP ingest plus DVR.
 - **Hybrid: keep Bunny CDN/Storage/DNS** — only the video workload moves; non-video stays on Bunny's edge platform.
 
 ### 3. Move VOD assets
@@ -194,7 +194,7 @@ mutation CreateStream {
 }
 ```
 
-Point your encoder at the FrameWorks RTMP/RTMPS, E-RTMP, SRT, or WHIP endpoint (resolved via the dashboard or `resolveIngestEndpoint(streamKey)`). DVR is a flag at create time (`record: true`) or post-create with `startDVR(streamId)`.
+Point your encoder at the FrameWorks RTMP, E-RTMP, SRT, or WHIP endpoint (resolved via the dashboard or `resolveIngestEndpoint(streamKey)`). DVR is a flag at create time (`record: true`) or post-create with `startDVR(streamId)`.
 
 ### 5. Swap the embed
 
@@ -206,11 +206,11 @@ If you were using Bunny's iframe embed:
 -   allow="autoplay; encrypted-media"
 -   allowfullscreen>
 - </iframe>
-+ <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
++ <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
 + <fw-player content-id="{playbackId}" content-type="vod" gateway-url="%GATEWAY_URL%/graphql"></fw-player>
 ```
 
-React, Svelte, and headless options are first-class:
+The player also ships as:
 
 - `@livepeer-frameworks/player-react`
 - `@livepeer-frameworks/player-svelte`
@@ -266,7 +266,7 @@ See [Playback Access Control](/builders/playback-access-control) for the full mo
 
 ### 8. (Optional) Re-attach multistream targets
 
-If you had to push from Bunny → Twitch/YouTube via a side tool, push targets are first-class on FrameWorks:
+If you had to push from Bunny → Twitch/YouTube via a side tool, FrameWorks pushes to them directly through stream-scoped push targets:
 
 ```graphql
 mutation Restream {
@@ -290,7 +290,7 @@ Run a low-traffic test through both platforms in parallel for a day. Watch the F
 
 ## What you gain on FrameWorks
 
-- **First-class live ingest** — RTMP/RTMPS, E-RTMP (HEVC/AV1 contribution over RTMP), SRT, and WHIP. Bunny customers who've been recording-then-uploading get the most leverage here.
+- **Live ingest** — RTMP, E-RTMP (HEVC/AV1 contribution over RTMP), SRT, and WHIP. Bunny customers who've been recording-then-uploading gain the most.
 - **Pull-input streams** — point FrameWorks at an RTSP camera, an SRT/RIST contribution feed, an HLS or MPEG-TS source, or another Mist origin (DTSC). Self-hosted edges can also pull from private (RFC1918) or multicast sources via an explicit cluster flag. See [Pull-input streams](/builders/pull-streams). Experimental media-engine discovery exists locally today; FrameWorks packaging through Edge, Tray, CLI, API, and dashboard workflows is tracked on the [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **DVR + clipping while live** — recording is on by default for streams that opt in; viewers can time-shift on the same playback ID, and you can mint clips from either the live ring or the persisted DVR via the clip API.
 - **LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket** — the underlying engine is [MistServer](https://mistserver.org/), which we co-maintain. CMAF output, sub-second WHEP, and a custom MSE WebSocket player are all there alongside HLS.
@@ -300,11 +300,11 @@ Run a low-traffic test through both platforms in parallel for a day. Watch the F
 - **Managed hybrid edges** — run MistServer and Helmsman edge capacity on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS, and the control plane.
 - **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
-- **Player on Svelte and as Web Components**, not just React.
+- **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
 ## Where Bunny still wins
 
-Worth being honest about, especially if you don't actually need live:
+Bunny is the better choice for:
 
 - **Edge footprint at the volume tier.** Bunny's CDN footprint is broad and mature, on the same network you may already be buying for non-video traffic.
 - **Standard encoding included.** FrameWorks meters delivered minutes inclusive of bandwidth + transcoding + ABR; Bunny's standard encoding is bundled in storage/bandwidth pricing. (Bunny's [Premium Encoding](https://bunny.net/stream/premium-encoding/) for HEVC/AV1 and instant playback is separately priced.)
@@ -321,14 +321,12 @@ Worth being honest about, especially if you don't actually need live:
 - **Per-video heatmaps and retention curves** — per-asset watch-density and retention curves now ship for the FrameWorks player; broader cross-player view-level QoE is still on the [roadmap](/roadmap#view-level-qoe-analytics).
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
-- **First-class PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
+- **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
 - **VOD URL-pull import** — no `POST /fetch` equivalent or one-shot bulk Bunny → FrameWorks importer today. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
 - **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
 - **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
 
 ## Beta and tricky bits
-
-Heads-up so nothing surprises you:
 
 - **Billing rates are still maturing.** Rates may adjust as we scale, but you keep the allowances you signed up for.
 - **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
@@ -346,8 +344,6 @@ Heads-up so nothing surprises you:
 - **DRM-protected content cannot move yet.** Wait for DRM GA or keep that subset on Bunny.
 
 ## Get help
-
-Pick whichever channel fits.
 
 | Channel                     | Best for                                                                                    | Where                                                        |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |

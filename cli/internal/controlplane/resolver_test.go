@@ -67,6 +67,82 @@ services:
 	}
 }
 
+func TestResolveGRPCEntryMeshDialsNamedCellEntry(t *testing.T) {
+	withEmptyConfig(t)
+	manifestPath := writeManifest(t, `
+version: v1
+type: cluster
+profile: production
+root_domain: example.test
+hosts:
+  regional-eu-1:
+    external_ip: 203.0.113.10
+    user: root
+    wireguard_ip: 10.88.0.10
+  regional-us-1:
+    external_ip: 203.0.113.20
+    user: root
+    wireguard_ip: 10.88.0.20
+services:
+  foghorn-eu:
+    enabled: true
+    deploy: foghorn
+    host: regional-eu-1
+  foghorn-us:
+    enabled: true
+    deploy: foghorn
+    host: regional-us-1
+`)
+	ctx := fwcfg.Context{
+		Name:       "platform",
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeMesh,
+		Endpoints:  fwcfg.Endpoints{AllowInsecure: true},
+		Gitops:     &fwcfg.Gitops{Source: fwcfg.GitopsManifest, ManifestPath: manifestPath},
+	}
+	resolver := NewResolver(ctx)
+	t.Cleanup(resolver.Close)
+
+	manifest, err := resolver.Manifest(context.Background())
+	if err != nil || manifest == nil || manifest.Services["foghorn-us"].Deploy != "foghorn" {
+		t.Fatalf("Manifest() = %v, %v; want the context manifest", manifest, err)
+	}
+	ep, err := resolver.ResolveGRPCEntry(context.Background(), "foghorn", "foghorn-us")
+	if err != nil {
+		t.Fatalf("ResolveGRPCEntry: %v", err)
+	}
+	if !strings.HasPrefix(ep.Address, "10.88.0.20:") {
+		t.Fatalf("Address = %q, want the foghorn-us host", ep.Address)
+	}
+}
+
+func TestResolveGRPCEntryRefusesSavedOverride(t *testing.T) {
+	t.Parallel()
+	ctx := fwcfg.Context{
+		Name:       "platform",
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeSSH,
+		Endpoints:  fwcfg.Endpoints{FoghornGRPCAddr: "foghorn.example.test:18019", UseTLS: true},
+	}
+	resolver := NewResolver(ctx)
+	t.Cleanup(resolver.Close)
+	if _, err := resolver.ResolveGRPCEntry(context.Background(), "foghorn", "foghorn-eu"); err == nil || !strings.Contains(err.Error(), "foghorn-eu") {
+		t.Fatalf("ResolveGRPCEntry err = %v, want refusal naming the entry", err)
+	}
+	if _, err := resolver.ResolveGRPC(context.Background(), "foghorn"); err != nil {
+		t.Fatalf("ResolveGRPC with a saved override: %v", err)
+	}
+}
+
+func TestResolverManifestIsNilForLocalAccess(t *testing.T) {
+	t.Parallel()
+	resolver := NewResolver(fwcfg.Context{Name: "local", AccessMode: fwcfg.AccessModeLocal, Endpoints: fwcfg.DefaultEndpoints()})
+	manifest, err := resolver.Manifest(context.Background())
+	if err != nil || manifest != nil {
+		t.Fatalf("Manifest() = %v, %v; want nil for local access", manifest, err)
+	}
+}
+
 func TestResolveGRPCMeshRequiresWireGuardAddress(t *testing.T) {
 	withEmptyConfig(t)
 	manifestPath := writeManifest(t, `

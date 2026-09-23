@@ -10,9 +10,9 @@ The current BYO product is **tenant-hosted BYO edge**, comparable to a
 self-hosted job runner. Tenants may operate media workers for bandwidth,
 storage, and processing, while Quartermaster and each virtual Foghorn control
 cell remain platform-operated. Cloud, VPC, colocation, and on-premises describe
-location, not authorization. “Self-hosted media cluster” is reserved for a
-future topology where the media coordination plane is also independently
-hostable.
+location, not authorization. A tenant that wants its own media coordination
+plane self-hosts the entire stack as an independent platform with its own
+trust root; such a platform does not federate with the FrameWorks platform.
 
 Cluster class, ownership, visibility, and access provenance are separate facts:
 

@@ -12,11 +12,9 @@ tags:
   - releases
 ---
 
-A broadcaster goes live in Europe. Someone opens the stream in the United States. Where should that viewer connect?
+When a broadcaster goes live in Europe and someone opens the stream in the United States, that viewer is usually routed to a healthy US edge, not to an edge near whichever Foghorn instance answered the routing request. The Foghorn that answers does not get to decide what "nearby" means just because it received the request.
 
-Usually, to a healthy US edge. The stream may start in Europe, but the viewer does not live at the ingest point. And the Foghorn instance that answers the routing request should not decide what "nearby" means simply by being the one that picked up the phone.
-
-That distinction is at the heart of media placement: where a request is answered, where a stream originates, and where a viewer receives it are three different places.
+Media placement treats three locations separately: where a request is answered, where a stream originates, and where a viewer receives it.
 
 ## From federation to a placement decision
 
@@ -24,53 +22,47 @@ That distinction is at the heart of media placement: where a request is answered
 
 The routing path now compares eligible edges using the same facts everywhere: health, usable capacity, distance, and whether the stream is already available there or needs a source connection. A cluster boundary is not a distance penalty. An edge in Virginia does not become less attractive to a viewer in Virginia because the request happened to reach an EU coordinator.
 
-When the chosen edge needs the stream, its owning Foghorn arranges the source path. The destination stays the destination. The first viewer may pay some setup latency; later viewers reuse the stream there. If the edge cannot accept the work, the resolver moves to the next permitted candidate rather than quietly substituting a node local to whichever coordinator answered. DNS can make reaching the platform faster, but a sensible answer no longer depends on the viewer arriving at the "right" Foghorn first.
+When the chosen edge needs the stream, its owning Foghorn arranges the source path. The first viewer may pay some setup latency; later viewers reuse the stream there. If the edge cannot accept the work, the resolver moves to the next permitted candidate rather than quietly substituting a node local to whichever coordinator answered. DNS can make reaching the platform faster, but a sensible answer no longer depends on the viewer arriving at the "right" Foghorn first.
 
 ## Nearby is only part of the answer
 
-There is another perfectly reasonable answer to the same routing question: "Use my servers."
-
-Perhaps you have already paid for capacity in your own rack. You want it used first, with spillover only when it is full or too far from the audience. Perhaps you never want platform-official media capacity used. Or perhaps a marketplace operator offers a better price within the regions you care about.
+Some accounts want a different rule: use their own servers first and spill over only when those are full or too far from the audience, never use platform-official media capacity, or prefer a marketplace operator that offers a better price within the regions they care about.
 
 Placement policies make those choices explicit. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
 
-That split also keeps source types honest. Push streams have publisher placement and stream keys.
+Each source type keeps its own rules. Push streams have publisher placement and stream keys.
 Pull streams have upstream-source pins plus viewer placement. Deployment-managed loops and local
 feeds keep their operator-owned source location while viewer policy decides where audiences are
-served. A local source is not disguised as a publisher just to fit the UI.
+served. A local source is not modelled as a publisher.
 
-"Prefer" and "never" mean different things. A preference can have a fallback. A prohibition cannot be outscored by a closer edge. If a private-only policy has no available private capacity, the answer is unavailable, not a surprise move onto paid capacity. A geographic hole is a configured distance threshold, not a guess based on a continent label.
+"Prefer" and "never" mean different things. A preference can have a fallback. A prohibition applies even when a closer edge is available. If a private-only policy has no available private capacity, the stream is reported unavailable rather than moved onto paid capacity. A geographic gap is defined by a configured distance threshold, not inferred from a continent label.
 
 ## Decisions you can inspect
 
-The choice is two-sided. You can prefer a cluster without being allowed to use it, and a cluster owner can offer viewer capacity without accepting publishers. Owner controls separate ingest, viewer serving, and receiving sources from other clusters. Review shows the intended change; rollout shows whether the required recipients have applied it. A saved rule is not a claim that every connection already follows it.
+The choice is two-sided. You can prefer a cluster without being allowed to use it, and a cluster owner can offer viewer capacity without accepting publishers. Owner controls separate ingest, viewer serving, and receiving sources from other clusters. Review shows the intended change; rollout shows whether the required recipients have applied it, since saving a rule does not mean every connection already follows it.
 
 A preview shows which capacity groups qualify, why a candidate was excluded, and which condition would permit spillover. The runtime decision records the policy revision and the chosen destination separately from the origin and the coordinator.
 
-Price comparisons use your effective pricing, not a number copied from a marketplace card. Unknown prices stay unknown. An estimated placement cost is not a promise about the final bill; billing still follows the work that actually happened.
+Price comparisons use your effective pricing, not a number copied from a marketplace card. When a price is not known, the comparison reports it as unknown instead of estimating one. An estimated placement cost is not a promise about the final bill; billing still follows the work that actually happened.
 
 ## Enforced where media actually starts
 
-A policy that only lives in the resolver is advice. Placement is enforced at the two points where media actually begins.
+Placement is enforced at two points: publisher admission and viewer admission.
 
 For publishers, MistServer now reports which connector accepted the connection as part of the push trigger itself. Foghorn evaluates ingest policy against that observed protocol, never against the URL the encoder sent, because the encoder controls that URL and RTMP lets a client label a connection however it likes. A publisher that lands on a node the policy forbids is refused after the claim is taken and the claim is released, so nothing is held for a session that never starts.
 
 For viewers, the same policy gate that prepared the destination admits the connection at the edge. A denied HLS request now gets a complete refusal and a closed connection instead of a response that never finishes, so players fail over instead of stalling.
 
-The same restrictions reach final admission through signed authority. A control-plane outage does not turn a deny into an allow, and it does not make distributed ownership disappear: an active publisher keeps its claim, and outage ingest has a single authorized owner. These are deliberate availability limits, not reasons to silently widen policy.
+The same restrictions reach final admission through signed authority. A control-plane outage does not turn a deny into an allow, and it does not make distributed ownership disappear: an active publisher keeps its claim, and outage ingest has a single authorized owner. During an outage, availability is limited rather than policy widened.
 
 ## Turning it on without a flag
 
-Signed authority carries the policy. That raises the obvious question: what happens to an edge cell that has not been updated yet?
-
-The answer is an attestation chain rather than a configuration knob. Every Foghorn replica records, in a shared ledger, whether it has installed placement enforcement. When a cell acknowledges a signed authority delivery, the acknowledging replica reports whether every live replica in that cell enforces the policy schema. The control plane issues the first policy-bearing authority to an account only when every cell that serves it has attested. Until then the account keeps its previous authority, and each newly ready cell queues the accounts it still holds on the old schema. Once issued, policy never rolls back; a later grant on a cell that cannot enforce it is refused instead.
+Signed authority carries the policy. Edge cells that have not been upgraded yet are handled by attestation, not a configuration flag. Every Foghorn replica records, in a shared ledger, whether it has installed placement enforcement. When a cell acknowledges a signed authority delivery, the acknowledging replica reports whether every live replica in that cell enforces the policy schema. The control plane issues the first policy-bearing authority to an account only when every cell that serves it has attested. Until then the account keeps its previous authority, and each newly ready cell queues the accounts it still holds on the old schema. Once issued, policy never rolls back; a later grant on a cell that cannot enforce it is refused instead.
 
 ## Next: where media rests, and where work runs
 
 This release's placement work concerns ingest and delivery. Durable storage and processing placement are separate engines on the roadmap.
 
-They build on the same idea, state the constraints, compare eligible capacity, explain the choice, but have different responsibilities. Storage must track copies, durability, retention and safe removal. Processing must match a job to compatible hardware, capacity and execution cost.
+They follow the same approach (state the constraints, compare eligible capacity, explain the choice) but have different responsibilities. Storage must track copies, durability, retention and safe removal. Processing must match a job to compatible hardware, capacity and execution cost.
 
-Together, those future pieces can enable regional recording policies, hot and cold storage tiers, and choosing suitable processing capacity by location or cost. A viewer-serving rule does not already control those things. They are what comes next.
-
-The direction is straightforward: your infrastructure choices should be actual rules the platform follows, not assumptions hidden inside a load-balancing score.
+Together, those future pieces can enable regional recording policies, hot and cold storage tiers, and choosing suitable processing capacity by location or cost. Viewer-serving rules do not control storage or processing today.

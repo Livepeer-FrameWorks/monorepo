@@ -1,0 +1,520 @@
+---
+title: Types G-L
+description: Generated public GraphQL type definitions.
+---
+
+[GraphQL schema reference](/builders/api-schema/) · Only types reachable from public entry points are shown.
+
+## GeoBucket
+
+**object**
+
+- **h3Index**: `String!`
+- **resolution**: `Int!`
+
+## GeographicDistribution
+
+**object**
+
+- **timeRange**: `TimeRange!` ([TimeRange](/builders/api-schema/types-s-z/#timerange))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **topCountries**: `[CountryMetric!]!` ([CountryMetric](/builders/api-schema/types-a-f/#countrymetric))
+- **topCities**: `[CityMetric!]!` ([CityMetric](/builders/api-schema/types-a-f/#citymetric))
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **totalViewers**: `Int!`
+- **viewersByCountry**: `[CountryTimeSeries!]!` ([CountryTimeSeries](/builders/api-schema/types-a-f/#countrytimeseries))
+
+## Incident
+
+**object**
+
+- **id**: `ID!`
+- **scope**: `IncidentScope!` ([IncidentScope](/builders/api-schema/types-g-l/#incidentscope))
+- **tenantId**: `ID` — Null for platform-scope incidents.
+- **clusterId**: `String`
+- **region**: `String`
+- **alertname**: `String!`
+- **severity**: `String!`
+- **status**: `IncidentStatus!` ([IncidentStatus](/builders/api-schema/types-g-l/#incidentstatus))
+- **resolution**: `IncidentResolution` ([IncidentResolution](/builders/api-schema/types-g-l/#incidentresolution)) — Null until the incident is resolved.
+- **title**: `String!`
+- **summary**: `String`
+- **firingAlertCount**: `Int!` — Alerts of this incident that are still firing.
+- **startedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **lastAlertAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **acknowledgedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **acknowledgedBy**: `ID`
+- **assignedTo**: `ID`
+- **resolvedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **resolvedBy**: `ID`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## IncidentAlert
+
+**object**
+
+- **fingerprint**: `String!`
+- **status**: `String!` — firing or resolved.
+- **labels**: `JSON!` ([JSON](/builders/api-schema/types-g-l/#json))
+- **annotations**: `JSON!` ([JSON](/builders/api-schema/types-g-l/#json))
+- **startsAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **endsAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **generatorUrl**: `String`
+
+## IncidentDetail
+
+**object**
+
+- **incident**: `Incident!` ([Incident](/builders/api-schema/types-g-l/#incident))
+- **alerts**: `[IncidentAlert!]!` ([IncidentAlert](/builders/api-schema/types-g-l/#incidentalert))
+- **timeline**: `[IncidentTimelineEvent!]!` ([IncidentTimelineEvent](/builders/api-schema/types-g-l/#incidenttimelineevent)) — Oldest first.
+
+## IncidentEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Incident!` ([Incident](/builders/api-schema/types-g-l/#incident))
+
+## IncidentEventKind
+
+**enum**
+
+- `ALERT_FIRING`
+- `ALERT_RESOLVED`
+- `ACKNOWLEDGED`
+- `ASSIGNED`
+- `NOTE`
+- `RESOLVED`
+- `INVESTIGATION_ATTACHED`
+- `NOTIFIED`
+- `SCOPE_CHANGED` — The incident&#39;s visibility moved after its cluster owner was confirmed.
+
+## IncidentFilterInput
+
+**input_object**
+
+- **statuses**: `[IncidentStatus!]` ([IncidentStatus](/builders/api-schema/types-g-l/#incidentstatus)) — Empty or omitted matches every status.
+- **clusterId**: `String`
+
+## IncidentMutationResult
+
+**union**
+
+- Member: [Incident](/builders/api-schema/types-g-l/#incident)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## IncidentResolution
+
+**enum**
+
+- `AUTO` — Every alert of the incident resolved.
+- `MANUAL` — A user resolved the incident.
+
+## IncidentScope
+
+**enum**
+
+- `PLATFORM` — Platform infrastructure; visible to platform operators only.
+- `TENANT` — A cluster owned by one tenant; visible to that tenant and platform operators.
+
+## IncidentStatus
+
+**enum**
+
+- `FIRING`
+- `ACKNOWLEDGED`
+- `RESOLVED`
+
+## IncidentTimelineEvent
+
+**object**
+
+- **id**: `ID!`
+- **kind**: `IncidentEventKind!` ([IncidentEventKind](/builders/api-schema/types-g-l/#incidenteventkind))
+- **actorUserId**: `ID` — Null for events produced by alerting or services.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **note**: `String` — NOTE events.
+- **assignedTo**: `ID` — ASSIGNED events; null clears the assignment.
+- **reportId**: `ID` — INVESTIGATION_ATTACHED events: the Skipper report.
+- **channel**: `String` — NOTIFIED events: email, slack, or discord.
+- **resolution**: `IncidentResolution` ([IncidentResolution](/builders/api-schema/types-g-l/#incidentresolution)) — RESOLVED events.
+- **alertFingerprint**: `String` — ALERT_FIRING and ALERT_RESOLVED events.
+- **alertname**: `String` — ALERT_FIRING and ALERT_RESOLVED events.
+
+## IncidentUpdatedEvent
+
+**object**
+
+Change to an incident the subscriber can see.
+
+- **incidentId**: `ID!`
+- **clusterId**: `String`
+- **status**: `IncidentStatus!` ([IncidentStatus](/builders/api-schema/types-g-l/#incidentstatus))
+- **severity**: `String!`
+- **title**: `String!`
+- **change**: `String!` — Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## IncidentsConnection
+
+**object**
+
+- **edges**: `[IncidentEdge!]!` ([IncidentEdge](/builders/api-schema/types-g-l/#incidentedge))
+- **nodes**: `[Incident!]!` ([Incident](/builders/api-schema/types-g-l/#incident))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## InfrastructureNode
+
+**object**
+
+An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers.
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **nodeId**: `String!` — Internal node identifier (UUID).
+- **clusterId**: `String!` — Cluster this node belongs to.
+- **nodeName**: `String!` — Human-readable node name.
+- **nodeType**: `String!` — Node role (edge, origin, transcoder, hybrid).
+- **internalIp**: `String` — Private network IP address.
+- **externalIp**: `String` — Public IP address for external access.
+- **wireguardIp**: `String` — WireGuard mesh network IP.
+- **wireguardPublicKey**: `String` — WireGuard public key for mesh peering.
+- **region**: `String` — Geographic region (us-east, eu-west, etc.).
+- **latitude**: `Float` — GPS latitude.
+- **longitude**: `Float` — GPS longitude.
+- **availabilityZone**: `String` — Availability zone within region.
+- **cpuCores**: `Int` — Number of CPU cores.
+- **memoryGb**: `Int` — Memory in gigabytes.
+- **diskGb**: `Int` — Disk storage in gigabytes.
+- **lastHeartbeat**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Last heartbeat timestamp from node agent.
+- **tags**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json)) — Custom tags for node organization.
+- **metadata**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json)) — Additional node metadata.
+- **createdAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the node was registered.
+- **updatedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the node was last updated.
+- **metricsConnection**: `NodeMetricsConnection!` ([NodeMetricsConnection](/builders/api-schema/types-m-r/#nodemetricsconnection)) — Paginated time-series metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+- **metrics1hConnection**: `NodeMetrics1hConnection!` ([NodeMetrics1hConnection](/builders/api-schema/types-m-r/#nodemetrics1hconnection)) — Hourly aggregated metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+- **liveState**: `LiveNode` ([LiveNode](/builders/api-schema/types-g-l/#livenode)) — Real-time state from the analytics data plane.
+- **effectiveMode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/types-m-r/#nodeoperationalmode)) — Current operational mode (normal / draining / maintenance). Read from Foghorn&#39;s per-node heartbeat. Changes via setNodeMode.
+- **routingImpactPreview**: `RoutingImpactPreview!` ([RoutingImpactPreview](/builders/api-schema/types-m-r/#routingimpactpreview)) — Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn&#39;s GetNodeHealth.
+
+## IngestEndpoint
+
+**object**
+
+- **nodeId**: `String!`
+- **baseUrl**: `String!`
+- **whipUrl**: `String`
+- **rtmpUrl**: `String`
+- **srtUrl**: `String`
+- **region**: `String`
+- **loadScore**: `Float`
+- **kind**: `IngestEndpointKind!` ([IngestEndpointKind](/builders/api-schema/types-g-l/#ingestendpointkind))
+- **clusterId**: `String!`
+
+## IngestEndpointKind
+
+**enum**
+
+- `INGEST_ENDPOINT_KIND_UNSPECIFIED`
+- `INGEST_ENDPOINT_KIND_TENANT_ALIAS`
+- `INGEST_ENDPOINT_KIND_ROOT_POOL`
+- `INGEST_ENDPOINT_KIND_CLUSTER_POOL`
+- `INGEST_ENDPOINT_KIND_NODE_SPECIFIC`
+
+## IngestEndpointResponse
+
+**object**
+
+- **primary**: `IngestEndpoint!` ([IngestEndpoint](/builders/api-schema/types-g-l/#ingestendpoint))
+- **fallbacks**: `[IngestEndpoint!]!` ([IngestEndpoint](/builders/api-schema/types-g-l/#ingestendpoint))
+- **metadata**: `IngestMetadata` ([IngestMetadata](/builders/api-schema/types-g-l/#ingestmetadata))
+
+## IngestMetadata
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **streamKey**: `String!`
+- **tenantId**: `String!`
+- **recordingEnabled**: `Boolean!`
+- **title**: `String`
+- **description**: `String`
+
+## IngestMode
+
+**enum**
+
+How source media enters a stream.
+
+- `PUSH` — An encoder pushes RTMP/E-RTMP, SRT, or WHIP into FrameWorks.
+- `PULL` — FrameWorks pulls from a configured upstream URI.
+- `MANAGED` — An operator-managed file, playlist, or process supplies the stream source.
+
+## InstanceStatus
+
+**enum**
+
+Service instance lifecycle status.
+
+- `RUNNING` — Service is running and healthy.
+- `STARTING` — Service is starting up.
+- `STOPPING` — Service is shutting down.
+- `STOPPED` — Service is stopped.
+- `ERROR` — Service encountered an error.
+- `UNKNOWN` — Service status unknown.
+
+## Invoice
+
+**object**
+
+A billing invoice for a subscription period. Includes base subscription and metered usage charges. Amounts are computed in EUR; a finalized invoice is presented and charged in the tenant&#39;s presentment currency at the ECB rate of its finalization date.
+
+- **id**: `ID!` — Unique invoice identifier.
+- **amount**: `Money!` ([Money](/builders/api-schema/types-m-r/#money)) — Total amount due in EUR (after credits applied).
+- **baseAmount**: `Money!` ([Money](/builders/api-schema/types-m-r/#money)) — Base subscription amount in EUR.
+- **meteredAmount**: `Money!` ([Money](/builders/api-schema/types-m-r/#money)) — Metered usage charges in EUR (net; 0 while usage is waived during beta).
+- **grossMeteredAmount**: `Money!` ([Money](/builders/api-schema/types-m-r/#money)) — Unwaived metered total — what usage would have cost. Equals meteredAmount when usage is not waived; the would-have-cost figure when it is.
+- **prepaidCreditApplied**: `Money!` ([Money](/builders/api-schema/types-m-r/#money)) — Prepaid balance credit applied to this invoice, in EUR.
+- **currency**: `Currency!` ([Currency](/builders/api-schema/types-a-f/#currency)) — Currency of the amounts above, EUR.
+- **presentmentAmountCents**: `Int` — Total charged, in cents of `presentmentCurrency`. Null until the invoice is finalized.
+- **presentmentCurrency**: `String` — Currency the invoice is presented and charged in (EUR, USD, GBP). Empty until the invoice is finalized.
+- **presentmentUnitsPerEur**: `String` — Units of `presentmentCurrency` one euro buys at finalization, as a decimal string. Empty until the invoice is finalized.
+- **presentmentReferenceDate**: `String` — ECB reference date of the presentment rate (YYYY-MM-DD). Empty until the invoice is finalized.
+- **finalizedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the invoice was finalized and its presentment amount fixed.
+- **status**: `InvoiceStatus!` ([InvoiceStatus](/builders/api-schema/types-g-l/#invoicestatus)) — Invoice status (draft, open, paid, void).
+- **dueDate**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — Payment due date.
+- **paidAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When payment was received.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When the invoice was created.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When the invoice was last updated.
+- **periodStart**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Billing period start date.
+- **periodEnd**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Billing period end date.
+- **usageDetails**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json)) — Detailed usage breakdown (JSON).
+- **lineItems**: `[LineItem!]!` ([LineItem](/builders/api-schema/types-g-l/#lineitem)) — Individual line items on the invoice.
+
+## InvoiceCreated
+
+**object**
+
+`billing.invoice_created` event. Aggregate: `invoices`.
+
+- **invoiceId**: `ID!`
+- **amountDue**: `EventMoney` ([EventMoney](/builders/api-schema/types-a-f/#eventmoney))
+- **periodStart**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **dueAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+
+## InvoiceEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Invoice!` ([Invoice](/builders/api-schema/types-g-l/#invoice))
+
+## InvoicePaid
+
+**object**
+
+`billing.invoice_paid` event. Aggregate: `invoices`.
+
+- **invoiceId**: `ID!`
+- **amountPaid**: `EventMoney` ([EventMoney](/builders/api-schema/types-a-f/#eventmoney))
+
+## InvoicePayment
+
+**object**
+
+A tenant-visible invoice payment record. Provider secrets and raw payloads are never exposed.
+
+- **id**: `ID!`
+- **invoiceId**: `ID!`
+- **method**: `String!`
+- **amount**: `Money!` ([Money](/builders/api-schema/types-m-r/#money))
+- **currency**: `Currency!` ([Currency](/builders/api-schema/types-a-f/#currency))
+- **status**: `String!`
+- **confirmedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/types-a-f/#currencyconversion)) — Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation.
+
+## InvoicePaymentEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `InvoicePayment!` ([InvoicePayment](/builders/api-schema/types-g-l/#invoicepayment))
+
+## InvoicePaymentsConnection
+
+**object**
+
+- **edges**: `[InvoicePaymentEdge!]!` ([InvoicePaymentEdge](/builders/api-schema/types-g-l/#invoicepaymentedge))
+- **nodes**: `[InvoicePayment!]!` ([InvoicePayment](/builders/api-schema/types-g-l/#invoicepayment))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## InvoiceStatus
+
+**enum**
+
+Invoice lifecycle status.
+
+- `DRAFT` — Invoice being prepared, not yet sent.
+- `PENDING` — Invoice sent, awaiting payment.
+- `PAID` — Invoice paid in full.
+- `OVERDUE` — Payment past due date.
+- `FAILED` — Payment processing failed.
+- `MANUAL_REVIEW` — Invoice requires operator review and cannot be paid.
+- `CANCELLED` — Invoice cancelled.
+
+## InvoicesConnection
+
+**object**
+
+- **edges**: `[InvoiceEdge!]!` ([InvoiceEdge](/builders/api-schema/types-g-l/#invoiceedge))
+- **nodes**: `[Invoice!]!` ([Invoice](/builders/api-schema/types-g-l/#invoice))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## JSON
+
+**scalar**
+
+## LineItem
+
+**object**
+
+A single line item on an invoice or usage preview, produced by the rating engine. Decimal quantities are strings to preserve precision.
+
+- **lineKey**: `String!` — Stable identity: &#39;base_subscription&#39;, &#39;meter:&lt;name&gt;:&lt;cluster_id&gt;:&lt;yyyymm&gt;&#39;.
+- **meter**: `String!` — Meter name; empty for base_subscription.
+- **description**: `String!` — Description of the charge.
+- **quantity**: `String!` — Total quantity used (decimal as string).
+- **includedQuantity**: `String!` — Free quantity (decimal as string).
+- **billableQuantity**: `String!` — Billable quantity (decimal as string).
+- **unitPrice**: `String!` — Price per unit (decimal as string).
+- **total**: `String!` — Total for this line item (= billableQuantity * unitPrice), decimal as string.
+- **currency**: `String!` — Currency (ISO 4217).
+- **clusterId**: `String` — Cluster id this line was attributed to; null for tenant-scoped lines (base_subscription).
+- **clusterName**: `String` — Display name of the cluster, joined from Quartermaster at read time. Null when clusterId is null.
+- **clusterKind**: `String` — platform_official &#124; tenant_private &#124; third_party_marketplace; null when clusterId is null.
+- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.
+- **pricingLabel**: `String!` — Human-readable label of pricingSource (e.g. &#39;Self-hosted (no charge)&#39;, &#39;Marketplace metered&#39;). Empty when not populated by the gateway.
+- **unit**: `String!` — Canonical quantity unit.
+- **dimensions**: `JSON!` ([JSON](/builders/api-schema/types-g-l/#json)) — Bounded pricing dimensions such as codec, rendition, backend, or model.
+
+## LinkEmailInput
+
+**input_object**
+
+Input for linking email to a wallet-only account.
+
+- **email**: `String!` — Email address to link.
+- **password**: `String!` — Password to set for email-based login.
+
+## LinkEmailPayload
+
+**object**
+
+Successful email link response.
+
+- **success**: `Boolean!` — Whether the operation succeeded.
+- **message**: `String!` — Human-readable status message.
+- **verificationSent**: `Boolean!` — Whether a verification email was sent.
+
+## LinkEmailResult
+
+**union**
+
+- Member: [LinkEmailPayload](/builders/api-schema/types-g-l/#linkemailpayload)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## LinkWalletResult
+
+**union**
+
+- Member: [WalletIdentity](/builders/api-schema/types-s-z/#walletidentity)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## LiveNode
+
+**object**
+
+- **nodeId**: `String!`
+- **tenantId**: `ID!`
+- **cpuPercent**: `Float!`
+- **ramUsedBytes**: `Float!` — Used memory in MiB (field name is historical).
+- **ramTotalBytes**: `Float!` — Total memory in MiB (field name is historical).
+- **diskUsedBytes**: `Float!`
+- **diskTotalBytes**: `Float!`
+- **upSpeed**: `Float!`
+- **downSpeed**: `Float!`
+- **activeStreams**: `Int!`
+- **isHealthy**: `Boolean!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **location**: `String!`
+- **metadata**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## LiveUsageSummary
+
+**object**
+
+- **tenantId**: `String`
+- **periodStart**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamHours**: `Float!`
+- **egressGb**: `Float!`
+- **peakBandwidthMbps**: `Float!`
+- **displayStorageGb**: `Float!`
+- **livepeerH264Seconds**: `Float!`
+- **livepeerVp9Seconds**: `Float!`
+- **livepeerAv1Seconds**: `Float!`
+- **livepeerHevcSeconds**: `Float!`
+- **nativeAvH264Seconds**: `Float!`
+- **nativeAvVp9Seconds**: `Float!`
+- **nativeAvAv1Seconds**: `Float!`
+- **nativeAvHevcSeconds**: `Float!`
+- **nativeAvAacSeconds**: `Float!`
+- **nativeAvOpusSeconds**: `Float!`
+- **totalStreams**: `Int!`
+- **totalViewers**: `Int!`
+- **viewerHours**: `Float!`
+- **maxViewers**: `Int!`
+- **uniqueUsers**: `Int!`
+- **livepeerSegmentCount**: `Int!`
+- **livepeerUniqueStreams**: `Int!`
+- **nativeAvSegmentCount**: `Int!`
+- **nativeAvUniqueStreams**: `Int!`
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **geoBreakdown**: `[CountryMetrics!]!` ([CountryMetrics](/builders/api-schema/types-a-f/#countrymetrics))
+- **clipsCreated**: `Int!`
+- **clipsDeleted**: `Int!`
+- **dvrCreated**: `Int!`
+- **dvrDeleted**: `Int!`
+- **vodCreated**: `Int!`
+- **vodDeleted**: `Int!`
+- **clipBytes**: `Int!`
+- **dvrBytes**: `Int!`
+- **vodBytes**: `Int!`
+- **frozenClipBytes**: `Int!`
+- **frozenDvrBytes**: `Int!`
+- **frozenVodBytes**: `Int!`
+- **syncedArtifactCount**: `Int!`
+- **syncedArtifactBytes**: `Int!`

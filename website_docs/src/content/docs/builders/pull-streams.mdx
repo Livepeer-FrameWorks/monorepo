@@ -13,8 +13,9 @@ media edge opens that source when playback needs it.
 
 The payoff is operational: you can onboard venue cameras, contribution feeds, and existing origins
 without asking every source to become a FrameWorks encoder. Pull input also composes with the rest
-of the platform — playback access control, DVR, clips, thumbnails, analytics, and multistreaming all
-attach to the stream once media is active.
+of the platform: playback access control, DVR, clips, thumbnails, and analytics attach to the
+stream once media is active. Multistreaming does not: push targets start only for streams whose
+encoder pushes to FrameWorks.
 
 Use pull-input streams when:
 
@@ -297,7 +298,10 @@ query PullSourceEvents($id: ID!) {
 ```
 
 `eventKind` is one of `resolved`, `not_found`, `disabled`, `blocked_uri`,
-`private_not_allowed`, `commodore_error`, or `foghorn_base_unresolved`. These are source
+`cluster_not_allowed_delegate`, `commodore_error`, or `foghorn_base_unresolved`.
+`cluster_not_allowed_delegate` means the source location does not allow the requesting edge to dial
+the upstream, so that edge tries to relay the stream from an allowed cluster that is already
+pulling it. These are source
 resolution events: they explain whether Foghorn handed MistServer a source. Upstream
 connect/disconnect/retry telemetry depends on MistServer emitting additional trigger types.
 
@@ -318,8 +322,11 @@ Once media is active, pull streams behave like push streams:
 
 - [Playback access control](/builders/playback-access-control) can gate viewers with JWT or webhook policies.
 - [Recording and DVR](/builders/recordings) work with the same stream-level recording flag.
-- [Multistreaming](/builders/multistreaming) can push the pulled source onward to RTMP targets.
 - [Thumbnails and previews](/builders/thumbnails-and-previews) use the same generation pipeline.
+
+[Multistreaming](/builders/multistreaming) is not supported for pull streams. Push targets are
+loaded and started only when an encoder pushes to the stream, so targets configured on a pull
+stream never start.
 
 For a lower-level service map, see the architecture note in
 [`docs/architecture/pull-streams.md`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/pull-streams.md).

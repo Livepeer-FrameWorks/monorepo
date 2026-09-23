@@ -23,7 +23,7 @@ manifest-driven. Treat these sources as authoritative for the current release:
 | BYO edge deployment workflow                        | `frameworks setup`, `frameworks login`, and `frameworks edge deploy --help`                                    |
 | Cluster shape, hosts, service placement, DNS inputs | [Cluster Manifest](/operators/cluster-manifest)                                                                |
 | Manifest resolution and provisioning behavior       | `cli/pkg/inventory/`, `cli/cmd/cluster_provision*.go`, `cli/pkg/orchestrator/`, `cli/pkg/provisioner/`         |
-| Ansible-backed infrastructure roles                 | [Ansible Provisioning](/operators/ansible-provisioning) and `ops/ansible/`                                     |
+| Ansible-backed infrastructure roles                 | [Ansible Provisioning](/operators/ansible-provisioning) and `ansible/`                                         |
 | Public DNS service types and labels                 | [DNS and Cluster Routing](/operators/dns) and `pkg/dns/public_services.go`                                     |
 | Base environment inputs and derived runtime values  | [External Services](/operators/external-services), `config/env/base.env`, and `config/env/secrets.env.example` |
 | PostgreSQL/YugabyteDB schemas and migrations        | [Postgres Migrations](/operators/postgres-migrations) and `pkg/database/sql/`                                  |

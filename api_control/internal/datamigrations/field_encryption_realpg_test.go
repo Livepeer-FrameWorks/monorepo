@@ -3,10 +3,12 @@
 package datamigrations
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +201,112 @@ func TestFieldEncryptionKeysetSweepAndVerify_RealPG(t *testing.T) {
 		}
 		if candidateExists(retryAfter) {
 			t.Fatal("retry sweep re-admitted a failure already observed during its epoch")
+		}
+		if _, err := db.Exec(`DELETE FROM commodore.field_encryption_quarantine WHERE table_name = $1`, spec.table); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("dry run names undecryptable rows and verify lists quarantine", func(t *testing.T) {
+		const (
+			tenantID = "91000000-0000-4000-8000-000000000001"
+			userID   = "92000000-0000-4000-8000-000000000001"
+			streamID = "93000000-0000-4000-8000-000000000001"
+			firstID  = "90000000-0000-4000-8000-000000000001"
+			targetID = "94000000-0000-4000-8000-000000000001"
+		)
+		retired, err := fieldcrypt.NewFieldKeyring("retired", []byte("retired-field-key-material-32-bytes"), nil, nil, "push-target-uri")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := retired.Encrypt("rtmps://example.test/live/unknown-key-secret")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, seed := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO commodore.users (id, tenant_id, email, password_hash) VALUES ($1, $2, 'unknown-key@example.test', 'x')`, []any{userID, tenantID}},
+			{`INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title) VALUES ($1, $2, $3, 'unknown-key-key', 'unknown-key-playback', 'unknown-key-live', 'Unknown key')`, []any{streamID, tenantID, userID}},
+			// Sorts ahead of targetID and decrypts, so with --batch-size 1 the
+			// failing row is only reached on the second page.
+			{`INSERT INTO commodore.push_targets (id, tenant_id, stream_id, platform, name, target_uri) VALUES ($1, $2, $3, 'custom', 'Plaintext', 'rtmps://example.test/live/plaintext')`, []any{firstID, tenantID, streamID}},
+			{`INSERT INTO commodore.push_targets (id, tenant_id, stream_id, platform, name, target_uri) VALUES ($1, $2, $3, 'custom', 'Unknown key', $4)`, []any{targetID, tenantID, streamID, stored}},
+		} {
+			if _, seedErr := db.ExecContext(context.Background(), seed.query, seed.args...); seedErr != nil {
+				t.Fatal(seedErr)
+			}
+		}
+
+		// Register a copy bound to this test's settings under a distinct ID; the
+		// report must come from the production registration.
+		if datamigrate.Lookup(FieldEncryptionID) == nil {
+			registerFieldEncryption(settings)
+		}
+		registered := datamigrate.Lookup(FieldEncryptionID)
+		if registered.Report == nil {
+			t.Fatal("field-encryption migration registers no verify report")
+		}
+		testID := FieldEncryptionID + "_realpg_output"
+		if datamigrate.Lookup(testID) == nil {
+			datamigrate.Register(datamigrate.Migration{
+				ID: testID, Service: "commodore", IntroducedIn: registered.IntroducedIn,
+				Run: func(ctx context.Context, migrationDB datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {
+					return runFieldEncryption(ctx, migrationDB, opts, settings)
+				},
+				Verify: func(ctx context.Context, migrationDB datamigrate.DB) error {
+					return verifyFieldEncryption(ctx, migrationDB, settings)
+				},
+				Report: registered.Report,
+			})
+		}
+		openDB := func() (*sql.DB, error) { return db, nil }
+
+		var dryOut bytes.Buffer
+		if err := datamigrate.HandleRun(context.Background(), openDB, &dryOut, []string{testID, "--batch-size", "1", "--dry-run"}); err != nil {
+			t.Fatalf("dry run: %v\n%s", err, dryOut.String())
+		}
+		wantFinding := fmt.Sprintf("undecryptable table=commodore.push_targets column=target_uri row_id=%s error=unknown_key_id key_id=retired", targetID)
+		if !strings.Contains(dryOut.String(), wantFinding) || !strings.Contains(dryOut.String(), "findings: showing 1 of 1") ||
+			!strings.Contains(dryOut.String(), "scanned table=commodore.push_targets column=target_uri rows=2 undecryptable=1") ||
+			!strings.Contains(dryOut.String(), "scanned table=commodore.dvr_recordings column=playback_webhook_secret_enc rows=0 undecryptable=0") {
+			t.Fatalf("dry run did not name the undecryptable row:\n%s", dryOut.String())
+		}
+		if strings.Contains(dryOut.String(), stored) || strings.Contains(dryOut.String(), "unknown-key-secret") {
+			t.Fatalf("dry run leaked field material:\n%s", dryOut.String())
+		}
+		var quarantined int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM commodore.field_encryption_quarantine WHERE row_id = $1`, targetID).Scan(&quarantined); err != nil {
+			t.Fatal(err)
+		}
+		var current string
+		if err := db.QueryRow(`SELECT target_uri FROM commodore.push_targets WHERE id = $1`, targetID).Scan(&current); err != nil {
+			t.Fatal(err)
+		}
+		if quarantined != 0 || current != stored {
+			t.Fatalf("dry run wrote: quarantine rows=%d value changed=%v", quarantined, current != stored)
+		}
+
+		progress := datamigrate.Progress{}
+		for attempt := 0; !progress.Done; attempt++ {
+			if attempt > 5 {
+				t.Fatalf("real run did not finish: %+v", progress)
+			}
+			progress, err = runFieldEncryption(context.Background(), db, datamigrate.RunOptions{BatchSize: 100, Checkpoint: progress.Checkpoint}, settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		var verifyOut bytes.Buffer
+		verifyErr := datamigrate.HandleVerify(context.Background(), openDB, &verifyOut, []string{testID})
+		if verifyErr == nil || !strings.Contains(verifyErr.Error(), "1 quarantined rows") {
+			t.Fatalf("verify did not fail on the quarantined row: %v\n%s", verifyErr, verifyOut.String())
+		}
+		wantRow := fmt.Sprintf("table=commodore.push_targets column=target_uri row_id=%s error_code=decrypt_failed attempts=1 last_observed_at=", targetID)
+		if !strings.Contains(verifyOut.String(), "field-encryption quarantine: showing 1 of 1") || !strings.Contains(verifyOut.String(), wantRow) {
+			t.Fatalf("verify did not list the quarantined row:\n%s", verifyOut.String())
 		}
 	})
 }

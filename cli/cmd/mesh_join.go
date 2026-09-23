@@ -137,7 +137,7 @@ bring up wg0. Tail the journal to watch the handshake:
 		},
 	}
 
-	cmd.Flags().StringVar(&token, "token", "", "bootstrap token minted by `frameworks admin bootstrap-token create` (required)")
+	cmd.Flags().StringVar(&token, "token", "", "bootstrap token minted by `frameworks admin bootstrap-tokens create` (required)")
 	cmd.Flags().StringVar(&bootstrapAddr, "bootstrap-addr", "", "public Bridge URL the node reaches to enroll (required)")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "node name to register (defaults to the SSH target address)")
 	cmd.Flags().StringVar(&nodeType, "node-type", "core", "node_type to register under")

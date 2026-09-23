@@ -184,6 +184,32 @@ func TestSessionServerNameUsesInternalServiceDNS(t *testing.T) {
 	}
 }
 
+// A per-cell entry (foghorn-eu) is served by a foghorn.internal leaf, so its
+// target names that certificate rather than the entry key.
+func TestSessionServerNameOverrideForPerCellEntry(t *testing.T) {
+	t.Parallel()
+	mf := newTestManifest()
+	mf.Services["foghorn-eu"] = inventory.ServiceConfig{Host: "central", GRPCPort: 18019}
+	sess, _ := OpenSession(Options{Manifest: mf})
+	t.Cleanup(func() { _ = sess.Close() })
+	var remotePort int
+	sess.openTunnel = func(_ context.Context, opts ssh.LocalForwardOptions) (*ssh.Tunnel, error) {
+		remotePort = opts.RemotePort
+		return fakeTunnel("127.0.0.1:31001", opts.RemotePort), nil
+	}
+
+	ep, err := sess.Endpoint(context.Background(), ServiceTarget{Name: "foghorn-eu", DefaultGRPCPort: 18019, ServerName: "foghorn.internal"})
+	if err != nil {
+		t.Fatalf("Endpoint: %v", err)
+	}
+	if ep.ServerName != "foghorn.internal" {
+		t.Fatalf("ServerName = %q, want foghorn.internal", ep.ServerName)
+	}
+	if remotePort != 18019 {
+		t.Fatalf("remote port = %d, want 18019", remotePort)
+	}
+}
+
 func TestSessionInsecureEndpointOmitsServerName(t *testing.T) {
 	t.Parallel()
 	sess, _ := OpenSession(Options{

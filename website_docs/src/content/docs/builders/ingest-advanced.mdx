@@ -36,28 +36,42 @@ Override default encoding parameters for fine-grained control:
 
 ```ts
 studio.setEncoderOverrides({
-  videoBitrate: 4_000_000, // 4 Mbps
-  videoFrameRate: 30,
-  keyFrameInterval: 60, // Keyframe every 2 seconds at 30fps
-  audioBitrate: 128_000, // 128 kbps
+  video: { width: 1920, height: 1080, bitrate: 4_000_000, framerate: 30 },
+  audio: { bitrate: 128_000, sampleRate: 48_000, numberOfChannels: 2 },
 });
 ```
 
-| Override           | Type     | Description                 |
-| ------------------ | -------- | --------------------------- |
-| `videoBitrate`     | `number` | Target video bitrate in bps |
-| `videoFrameRate`   | `number` | Target frame rate           |
-| `keyFrameInterval` | `number` | Frames between keyframes    |
-| `audioBitrate`     | `number` | Target audio bitrate in bps |
+| Override                 | Type     | Description                 |
+| ------------------------ | -------- | --------------------------- |
+| `video.width`            | `number` | Output width in pixels      |
+| `video.height`           | `number` | Output height in pixels     |
+| `video.bitrate`          | `number` | Target video bitrate in bps |
+| `video.framerate`        | `number` | Target frame rate           |
+| `audio.bitrate`          | `number` | Target audio bitrate in bps |
+| `audio.sampleRate`       | `number` | Audio sample rate in Hz     |
+| `audio.numberOfChannels` | `number` | Audio channel count         |
+
+Every field is optional; unset fields keep the quality profile's value. There is no keyframe-interval
+override.
 
 ## Audio Mixing
 
-When multiple sources are active, StreamCrafter automatically mixes their audio using the Web Audio API.
+With audio mixing enabled, StreamCrafter mixes the audio of all active sources through the Web
+Audio API. The React, Svelte, and Web Component drop-in components enable it. `createStreamCrafter()`
+and the `useStreamCrafterV2` / `createStreamCrafterContextV2` controllers leave it off unless you
+pass `audioMixing: true`:
+
+```ts
+const studio = createStreamCrafter({
+  whipUrl: "...",
+  audioMixing: true,
+});
+```
 
 ### Per-Source Volume
 
 ```ts
-// Set volume (0.0 to 1.0)
+// Volume ranges from 0 to 2 (1 = unchanged, 2 = 200% boost)
 studio.setSourceVolume("camera-1", 0.8);
 studio.setSourceVolume("screen-1", 0.3);
 
@@ -68,12 +82,16 @@ studio.setSourceMuted("camera-1", true);
 ### Master Volume
 
 ```ts
-studio.masterVolume = 0.5; // Affects all sources
+studio.masterVolume = 0.5; // 0 to 2; applies to the mixed output
 ```
+
+Master volume requires `audioMixing: true`. Without it, setting `masterVolume` does nothing and
+reading it returns `1`.
 
 ### Audio Processing
 
-The mixer applies basic audio processing to prevent clipping when mixing multiple sources. The output level is automatically normalized based on the number of active audio sources.
+The mixed output passes through a fixed compressor (threshold -24 dB, ratio 4:1) followed by a
+limiter at -1 dB to prevent clipping. Levels are not normalized by the number of sources.
 
 ## Reconnection
 
@@ -121,15 +139,9 @@ studio.reactiveState.on("reconnecting", (isReconnecting) => {
 ## Gateway Resolution
 
 The SDK can call the public `resolveIngestEndpoint` GraphQL field to resolve a WHIP endpoint from a
-stream key:
-
-```ts
-const studio = createStreamCrafter({
-  gatewayUrl: "%GATEWAY_URL%/graphql",
-  streamKey: "<YOUR_STREAM_KEY>",
-  profile: "broadcast",
-});
-```
+stream key. The React, Svelte, and Web Component drop-in components do this when given
+`gatewayUrl` and `streamKey` without a `whipUrl`. `createStreamCrafter()` requires a `whipUrl`, so
+resolve it first with `IngestClient` (see [Manual Gateway Resolution](#manual-gateway-resolution)).
 
 The resolver chooses an ingest node based on:
 
@@ -155,7 +167,7 @@ const client = new IngestClient({
   streamKey: "my-stream-key",
 });
 const endpoints = await client.resolve();
-const whipUrl = endpoints.primary?.whipUrl;
+const whipUrl = endpoints.primary.whipUrl;
 if (!whipUrl) throw new Error("No WHIP endpoint resolved");
 
 // Now use the resolved URL
@@ -167,10 +179,19 @@ const studio = createStreamCrafter({ whipUrl });
 ### Adding Sources
 
 ```ts
-// Camera with constraints
+// Camera with a specific device and quality profile
 await studio.startCamera({
-  video: { width: 1920, height: 1080, frameRate: 30 },
-  audio: true,
+  videoDeviceId: "<VIDEO_DEVICE_ID>",
+  audioDeviceId: "<AUDIO_DEVICE_ID>",
+  profile: "professional",
+});
+
+// Or pass raw MediaStreamConstraints
+await studio.startCamera({
+  customConstraints: {
+    video: { width: 1920, height: 1080, frameRate: 30 },
+    audio: true,
+  },
 });
 
 // Screen share with system audio
@@ -200,7 +221,7 @@ studio.removeSource("screen-1");
 ### Source Events
 
 ```ts
-studio.on("sourceAdded", (source) => {
+studio.on("sourceAdded", ({ source }) => {
   console.log("New source:", source.label);
 });
 
@@ -208,10 +229,13 @@ studio.on("sourceRemoved", ({ sourceId }) => {
   console.log("Removed:", sourceId);
 });
 
-studio.on("sourceUpdated", (source) => {
-  console.log("Updated:", source.id, source.volume, source.muted);
+studio.on("sourceUpdated", ({ source, changes }) => {
+  console.log("Updated:", source.id, changes);
 });
 ```
+
+`startCamera()` accepts `videoDeviceId`, `audioDeviceId`, `facingMode` (`"user"` or
+`"environment"`), `profile`, and `customConstraints`. Device IDs come from `await studio.devices`.
 
 ## Runtime Theming
 

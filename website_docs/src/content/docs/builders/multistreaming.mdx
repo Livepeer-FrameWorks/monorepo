@@ -11,8 +11,7 @@ Multistreaming lets you push a single live broadcast to multiple external platfo
 
 Each enabled live destination uses one slot from your existing viewer-capacity limit. There is no separate restream quota. Restream runtime and bytes are reported as delivered minutes and egress, while audience analytics continue to count human playback sessions only.
 
-That keeps the operational source of truth in one place: one ingest, one set of playback policies,
-one DVR archive, one analytics surface, and multiple distribution endpoints.
+Playback policy, DVR, and analytics stay on the single ingest; only distribution fans out.
 
 <Aside type="tip">
   Multistreaming uses native MistServer push, so FrameWorks does not add a re-encoding step. Each
@@ -44,18 +43,21 @@ operator-facing error detail.
 
 ## Supported platforms
 
-| Platform    | Configuration source                                       |
-| ----------- | ---------------------------------------------------------- |
-| Twitch      | Copy the current server URL and key from Creator Dashboard |
-| YouTube     | Copy them from Live Control Room                           |
-| Facebook    | Copy them from Live Producer                               |
-| Kick        | Copy them from Creator Dashboard                           |
-| X (Twitter) | Copy them from Media Studio or Producer                    |
-| Custom      | Supply a complete `rtmp://`, `rtmps://`, or `srt://` URI   |
+| Platform    | Dashboard preset ingest URL                                            | Key source                  |
+| ----------- | ---------------------------------------------------------------------- | --------------------------- |
+| Twitch      | `rtmp://live.twitch.tv/app/`                                           | Creator Dashboard           |
+| YouTube     | `rtmp://a.rtmp.youtube.com/live2/`                                     | Live Control Room           |
+| Facebook    | `rtmps://live-api-s.facebook.com:443/rtmp/`                            | Live Producer               |
+| Kick        | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/`           | Creator Dashboard           |
+| X (Twitter) | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/` | Media Studio or Producer    |
+| Custom      | None; supply a complete `rtmp://`, `rtmps://`, or `srt://` URI         | The destination's dashboard |
 
-Destination endpoints can change, so copy the current URL and stream key from the destination's
-own dashboard. FrameWorks stores the complete target URI; the platform preset only labels the
-destination.
+In the dashboard, a platform preset fixes the ingest URL shown above and asks only for the stream
+key; FrameWorks stores the preset URL followed by the key. If the destination gives you a different
+server URL (another region or ingest server), choose **Custom** and enter the complete URI.
+
+Through the API, you always supply the complete target URI. The `platform` value there is only a
+label for the destination and does not change the URI.
 
 <Aside type="caution">
   Your stream key for each platform is stored securely and masked in API responses. Never share your

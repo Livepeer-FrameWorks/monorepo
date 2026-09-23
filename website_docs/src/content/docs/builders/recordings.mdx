@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. FrameWorks keeps a single DVR session running per channel for as long as the stream is live, and segments that session into chapter artifacts you can replay by window, civil-time range, or explicit range. This page covers DVR replay, clips from the buffer, and direct VOD uploads.
+Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. FrameWorks keeps a single DVR session running per channel for as long as the stream is live, and, when chapters are enabled on the stream, segments that session into chapter artifacts. You find chapters by listing a UTC time range and replay each one by its playback ID. This page covers DVR replay, clips from the buffer, and direct VOD uploads.
 
 ```mermaid
 flowchart LR
@@ -29,7 +29,7 @@ flowchart LR
 
 ## DVR Recording
 
-DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the same recording remains available as a continuous archive, split into bounded chapter artifacts for replay.
+DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the recording is replayable only if chapters are enabled on the stream (they are off by default): it is then split into bounded chapter artifacts for replay.
 
 The recording model separates capture, live seeking, and archive replay:
 
@@ -93,7 +93,7 @@ Recording begins automatically when a stream with `record: true` goes live. You 
 
 ```graphql
 # Start recording
-mutation {
+mutation StartRecording {
   startDVR(streamId: "stream-global-id") {
     __typename
     ... on DVRRequest {
@@ -108,7 +108,7 @@ mutation {
 }
 
 # Stop recording
-mutation {
+mutation StopRecording {
   stopDVR(dvrHash: "dvr-hash") {
     __typename
     ... on DeleteSuccess {
@@ -137,7 +137,7 @@ MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
 With the Player SDK, use `contentType="dvr"` for the live DVR window. The player enables seeking, skip, and speed controls within the active window:
 
 ```tsx
-<Player contentType="dvr" contentId="pk_dvr_..." />
+<Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
 ### Live Time-Shift
@@ -164,22 +164,24 @@ For historical replay, FrameWorks splits the DVR archive into **chapter VOD arti
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
-Common chapter shapes:
+Chapters are off by default: a stream's `dvrChapterMode` is `NONE` until you set it. Common chapter shapes:
 
 | Shape                 | Use                                                                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Window-sized chapters | Sequential chapters sized to the stream's DVR window. Useful default for long recordings.                     |
+| Window-sized chapters | Sequential chapters sized to the stream's DVR window (`WINDOW_SIZED`).                                        |
 | Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB). |
 
-All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should resolve those boundaries before requesting the chapter.
+All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should convert them to a UTC range and list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
 #### Chapter API
 
 Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD and supply whatever authorization the parent DVR policy requires.
 
+`dvrChapter` finds a chapter only when `startMs` and `endMs` are exactly its boundaries; it does not search for the chapter covering a range. Take the boundaries from `dvrChapters`, or compute them from the configured mode. With the 6-hour `FIXED_INTERVAL` configuration shown below, chapters start on UTC multiples of 6 hours and last 21,600,000 ms:
+
 ```graphql
 query {
-  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715212800000) {
+  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715148000000) {
     chapterId
     state
     playbackId
@@ -222,7 +224,7 @@ query {
 }
 ```
 
-For stream-scoped media views, chapter artifacts also surface through `storageArtifactsConnection` when you request `kinds: [VOD, CHAPTER]` and pass a `streamId`. Omit `streamId` to get the normal tenant VOD library, which only returns library-visible user uploads.
+Chapter artifacts also surface through `storageArtifactsConnection` with kind `CHAPTER`. Pass a `streamId` for one stream's uploads and chapters. Omitting `streamId` does not hide chapters: `kinds: [VOD, CHAPTER]` then returns the chapters of every stream in your account along with your uploads. Request `kinds: [VOD]` for the upload library only.
 
 ```graphql
 query StreamVodArtifacts {
@@ -244,7 +246,7 @@ query StreamVodArtifacts {
 }
 ```
 
-Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
+Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` is the default. It keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
 
 ```graphql
 mutation {
@@ -294,173 +296,20 @@ query {
 
 ## Clips
 
-Clips are short video segments extracted from a live stream's DVR buffer. Use them to capture highlights, key moments, or shareable previews.
+A clip is a time range from the live stream, its DVR window, or a finalized chapter. There are
+two kinds:
 
-### Creating Clips from the Dashboard
+- **Stored clips**: create one in the dashboard (the **Clips** section of a stream's page) or with
+  `createClip`. It is processed, saved to your account with its own `playbackId`, and counts
+  toward storage and retention.
+- **Ad-hoc cuts**: add `startunix`, `stopunix`, or `duration` to a progressive playback URL such
+  as `/play/{dvrPlaybackId}.mp4`. The edge returns the range as a file and nothing is saved.
 
-On a live stream's detail page, open the **Clips** section and click **Create Clip**. Choose your time range and hit save.
+[Clips](/builders/clips) covers both: the four `createClip` time modes, which source a range is
+read from, events, the URL parameters, and how far back each playback ID reaches.
 
-### Creating Clips via the API
-
-The `createClip` mutation supports four time modes:
-
-| Mode       | Use Case                          | Required Fields            |
-| ---------- | --------------------------------- | -------------------------- |
-| `CLIP_NOW` | Clip the last N seconds from live | `duration`                 |
-| `DURATION` | Start time + duration             | `startUnix` + `duration`   |
-| `ABSOLUTE` | Exact start and stop timestamps   | `startUnix` + `stopUnix`   |
-| `RELATIVE` | Seconds from stream start         | `startMedia` + `stopMedia` |
-
-**Clip the last 30 seconds (most common):**
-
-```graphql
-mutation {
-  createClip(
-    input: { streamId: "stream-global-id", title: "Great moment", mode: CLIP_NOW, duration: 30 }
-  ) {
-    __typename
-    ... on Clip {
-      id
-      clipHash
-      playbackId
-      status
-      duration
-    }
-    ... on ValidationError {
-      message
-      field
-    }
-    ... on NotFoundError {
-      message
-    }
-  }
-}
-```
-
-**Clip with absolute timestamps:**
-
-```graphql
-mutation {
-  createClip(
-    input: {
-      streamId: "stream-global-id"
-      title: "Keynote intro"
-      mode: ABSOLUTE
-      startUnix: 1706000000
-      stopUnix: 1706000060
-    }
-  ) {
-    __typename
-    ... on Clip {
-      id
-      playbackId
-      status
-    }
-  }
-}
-```
-
-<Aside type="note" title="Live and DVR are separate streams — clip against the right one">
-  How far back you can clip depends on which stream entity holds the segments:
-
-- **Live stream** — keeps roughly the last 50 seconds in shared memory by default. The
-  default is configurable (private deployments often want a longer ring) but every extra
-  second costs cluster RAM, so it stays tight by default. [Open an in-app ticket](%APP_URL%/support)
-  if you need a non-default size.
-- **DVR recording** — a separate stream entity started with `startDVR(streamId)` or by
-  setting `record: true` at stream creation. Segments are disk-backed and only paged into
-  memory when a viewer is reading that range. Live seekback is bounded by the DVR window;
-  historical replay uses archive chapters.
-
-**To clip further back than the live ring**, keep using the source stream id and request the
-absolute time range. The media plane chooses the source: live shared memory, the rolling DVR
-segments, or a finalized chapter artifact. Requests that span two source kinds are rejected so the
-clip output remains a single canonical artifact.
-
-</Aside>
-
-### Clip Processing
-
-After creation, clips go through a processing pipeline:
-
-1. **queued** — Waiting to be processed
-2. **processing** — Extracting and encoding the segment
-3. **ready** — Available for playback
-4. **failed** — Something went wrong (check `errorMessage`)
-
-Follow clips in real time with the clip events of `tenantEvents`:
-
-```graphql
-subscription {
-  tenantEvents(
-    types: ["clip.requested", "clip.ready", "clip.failed"]
-    streamId: "stream-global-id"
-  ) {
-    type
-    time
-    data {
-      ... on ClipReady {
-        artifact {
-          artifactId
-          playbackId
-        }
-        sizeBytes
-      }
-      ... on ClipFailed {
-        artifact {
-          artifactId
-        }
-        reason
-      }
-    }
-  }
-}
-```
-
-The same subscription with `types: ["recording.ready", "recording.failed"]` reports finalized and
-failed DVR recordings. See [Events](/builders/events) for every event type.
-
-### Clip Playback
-
-Once ready, clips are playable at the same URLs as any other content:
-
-```
-%PLAY_URL%/play/{playbackId}/hls/index.m3u8
-%PLAY_URL%/play/{playbackId}.mp4
-```
-
-### Managing Clips
-
-```graphql
-# List clips for a stream
-query {
-  storageArtifactsConnection(
-    input: { kinds: [CLIP], streamId: "stream-global-id", first: 20, offset: 0 }
-  ) {
-    nodes {
-      id
-      title
-      playbackId
-      durationSeconds
-      status
-      createdAt
-      sizeBytes
-    }
-    totalCount
-    hasNextPage
-  }
-}
-
-# Delete a clip
-mutation {
-  deleteClip(id: "clip-global-id") {
-    __typename
-    ... on DeleteSuccess {
-      success
-    }
-  }
-}
-```
+The `tenantEvents` subscription with `types: ["recording.ready", "recording.failed"]` reports
+finalized and failed DVR recordings. See [Events](/builders/events) for every event type.
 
 ---
 
@@ -485,6 +334,9 @@ Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compa
 1. **Initiate** — Create an upload session to get presigned URLs
 2. **Upload parts** — PUT each file chunk to its presigned URL
 3. **Complete** — Finalize the upload with part ETags
+
+The [SDKs](/builders/sdks#upload-a-file) run all three steps with one call, including part
+retries and aborting the session on failure. The raw GraphQL flow:
 
 ```graphql
 # Step 1: Create upload session
@@ -552,15 +404,15 @@ Events carry no progress percentage; see [Events](/builders/events).
 Same URL pattern as all other content:
 
 ```tsx
-<Player contentType="vod" contentId="pk_..." />
+<Player contentType="vod" contentId="a1b2c3d4e5f6g7h8" />
 ```
 
 ### Managing VOD Assets
 
 ```graphql
-# List all library VOD uploads
-query {
-  storageArtifactsConnection(input: { kinds: [VOD, CHAPTER], first: 20, offset: 0 }) {
+# List all library VOD uploads (kinds: [VOD] excludes DVR chapters)
+query LibraryUploads {
+  storageArtifactsConnection(input: { kinds: [VOD], first: 20, offset: 0 }) {
     nodes {
       id
       playbackId
@@ -576,7 +428,7 @@ query {
 }
 
 # List VOD-shaped artifacts derived from a stream, including DVR chapters
-query {
+query StreamArtifacts {
   storageArtifactsConnection(
     input: { kinds: [VOD, CHAPTER], streamId: "stream-global-id", first: 20, offset: 0 }
   ) {
@@ -595,7 +447,7 @@ query {
 }
 
 # Delete a VOD asset
-mutation {
+mutation DeleteUpload {
   deleteVodAsset(id: "vod-global-id") {
     __typename
     ... on DeleteSuccess {
@@ -605,7 +457,7 @@ mutation {
 }
 
 # Abort an in-progress upload
-mutation {
+mutation AbortUpload {
   abortVodUpload(uploadId: "upload-session-id") {
     __typename
     ... on DeleteSuccess {

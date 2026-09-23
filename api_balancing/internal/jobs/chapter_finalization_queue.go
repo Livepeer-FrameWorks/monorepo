@@ -378,7 +378,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
 	chapterInt := chapterInternalName(playbackHash)
 	req := &ipcpb.ProcessingJobRequest{
-		JobId:                    fmt.Sprintf("chapter-finalize-v2-%d-%s", attempt, c.ChapterID),
+		JobId:                    foghorndb.ChapterFinalizeJobID(attempt, c.ChapterID),
 		TenantId:                 parent.tenantID,
 		ArtifactHash:             playbackHash,
 		JobType:                  "dvr_chapter_finalize",

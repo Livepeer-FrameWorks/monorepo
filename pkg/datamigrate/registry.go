@@ -43,6 +43,10 @@ type Migration struct {
 	Run    func(ctx context.Context, db DB, opts RunOptions) (Progress, error)
 	Verify func(ctx context.Context, db DB) error
 	Scopes func(ctx context.Context, db DB) ([]ScopeKey, error)
+	// Report is an optional read-only listing the verify subcommand prints
+	// ahead of Verify's verdict, so the operator sees the rows behind a failed
+	// or acknowledged invariant. It never gates completion.
+	Report func(ctx context.Context, db DB) ([]string, error)
 }
 
 // ScopeKey partitions a migration's work. Whole-job migrations use the zero
@@ -74,6 +78,13 @@ type Progress struct {
 	Errors     int64
 	Checkpoint json.RawMessage
 	Done       bool
+	// Summary states what the call covered (for example rows scanned per
+	// column). Findings names individual rows it could not process, capped by
+	// the migration; FindingsTotal counts all of them. The dry-run subcommand
+	// prints all three. None may carry secret or row payload values.
+	Summary       []string
+	Findings      []string
+	FindingsTotal int64
 }
 
 var (

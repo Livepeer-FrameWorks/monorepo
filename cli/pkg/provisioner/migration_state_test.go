@@ -162,7 +162,7 @@ func TestMigrationItemSplitsNonTransactionalStatementsForAutocommit(t *testing.T
 		Filename: "019_indexes.notx.sql", Transactional: false,
 		content: "CREATE INDEX CONCURRENTLY IF NOT EXISTS one ON purser.t (a);\nCREATE INDEX CONCURRENTLY IF NOT EXISTS two ON purser.t (b);",
 	}
-	item, err := migrationItem(SchemaDatabase{Name: "purser"}, migration)
+	item, err := migrationItem(SchemaDatabase{Name: "purser"}, migration, migrationPrecheck{})
 	if err != nil {
 		t.Fatal(err)
 	}

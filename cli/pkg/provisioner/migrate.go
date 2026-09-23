@@ -133,9 +133,14 @@ func ValidateEmbeddedPostgresMigrations() error {
 	if err != nil {
 		return err
 	}
+	var precheckErr error
+	if issues := validateMigrationPrechecks(dbsql.Content, migrations); len(issues) > 0 {
+		precheckErr = &MigrationValidationError{Issues: issues}
+	}
 	return errors.Join(
 		validatePostgresMigrationSet(migrations),
 		validateEmbeddedMigrationReleaseCeiling(migrations),
+		precheckErr,
 	)
 }
 

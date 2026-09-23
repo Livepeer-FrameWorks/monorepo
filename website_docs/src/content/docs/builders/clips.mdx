@@ -1,85 +1,170 @@
 ---
 title: "Clips"
-description: "Extract time-range clips from live streams and DVR recordings, then play them back through the standard player."
+description: "Two ways to cut a time range from a live stream, DVR recording, or chapter: a stored clip created through the API, or an ad-hoc cut requested straight from a playback URL."
 sidebar:
   order: 5
 ---
 
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
-A clip is a bounded time range from a live stream or DVR recording, materialized as an independently playable HLS asset. Clips share their source stream's playback infrastructure — the same player, the same access policy — but get their own playback ID so you can share, embed, or reference them without exposing the parent stream.
+There are two ways to get a time range out of a stream:
 
-For always-on streams, clips are the lightweight publishing layer on top of the 24/7 DVR archive: keep the full timeline for compliance or replay, then carve out the moments worth sharing.
+|               | Stored clip (`createClip`)                                  | Ad-hoc cut (URL parameters)                             |
+| ------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| What you get  | A new asset in your account with its own `playbackId`       | A one-off MP4, MKV, WebM, or TS response                |
+| Stored        | Yes, until you delete it or retention expires it            | No                                                      |
+| Playable as   | Every protocol (HLS, DASH, WebRTC, MP4, ...) and the player | The single file you requested                           |
+| Access policy | Snapshot of the source's policy at creation                 | The source's policy, checked on the request             |
+| Billed as     | Storage, plus delivery when watched                         | Delivery, like any other playback                       |
+| Use it for    | Highlights you share, embed, or list later                  | Downloads, exports, and handing a range to another tool |
 
-<Aside type="note">
-  Clips are billed as part of your storage usage and respect retention policy alongside DVR
-  recordings and VOD assets. See [storage-and-retention](/builders/storage-and-retention) for
-  retention semantics.
-</Aside>
+## Stored clips
 
-## Creating a clip
+A stored clip is processed on the media cluster and saved as its own asset. It gets a
+`playbackId`, shows up in your storage listing, and plays through the same player and URLs as
+any stream or VOD asset, without exposing the source stream's playback ID.
 
-Clips are created against a live or recently-completed stream. You provide a time range (typically expressed as `startMs` / `endMs` epoch ms) and a name. FrameWorks decides where the bytes come from based on where your range falls:
+### Create a clip
 
-- Inside the **live shm window** (last ~120s before now) → pulled from the live stream
-- Past shm but inside the **rolling DVR window** → pulled from the recording origin's DVR segments
-- Inside a **finalized chapter** (`state ∈ {FINALIZED, FROZEN, RECLAIMED}`) → pulled from the canonical chapter `.mkv`
+`createClip` takes the source stream's global ID, a title, and a time range in one of four modes:
 
-Cross-source ranges (spanning the shm boundary, or spanning two different chapters) are rejected — split the request into two clips on the same `streamId`.
+| `mode`               | Range                                 | Fields                     |
+| -------------------- | ------------------------------------- | -------------------------- |
+| `ABSOLUTE` (default) | Exact start and stop                  | `startUnix` + `stopUnix`   |
+| `DURATION`           | Start time plus a length              | `startUnix` + `duration`   |
+| `CLIP_NOW`           | The last N seconds of the live stream | `duration`                 |
+| `RELATIVE`           | Seconds from the stream start         | `startMedia` + `stopMedia` |
+
+`startUnix` and `stopUnix` are Unix timestamps in seconds; `duration`, `startMedia`, and
+`stopMedia` are seconds. `expiresAt` (Unix seconds) optionally deletes the clip at that time.
+
+<Tabs syncKey="sdk-language">
+  <TabItem label="GraphQL">
 
 ```graphql
-mutation CreateClip {
+mutation {
   createClip(
     input: {
       streamId: "<stream global id>"
-      name: "Highlight reel"
-      startMs: 1700000000000
-      endMs: 1700000060000
+      title: "Last 30 seconds"
+      mode: CLIP_NOW
+      duration: 30
     }
   ) {
     __typename
     ... on Clip {
       id
-      clipId
-      name
+      clipHash
       playbackId
-      startMs
-      endMs
-      createdAt
+      status
     }
     ... on ValidationError {
       field
+      message
+    }
+    ... on NotFoundError {
       message
     }
   }
 }
 ```
 
-The returned `playbackId` is what you hand to the player or pass to `resolveViewerEndpoint`. Clip materialization runs asynchronously — the resource exists immediately but the playable manifest may take a few seconds to appear depending on segment availability.
+  </TabItem>
+  <TabItem label="TypeScript">
 
-### Clip events
+```ts
+import { createClient, CreateClipDocument, expectResult } from "@livepeer-frameworks/api";
 
-Subscribe to `tenantEvents` with the clip event types for real-time request, readiness, and failure
-events on your clips. Pass `streamId` to receive only clips of one stream:
+const client = createClient({
+  url: "https://bridge.example.com/graphql",
+  token: process.env.FRAMEWORKS_API_TOKEN,
+});
+
+const created = await client.request(CreateClipDocument, {
+  input: {
+    streamId,
+    title: "Keynote intro",
+    mode: "ABSOLUTE",
+    startUnix: 1706000000,
+    stopUnix: 1706000060,
+  },
+});
+const clip = expectResult(created.createClip, "Clip");
+console.log(clip.playbackId, clip.status);
+```
+
+  </TabItem>
+  <TabItem label="Go">
+
+```go
+mode := frameworks.ClipCreationModeAbsolute
+start, stop := 1706000000, 1706000060
+resp, err := frameworks.CreateClip(ctx, client, frameworks.CreateClipInput{
+	StreamId:  streamID,
+	Title:     "Keynote intro",
+	Mode:      &mode,
+	StartUnix: &start,
+	StopUnix:  &stop,
+})
+if err != nil {
+	log.Fatal(err)
+}
+clip, err := frameworks.ExpectResult[*frameworks.CreateClipCreateClip](resp.CreateClip)
+```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```python
+from livepeer_frameworks import FrameWorksClient, expect_result
+from livepeer_frameworks.graphql import Clip, ClipCreationMode, CreateClipInput
+
+with FrameWorksClient(token=os.environ["FRAMEWORKS_API_TOKEN"]) as fw:
+    created = fw.create_clip(
+        input=CreateClipInput(
+            stream_id=stream_id,
+            title="Keynote intro",
+            mode=ClipCreationMode.ABSOLUTE,
+            start_unix=1706000000,
+            stop_unix=1706000060,
+        )
+    )
+    clip = expect_result(created.create_clip, Clip)
+```
+
+  </TabItem>
+</Tabs>
+
+See [SDKs](/builders/sdks) for client setup, retries, and typed errors.
+
+### Where the bytes come from
+
+Always pass the live stream's ID, however far back the range goes. FrameWorks picks the source
+from where the range falls:
+
+- **The live buffer** (about the last two minutes): read from the live stream.
+- **The rolling DVR window**, when the stream is [recording](/builders/recordings): read from the
+  DVR segments.
+- **A finalized chapter** (`FINALIZED`, `FROZEN`, or `RECLAIMED`): read from the chapter file.
+
+A range that spans two sources, such as the live buffer and the DVR window or two chapters, is
+rejected with a `ValidationError`. Split it into two clips.
+
+### Processing and events
+
+The clip exists as soon as `createClip` returns, and `status` moves through `queued`,
+`processing`, and `ready`, or ends at `failed`. Follow it with the clip events of
+`tenantEvents` (pass `streamId` for one stream only) or the matching [webhooks](/builders/webhooks):
 
 ```graphql
 subscription {
   tenantEvents(types: ["clip.requested", "clip.ready", "clip.failed"]) {
-    id
     type
     time
     data {
-      ... on ClipRequested {
-        artifact {
-          artifactId
-          streamId
-        }
-        durationMs
-      }
       ... on ClipReady {
         artifact {
           artifactId
-          playbackId
         }
         durationMs
         sizeBytes
@@ -95,81 +180,128 @@ subscription {
 }
 ```
 
-`artifactId` is the clip's `hash`. See [Events](/builders/events) for every event type and payload
-field.
+`artifactId` is the clip's `clipHash`. Clip events leave `artifact.playbackId` empty; read the
+clip's `playbackId` with `clip(id: "<clipHash>")` or with `storageArtifactsConnection` and
+`artifactHash`. See [Events](/builders/events) for every payload field.
 
-## Listing clips
+### Play a clip
 
-Clips are listed through the unified `storageArtifactsConnection` with `kinds: [CLIP]`. Pass `streamId` to scope to a single source stream, or omit it to list all clips for the tenant. Pagination is offset-based (`first`/`offset`).
+A ready clip plays at the same URLs as any other content, or through the
+[player](/builders/playback) with its `playbackId`:
+
+```
+%PLAY_URL%/play/{clipPlaybackId}/hls/index.m3u8
+%PLAY_URL%/play/{clipPlaybackId}.mp4
+```
+
+For a custom player, `resolveViewerEndpoint(contentId: "<clip playback id>")` returns the edge
+node and its output catalog.
+
+The clip's playback policy is a snapshot of the source stream's policy when the clip was created.
+Changing the stream's policy later does not change clips that already exist. See
+[playback access control](/builders/playback-access-control).
+
+### List and delete clips
+
+Clips are listed with the other stored media through `storageArtifactsConnection`:
 
 ```graphql
-query MyClips {
-  storageArtifactsConnection(input: { kinds: [CLIP], first: 20, offset: 0 }) {
+query {
+  storageArtifactsConnection(input: { kinds: [CLIP], streamId: "<stream global id>", first: 20 }) {
     nodes {
       id
-      key
       hash
       title
       playbackId
-      streamId
+      status
+      durationSeconds
+      sizeBytes
       createdAt
       expiresAt
-      durationSeconds
     }
     totalCount
     hasNextPage
-    limit
-    offset
   }
 }
 ```
 
-Use `clip(id: ID!)` to fetch a single clip by global ID.
-
-## Playing back a clip
-
-Clips share the playback resolution path with streams and VOD assets. Hand the clip's `playbackId` to the [Player SDK](/builders/playback) or call `resolveViewerEndpoint` directly:
-
-```graphql
-query ResolveClip {
-  resolveViewerEndpoint(input: { playbackId: "<clip playback id>" }) {
-    __typename
-    ... on PlaybackEndpoint {
-      hlsUrl
-      lowLatencyHlsUrl
-      protocol
-    }
-  }
-}
-```
-
-Access policy attached to the parent stream (public / JWT / webhook — see [playback-access-control](/builders/playback-access-control)) carries through to clips by default.
-
-## Deleting a clip
+`clip(id: ID!)` fetches one clip by global ID. Deleting removes the clip's media and cannot be
+undone:
 
 ```graphql
 mutation {
   deleteClip(id: "<clip global id>") {
     __typename
-    ... on DeleteClipResult {
-      deleted
+    ... on DeleteSuccess {
+      success
     }
-    ... on ValidationError {
-      field
+    ... on NotFoundError {
       message
     }
   }
 }
 ```
 
-Deletion is immediate and irreversible. The clip's segments are removed from storage; the `Clip` row stays in your account briefly for audit before being garbage-collected.
+Clips count toward storage and follow your retention settings; see
+[storage and retention](/builders/storage-and-retention). Agents create and delete clips with the
+`create_clip` and `delete_clip` [MCP tools](/agents/mcp).
 
-## Agents (MCP)
+## Ad-hoc cuts from a playback URL
 
-Agents manage clips through the MCP server using `create_clip` and `delete_clip` tools. See [agents/mcp](/agents/mcp) for the tool catalog.
+Any progressive playback URL (`.mp4`, `.mkv`, `.webm`, `.ts`) accepts time-range parameters. The
+edge cuts the range on the fly and returns it as a single file. Nothing is processed in advance or
+saved to your account.
+
+```bash
+# The last 60 seconds of a live stream, as a download
+curl -L -o last-minute.mp4 "%PLAY_URL%/play/{playbackId}.mp4?startunix=-60&dl=1"
+
+# A fixed wall-clock range from the DVR window, delivered as fast as possible
+curl -L -o keynote.mkv "%PLAY_URL%/play/{dvrPlaybackId}.mkv?startunix=1706000000&stopunix=1706000060&rate=0"
+```
+
+`/play` validates these parameters and passes them on to the edge it redirects to. Other query
+parameters are not forwarded.
+
+| Parameter                    | Value              | Effect                                                                                                                                                                   |
+| ---------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `startunix`                  | Unix seconds       | Start of the cut in wall-clock time. A value of 36000 or less is relative to now: `-300` means five minutes ago.                                                         |
+| `stopunix`                   | Unix seconds       | End of the cut, with the same relative rule.                                                                                                                             |
+| `duration`                   | Seconds            | Length of the cut from its start. Takes precedence over `stop` and `stopunix`.                                                                                           |
+| `start`                      | Milliseconds       | Start of the cut on the content's own media timeline.                                                                                                                    |
+| `stop`                       | Milliseconds       | End of the cut on the content's own media timeline.                                                                                                                      |
+| `dl`                         | `1` or a file name | Sends the response as a download. A value with a dot, such as `dl=keynote.mp4`, is the file name; otherwise the URL's file name is used. Also turns off realtime pacing. |
+| `rate`                       | Number             | Delivery speed: `0` sends as fast as the network allows, `2` at twice realtime.                                                                                          |
+| `audio`, `video`, `subtitle` | Track selector     | Which tracks to include, such as `video=all` or `audio=none`.                                                                                                            |
+
+Behavior to expect:
+
+- The cut starts at the keyframe at or before the requested start.
+- A start earlier than the available media is moved up to the oldest available point. A stop
+  earlier than the available media returns an error.
+- On a live stream, a stop in the future holds the response open until that moment arrives.
+- Cuts are supported on progressive formats only. Segmented protocols (HLS, DASH) and WebRTC are
+  not a reliable way to request a range.
+
+How far back you can reach depends on the playback ID:
+
+| Playback ID                          | Reach                                    | Use                                    |
+| ------------------------------------ | ---------------------------------------- | -------------------------------------- |
+| Live `playbackId`                    | About the last two minutes               | "The last N seconds" with `startunix`  |
+| `dvrPlaybackId`                      | The recording's rolling DVR window       | Longer ranges while the stream is live |
+| A chapter's `playbackId`             | That chapter                             | Ranges from finished recordings        |
+| A VOD asset's or clip's `playbackId` | The whole asset, with `start` and `stop` | Trimming uploaded or stored media      |
+
+<Aside type="note">
+  A cut is ordinary playback: the content's playback policy is checked on the request, and the
+  delivery is billed like any other viewer. For JWT-protected live and DVR content, add
+  `jwt=<token>` to the URL as described in [playback access
+  control](/builders/playback-access-control).
+</Aside>
 
 ## Related
 
-- [Recordings, Clips & VOD](/builders/recordings) — DVR and VOD context
-- [Playback access control](/builders/playback-access-control) — how clip access policy works
-- [Storage & retention](/builders/storage-and-retention) — retention behavior across DVR / clip / VOD
+- [Recordings, clips, and VOD](/builders/recordings): DVR windows, chapters, and uploads
+- [DVR chapters](/builders/dvr-chapters): finalized chapter playback IDs and wall-clock times
+- [Playback](/builders/playback): `/play` URLs and output formats
+- [SDKs](/builders/sdks): TypeScript, Go, and Python clients

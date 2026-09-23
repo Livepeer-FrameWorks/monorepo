@@ -2281,6 +2281,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		respondPlaybackError(c, http.StatusBadRequest, "INVALID_VIEW_KEY", "Invalid view key", nil)
 		return
 	}
+	viewerParams, badParam := viewerForwardedParams(c.Request.URL.Query())
+	if badParam != "" {
+		respondPlaybackError(c, http.StatusBadRequest, "INVALID_PLAYBACK_PARAMETER", fmt.Sprintf("Query parameter '%s' is repeated or malformed", badParam), gin.H{"parameter": badParam})
+		return
+	}
 
 	// UNIFIED RESOLUTION: derive the content type from the public ID.
 	// Never trust or require a caller-provided content type.
@@ -2482,12 +2487,13 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// remain out of URLs; clients using them attach credentials to the selected edge.
 	if contentType == "live" || contentType == "dvr" {
 		if token := strings.TrimSpace(c.Request.URL.Query().Get("jwt")); token != "" {
-			response, err = withViewerQueryCredential(response, token)
-			if err != nil {
-				respondPlaybackError(c, http.StatusServiceUnavailable, "INVALID_PLAYBACK_DESTINATION", "Playback destination is unavailable", nil)
-				return
-			}
+			viewerParams.Set("jwt", token)
 		}
+	}
+	response, err = withViewerQueryParams(response, viewerParams)
+	if err != nil {
+		respondPlaybackError(c, http.StatusServiceUnavailable, "INVALID_PLAYBACK_DESTINATION", "Playback destination is unavailable", nil)
+		return
 	}
 
 	// Create virtual viewer for live streams to track this redirect
@@ -2741,11 +2747,24 @@ func findProtocolURL(outputs map[string]*sharedpb.OutputEndpoint, protocol strin
 				return output.Url
 			}
 		}
-	case "webrtc", "whep":
-		for outputName, output := range outputs {
-			outputLower := strings.ToLower(outputName)
-			if strings.Contains(outputLower, "webrtc") || strings.Contains(outputLower, "whep") {
-				return output.Url
+	// WHEP and Mist's WebSocket-signalled WebRTC use different signalling. Each
+	// request prefers its own output and falls back to the other only when its own
+	// is absent, so map iteration order never decides between two present outputs.
+	case "whep", "webrtc":
+		isWHEP := func(name string) bool { return strings.Contains(strings.ToLower(name), "whep") }
+		isMistWebRTC := func(name string) bool {
+			lower := strings.ToLower(name)
+			return strings.Contains(lower, "webrtc") && !isWHEP(name)
+		}
+		preferred, fallback := isWHEP, isMistWebRTC
+		if protocol == "webrtc" {
+			preferred, fallback = isMistWebRTC, isWHEP
+		}
+		for _, match := range []func(string) bool{preferred, fallback} {
+			for outputName, output := range outputs {
+				if match(outputName) {
+					return output.Url
+				}
 			}
 		}
 	case "html", "embed":

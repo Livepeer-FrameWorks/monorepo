@@ -7,14 +7,18 @@ sidebar:
 
 import { Card, CardGrid, LinkCard, Aside } from "@astrojs/starlight/components";
 
-<Aside type="caution" title="Operator-owned deployment">
-  Self-hosting gives you the full FrameWorks control plane and media plane on your own
-  infrastructure. Treat it like operating a SaaS platform: validate capacity, DNS, TLS, backups,
-  secrets, monitoring, and upgrade runbooks before carrying production traffic.
+<Aside type="caution" title="Full-stack deployment">
+  This guide describes how to deploy and operate the entire FrameWorks stack: control plane,
+  Foghorn, media plane, and supporting services. Treat it like operating a SaaS platform: validate
+  capacity, DNS, TLS, backups, secrets, monitoring, and upgrade runbooks before carrying production
+  traffic.
 </Aside>
 
-This guide covers a full operator-owned deployment. If you only want to add customer-operated media
-capacity to the managed FrameWorks control plane, use the [hybrid edge guide](/hybrid/overview).
+This guide applies to anyone running the full platform, whether that is FrameWorks operating its
+hosted platform or you self-hosting the whole stack as an independent platform. A self-hosted
+platform has its own Foghorn, federation identity, and trust root; it cannot be federated with the
+FrameWorks platform as one network. If you only want to run edge nodes (Caddy, MistServer, Helmsman)
+attached to the FrameWorks platform, use the [hybrid edge guide](/hybrid/overview) instead.
 
 ## Media authority and control-plane outages
 
@@ -44,8 +48,9 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 `FOGHORN_STATE_ENCRYPTION_KEY`, `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, `JWT_SECRET`,
 `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`,
 `TELEMETRY_TOKEN_SECRET`, `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
-`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`, and the edge-telemetry
-ES256 signer. The renderer derives
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`,
+`CAPACITY_CONSENT_REVIEW_KEY_ID`, `CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64`, and the
+edge-telemetry ES256 signer (`EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`). The renderer derives
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
 input.
 
@@ -227,11 +232,11 @@ use a validated cached copy of that same repository.
 <Aside type="note" title="Provisioning Phases">
 The CLI provisions in dependency order:
 
-1. **Infrastructure** — Postgres, Kafka, ClickHouse (parallel)
+1. **Infrastructure** — Postgres, Redis, Kafka, ClickHouse (parallel)
 2. **Quartermaster** — Control plane bootstrap (tenant, clusters, nodes, tokens)
 3. **Privateer** — Mesh agent on ALL hosts → mesh health verification
 4. **Application services** — All other services (parallel)
-5. **Ingress & interfaces** — Nginx, Chartroom, Foredeck, Logbook (parallel)
+5. **Ingress & interfaces** — Nginx/Caddy, Chartroom, Foredeck, Logbook (parallel)
 
 Use `--only infrastructure|applications|interfaces` to run a single phase.
 
@@ -324,13 +329,13 @@ For detailed architecture documentation including service tables, ports, deploym
 - When running more than one backend node, a private mesh is required for databases, Kafka, and service-to-service calls.
 - TLS termination varies by tier:
   - Development: Nginx reverse proxy (optional TLS)
-  - Edge nodes: Caddy (automatic HTTPS via HTTP-01)
+  - Edge nodes: Caddy serving Navigator-issued cluster wildcard certificates (DNS-01), delivered by Foghorn over the Helmsman control stream (see [DNS and Cluster Routing](/operators/dns#wildcard-tls-certificates))
   - Central/Regional: Navigator-issued certificates (DNS-01) or operator-managed proxies
 - Firewall rules restrict access to required ports
 
 ### Data Security
 
-- TLS at ingress (Caddy/Navigator/proxies) should be enabled; internal gRPC TLS is not enabled yet (RFC draft exists).
+- TLS at ingress (Caddy/Navigator/proxies) should be enabled. Internal service-to-service gRPC runs over TLS with leaves issued by the Navigator internal CA and distributed by Privateer; see [TLS Architecture](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/tls.md).
 - Kafka inter-broker encryption is not enabled yet; the mesh provides the current security boundary.
 - Service-to-service authentication uses `SERVICE_TOKEN` (RFC draft exists for stronger service identity).
 - Secrets are currently managed via flat env files pushed during provisioning. This is an interim solution — a HashiCorp Vault integration is planned (RFC draft exists) to replace plaintext env files with dynamic secret injection.

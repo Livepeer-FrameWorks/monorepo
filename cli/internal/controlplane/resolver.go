@@ -155,6 +155,31 @@ func (r *Resolver) Close() {
 }
 
 func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, error) {
+	return r.resolveGRPC(ctx, service, "")
+}
+
+// ResolveGRPCEntry resolves one named manifest entry of service, for services
+// deployed as several per-cell entries (foghorn-eu, foghorn-us). The entry
+// applies to ssh and mesh access; a local context has a single endpoint per
+// service and resolves as ResolveGRPC does. A saved non-local endpoint
+// override is refused because it cannot name a cell.
+func (r *Resolver) ResolveGRPCEntry(ctx context.Context, service, entry string) (Endpoint, error) {
+	return r.resolveGRPC(ctx, service, strings.TrimSpace(entry))
+}
+
+// Manifest returns the manifest ssh and mesh access resolve against, loading
+// it on first use. It is nil, without error, for a local-access context.
+func (r *Resolver) Manifest(ctx context.Context) (*inventory.Manifest, error) {
+	if r == nil {
+		return nil, fmt.Errorf("nil control-plane resolver")
+	}
+	if r.ctxCfg.EffectiveAccessMode() == fwcfg.AccessModeLocal {
+		return nil, nil
+	}
+	return r.loadManifest(ctx)
+}
+
+func (r *Resolver) resolveGRPC(ctx context.Context, service, entry string) (Endpoint, error) {
 	if r == nil {
 		return Endpoint{}, fmt.Errorf("nil control-plane resolver")
 	}
@@ -162,6 +187,17 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 	spec, ok := grpcServices[service]
 	if !ok {
 		return Endpoint{}, fmt.Errorf("unknown control-plane gRPC service %q", service)
+	}
+	manifestID := spec.manifestID
+	if entry != "" {
+		manifestID = entry
+	}
+	overrideFor := func(mode string) (string, error) {
+		addr := nonLocalOverride(spec.localAddr(ctxCfg.Endpoints))
+		if addr != "" && entry != "" && entry != spec.manifestID {
+			return "", fmt.Errorf("context %q saves %s=%s, which cannot select manifest entry %q under access_mode=%s; clear the saved endpoint to reach a specific entry", ctxCfg.Name, spec.configName, addr, entry, mode)
+		}
+		return addr, nil
 	}
 
 	switch ctxCfg.EffectiveAccessMode() {
@@ -175,7 +211,11 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 		if ctxCfg.Persona != fwcfg.PersonaPlatform {
 			return Endpoint{}, fmt.Errorf("%s requires a platform context when access_mode=ssh; current context %q has persona %q", service, ctxCfg.Name, ctxCfg.Persona)
 		}
-		if addr := nonLocalOverride(spec.localAddr(ctxCfg.Endpoints)); addr != "" {
+		addr, err := overrideFor(string(fwcfg.AccessModeSSH))
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if addr != "" {
 			return savedEndpoint(ctxCfg, addr)
 		}
 		manifest, err := r.loadManifest(ctx)
@@ -194,8 +234,9 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 			r.sshSession = sess
 		}
 		ep, err := r.sshSession.Endpoint(ctx, remoteaccess.ServiceTarget{
-			Name:            spec.manifestID,
+			Name:            manifestID,
 			DefaultGRPCPort: spec.defaultPort,
+			ServerName:      spec.manifestID + ".internal",
 		})
 		if err != nil {
 			return Endpoint{}, err
@@ -215,14 +256,18 @@ func (r *Resolver) ResolveGRPC(ctx context.Context, service string) (Endpoint, e
 		if ctxCfg.Persona != fwcfg.PersonaPlatform {
 			return Endpoint{}, fmt.Errorf("%s requires a platform context when access_mode=mesh; current context %q has persona %q", service, ctxCfg.Name, ctxCfg.Persona)
 		}
-		if addr := nonLocalOverride(spec.localAddr(ctxCfg.Endpoints)); addr != "" {
-			return savedEndpoint(ctxCfg, addr)
+		overrideAddr, err := overrideFor(string(fwcfg.AccessModeMesh))
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if overrideAddr != "" {
+			return savedEndpoint(ctxCfg, overrideAddr)
 		}
 		manifest, err := r.loadManifest(ctx)
 		if err != nil {
 			return Endpoint{}, err
 		}
-		addr, err := manifestMeshGRPCAddr(manifest, spec.manifestID, spec.defaultPort)
+		addr, err := manifestMeshGRPCAddr(manifest, manifestID, spec.defaultPort)
 		if err != nil {
 			return Endpoint{}, err
 		}

@@ -782,6 +782,26 @@ func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region 
 	})
 }
 
+// ListNodeFingerprints lists node fingerprint bindings across tenants.
+// Quartermaster admits only a platform-operator JWT (ctxkeys.KeyJWTToken).
+func (c *GRPCClient) ListNodeFingerprints(ctx context.Context, clusterID string, duplicatesOnly bool, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodeFingerprintsResponse, error) {
+	return c.node.ListNodeFingerprints(ctx, &quartermasterpb.ListNodeFingerprintsRequest{
+		ClusterId:      clusterID,
+		DuplicatesOnly: duplicatesOnly,
+		Pagination:     pagination,
+	})
+}
+
+// UnbindNodeFingerprint deletes one node's fingerprint binding. Quartermaster
+// admits only a platform-operator JWT and requires a reason.
+func (c *GRPCClient) UnbindNodeFingerprint(ctx context.Context, nodeID, fingerprintID, reason string) (*quartermasterpb.UnbindNodeFingerprintResponse, error) {
+	return c.node.UnbindNodeFingerprint(ctx, &quartermasterpb.UnbindNodeFingerprintRequest{
+		NodeId:        nodeID,
+		FingerprintId: fingerprintID,
+		Reason:        reason,
+	})
+}
+
 // ListHealthyNodesForDNS lists healthy nodes for DNS sync by service type.
 // Quartermaster resolves edge queries (service_type "edge" or "edge-*") via
 // node_type + heartbeat; all other queries use the service_instance join.

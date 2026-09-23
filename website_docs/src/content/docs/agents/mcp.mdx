@@ -56,7 +56,7 @@ Restart Claude Desktop after saving.
 ### Claude Code CLI
 
 ```bash
-claude mcp add frameworks %GATEWAY_URL%/mcp
+claude mcp add --transport http frameworks %GATEWAY_URL%/mcp
 ```
 
 ### Other Clients
@@ -68,7 +68,7 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 Interactive JWT and wallet sessions use the signed-in user's platform role. API tokens are narrower:
 each tool requires its exact published domain permission, such as `streams:read`, `streams:write`,
 `billing:read`, `billing:write`, `analytics:read`, or `infrastructure:write`. Account, support,
-developer, consultant, and wallet-management tools use the corresponding `account:*`,
+developer, consultant, and wallet-management tools use the corresponding `account:read`,
 `support:read`, `developer:*`, `consultant:use`, `security:*`, and `placement:read`/`placement:write` scopes.
 
 High-risk tools require API tokens to carry both their domain scope and `mcp:high-risk`. Grant this
@@ -239,53 +239,53 @@ Actions the agent can perform.
 | `get_cluster_media_consent_change`    | Recover an owner-consent change                            | Auth + placement:read + cluster ownership                                             |
 | `request_wallet_challenge`            | Request a single-use EIP-191 login/link challenge          | None                                                                                  |
 | `list_linked_wallets`                 | List wallets linked to the authenticated user              | Auth                                                                                  |
-| `link_wallet`                         | Link a wallet using a fresh signed challenge               | Auth                                                                                  |
-| `unlink_wallet`                       | Unlink a wallet while retaining a sign-in method           | Auth                                                                                  |
+| `link_wallet`                         | Link a wallet using a fresh signed challenge               | Auth + security:write; API tokens also need mcp:high-risk                             |
+| `unlink_wallet`                       | Unlink a wallet while retaining a sign-in method           | Auth + security:write; API tokens also need mcp:high-risk                             |
 | `link_email`                          | Add email/password and send verification                   | Auth                                                                                  |
-| `activate_free_tier`                  | Activate Free after email verification                     | Auth                                                                                  |
+| `activate_free_tier`                  | Activate Free after email verification                     | Owner/Admin + billing:write                                                           |
 | `get_tenant_settings`                 | Read tenant identity and routing settings                  | Auth                                                                                  |
 | `update_tenant_settings`              | Update tenant name, primary cluster, or model              | Owner/Admin                                                                           |
-| `update_billing_details`              | Set billing address                                        | Auth                                                                                  |
+| `update_billing_details`              | Set billing identity (name, email) and address             | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `get_payment_options`                 | Get tenant-bound x402 payment options                      | Auth                                                                                  |
-| `submit_payment`                      | Submit an x402 top-up payment                              | Auth                                                                                  |
-| `topup_balance`                       | Request ETH or USDC deposit address (locked rate)          | Auth                                                                                  |
+| `submit_payment`                      | Submit an x402 top-up payment                              | Auth + billing:write; API tokens also need mcp:high-risk                              |
+| `topup_balance`                       | Request ETH or USDC deposit address (locked rate)          | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `check_topup`                         | Check crypto payment status                                | Auth                                                                                  |
-| `pay_invoice`                         | Create or resume an invoice payment                        | Auth + Billing                                                                        |
-| `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup               | Auth + Billing                                                                        |
-| `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid                | Auth + Billing                                                                        |
+| `pay_invoice`                         | Create or resume an invoice payment                        | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
+| `start_postpaid_setup`                | Start Stripe or Mollie hosted postpaid setup               | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
+| `complete_mollie_postpaid_setup`      | Verify mandate and activate Mollie postpaid                | Owner/Admin + billing:write; API tokens also need mcp:high-risk                       |
 | `create_stream`                       | Create a push or pull stream                               | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config               | Auth                                                                                  |
-| `delete_stream`                       | Delete a stream                                            | Auth + Confirm                                                                        |
+| `delete_stream`                       | Delete a stream                                            | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `list_stream_keys`                    | List push-stream ingest keys                               | Auth                                                                                  |
-| `create_stream_key`                   | Create an additional push-stream ingest key                | Auth + Confirm                                                                        |
-| `delete_stream_key`                   | Deactivate a push-stream ingest key                        | Auth + Confirm                                                                        |
-| `refresh_stream_key`                  | Rotate a push stream's primary key                         | Auth + Confirm                                                                        |
+| `create_stream_key`                   | Create an additional push-stream ingest key                | Auth + Confirm; API tokens also need mcp:high-risk                                    |
+| `delete_stream_key`                   | Deactivate a push-stream ingest key                        | Auth + Confirm; API tokens also need mcp:high-risk                                    |
+| `refresh_stream_key`                  | Rotate a push stream's primary key                         | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `validate_stream_key`                 | Validate an ingest key                                     | Auth                                                                                  |
 | `list_push_targets`                   | List masked multistream destinations                       | Auth                                                                                  |
 | `create_push_target`                  | Add a multistream destination                              | Auth                                                                                  |
 | `update_push_target`                  | Update or enable a multistream destination                 | Auth                                                                                  |
-| `delete_push_target`                  | Delete a multistream destination                           | Auth                                                                                  |
+| `delete_push_target`                  | Delete a multistream destination                           | Auth; API tokens also need mcp:high-risk                                              |
 | `create_clip`                         | Create clip from stream                                    | Auth + Balance                                                                        |
-| `delete_clip`                         | Delete a clip                                              | Auth                                                                                  |
+| `delete_clip`                         | Delete a clip                                              | Auth; API tokens also need mcp:high-risk                                              |
 | `start_dvr`                           | Start DVR recording                                        | Auth + Balance                                                                        |
 | `stop_dvr`                            | Stop DVR recording                                         | Auth                                                                                  |
-| `delete_dvr`                          | Delete a DVR recording and stored media                    | Auth + Confirm                                                                        |
+| `delete_dvr`                          | Delete a DVR recording and stored media                    | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `get_retention_policy`                | Read tenant media-retention defaults and bounds            | Auth                                                                                  |
-| `set_retention_policy`                | Set tenant media-retention defaults                        | Owner/Admin + Billing                                                                 |
-| `set_stream_retention_overrides`      | Set DVR/clip retention overrides for a stream              | Owner/Admin + Billing                                                                 |
-| `update_asset_retention`              | Override retention for DVR, clip, or VOD                   | Owner/Admin + Billing                                                                 |
-| `reset_asset_retention`               | Reset asset retention to the cascade default               | Owner/Admin + Billing + Confirm                                                       |
+| `set_retention_policy`                | Set tenant media-retention defaults                        | Owner/Admin + billing:write                                                           |
+| `set_stream_retention_overrides`      | Set DVR/clip retention overrides for a stream              | Owner/Admin + billing:write                                                           |
+| `update_asset_retention`              | Override retention for DVR, clip, or VOD                   | Owner/Admin + billing:write + Balance                                                 |
+| `reset_asset_retention`               | Reset asset retention to the cascade default               | Owner/Admin + billing:write + Confirm; API tokens also need mcp:high-risk             |
 | `create_vod_upload`                   | Start a VOD upload                                         | Auth + Balance                                                                        |
 | `get_vod_upload_status`               | Inspect uploaded and missing VOD parts                     | Auth                                                                                  |
 | `complete_vod_upload`                 | Finalize a VOD upload                                      | Auth + Balance                                                                        |
-| `abort_vod_upload`                    | Cancel an upload                                           | Auth                                                                                  |
-| `delete_vod_asset`                    | Delete a VOD asset                                         | Auth + Confirm                                                                        |
+| `abort_vod_upload`                    | Cancel an upload                                           | Auth; API tokens also need mcp:high-risk                                              |
+| `delete_vod_asset`                    | Delete a VOD asset                                         | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `resolve_playback_endpoint`           | Get viewer playback URLs                                   | None                                                                                  |
 | `list_signing_keys`                   | List playback signing keys                                 | Auth                                                                                  |
-| `create_signing_key`                  | Create a one-shot ES256 private key                        | Auth + Confirm                                                                        |
-| `revoke_signing_key`                  | Revoke a playback signing key                              | Auth + Confirm                                                                        |
-| `set_playback_policy`                 | Set JWT or webhook playback policy                         | Auth + Confirm                                                                        |
-| `clear_playback_policy`               | Clear playback policy                                      | Auth + Confirm                                                                        |
+| `create_signing_key`                  | Create a one-shot ES256 private key                        | Auth + Confirm; API tokens also need mcp:high-risk                                    |
+| `revoke_signing_key`                  | Revoke a playback signing key                              | Auth + Confirm; API tokens also need mcp:high-risk                                    |
+| `set_playback_policy`                 | Set JWT or webhook playback policy                         | Auth + Confirm; API tokens also need mcp:high-risk                                    |
+| `clear_playback_policy`               | Clear playback policy                                      | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `test_playback_access`                | Test JWT/webhook playback policy behavior                  | Auth                                                                                  |
 | `diagnose_rebuffering`                | Analyze rebuffering events                                 | Auth                                                                                  |
 | `diagnose_buffer_health`              | Analyze buffer health and dry events                       | Auth                                                                                  |
@@ -297,22 +297,22 @@ Actions the agent can perform.
 | `search_support_history`              | Search support conversations                               | Auth                                                                                  |
 | `introspect_schema`                   | Explore the GraphQL schema                                 | Auth                                                                                  |
 | `generate_query`                      | Generate a GraphQL query from templates                    | Auth                                                                                  |
-| `execute_query`                       | Execute a GraphQL query                                    | Auth + Balance                                                                        |
+| `execute_query`                       | Execute a GraphQL query                                    | Auth + Balance; API tokens also need mcp:high-risk                                    |
 | `ask_consultant`                      | Full Skipper pipeline with confidence tagging              | Auth + Balance                                                                        |
 | `browse_marketplace`                  | Browse available infrastructure clusters                   | None                                                                                  |
 | `subscribe_to_cluster`                | Subscribe to a cluster                                     | Owner/Admin + Infrastructure                                                          |
-| `unsubscribe_from_cluster`            | Remove a cluster subscription                              | Owner/Admin + Infrastructure + Confirm                                                |
+| `unsubscribe_from_cluster`            | Remove a cluster subscription                              | Owner/Admin + Infrastructure + Confirm; API tokens also need mcp:high-risk            |
 | `create_cluster_invite`               | Invite a tenant to subscribe to an owned cluster           | Owner/Admin + Infrastructure                                                          |
-| `revoke_cluster_invite`               | Revoke an outstanding cluster invite                       | Owner/Admin + Infrastructure                                                          |
+| `revoke_cluster_invite`               | Revoke an outstanding cluster invite                       | Owner/Admin + Infrastructure; API tokens also need mcp:high-risk                      |
 | `accept_cluster_invite`               | Redeem a cluster invite                                    | Owner/Admin + Infrastructure                                                          |
 | `request_cluster_subscription`        | Request access to a cluster                                | Owner/Admin + Infrastructure                                                          |
 | `approve_subscription_request`        | Approve a pending cluster subscription                     | Owner/Admin + Infrastructure                                                          |
-| `reject_subscription_request`         | Reject a pending cluster subscription                      | Owner/Admin + Infrastructure                                                          |
+| `reject_subscription_request`         | Reject a pending cluster subscription                      | Owner/Admin + Infrastructure; API tokens also need mcp:high-risk                      |
 | `set_preferred_cluster`               | Set preferred cluster for DNS steering                     | Owner/Admin + Settings                                                                |
-| `update_cluster_marketplace`          | Update cluster visibility, approval, or pricing            | Owner/Admin + Infrastructure + Confirm                                                |
+| `update_cluster_marketplace`          | Update cluster visibility, approval, or pricing            | Owner/Admin + Infrastructure + Confirm; API tokens also need mcp:high-risk            |
 | `create_enrollment_token`             | Create an enrollment token for edge bootstrap              | Owner/Admin + Infrastructure                                                          |
 | `get_node_info`                       | Fetch node details                                         | Owner/Admin + Infrastructure                                                          |
-| `manage_node`                         | Activate/deactivate/drain/restart a node                   | Owner/Admin + Infrastructure                                                          |
+| `manage_node`                         | Activate/deactivate/drain/restart a node                   | Owner/Admin + Infrastructure; API tokens also need mcp:high-risk                      |
 | `set_node_mode`                       | Set node mode (normal/draining/maintenance)                | Owner/Admin + Infrastructure                                                          |
 | `get_node_health`                     | Node health and metrics summary                            | Owner/Admin + Infrastructure                                                          |
 | `list_incidents`                      | Incidents on clusters the tenant owns                      | Owner/Admin + Infrastructure                                                          |
@@ -354,11 +354,13 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 
 **update_billing_details**
 
+- `name` (required): Customer legal or person name shown on invoices
+- `email` (required): Billing email address
 - `address_line1` (required): Street address
 - `city` (required): City
 - `postal_code` (required): Postal/ZIP code
 - `country` (required): ISO 3166-1 alpha-2 code
-- `email`, `company`, `vat_number`, `address_line2`: Optional
+- `company`, `vat_number`, `address_line2`: Optional
 
 **update_tenant_settings**
 
@@ -453,7 +455,7 @@ fetches and validates the tenant's mandate before creating the subscription.
 
 **resolve_playback_endpoint**
 
-- `content_id` (required): playback_id, stream_id, or Relay ID
+- `content_id` (required): Public playback_id (live, VOD, clip, or DVR) or a Relay/global ID (Stream, Clip, VodAsset). An internal stream_id is not accepted.
 - `viewer_ip`: Optional geo-routing hint
 - Returns thumbnail preview URLs in `thumbnail_assets` when poster and sprite assets are available.
 
@@ -535,14 +537,18 @@ Read `knowledge://sources` to get curated entry points for video streaming docum
     { "name": "FrameWorks Docs", "index": "https://logbook.frameworks.network/", "sitemap": "..." },
     { "name": "MistServer Docs", "index": "https://docs.mistserver.org/", "sitemap": "..." },
     { "name": "FFmpeg Wiki", "index": "https://trac.ffmpeg.org/wiki/TitleIndex" },
-    { "name": "OBS Wiki", "index": "https://obsproject.com/wiki/" }
+    { "name": "OBS Wiki", "index": "https://obsproject.com/wiki/" },
+    { "name": "SRT Alliance", "index": "https://www.srtalliance.org/" },
+    { "name": "HLS Specification", "index": "https://datatracker.ietf.org/doc/html/rfc8216" },
+    { "name": "nginx-rtmp", "index": "https://github.com/arut/nginx-rtmp-module/wiki" },
+    { "name": "Ecosystem", "index": "https://docs.livepeer.org/" }
   ]
 }
 ```
 
-Your AI can navigate these sitemaps to find codec guides, protocol references, and troubleshooting steps.
+Your AI can navigate these sitemaps to find codec guides, protocol references, and troubleshooting steps. The resource covers SRT, HLS (RFC 8216), nginx-rtmp, and ecosystem sources (Livepeer, WebRTC, DASH) alongside the FrameWorks, MistServer, FFmpeg, and OBS docs.
 
-Skipper's full knowledge base also includes SRT (Haivision), HLS (RFC 8216), nginx-rtmp, and ecosystem sources (Livepeer, WebRTC, DASH). Use `ask_consultant` to query the full knowledge base with confidence tagging and source citations. See the [Skipper operator guide](/operators/skipper#knowledge-base) for the complete source list and how to add custom sources.
+Use `ask_consultant` to query the full knowledge base with confidence tagging and source citations. See the [Skipper operator guide](/operators/skipper#knowledge-base) for the complete source list and how to add custom sources.
 
 ### Diagnostic Tools
 

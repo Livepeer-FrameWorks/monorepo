@@ -28,6 +28,9 @@ function routeForFile(file) {
   if (rel === "index") {
     return "/";
   }
+  if (rel.endsWith("/index")) {
+    return `/${rel.slice(0, -"/index".length)}/`;
+  }
   return `/${rel}/`;
 }
 

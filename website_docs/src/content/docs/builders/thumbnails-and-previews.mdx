@@ -5,19 +5,20 @@ description: Poster frames and animated sprite previews for live streams, DVR re
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-FrameWorks generates preview assets for streams, DVR recordings, clips, and VOD: a high-resolution **poster frame** and a low-resolution **sprite sheet** with synchronized VTT cues. Both are served by **Chandler**, the regional static-asset cache, and are exposed in playback metadata so your own app can use the same assets as the FrameWorks player.
+FrameWorks generates preview assets for streams, DVR recordings, clips, and VOD: a single-frame **poster** and a **sprite sheet** with synchronized VTT cues. Both are served by **Chandler**, the regional static-asset cache, and are exposed in playback metadata so your own app can use the same assets as the FrameWorks player.
 
 ## What you get
 
 | Asset        | File         | Purpose                                                                   |
 | ------------ | ------------ | ------------------------------------------------------------------------- |
-| Poster frame | `poster.jpg` | Full-resolution single-frame JPEG. Use as the click-to-play overlay.      |
-| Sprite sheet | `sprite.jpg` | Tiled grid (10×10) of low-resolution thumbnails across the timeline.      |
+| Poster frame | `poster.jpg` | The latest thumbnail as a single JPEG, at thumbnail cell size.            |
+| Sprite sheet | `sprite.jpg` | Tiled grid (10×10) of thumbnails across the timeline.                     |
 | Sprite cues  | `sprite.vtt` | WebVTT cues pointing into `sprite.jpg` via `#xywh=` fragment identifiers. |
 
-<Aside type="caution" title="Don't use a sprite tile as a static frame">
-  Sprite tiles are deliberately low resolution — they're built for hover-scrub previews, not static
-  display. For poster frames and key art, always use `poster.jpg`.
+<Aside type="caution" title="The poster is thumbnail-sized">
+  `poster.jpg` has the same dimensions as one sprite tile: it fits the source aspect ratio into a
+  160×90 box by default. It works as a small preview or a placeholder while the player loads, but it
+  is not a full-resolution frame. For large key art, capture your own image from the stream.
 </Aside>
 
 ## URL pattern
@@ -32,6 +33,10 @@ https://{chandler-host}/assets/{assetId}/{file}
 
 - the **stream ID** for live streams,
 - the **artifact hash** for DVR recordings and clips.
+
+When playback resolution (`resolveViewerEndpoint`) returns a DVR recording that has no thumbnails
+of its own, it falls back to the source stream's poster: `thumbnailAssets.posterUrl` then points
+at the **stream ID**, and the sprite URLs are empty.
 
 Example URLs:
 

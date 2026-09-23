@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-The FrameWorks CLI is your swiss-army knife for platform management. Provisioning uses Ansible for some infrastructure tasks, while most commands run direct SSH or API calls.
+The FrameWorks CLI provisions, upgrades, and inspects clusters and edge nodes. Provisioning uses Ansible for some infrastructure tasks, while most commands run direct SSH or API calls.
 
 <Aside type="tip">
   Use `frameworks menu` to launch an interactive menu for exploring these commands.
@@ -170,7 +170,13 @@ The report groups infrastructure, application, interface, observability, and
 migration-ledger checks. Use `--output json` when a pipeline needs the current
 result shape.
 
+The migration-ledger check treats contract migrations that have not run yet as
+healthy: after a release they wait for the rollback window, and doctor says so
+and prints the `cluster migrate --phase contract` command to run once it closes.
+
 **Flags:** inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
+
+- `--deep` - Also run authenticated control-plane checks and the read-only schema capability packs
 
 **Examples:**
 
@@ -369,7 +375,7 @@ During provisioning, the CLI automatically bootstraps the system tenant and clus
 
 1. **Service Token:** `SERVICE_TOKEN` is loaded from your manifest `env_files` (gitops, SOPS-encrypted) — the CLI decrypts with `--age-key` or `SOPS_AGE_KEY_FILE` and uses the token to authenticate to Quartermaster. No separate login or env var is required; the token is platform configuration, not operator identity.
 
-2. **System Tenant Creation:** If the "FrameWorks" system tenant doesn't exist, it's created with deployment tier `global`.
+2. **System Tenant Creation:** If the "FrameWorks" system tenant doesn't exist, it's created. Provisioning does not set a deployment tier; the tier is derived from billing.
 
 3. **Cluster Registration:**
    - If the manifest has a `clusters` section, one cluster record is created per entry. Cluster IDs come from the manifest keys (e.g., `prod-control`, `prod-media`).
@@ -378,10 +384,7 @@ During provisioning, the CLI automatically bootstraps the system tenant and clus
 
 4. **Node Registration:** Each host is registered under the cluster(s) its services belong to. The CLI resolves cluster assignment per service using role-based matching (see [Cluster Manifest: clusters](/operators/cluster-manifest#clusters)).
 
-5. **Infrastructure Bootstrap Tokens:** One token is generated per cluster:
-   - Kind: `infrastructure_node`
-   - TTL: 720 hours (30 days)
-   - Usage limit not set (defaults to single-use until used)
+Provisioning does not mint infrastructure bootstrap tokens. To enroll additional infrastructure nodes, use `frameworks cluster nodes add` or create a token with `frameworks admin bootstrap-tokens create --kind infrastructure_node`.
 
 **Important:** When using `clusters`, IDs are explicit from the manifest. When not using `clusters`, the auto-generated format `{type}-{profile}` applies. These IDs are needed when using:
 
@@ -563,31 +566,31 @@ viewer or ingest placement enforcement.
 
 ### Additional Cluster Provisioning Commands
 
-| Command                                                            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag.                                                                                                                                                                                                                                                                                                                |
-| `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `frameworks cluster secrets generate-internal-ca --out <file>`     | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                              |
-| `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
-| `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster data-migrate run <service>.<id>`               | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `frameworks cluster data-migrate verify <service>.<id>`            | Run the migration's read-only verification on the service host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `frameworks cluster data-migrate pause <service>.<id>`             | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster data-migrate resume <service>.<id>`            | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `frameworks cluster skipper knowledge reset`                       | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
-| `frameworks cluster clickhouse migrate cutover`                    | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command. |
+| Command                                                            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/` and ClickHouse migrations from `pkg/database/sql/clickhouse/migrations/`; contract-phase runs require `--yes`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag. A migration with a [precheck](/operators/postgres-migrations#migration-prechecks) is refused before its first statement when the precheck returns rows; the failure prints the total and up to 50 rows. |
+| `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, conservative expand-phase SQL safety rules, and that every precheck is a single `SELECT` keyed to an offered migration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `frameworks cluster secrets generate-internal-ca --out <file>`     | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate run <service>.<id>`               | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`. `--dry-run` runs inside a read-only transaction, needs no backup, and prints the migration's summary lines and findings (`findings: showing N of TOTAL`) when it reports them.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster data-migrate verify <service>.<id>`            | Run the migration's read-only verification on the service host, printing the migration's report first when it has one (for example the Commodore field-encryption quarantine).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `frameworks cluster data-migrate pause <service>.<id>`             | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate resume <service>.<id>`            | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `frameworks cluster skipper knowledge reset`                       | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                         |
+| `frameworks cluster clickhouse migrate cutover`                    | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command.        |
 
 `cluster migrate --phase contract` (with or without `--dry-run`) and `cluster data-migrate run` of
 an irreversible migration take `--backup <dir|s3-url>`: a backup from `cluster backup create` that
@@ -633,8 +636,9 @@ frameworks cluster sync-geoip \
   --services foghorn,quartermaster \
   --restart
 
-# Move the cluster onto the release-candidate channel
-frameworks cluster set-channel rc
+# Track the newest release, including release candidates
+# (the legacy `rc` channel tracks release candidates only)
+frameworks cluster set-channel candidate
 ```
 
 ---
@@ -963,7 +967,7 @@ next node only after the restarted one has recovered. The first failure stops th
 **Examples:**
 
 ```bash
-# Restart with health check
+# Restart without a post-restart health check
 frameworks cluster restart commodore
 
 # Restart with health validation
@@ -988,7 +992,8 @@ frameworks cluster upgrade <service> [flags]
 **Version Resolution:**
 
 - `stable` - Latest stable release
-- `rc` - Latest release candidate
+- `candidate` - Newest release, including release candidates (`latest` is an alias)
+- `rc` - Legacy track: newest release candidate only
 - `v0.0.0-rc1` - Specific version tag
 
 **Process:**
@@ -1048,12 +1053,11 @@ frameworks cluster upgrade --all --yes
 ```
 
 <Aside type="caution" title="Database schema changes">
-  Service upgrades may require schema migrations. For ClickHouse changes, apply `ALTER TABLE`
-  statements **before** upgrading services. See [ClickHouse
-  Migrations](/operators/clickhouse-migrations). For PostgreSQL/YugabyteDB migrations, run
-  `frameworks cluster migrate --phase expand --to-version vX.Y.Z` before upgrading services that
-  depend on the new schema. Upgrade commands run the same migration and data-migration gates in
-  dry-run and apply mode.
+  Service upgrades may require schema migrations. Run `frameworks cluster migrate --phase expand
+  --to-version vX.Y.Z` before upgrading services that depend on the new schema; it applies both
+  PostgreSQL/YugabyteDB and ClickHouse migrations. `frameworks cluster release apply` runs the same
+  phases as part of a full release. See [ClickHouse Migrations](/operators/clickhouse-migrations).
+  Upgrade commands run the same migration and data-migration gates in dry-run and apply mode.
 </Aside>
 
 ### frameworks cluster release
@@ -1086,6 +1090,15 @@ the release closed. Each converges a declared invariant against natural authorit
 state, so a rerun after a mid-release failure re-Checks reality and skips whatever is
 already complete — the release is resumable. `--dry-run` runs every gate and Check and
 prints the planned transitions without mutating anything.
+
+Between expand migrations and service upgrades, `release apply` prints a read-only
+post-expand report from the Quartermaster database: operator-managed and customer-enrolled
+nodes without an identity key, and tenants whose custom subdomain or domain grant the
+tenant-DNS entitlement migration will clear, with whether Purser's handoff receipt exists.
+Each list shows up to 50 rows and the total. The report never fails the release. Before
+expand has been applied (including a `--dry-run` on such a cluster) it prints
+`post-expand report: not run (expand not applied)`. See
+[Running Cluster Upgrades](/operators/running-upgrades#post-expand-report).
 
 **Flags:**
 
@@ -1493,6 +1506,37 @@ as healthy.
 
 ---
 
+### frameworks cluster diagnose dvr
+
+Show one DVR recording as its origin cell's Foghorn sees it. Needs a
+platform-operator login.
+
+```bash
+frameworks cluster diagnose dvr <dvr-hash>
+frameworks cluster diagnose dvr <dvr-hash> --service foghorn-eu --output json
+```
+
+Commodore resolves the hash to the recording's origin cluster, and the command
+asks the manifest Foghorn entry whose `clusters` include that cluster; a manifest
+with a single unassigned Foghorn uses it. The report covers:
+
+- **Recording** - status and error, start/end, storage location, sync status
+  with its last attempt, node, failure count, and error, `.dtsh` sync state,
+  retention, the chapter policy snapshot, and a pending start dispatch.
+- **Segments** - count, first and last media time, recorded duration and bytes,
+  counts per segment status, and the gaps in the ledger (the first 100, plus the
+  total).
+- **Chapters** - each chapter's state, bounds, finalize attempts, latest
+  finalize job ID, assigned node, and last failure reason.
+- **Finalize queue** - the chapters in `closed` or `finalizing` state, waiting
+  for or running a finalize attempt.
+
+**Flags:**
+
+- `--service` - Manifest Foghorn entry to ask (e.g. `foghorn-eu`) instead of the one serving the origin cluster
+
+---
+
 ## DNS Commands
 
 ### frameworks dns doctor
@@ -1598,6 +1642,12 @@ frameworks admin tokens create --name "my-app" --expires 720h --perms "streams:r
 # List tokens (shows name and ID)
 frameworks admin tokens list
 
+# Platform operator: token metadata across every tenant
+frameworks admin tokens list --all-tenants
+
+# Platform operator: tokens holding a scope this release no longer accepts
+frameworks admin tokens list --all-tenants --unsupported-scopes
+
 # Revoke by name (preferred)
 frameworks admin tokens revoke --name "my-app"
 
@@ -1608,6 +1658,12 @@ frameworks admin tokens revoke <token-id>
 Token listings contain only the current user's tokens. A tenant owner or admin
 may revoke another user's token by its tenant-scoped ID; ordinary members may
 revoke only their own tokens.
+
+`--all-tenants` lists token metadata (ID, tenant, name, scopes, status, created,
+last used, expiry) across every tenant and needs a platform-operator login;
+token values are never shown. With it, `--tenant-id` narrows the listing to one
+tenant and `--unsupported-scopes` keeps only tokens holding a permission that
+`create` no longer accepts, each marked with the unsupported scopes.
 
 **Flags for create:**
 
@@ -1652,11 +1708,11 @@ frameworks admin bootstrap-tokens revoke <token-id>
 
 **Flags for create:**
 
-- `--name` - Display name (required)
+- `--name` - Display name (default: `Bootstrap Token`)
 - `--kind` - Token kind: `edge_node`, `service`, or `infrastructure_node` (default: `edge_node`)
 - `--ttl` - Time-to-live (e.g., `24h`, `7d`) (default: `24h`)
-- `--tenant-id` - Tenant ID (required for `edge_node`)
-- `--cluster-id` - Cluster ID (required for `edge_node`)
+- `--tenant-id` - Tenant ID (defaults to the active context's system tenant; required for `edge_node`)
+- `--cluster-id` - Cluster ID (defaults to the active context's cluster; required for `edge_node`)
 - `--expected-ip` - Expected client IP for validation (optional)
 - `--usage-limit` - Maximum uses; omit or set `0` for single use
 
@@ -1675,7 +1731,7 @@ frameworks admin tenants list
 frameworks admin tenants activity
 
 # Wider window, top 10 only, machine-readable
-frameworks admin tenants activity --since 30d --limit 10 -o json
+frameworks admin tenants activity --since 30d --limit 10 --output json
 ```
 
 **Sample output:**
@@ -1859,7 +1915,7 @@ frameworks admin clusters enrollment-token --cluster-id <id> --ttl 7d
 
 **Flags:**
 
-- `--cluster-id` - Cluster ID (required)
+- `--cluster-id` - Cluster ID (defaults to the active context's cluster; required if the context has none)
 - `--tenant-id` - Tenant ID (defaults to JWT tenant)
 - `--name` - Token display name
 - `--ttl` - Time-to-live (e.g. `24h`, `7d`; default 30d)
@@ -1985,6 +2041,50 @@ frameworks admin nodes hardware --node-id edge-nyc-01 --cpu-cores 16 --memory-gb
 - `--cluster-id` - Filter by cluster ID
 - `--type` - Filter by node type (common: `edge`, `core`; some deployments use `regional`/`central`)
 - `--region` - Filter by region
+
+---
+
+### frameworks admin nodes fingerprints
+
+Inspect and remove node fingerprint bindings across every tenant. Both
+subcommands need a platform-operator login and Quartermaster v0.3.11 or later;
+the CLI cannot call these RPCs on an older running service.
+
+### frameworks admin nodes fingerprints list
+
+```bash
+frameworks admin nodes fingerprints list
+frameworks admin nodes fingerprints list --duplicates
+frameworks admin nodes fingerprints list --duplicates --cluster-id media-eu-1 --output json
+```
+
+Each binding shows its node, fingerprint ID, cluster, tenant, the start of its
+machine-ID and MAC hashes, whether it holds an identity key, and when it was
+last seen. `--duplicates` keeps only bindings whose machine-ID or MAC hash
+another binding shares, which are the rows Quartermaster's unique fingerprint
+indexes reject. A hash shared by N bindings is marked `(xN)`. A binding whose
+node row no longer exists shows `cluster=(node row missing)`.
+
+**Flags:**
+
+- `--cluster-id` - Only bindings of nodes in this cluster
+- `--duplicates` - Only bindings that share a machine-ID or MAC hash
+
+### frameworks admin nodes fingerprints unbind
+
+```bash
+frameworks admin nodes fingerprints unbind <node-id> <fingerprint-id> --reason "host replaced by edge-nyc-02"
+```
+
+Deletes the node's fingerprint binding, including its stored hashes and identity
+key; the node must enroll again to rebind. Quartermaster records a
+`node.fingerprint_unbound` service event with your user ID and the reason. The
+command asks for confirmation unless `--yes` is given.
+
+**Flags:**
+
+- `--reason` - Why the binding is removed (required)
+- `--yes` - Skip the confirmation prompt
 
 ---
 
@@ -2553,7 +2653,7 @@ Generate central-tier compose fragments and a `.central.env` file.
 frameworks services plan
 
 # Use a specific profile
-frameworks services plan --profile control-core
+frameworks services plan --profile control
 
 # Interactive service selection
 frameworks services plan --interactive
@@ -2568,7 +2668,7 @@ selected target directory. Exact filenames are CLI-owned; inspect
 
 **Flags:**
 
-- `--profile` - Preset: `central-all` | `control-core` | `routing-only` | `analytics-suite` | `billing-only` (default: `central-all`)
+- `--profile` - Preset: `central-all` | `platform` | `control` | `data` | `media` | `interfaces` | `observability` | `support` (default: `central-all`)
 - `--include` - Comma-separated services to include
 - `--exclude` - Comma-separated services to exclude
 - `--dir` - Target directory for generated files (default: `.`)
@@ -2738,7 +2838,7 @@ frameworks context set-gitops-manifest clusters/production/cluster.yaml --contex
 frameworks context set-age-key ~/.config/sops/age/keys.txt --context platform-prod
 ```
 
-Available setters: `set-persona`, `set-gitops-source`, `set-gitops-path`,
+Available setters: `set-persona`, `set-access-mode`, `set-gitops-source`, `set-gitops-path`,
 `set-gitops-repo`, `set-gitops-ref`, `set-gitops-cluster`,
 `set-gitops-manifest`, `set-age-key`. Plus the existing `set-url` and
 `set-cluster` for endpoints.
@@ -2912,14 +3012,21 @@ Launch interactive menu for common operations.
 frameworks menu
 ```
 
-Provides a guided interface for:
+Provides a guided interface with these sections; which ones appear depends on
+the active context's persona:
 
+- Account & Hosted
 - Edge Operations
 - Services & Health
-- Control / API Plane (Admin)
+- Control Plane (Admin)
 - Cluster Operations
 - DNS & Mesh
 - Settings & Contexts
+
+The `platform` persona sees every section; `selfhosted` sees Edge Operations,
+Account & Hosted, and Settings & Contexts; `user` sees Account & Hosted and
+Settings & Contexts. `frameworks menu --output json` prints the same catalog as
+JSON.
 
 ---
 
@@ -3133,8 +3240,10 @@ frameworks crypto sweep release --batch-id <uuid> --reason "expired offline cere
 ## Exit Codes
 
 - `0` - Success
-- `1` - General error
-- `2` - Invalid arguments
-- `3` - Service not found
-- `4` - Connection error
-- `5` - Health check failed
+- `1` - Any error, including invalid arguments and flags. `cluster diff`,
+  `cluster drift`, and `edge drift` also exit `1` when they find changes or
+  divergence, and `cluster apply` exits `1` when the diff contains entries it
+  cannot apply.
+- `2` - Command-specific status: `cluster os update` exits `2` when OS updates
+  are pending, and `cluster apply` exits `2` when the rollout halts on a failing
+  host.

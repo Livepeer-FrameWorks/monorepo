@@ -25,11 +25,16 @@ curated set of GraphQL operations, share one version, and pass the same conforma
 they behave the same way. Every example on this page is a file in the repository that CI compiles
 or type-checks (`tsc`, `go vet`, `mypy`).
 
-| Language   | Package                                                                      | Needs                 |
-| ---------- | ---------------------------------------------------------------------------- | --------------------- |
-| TypeScript | `npm install @livepeer-frameworks/api` (plus `graphql-ws` for subscriptions) | Node 22+ or a browser |
-| Go         | `go get github.com/Livepeer-FrameWorks/sdk-go`                               | Go 1.27+              |
-| Python     | `pip install livepeer-frameworks`                                            | Python 3.10+          |
+The typed operation set does not yet cover every tenant-facing GraphQL field. Use the
+[generated schema reference](/builders/api-schema/) to find the full public surface and see which
+fields have a typed SDK document. Every SDK can also send a custom GraphQL document through its
+raw client. `make sdk-audit` reports the coverage gap against the current schema.
+
+| Language   | Install                                                                      | Needs                 | Registry and source                                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | `npm install @livepeer-frameworks/api` (plus `graphql-ws` for subscriptions) | Node 22+ or a browser | [npm](https://www.npmjs.com/package/@livepeer-frameworks/api) · [source](https://github.com/Livepeer-FrameWorks/monorepo/tree/master/npm_api) |
+| Go         | `go get github.com/Livepeer-FrameWorks/sdk-go`                               | Go 1.27+              | [pkg.go.dev](https://pkg.go.dev/github.com/Livepeer-FrameWorks/sdk-go) · [source](https://github.com/Livepeer-FrameWorks/sdk-go)              |
+| Python     | `pip install livepeer-frameworks`                                            | Python 3.10+          | [PyPI](https://pypi.org/project/livepeer-frameworks/) · [source](https://github.com/Livepeer-FrameWorks/monorepo/tree/master/sdk_python)      |
 
 Other languages use the [GraphQL API](/builders/api-reference) directly and a
 [Standard Webhooks](https://www.standardwebhooks.com/) library for [webhooks](/builders/webhooks).

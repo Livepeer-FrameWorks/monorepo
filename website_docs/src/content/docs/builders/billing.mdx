@@ -198,8 +198,8 @@ For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x4
 When balance is insufficient, the API returns HTTP 402 with the official v2
 `PAYMENT-REQUIRED` header. Clients sign an EIP-3009 authorization for one exact
 accepted requirement and retry with `PAYMENT-SIGNATURE`. Successful settlement
-returns `PAYMENT-RESPONSE`; `X-PAYMENT` is legacy compatibility only and is
-disabled by default in production.
+returns `PAYMENT-RESPONSE`. `PAYMENT-SIGNATURE` is canonical; `X-PAYMENT` is
+read as a fallback; only v2 quote-bound payloads are accepted.
 
 Side-effecting GraphQL/MCP mutations do not settle x402 inline until their
 owning service has a durable idempotency contract. Top up with the payment
@@ -281,7 +281,7 @@ FrameWorks supports multiple deployment models with different billing characteri
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | **Shared (Community)** | Free access to a shared cluster, capped at 3 concurrent live streams and 200 concurrent viewers.           | Zero-priced metering with fair-use.                                                                  |
 | **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                    | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
-| **Dedicated**          | Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is out of scope. | Custom pricing via `cluster_pricing`.                                                                |
+| **Dedicated**          | Isolated provider-operated capacity and routing for one tenant. To run Foghorn, self-host the whole stack. | Custom pricing via `cluster_pricing`.                                                                |
 | **Hybrid**             | Self-hosted MistServer/Helmsman edges connect to provider Foghorn and can fall back to managed capacity.   | Per-cluster usage attribution.                                                                       |
 | **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.         | Operator-set pricing via `cluster_subscriptions`.                                                    |
 

@@ -9,8 +9,8 @@ Browser-based broadcasting — camera, screen share, or both with audio mixing. 
 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
 
-- **StreamCrafter** — Quick browser-based streaming, screen shares, webcam broadcasts, interactive apps.
-- **OBS/Encoder** — Professional production, scene switching, complex overlays, and maximum quality control.
+Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps.
+Use OBS or a hardware encoder for scene switching, complex overlays, and fine control over encoding quality.
 
 </Aside>
 
@@ -39,14 +39,17 @@ Not sure which package to use? See the [Integration Guide](/builders/integration
 
 ## Quick Start
 
-**Direct WHIP Mode** — pass the WHIP endpoint shown in the dashboard:
+### Direct WHIP mode
+
+Pass the WHIP endpoint shown in the dashboard:
 
 ```tsx
 <StreamCrafter whipUrl="%INGEST_URL%/webrtc/your-stream-key" initialProfile="broadcast" />
 ```
 
-**Gateway Resolution Mode** — the SDK resolves the WHIP endpoint from a stream key via
-`resolveIngestEndpoint`, which picks the ingest node closest to and least loaded for the publisher:
+### Gateway resolution mode
+
+The SDK resolves the WHIP endpoint from a stream key via `resolveIngestEndpoint`, which picks the ingest node closest to and least loaded for the publisher:
 
 ```tsx
 import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
@@ -126,6 +129,7 @@ Resolve with an explicit protocol when your encoder requires one.
 {
   "primary": {
     "nodeId": "edge-ams-1",
+    "baseUrl": "https://edge-ams-1.{cluster}.{base}",
     "whipUrl": "https://edge-ams-1.{cluster}.{base}/webrtc/{streamKey}",
     "rtmpUrl": "rtmp://edge-ams-1.{cluster}.{base}:1935/live/{streamKey}",
     "srtUrl": "srt://edge-ams-1.{cluster}.{base}:8889?streamid={streamKey}",
@@ -146,8 +150,18 @@ The Foghorn listener hostname does not constrain the result to one virtual media
 supplies the stream's authorized healthy cluster envelope, and an existing live claim pins reconnects
 to the cluster already receiving the publisher.
 
-An unknown key returns `404`, a suspended account `403`, a negative balance `402`, and an unhealthy
-cluster `503`. The endpoint is rate limited per IP.
+Errors use these statuses:
+
+| Status | Cause                                                                                              |
+| ------ | -------------------------------------------------------------------------------------------------- |
+| `400`  | Missing stream key, invalid or duplicate `protocol` parameter, or a `POST` that is not WHIP        |
+| `402`  | Negative account balance                                                                           |
+| `403`  | Account suspended or inactive, or the tenant is not entitled to the cluster or its class           |
+| `404`  | Unknown stream key                                                                                 |
+| `409`  | The stream's source mode does not accept push ingest, or the stream is already ingesting elsewhere |
+| `415`  | The ingest protocol is not supported for this stream                                               |
+| `429`  | Per-IP rate limit exceeded; the response carries `Retry-After`                                     |
+| `503`  | Cluster unhealthy, no ingest-capable node available, or stream validation unavailable              |
 
 <Aside type="caution" title="Stream Key is Secret">
   Your stream key grants permission to broadcast to your stream. Never share it publicly.
@@ -205,7 +219,7 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 
 The compositor is **enabled by default** — multi-source layout control with scenes, layers, and transitions:
 
-- 15 layout presets (solo, PiP, split, grid, featured, and more)
+- 17 layout presets (solo, PiP, split, grid, featured, and more)
 - Drag-and-drop layer ordering
 - Scene switching with animated transitions
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)

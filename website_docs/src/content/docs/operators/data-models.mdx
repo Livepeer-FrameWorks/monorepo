@@ -34,6 +34,8 @@ not as a public integration API.
 | Periscope           | PostgreSQL coordination state for analytics/billing jobs. High-volume analytics data is in ClickHouse.      | `pkg/database/sql/schema/periscope.sql`                                        |
 | Navigator           | Public TLS certificates, ACME accounts, internal CA state, and issued internal certificates.                | `pkg/database/sql/schema/navigator.sql`                                        |
 | Skipper             | Knowledge-base documents, conversations, crawl state, usage, reports, baselines, and staged posts.          | `pkg/database/sql/schema/skipper.sql`                                          |
+| Bosun               | Tenant webhook endpoints and signing secrets, received domain events, deliveries, and delivery attempts.    | `pkg/database/sql/schema/bosun.sql`                                            |
+| Lookout             | Incidents built from Alertmanager notifications, their alerts and timeline, and the notification outbox.    | `pkg/database/sql/schema/lookout.sql`                                          |
 | Listmonk / Chatwoot | Supplementary application schemas for email and support/chat integrations.                                  | `pkg/database/sql/schema/listmonk.sql`, `pkg/database/sql/schema/chatwoot.sql` |
 
 Real-time stream, viewer, node, artifact, storage, routing, federation, API, and processing events
@@ -55,12 +57,12 @@ the tables directly.
 This page is intentionally not a full table catalog. The repository SQL is the contract used by the
 CLI/provisioner and local development stack.
 
-| Store                                    | Source                                           | Notes                                                                                                              |
-| ---------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| PostgreSQL / YugabyteDB baseline schemas | `pkg/database/sql/schema/*.sql`                  | Embedded by `pkg/database/sql/embed.go` and applied by `frameworks cluster init` / `frameworks cluster provision`. |
-| ClickHouse analytics schema              | `pkg/database/sql/clickhouse/periscope.sql`      | Defines event logs, current-state tables, materialized views, and rollups.                                         |
-| Static seed data                         | `pkg/database/sql/seeds/static/purser_tiers.sql` | Production reference data such as billing tiers.                                                                   |
-| Demo seed data                           | `pkg/database/sql/seeds/demo/*.sql`              | Local/demo data only; separate from demo-mode API fallbacks.                                                       |
+| Store                                    | Source                                                      | Notes                                                                                                                      |
+| ---------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL / YugabyteDB baseline schemas | `pkg/database/sql/schema/*.sql`                             | Embedded by `pkg/database/sql/embed.go` and applied by `frameworks cluster init` / `frameworks cluster provision`.         |
+| ClickHouse analytics schema              | `pkg/database/sql/clickhouse/periscope.sql`                 | Defines event logs, current-state tables, materialized views, and rollups.                                                 |
+| Billing tier catalog                     | `api_billing/internal/bootstrap/catalog/billing_tiers.yaml` | Embedded in the Purser binary. GitOps adds tiers or overrides fields through `purser.billing_tiers` in the bootstrap file. |
+| Demo seed data                           | `pkg/database/sql/seeds/demo/`                              | Local/demo data only; separate from demo-mode API fallbacks.                                                               |
 
 The SQL files are regular enough for tooling to generate a table and materialized-view index from
 `CREATE TABLE IF NOT EXISTS` and `CREATE MATERIALIZED VIEW IF NOT EXISTS` statements. For
@@ -126,8 +128,8 @@ Client IP addresses are stored in ClickHouse for internal analytics but **redact
 **Redacted:** Raw viewer IP addresses, connection addresses
 
 <Aside type="tip">
-  Raw IPs remain in ClickHouse for future per-tenant analytics features. Operators with direct
-  database access can query these, but platform APIs enforce redaction.
+  Raw IPs remain in ClickHouse for future per-tenant analytics features. Platform APIs enforce
+  redaction.
 </Aside>
 
 ### Geographic Normalization (H3 Bucketing)

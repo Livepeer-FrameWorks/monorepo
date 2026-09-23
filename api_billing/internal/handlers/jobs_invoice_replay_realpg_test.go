@@ -29,8 +29,8 @@ func TestMonthlyInvoiceReplaysAfterSerializationFailure_RealPG(t *testing.T) {
 	}{
 		{`INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, metering_enabled)
 			VALUES ($1, $2, 'Invoice replay', 20.00, 'EUR', false)`, []any{tierID, "invoice-replay-" + tierID}},
-		{`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end)
-			VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4)`, []any{tenantID, tierID, periodStart, periodEnd}},
+		{`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_period_start, billing_period_end, presentment_currency)
+			VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', $3, $4, 'EUR')`, []any{tenantID, tierID, periodStart, periodEnd}},
 		{`INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, 500, 'EUR')`, []any{tenantID}},
 		// nextval survives the rollback, so the fault fires on the first attempt only and the replay proceeds.
 		{`CREATE SEQUENCE public.invoice_replay_fault`, nil},

@@ -11,23 +11,39 @@ Skipper is the platform's AI video streaming consultant. Ask it about live strea
 
 ## Where to Find It
 
-**In the dashboard** — full-page chat at `/skipper` with conversation history, stream diagnostics, and authenticated management actions.
+### Dashboard
 
-**On the docs site** — floating chat panel (toggle with <kbd>Cmd/Ctrl+J</kbd>). Docs mode uses read-only and diagnostic tools; it can explain or inspect, but won't modify anything.
+Full-page chat at `/skipper` with conversation history, stream diagnostics, and authenticated management actions.
 
-**Via MCP** — your AI agent can use `ask_consultant` for read/diagnostic consulting, or the `video_consultant` prompt for a guided persona, through the [MCP server](/agents/mcp). Agents that need to change platform state should call the dedicated MCP tools directly, such as `create_stream`, `start_dvr`, or `topup_balance`.
+### Docs site
+
+Floating chat panel (toggle with <kbd>Cmd/Ctrl+J</kbd>). Docs mode uses read-only and diagnostic tools; it can explain or inspect, but won't modify anything.
+
+### MCP
+
+Your AI agent can use `ask_consultant` for read/diagnostic consulting, or the `video_consultant` prompt for a guided persona, through the [MCP server](/agents/mcp). Agents that need to change platform state should call the dedicated MCP tools directly, such as `create_stream`, `start_dvr`, or `topup_balance`.
 
 ## What It Can Help With
 
-**Documentation questions** — "How do I configure SRT encryption in MistServer?", "What codec settings does OBS recommend for 1080p streaming?"
+### Documentation questions
 
-**Troubleshooting** — "My viewers are buffering on the European edge" triggers diagnostic tools that analyze rebuffering patterns, packet loss, buffer health, and CDN routing for your stream.
+Examples: "How do I configure SRT encryption in MistServer?", "What codec settings does OBS recommend for 1080p streaming?"
 
-**Platform operations** — in authenticated dashboard chat, Skipper can use Gateway tools for stream, recording, billing, and diagnostic workflows. Through MCP `ask_consultant`, mutation tools are blocked; use the dedicated MCP tools directly when your agent intends to create, update, or delete resources.
+### Troubleshooting
 
-**Automated monitoring** — where enabled, Skipper runs periodic health checks for eligible tenants with active streams and infrastructure, learns baseline patterns via Welford running averages, and flags anomalies. When something looks wrong, it runs a full diagnostic investigation and delivers a report with root cause and recommendations via configured email, WebSocket, or MCP channels.
+A question like "My viewers are buffering on the European edge" triggers diagnostic tools that analyze rebuffering patterns, packet loss, buffer health, and CDN routing for your stream.
 
-**General streaming knowledge** — codecs, protocols, bitrate planning, latency tradeoffs. Answers from general knowledge are tagged as `best_guess` so you know when to verify.
+### Platform operations
+
+In authenticated dashboard chat, Skipper can use Gateway tools for stream, recording, billing, and diagnostic workflows. Through MCP `ask_consultant`, mutation tools are blocked; use the dedicated MCP tools directly when your agent intends to create, update, or delete resources.
+
+### Automated monitoring
+
+Where enabled, Skipper runs periodic health checks for eligible tenants with active streams and infrastructure, learns baseline patterns via Welford running averages, and flags anomalies. When something looks wrong, it runs a full diagnostic investigation and delivers a report with root cause and recommendations via configured email, WebSocket, or MCP channels.
+
+### General streaming knowledge
+
+Codecs, protocols, bitrate planning, latency tradeoffs. Answers from general knowledge are tagged as `best_guess` so you know when to verify.
 
 ## Knowledge Base
 

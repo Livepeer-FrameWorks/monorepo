@@ -18,6 +18,12 @@ const (
 	MarketingSubscriberCreated = "marketing_subscriber_created"
 )
 
+// NodeFingerprintUnbound is Quartermaster's audit of a platform operator
+// deleting a node fingerprint binding. It is operator activity on
+// infrastructure, so it never carries an envelope tenant; the binding's tenant,
+// when it had one, rides in the payload.
+const NodeFingerprintUnbound = "node.fingerprint_unbound"
+
 // domainCounterparts maps service_events types that Quartermaster still writes
 // alongside their domain event to that domain event type, whose registry spec
 // decides the scope.
@@ -34,7 +40,7 @@ var domainCounterparts = map[string]string{
 // a tenant.
 func PlatformScoped(eventType string) bool {
 	switch eventType {
-	case PlatformIncidentUpdated, MarketingContactDelivered, MarketingSubscriberCreated:
+	case PlatformIncidentUpdated, MarketingContactDelivered, MarketingSubscriberCreated, NodeFingerprintUnbound:
 		return true
 	}
 	domainType, ok := domainCounterparts[eventType]

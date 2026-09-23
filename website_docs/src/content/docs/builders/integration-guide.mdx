@@ -22,6 +22,10 @@ basic object model: stream keys, playback IDs, push ingest, and pull-input strea
 | No framework / CDN | `@livepeer-frameworks/player-wc` (IIFE) | `@livepeer-frameworks/streamcrafter-wc` (IIFE) |
 | Custom / headless  | `@livepeer-frameworks/player-core`      | `@livepeer-frameworks/streamcrafter-core`      |
 
+These packages cover the browser side. To create streams, upload files, sign viewer tokens, or
+verify webhooks from your backend, use the [SDKs](/builders/sdks): `@livepeer-frameworks/api`
+(TypeScript), `github.com/Livepeer-FrameWorks/sdk-go` (Go), or `livepeer-frameworks` (Python).
+
 ### How much customization do you need?
 
 **Level 1: Drop-in Component**
@@ -30,7 +34,7 @@ Use the component as-is. No custom UI work required.
 
 ```tsx
 // Player
-<Player contentId="pk_..." contentType="live" />
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live" />
 
 // Studio
 <StreamCrafter whipUrl="..." />
@@ -46,7 +50,7 @@ Replace the default layout with framework sub-components. Mix our components wit
 
 ```tsx
 // Player — custom control bar
-<Player contentId="pk_..." contentType="live">
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live">
   <PlayButton />
   <VolumeControl />
   <SettingsMenu />
@@ -107,7 +111,7 @@ Run the media engine without any visual UI. Full programmatic control.
 // Vanilla player (no built-in UI)
 const player = createPlayer({
   target: "#player",
-  contentId: "pk_...",
+  contentId: "a1b2c3d4e5f6g7h8",
   skin: false,
 });
 
@@ -115,7 +119,7 @@ const player = createPlayer({
 const studio = createStreamCrafter({ whipUrl: "..." });
 
 // WC — provide your own controls slot content
-<fw-player content-id="pk_..."><div slot="controls"></div></fw-player>
+<fw-player content-id="a1b2c3d4e5f6g7h8"><div slot="controls"></div></fw-player>
 <fw-streamcrafter whip-url="..." controls="false"></fw-streamcrafter>
 ```
 
@@ -151,7 +155,7 @@ Framework packages re-export core types. You only need to install one package pe
 ### Themed Player with Custom Controls
 
 ```tsx
-<Player contentId="pk_..." contentType="live" options={{ theme: "tokyo-night" }}>
+<Player contentId="a1b2c3d4e5f6g7h8" contentType="live" options={{ theme: "tokyo-night" }}>
   <PlayButton />
   <SettingsMenu />
   <div className="spacer" />
@@ -186,7 +190,7 @@ function LiveDashboard() {
         <StreamCrafter whipUrl="..." />
       </div>
       <div className="preview">
-        <Player contentId="pk_..." contentType="live" />
+        <Player contentId="a1b2c3d4e5f6g7h8" contentType="live" />
       </div>
     </div>
   );
@@ -200,11 +204,11 @@ function LiveDashboard() {
 <html>
   <body>
     <!-- Player -->
-    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
-    <fw-player content-id="pk_..." content-type="live" autoplay muted></fw-player>
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
+    <fw-player content-id="a1b2c3d4e5f6g7h8" content-type="live" autoplay muted></fw-player>
 
     <!-- Studio -->
-    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
     <fw-streamcrafter whip-url="..." initial-profile="broadcast"></fw-streamcrafter>
   </body>
 </html>

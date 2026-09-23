@@ -21,9 +21,9 @@ import "@livepeer-frameworks/streamcrafter-wc/define";
 
 ```html
 <!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
+<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
 <!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"></script>
 ```
 
 Shadow DOM encapsulates all CSS — host page styles won't break controls.
@@ -103,12 +103,14 @@ studio.pc.on("stateChange", ({ state }) => console.log(state));
 
 ## Slot-based Composition
 
-When you provide content in the default slot, it replaces the built-in controls while the element still manages the connection:
+With `controls="false"`, the element renders only its default slot, so slotted content replaces the
+built-in UI while the element still manages the connection. Slotted elements are not wired to the
+studio automatically; connect them through `.pc` as shown below.
 
 ```html
-<fw-streamcrafter whip-url="..." controls="false">
+<fw-streamcrafter id="studio" whip-url="..." controls="false">
   <div class="my-controls">
-    <fw-sc-volume></fw-sc-volume>
+    <fw-sc-volume id="camera-volume"></fw-sc-volume>
     <button id="go-live">Go Live</button>
   </div>
 </fw-streamcrafter>
@@ -116,21 +118,60 @@ When you provide content in the default slot, it replaces the built-in controls 
 
 ## Standalone Sub-Components
 
-All sub-components can be used outside `<fw-streamcrafter>` by referencing it with the `for` attribute:
+The `fw-sc-*` sub-components are presentational. They do not find or bind to a
+`<fw-streamcrafter>` on their own: the `for` attribute is declared but not used, and nesting them
+inside the element does not connect them either. Feed them data through JS properties and act on
+their events or callback properties:
 
 ```html
 <fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
 
-<div class="my-custom-layout">
-  <fw-sc-volume for="studio"></fw-sc-volume>
-  <fw-sc-compositor for="studio"></fw-sc-compositor>
-  <fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
-  <fw-sc-layer-list for="studio"></fw-sc-layer-list>
-  <fw-sc-advanced for="studio"></fw-sc-advanced>
-</div>
+<fw-sc-volume id="camera-volume"></fw-sc-volume>
+<fw-sc-compositor id="layouts"></fw-sc-compositor>
+
+<script type="module">
+  const studio = document.getElementById("studio");
+  const volume = document.getElementById("camera-volume");
+  const layouts = document.getElementById("layouts");
+
+  // The controller is created during the element's first update.
+  await studio.updateComplete;
+  const sceneManager = () => studio.pc.getController()?.getSceneManager() ?? null;
+
+  function sync() {
+    const sources = studio.pc.getSources();
+    const scene = sceneManager()?.getActiveScene();
+    volume.value = sources[0]?.volume ?? 1;
+    layouts.isEnabled = !!sceneManager();
+    layouts.isInitialized = !!scene;
+    layouts.sources = sources;
+    layouts.layers = scene?.layers ?? [];
+    layouts.currentLayout = sceneManager()?.getCurrentLayout() ?? null;
+  }
+
+  volume.addEventListener("fw-sc-volume-change", (e) => {
+    const [source] = studio.pc.getSources();
+    if (source) studio.pc.setSourceVolume(source.id, e.detail.value);
+  });
+  layouts.addEventListener("fw-sc-layout-apply", (e) => {
+    sceneManager()?.applyLayout(e.detail.layout);
+    sync();
+  });
+  layouts.addEventListener("fw-sc-cycle-source-order", (e) => {
+    sceneManager()?.cycleSourceOrder(e.detail.direction);
+    sync();
+  });
+
+  for (const event of ["sourceAdded", "sourceRemoved", "sourceUpdated"]) {
+    studio.pc.on(event, sync);
+  }
+  studio.addEventListener("fw-sc-state-change", sync);
+</script>
 ```
 
-Without `for`, sub-components look for the nearest ancestor `<fw-streamcrafter>` using `closest()`.
+`<fw-sc-scene-switcher>` and `<fw-sc-layer-list>` follow the same pattern: set `scenes` /
+`activeSceneId` or `layers` / `sources`, and handle actions through callback properties such as
+`onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, and `onReorder`.
 
 ### Sub-Component Reference
 
@@ -151,7 +192,7 @@ Without `for`, sub-components look for the nearest ancestor `<fw-streamcrafter>`
 | `stream-key`        | `string`  | —             | Stream key used with `gateway-url`                                     |
 | `initial-profile`   | `string`  | `"broadcast"` | Quality preset                                                         |
 | `controls`          | `string`  | `""`          | Set to `"false"` for headless mode                                     |
-| `theme`             | `string`  | `"default"`   | Theme preset name                                                      |
+| `theme`             | `string`  | `""`          | Theme preset name (empty uses the built-in default tokens)             |
 | `locale`            | `string`  | `"en"`        | UI language                                                            |
 | `enable-compositor` | `boolean` | `true`        | Enable compositor (set `el.enableCompositor = false` in JS to disable) |
 | `debug`             | `boolean` | `false`       | Enable debug logging                                                   |

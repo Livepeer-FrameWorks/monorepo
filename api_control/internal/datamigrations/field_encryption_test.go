@@ -196,18 +196,106 @@ func TestRunFieldEncryptionDryRunReportsWithoutWriting(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}).
 			AddRow("target-bad", "enc:v3:missing:not-valid-base64").
 			AddRow("target-good", legacyStored))
+	mock.ExpectQuery(regexp.QuoteMeta(fieldEncryptionCandidateQuery(spec))).
+		WithArgs(2, "enc:v3:primary:", spec.table, spec.column, "target-good", int64(0)).
+		WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}).
+			AddRow("target-late", "enc:v3:primary:not-valid-base64"))
+	expectEmptyDryRunColumns(mock, 2, encryptedColumns[1:])
 
+	// A persisted mid-sweep position must not narrow the preview.
+	checkpoint, err := json.Marshal(fieldEncryptionCheckpoint{
+		Column:               3,
+		AfterID:              "zzzz",
+		LegacyKeyFingerprint: fieldEncryptionLegacyKeyFingerprint(settings, "legacy-jwt-key-material-32-bytes"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{
-		BatchSize: 2,
-		DryRun:    true,
-		Checkpoint: fieldEncryptionTestCheckpoint(t,
-			"legacy-jwt-key-material-32-bytes"),
+		BatchSize:  2,
+		DryRun:     true,
+		Checkpoint: checkpoint,
 	}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if progress.Scanned != 2 || progress.Changed != 1 || progress.Errors != 1 || progress.Skipped != 1 {
+	if progress.Scanned != 3 || progress.Changed != 1 || progress.Errors != 2 || progress.Skipped != 2 || progress.Done {
 		t.Fatalf("unexpected dry-run progress: %+v", progress)
+	}
+	wantFindings := []string{
+		"undecryptable table=commodore.push_targets column=target_uri row_id=target-bad error=unknown_key_id key_id=missing",
+		"undecryptable table=commodore.push_targets column=target_uri row_id=target-late error=authentication_failed key_id=primary",
+	}
+	if progress.FindingsTotal != 2 || fmt.Sprint(progress.Findings) != fmt.Sprint(wantFindings) {
+		t.Fatalf("dry run did not name every failing row: total=%d findings=%q", progress.FindingsTotal, progress.Findings)
+	}
+	if len(progress.Summary) != len(encryptedColumns) ||
+		progress.Summary[0] != "scanned table=commodore.push_targets column=target_uri rows=3 undecryptable=2" ||
+		progress.Summary[1] != "scanned table=commodore.stream_pull_sources column=source_uri_enc rows=0 undecryptable=0" {
+		t.Fatalf("dry run summary = %q", progress.Summary)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func expectEmptyDryRunColumns(mock sqlmock.Sqlmock, batchSize int, specs []encryptedColumn) {
+	for _, spec := range specs {
+		mock.ExpectQuery(regexp.QuoteMeta(fieldEncryptionCandidateQuery(spec))).
+			WithArgs(batchSize, "enc:v3:primary:", spec.table, spec.column, "", int64(0)).
+			WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}))
+	}
+}
+
+func TestFieldEncryptionFailureKindNeverEchoesFieldMaterial(t *testing.T) {
+	known := map[string]bool{"primary": true}
+	for stored, want := range map[string]string{
+		"enc:v3:retired:c2VjcmV0":   "unknown_key_id key_id=retired",
+		"enc:v3:primary:c2VjcmV0":   "authentication_failed key_id=primary",
+		"enc:v3:bad key!:c2VjcmV0":  "malformed_envelope",
+		"enc:v3:no-separator":       "malformed_envelope",
+		"enc:v1:c2VjcmV0c2VjcmV0":   "legacy_key_mismatch",
+		"enc:v2:c2VjcmV0c2VjcmV0":   "legacy_key_mismatch",
+		"enc:v9:c2VjcmV0c2VjcmV0":   fieldEncryptionDecryptError,
+		"plaintext-should-not-fail": fieldEncryptionDecryptError,
+	} {
+		if got := fieldEncryptionFailureKind(stored, known); got != want {
+			t.Fatalf("fieldEncryptionFailureKind(%q) = %q, want %q", stored, got, want)
+		}
+	}
+}
+
+func TestRunFieldEncryptionDryRunCapsFindings(t *testing.T) {
+	settings := testFieldEncryptionSettings("legacy-jwt-key-material-32-bytes")
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	spec := encryptedColumns[0]
+	const failing = fieldEncryptionFindingsLimit + 5
+	rows := sqlmock.NewRows([]string{spec.id, spec.column})
+	for i := 0; i < failing; i++ {
+		rows.AddRow(fmt.Sprintf("target-%03d", i), "enc:v3:retired:not-valid-base64")
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(fieldEncryptionCandidateQuery(spec))).
+		WithArgs(failing, "enc:v3:primary:", spec.table, spec.column, "", int64(0)).
+		WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta(fieldEncryptionCandidateQuery(spec))).
+		WithArgs(failing, "enc:v3:primary:", spec.table, spec.column, fmt.Sprintf("target-%03d", failing-1), int64(0)).
+		WillReturnRows(sqlmock.NewRows([]string{spec.id, spec.column}))
+	expectEmptyDryRunColumns(mock, failing, encryptedColumns[1:])
+
+	progress, err := runFieldEncryption(context.Background(), db, datamigrate.RunOptions{
+		BatchSize:  failing,
+		DryRun:     true,
+		Checkpoint: fieldEncryptionTestCheckpoint(t, "legacy-jwt-key-material-32-bytes"),
+	}, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.FindingsTotal != failing || len(progress.Findings) != fieldEncryptionFindingsLimit {
+		t.Fatalf("findings total=%d shown=%d, want total=%d shown=%d", progress.FindingsTotal, len(progress.Findings), failing, fieldEncryptionFindingsLimit)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

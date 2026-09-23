@@ -97,7 +97,8 @@ Available actions:
 
 - `acknowledgeIncident(id:)` marks a firing incident as acknowledged. Alert ingestion continues,
   and the incident still auto-resolves when every alert resolves.
-- `assignIncident(id:, assigneeUserId:)` assigns a user; pass `null` to clear the assignment.
+- `assignIncident(id:, assigneeUserId:)` assigns the incident to yourself (pass your own user ID);
+  pass `null` to clear the assignment. Assigning another user returns a `ValidationError`.
 - `addIncidentNote(id:, body:)` adds operational context to the timeline, including after
   resolution.
 - `resolveIncident(id:)` resolves manually. Repeats of the same firing alerts do not reopen it;

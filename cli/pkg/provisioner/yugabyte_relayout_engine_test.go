@@ -647,6 +647,13 @@ END $$;`)
 	if _, err := first.Acquire(ctx); err != nil {
 		t.Fatalf("first Acquire: %v", err)
 	}
+	_, stopHolding := first.Hold(ctx)
+	holding := true
+	t.Cleanup(func() {
+		if holding {
+			stopHolding()
+		}
+	})
 	worker := exec.Command("docker", "exec", "-e", "PGAPPNAME="+RelayoutApplicationName(first.LeaseOwner), container,
 		"ysqlsh", "-X", "-h", host, "-U", "yugabyte", "-d", "takeover_probe", "-c", "SELECT pg_sleep(600)")
 	if err := worker.Start(); err != nil {
@@ -698,6 +705,8 @@ ysqlsh -X -h %s -U yugabyte -d takeover_probe -c 'CREATE TABLE public.stale_writ
 		t.Fatal("refusing a live lease ended the holder's script")
 	default:
 	}
+	stopHolding()
+	holding = false
 	time.Sleep(first.LeaseTTL + time.Second)
 	record, err := second.Acquire(ctx)
 	if err != nil {

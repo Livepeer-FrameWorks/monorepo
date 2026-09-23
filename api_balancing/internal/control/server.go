@@ -4402,10 +4402,7 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 		grpcutil.SanitizeUnaryServerInterceptor(),
 	}
 
-	nodeControlMethods := []string{
-		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName,
-		foghornpb.NodeControlService_GetNodeHealth_FullMethodName,
-	}
+	nodeControlMethods := jwtCapableMethods()
 
 	if cfg.ServiceToken != "" {
 		skipMethods := []string{
@@ -4447,10 +4444,21 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 	return opts
 }
 
+// jwtCapableMethods are the RPCs that accept a user JWT as well as the service
+// token: tenant node lifecycle, and operator diagnostics whose handlers require
+// a platform-operator session. Every other method stays service-token only.
+func jwtCapableMethods() []string {
+	return []string{
+		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName,
+		foghornpb.NodeControlService_GetNodeHealth_FullMethodName,
+		foghornpb.DVRControlService_DiagnoseDVR_FullMethodName,
+	}
+}
+
 func nodeControlAuthInterceptor(serviceToken, jwtSecret string, metadataPolicy middleware.ServiceTokenMetadataPolicy, logger logging.Logger) grpc.UnaryServerInterceptor {
-	protected := map[string]bool{
-		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
-		foghornpb.NodeControlService_GetNodeHealth_FullMethodName:          true,
+	protected := map[string]bool{}
+	for _, method := range jwtCapableMethods() {
+		protected[method] = true
 	}
 	serviceToken = strings.TrimSpace(serviceToken)
 	jwtSecret = strings.TrimSpace(jwtSecret)

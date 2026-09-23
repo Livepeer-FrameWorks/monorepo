@@ -9,7 +9,7 @@
 | Glass-to-glass       | 2-5 seconds           | 0.5-2 seconds            | Under 500 ms                     |
 | Packet loss handling | None (TCP retransmit) | ARQ retransmission       | NACK + FEC                       |
 | Firewall             | Good (TCP)            | May be blocked (UDP)     | Excellent (HTTPS)                |
-| Encryption           | RTMPS (TLS wrap)      | AES-128/256 built-in     | DTLS built-in                    |
+| Encryption           | None on FrameWorks    | AES-128/256 built-in     | DTLS built-in                    |
 | Encoder support      | Universal             | OBS, FFmpeg, vMix, Larix | Browser only (StreamCrafter SDK) |
 
 ## When to Use Each Protocol
@@ -22,7 +22,7 @@ Best for: general-purpose streaming with desktop encoders.
 - Simple setup: just paste the ingest URL and stream key
 - Works behind most firewalls (TCP port 1935 is rarely blocked)
 - Adequate latency for most use cases (2-5 seconds)
-- Use RTMPS for encrypted transport
+- FrameWorks RTMP ingest is unencrypted; use SRT or WHIP when the contribution link must be encrypted
 
 FrameWorks URL: `rtmp://edge-ingest.{media-cluster}.frameworks.network/live/{streamKey}`
 

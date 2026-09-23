@@ -21,9 +21,9 @@ import "@livepeer-frameworks/player-wc/define";
 
 ```html
 <!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/player-wc/fw-player.js"></script>
+<script src="https://unpkg.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
 <!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
 ```
 
 Shadow DOM encapsulates all CSS — host page styles won't break controls.
@@ -54,8 +54,8 @@ use the dashboard playback DNS URL directly.
 ### DVR and Clips
 
 ```html
-<fw-player content-type="dvr" content-id="pk_..."></fw-player>
-<fw-player content-type="clip" content-id="pk_..."></fw-player>
+<fw-player content-type="dvr" content-id="a1b2c3d4e5f6g7h8"></fw-player>
+<fw-player content-type="clip" content-id="a1b2c3d4e5f6g7h8"></fw-player>
 ```
 
 ## Custom Controls Mode
@@ -63,7 +63,7 @@ use the dashboard playback DNS URL directly.
 Provide your own controls via the `controls` slot. Access the controller for programmatic control:
 
 ```html
-<fw-player id="player" content-type="live" content-id="pk_..." autoplay muted></fw-player>
+<fw-player id="player" content-type="live" content-id="a1b2c3d4e5f6g7h8" autoplay muted></fw-player>
 
 <script>
   const player = document.getElementById("player");
@@ -86,7 +86,7 @@ Provide your own controls via the `controls` slot. Access the controller for pro
 Provide custom controls via the `controls` slot and call the player element's exposed controller:
 
 ```html
-<fw-player id="slot-player" content-id="pk_..." content-type="live">
+<fw-player id="slot-player" content-id="a1b2c3d4e5f6g7h8" content-type="live">
   <div slot="controls">
     <button type="button" data-action="play">Play/Pause</button>
     <button type="button" data-action="back">Back 10s</button>
@@ -119,7 +119,7 @@ import "@livepeer-frameworks/player-wc";
 ```
 
 ```html
-<fw-player id="my-player" content-id="pk_..." content-type="live"></fw-player>
+<fw-player id="my-player" content-id="a1b2c3d4e5f6g7h8" content-type="live"></fw-player>
 
 <div class="external-controls">
   <fw-play-button for="my-player"></fw-play-button>
@@ -143,44 +143,49 @@ import "@livepeer-frameworks/player-wc";
 
 ## Attributes Reference
 
-| Attribute                  | Type                  | Default     | Description                                                                                           |
-| -------------------------- | --------------------- | ----------- | ----------------------------------------------------------------------------------------------------- |
-| `content-id`               | `string`              | —           | Playback ID                                                                                           |
-| `content-type`             | `string`              | `"live"`    | `live`, `dvr`, `clip`, or `vod`                                                                       |
-| `gateway-url`              | `string`              | Official    | Gateway GraphQL endpoint override                                                                     |
-| `mist-url`                 | `string`              | —           | Direct MistServer URL                                                                                 |
-| `auth-token`               | `string`              | —           | Bearer token for Gateway GraphQL resolution                                                           |
-| `playback-token`           | `string`              | —           | Viewer JWT for playback access control                                                                |
-| `playback-token-transport` | `"query" \| "header"` | `"query"`   | Sends the viewer JWT as `?jwt=` or as `Authorization: Bearer` where player transports can set headers |
-| `thumbnail-url`            | `string`              | —           | Poster image before playback                                                                          |
-| `autoplay`                 | `boolean`             | `true`      | Auto-start playback                                                                                   |
-| `muted`                    | `boolean`             | `false`     | Start muted                                                                                           |
-| `controls`                 | `boolean`             | `false`     | Compatibility no-op                                                                                   |
-| `no-controls`              | `boolean`             | `false`     | Hide the built-in controls                                                                            |
-| `stock-controls`           | `boolean`             | `false`     | Use browser-native video controls                                                                     |
-| `native-controls`          | `boolean`             | `false`     | Alias for `stock-controls`                                                                            |
-| `animate-preroll`          | `boolean`             | `false`     | Cycle thumbnail sprite tiles as a preroll animation before playback                                   |
-| `theme`                    | `string`              | `"default"` | Theme preset                                                                                          |
-| `locale`                   | `string`              | `"en"`      | Built-in UI locale                                                                                    |
-| `playback-mode`            | `string`              | `"auto"`    | Controls/dev-panel mode label; current WC initial selection does not apply it                         |
-| `dev-mode`                 | `boolean`             | `false`     | Show dev panel                                                                                        |
-| `debug`                    | `boolean`             | `false`     | Debug logging                                                                                         |
+| Attribute                  | Type                  | Default     | Description                                                                                                                                                                      |
+| -------------------------- | --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `content-id`               | `string`              | —           | Playback ID                                                                                                                                                                      |
+| `content-type`             | `string`              | —           | `live`, `dvr`, `clip`, or `vod`; auto-detected from Gateway or Mist metadata when omitted                                                                                        |
+| `gateway-url`              | `string`              | Official    | Gateway GraphQL endpoint override                                                                                                                                                |
+| `mist-url`                 | `string`              | —           | Direct MistServer URL                                                                                                                                                            |
+| `auth-token`               | `string`              | —           | Bearer token for Gateway GraphQL resolution                                                                                                                                      |
+| `playback-token`           | `string`              | —           | Viewer JWT for playback access control                                                                                                                                           |
+| `playback-token-transport` | `"query" \| "header"` | `"query"`   | Sends the viewer JWT as `?jwt=` or as `Authorization: Bearer` where player transports can set headers                                                                            |
+| `thumbnail-url`            | `string`              | —           | Poster image before playback                                                                                                                                                     |
+| `autoplay`                 | `boolean`             | `true`      | Auto-start playback                                                                                                                                                              |
+| `muted`                    | `boolean`             | `false`     | Start muted                                                                                                                                                                      |
+| `controls`                 | `boolean`             | `false`     | Compatibility no-op                                                                                                                                                              |
+| `no-controls`              | `boolean`             | `false`     | Hide the built-in controls                                                                                                                                                       |
+| `stock-controls`           | `boolean`             | `false`     | Use browser-native video controls                                                                                                                                                |
+| `native-controls`          | `boolean`             | `false`     | Alias for `stock-controls`                                                                                                                                                       |
+| `animate-preroll`          | `boolean`             | `false`     | Cycle thumbnail sprite tiles as a preroll animation before playback                                                                                                              |
+| `theme`                    | `string`              | `"default"` | Theme preset                                                                                                                                                                     |
+| `locale`                   | `string`              | `"en"`      | Built-in UI locale                                                                                                                                                               |
+| `playback-mode`            | `string`              | `"auto"`    | Protocol selection mode (see [Playback Modes](/builders/playback-advanced/#playback-modes)); changing only this attribute after the player has started does not re-run selection |
+| `dev-mode`                 | `boolean`             | `false`     | Show dev panel                                                                                                                                                                   |
+| `debug`                    | `boolean`             | `false`     | Debug logging                                                                                                                                                                    |
 
 ## Theming
 
-```css
-fw-player {
-  --fw-accent: 200 80% 60%;
-  --fw-surface: 230 15% 12%;
-  --fw-radius: 8px;
-}
-```
-
-Or use a preset:
+Use a preset with the `theme` attribute:
 
 ```html
 <fw-player theme="tokyo-night" ...></fw-player>
 ```
+
+Or set individual tokens with the `themeOverrides` property:
+
+```js
+document.querySelector("fw-player").themeOverrides = {
+  accent: "200 80% 60%",
+  surface: "230 15% 12%",
+  radius: "8px",
+};
+```
+
+Setting `--fw-*` custom properties on the `fw-player` element from page CSS has no effect: the
+player redeclares every token on its surface element inside the shadow root.
 
 ## Using with Vue
 
@@ -193,7 +198,7 @@ Or use a preset:
 import "@livepeer-frameworks/player-wc/define";
 import { ref } from "vue";
 
-const contentId = ref("pk_...");
+const contentId = ref("a1b2c3d4e5f6g7h8");
 </script>
 ```
 

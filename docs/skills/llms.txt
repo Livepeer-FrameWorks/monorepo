@@ -19,7 +19,7 @@
 
 ## Migrating
 
-FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and Livepeer Studio. It runs as hosted SaaS or with customer-operated hybrid edge capacity; customer-operated Foghorn and whole-platform self-hosting are outside the supported product.
+FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and Livepeer Studio. It runs as hosted SaaS, with customer-operated edges attached to the FrameWorks platform, or fully self-hosted as an independent platform (public domain, deployed with the `frameworks` CLI). Federating a self-hosted platform with the FrameWorks network is not supported.
 
 - [Migration overview](https://logbook.frameworks.network/migrate): Pick your starting point
 - [Migrate from Mux](https://logbook.frameworks.network/migrate/mux): REST → GraphQL, signed playback, simulcast, recordings

@@ -6,9 +6,15 @@
 
 > Warning: This stack is in active beta. Interfaces and schemas change frequently. If deploying in a production environment, be careful with data migrations when updating major versions. Plan ahead for stuff to break.
 
-**Open live video platform with managed hybrid edges.** Run MistServer and Helmsman edge capacity on your infrastructure while FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane. Customer-operated Foghorn or whole-stack hosting is not part of the supported edge product.
+**Open live video platform:** apps, real‑time APIs, and analytics, released into the public domain. Three ways to run it:
 
-An open streaming stack for live video: apps, real‑time APIs, and analytics. Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
+- **Hosted:** use the FrameWorks platform.
+- **Self-hosted edge:** run the edge bundle (Caddy, MistServer, Helmsman) on your infrastructure, attached to the FrameWorks platform, which operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane.
+- **Full self-host:** run the entire stack as your own independent platform, provisioned and upgraded with the `frameworks` CLI from a GitOps repository.
+
+Federating an independently operated platform with the FrameWorks platform as one network is not supported.
+
+Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
 
 ## Packages & Bundles
 
@@ -22,6 +28,14 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
 | [@livepeer-frameworks/streamcrafter-svelte](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | [![npm unpacked size](https://img.shields.io/npm/unpacked-size/%40livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | [![install size](https://packagephobia.com/badge?p=@livepeer-frameworks/streamcrafter-svelte)](https://packagephobia.com/result?p=@livepeer-frameworks/streamcrafter-svelte) |
 | [@livepeer-frameworks/streamcrafter-wc](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-wc)         | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-wc)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-wc)         | [![npm unpacked size](https://img.shields.io/npm/unpacked-size/%40livepeer-frameworks%2Fstreamcrafter-wc)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-wc)         | [![install size](https://packagephobia.com/badge?p=@livepeer-frameworks/streamcrafter-wc)](https://packagephobia.com/result?p=@livepeer-frameworks/streamcrafter-wc)         |
 | [@livepeer-frameworks/streamcrafter-core](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     | [![npm unpacked size](https://img.shields.io/npm/unpacked-size/%40livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     | [![install size](https://packagephobia.com/badge?p=@livepeer-frameworks/streamcrafter-core)](https://packagephobia.com/result?p=@livepeer-frameworks/streamcrafter-core)     |
+
+API SDKs for TypeScript, Go and Python are generated from one set of operations (`pkg/graphql/public`), released under one version, and tested against the shared fixtures in `sdk_conformance/`. See the [SDK guide](https://logbook.frameworks.network/builders/sdks).
+
+| Language   | Package                                                                                           | Version                                                                                                                                         | Source        |
+| ---------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| TypeScript | [@livepeer-frameworks/api](https://www.npmjs.com/package/@livepeer-frameworks/api)                | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fapi)](https://www.npmjs.com/package/@livepeer-frameworks/api)                     | `npm_api/`    |
+| Go         | [github.com/Livepeer-FrameWorks/sdk-go](https://pkg.go.dev/github.com/Livepeer-FrameWorks/sdk-go) | [![Go Reference](https://pkg.go.dev/badge/github.com/Livepeer-FrameWorks/sdk-go.svg)](https://pkg.go.dev/github.com/Livepeer-FrameWorks/sdk-go) | `sdk_go/`     |
+| Python     | [livepeer-frameworks](https://pypi.org/project/livepeer-frameworks/)                              | [![PyPI](https://img.shields.io/pypi/v/livepeer-frameworks)](https://pypi.org/project/livepeer-frameworks/)                                     | `sdk_python/` |
 
 | Bundle        | Total Emitted Size                                                                                                                                                                                                                                        |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -72,6 +86,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Foredeck / Marketing Site (`website_marketing`): public site
   - Logbook / Documentation (`website_docs`): Astro Starlight docs
   - Player / Studio packages (`npm_player`, `npm_studio`): embeddable playback and ingest components
+  - API SDKs (`npm_api`, `sdk_go`, `sdk_python`): typed GraphQL clients with uploads, playback token signing, and webhook verification; `sdk_conformance/` holds the fixtures all three pass
 - Observability & Operations
   - VictoriaMetrics / Prometheus / Grafana / Metabase: metrics, dashboards, and BI
   - Lookout (`api_incidents`): incidents from Alertmanager, operator notifications, and tenant incident feed

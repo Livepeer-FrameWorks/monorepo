@@ -2908,6 +2908,8 @@ const (
 	NodeService_GetNodeByLogicalName_FullMethodName    = "/quartermaster.NodeService/GetNodeByLogicalName"
 	NodeService_UpdateNodeHardware_FullMethodName      = "/quartermaster.NodeService/UpdateNodeHardware"
 	NodeService_ReportAliveNodes_FullMethodName        = "/quartermaster.NodeService/ReportAliveNodes"
+	NodeService_ListNodeFingerprints_FullMethodName    = "/quartermaster.NodeService/ListNodeFingerprints"
+	NodeService_UnbindNodeFingerprint_FullMethodName   = "/quartermaster.NodeService/UnbindNodeFingerprint"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -2937,6 +2939,15 @@ type NodeServiceClient interface {
 	// Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
 	// Called periodically by Foghorn (60s) with connected edge node IDs.
 	ReportAliveNodes(ctx context.Context, in *ReportAliveNodesRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Operator-only fingerprint administration. Both require a
+	// platform-operator JWT; service and tenant credentials are refused.
+	// ListNodeFingerprints reads bindings across every tenant; duplicates are
+	// the rows the unique indexes uq_qm_fingerprints_machine and
+	// uq_qm_fingerprints_macs would reject.
+	ListNodeFingerprints(ctx context.Context, in *ListNodeFingerprintsRequest, opts ...grpc.CallOption) (*ListNodeFingerprintsResponse, error)
+	// UnbindNodeFingerprint deletes one node's fingerprint binding and records
+	// node.fingerprint_unbound with the operator and reason.
+	UnbindNodeFingerprint(ctx context.Context, in *UnbindNodeFingerprintRequest, opts ...grpc.CallOption) (*UnbindNodeFingerprintResponse, error)
 }
 
 type nodeServiceClient struct {
@@ -3057,6 +3068,26 @@ func (c *nodeServiceClient) ReportAliveNodes(ctx context.Context, in *ReportAliv
 	return out, nil
 }
 
+func (c *nodeServiceClient) ListNodeFingerprints(ctx context.Context, in *ListNodeFingerprintsRequest, opts ...grpc.CallOption) (*ListNodeFingerprintsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodeFingerprintsResponse)
+	err := c.cc.Invoke(ctx, NodeService_ListNodeFingerprints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeServiceClient) UnbindNodeFingerprint(ctx context.Context, in *UnbindNodeFingerprintRequest, opts ...grpc.CallOption) (*UnbindNodeFingerprintResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnbindNodeFingerprintResponse)
+	err := c.cc.Invoke(ctx, NodeService_UnbindNodeFingerprint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -3084,6 +3115,15 @@ type NodeServiceServer interface {
 	// Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
 	// Called periodically by Foghorn (60s) with connected edge node IDs.
 	ReportAliveNodes(context.Context, *ReportAliveNodesRequest) (*emptypb.Empty, error)
+	// Operator-only fingerprint administration. Both require a
+	// platform-operator JWT; service and tenant credentials are refused.
+	// ListNodeFingerprints reads bindings across every tenant; duplicates are
+	// the rows the unique indexes uq_qm_fingerprints_machine and
+	// uq_qm_fingerprints_macs would reject.
+	ListNodeFingerprints(context.Context, *ListNodeFingerprintsRequest) (*ListNodeFingerprintsResponse, error)
+	// UnbindNodeFingerprint deletes one node's fingerprint binding and records
+	// node.fingerprint_unbound with the operator and reason.
+	UnbindNodeFingerprint(context.Context, *UnbindNodeFingerprintRequest) (*UnbindNodeFingerprintResponse, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -3126,6 +3166,12 @@ func (UnimplementedNodeServiceServer) UpdateNodeHardware(context.Context, *Updat
 }
 func (UnimplementedNodeServiceServer) ReportAliveNodes(context.Context, *ReportAliveNodesRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportAliveNodes not implemented")
+}
+func (UnimplementedNodeServiceServer) ListNodeFingerprints(context.Context, *ListNodeFingerprintsRequest) (*ListNodeFingerprintsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeFingerprints not implemented")
+}
+func (UnimplementedNodeServiceServer) UnbindNodeFingerprint(context.Context, *UnbindNodeFingerprintRequest) (*UnbindNodeFingerprintResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnbindNodeFingerprint not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -3346,6 +3392,42 @@ func _NodeService_ReportAliveNodes_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_ListNodeFingerprints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodeFingerprintsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).ListNodeFingerprints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_ListNodeFingerprints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).ListNodeFingerprints(ctx, req.(*ListNodeFingerprintsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeService_UnbindNodeFingerprint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnbindNodeFingerprintRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).UnbindNodeFingerprint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_UnbindNodeFingerprint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).UnbindNodeFingerprint(ctx, req.(*UnbindNodeFingerprintRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3396,6 +3478,14 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportAliveNodes",
 			Handler:    _NodeService_ReportAliveNodes_Handler,
+		},
+		{
+			MethodName: "ListNodeFingerprints",
+			Handler:    _NodeService_ListNodeFingerprints_Handler,
+		},
+		{
+			MethodName: "UnbindNodeFingerprint",
+			Handler:    _NodeService_UnbindNodeFingerprint_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

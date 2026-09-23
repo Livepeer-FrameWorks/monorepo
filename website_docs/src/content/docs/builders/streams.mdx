@@ -98,7 +98,7 @@ Setting `record: true` at create time (or calling `startDVR(streamId)` later) cr
 stream entity** for the recording, with its own internal name and `playbackId`, distinct from the
 live stream:
 
-- **Live stream** — segments live in a shared-memory ring buffer of about 50 seconds. Right for
+- **Live stream** — segments live in a shared-memory ring buffer of about 2 minutes. Right for
   real-time playback and `CLIP_NOW` of recent moments.
 - **DVR stream** — segments are written to disk and archived under one recording artifact. Right
   for seek-back, longer clips, and post-event playback. The live DVR window is bounded for player

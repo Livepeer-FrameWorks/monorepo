@@ -385,14 +385,15 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("---\n\n")
 	b.WriteString("FrameWorks capabilities are available through the GraphQL API, MCP tools, dashboard, CLI, and documented operator workflows. This matrix shows what is usable now, what is expanding, and what remains planned.\n\n")
 	b.WriteString("## Why teams pick FrameWorks\n\n")
-	b.WriteString("- **Sovereign deployment options** — run FrameWorks as SaaS, add your own edge clusters, or self-host the video and control-plane stack without changing platforms.\n")
+	b.WriteString("- **Sovereign deployment options** — use FrameWorks hosted, attach your own edge nodes to it, or self-host the entire stack with the CLI and GitOps.\n")
 	b.WriteString("- **Complete live-video workflow** — ingest, playback, multistreaming, playback access control, 24/7 DVR, chapters, clips, VOD, thumbnails, and analytics in one control plane.\n")
 	b.WriteString("- **Deep routing and QoE visibility** — see viewer routing, stream health, geography, quality, and node performance instead of treating delivery as a black box.\n")
 	b.WriteString("- **Agent-native operations** — the dashboard, GraphQL API, and MCP tools expose the same platform controls for humans, automation, and AI agents.\n\n")
 	b.WriteString("## Availability key\n\n")
 	b.WriteString("- **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.\n")
 	b.WriteString("- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.\n")
-	b.WriteString("- **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).\n\n")
+	b.WriteString("- **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).\n")
+	b.WriteString("- **Not available** — outside the supported product; listed so the scope boundary is explicit.\n\n")
 	b.WriteString("Rows marked *(foundation)* are platform building blocks whose value shows up through the product capabilities built on them.\n\n")
 	b.WriteString("## Capability matrix\n\n")
 
@@ -564,8 +565,10 @@ func publicStatusLabel(status string) string {
 	switch status {
 	case "shipped":
 		return "Available"
-	case "partial", "gap":
+	case "partial":
 		return "Expanding"
+	case "gap":
+		return "Not available"
 	case "roadmap":
 		return "Planned"
 	default:

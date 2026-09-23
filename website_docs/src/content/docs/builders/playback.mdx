@@ -52,29 +52,38 @@ Your **Playback ID** is shown in the FrameWorks dashboard under **Playback Info*
 
 **Primary Protocols:**
 
-| URL Pattern                  | Protocol      | Description                                      |
-| ---------------------------- | ------------- | ------------------------------------------------ |
-| `/play/{id}/hls/index.m3u8`  | HLS (TS)      | Best compatibility — browsers, mobile, smart TVs |
-| `/play/{id}/cmaf/index.m3u8` | LL-HLS        | Lower latency HLS variant                        |
-| `/play/{id}/cmaf/index.mpd`  | DASH          | MPEG-DASH adaptive streaming                     |
-| `/play/{id}/webrtc`          | WebRTC (WHEP) | Ultra-low latency (~0.5s)                        |
-| `/play/{id}.mp4`             | MP4           | Progressive download                             |
-| `/play/{id}.webm`            | WebM          | Open format (VP8/VP9)                            |
+| URL Pattern                  | Protocol    | Description                                      |
+| ---------------------------- | ----------- | ------------------------------------------------ |
+| `/play/{id}/hls/index.m3u8`  | HLS (TS)    | Best compatibility — browsers, mobile, smart TVs |
+| `/play/{id}/cmaf/index.m3u8` | LL-HLS      | Lower latency HLS variant                        |
+| `/play/{id}/cmaf/index.mpd`  | DASH        | MPEG-DASH adaptive streaming                     |
+| `/play/{id}/whep`            | WHEP        | Standard WebRTC playback, sub-second latency     |
+| `/play/{id}/webrtc`          | Mist WebRTC | FrameWorks player transport; use WHEP elsewhere  |
+| `/play/{id}.mp4`             | MP4         | Progressive download                             |
+| `/play/{id}.webm`            | WebM        | Open format (VP8/VP9)                            |
 
 ```bash
 # Example URLs through Foghorn
 %PLAY_URL%/play/{playback-id}/hls/index.m3u8
-%PLAY_URL%/play/{playback-id}/webrtc
+%PLAY_URL%/play/{playback-id}/whep
 %PLAY_URL%/play/{playback-id}.mp4
 ```
 
+`/play` only accepts `GET`. For WHEP, request `/play/{id}/whep` to get a 307 redirect to the edge's
+WHEP endpoint, then send the WHEP `POST` (SDP offer) to that edge URL.
+
+For WebRTC in your own player or a third-party one, use WHEP (and WHIP for ingest): they are the
+standard signalling protocols. `/webrtc` is MistServer's WebSocket-signalled WebRTC, which carries
+extra signalling the FrameWorks player uses. Each path returns its own output when the edge offers
+it, and the other WebRTC output only when its own is missing.
+
 ### Content Identifiers
 
-| Content Type  | Identifier                | Example           |
-| ------------- | ------------------------- | ----------------- |
-| Live Stream   | `playbackId` (view key)   | `abc123def456`    |
-| Clip          | `clipHash` (32-char hash) | `f8a2b3c4d5e6...` |
-| DVR Recording | `dvrHash` (32-char hash)  | `a1b2c3d4e5f6...` |
+| Content Type  | Identifier                                         | Example           |
+| ------------- | -------------------------------------------------- | ----------------- |
+| Live Stream   | Stream `playbackId` (view key)                     | `abc123def456`    |
+| Clip          | Clip artifact `playbackId`                         | `f8a2b3c4d5e6...` |
+| DVR Recording | DVR artifact `playbackId` (DVR hash also accepted) | `a1b2c3d4e5f6...` |
 
 All content types use the same unified `/play/{id}` path through Foghorn.
 
@@ -137,7 +146,16 @@ vlc %PLAY_URL%/play/abc123def/hls/index.m3u8
 
 # Record with ffmpeg
 ffmpeg -i %PLAY_URL%/play/abc123def/hls/index.m3u8 -c copy output.mp4
+
+# Download the last 60 seconds as an MP4
+curl -L -o last-minute.mp4 "%PLAY_URL%/play/abc123def.mp4?startunix=-60&dl=1"
 ```
+
+`/play` passes a fixed set of query parameters on to the edge it redirects to: the time-range
+parameters `startunix`, `stopunix`, `start`, `stop`, and `duration`, plus `dl`, `rate`, `audio`,
+`video`, and `subtitle`, and `jwt` for live and DVR content. A repeated or malformed value returns
+`400 invalid_playback_parameter`. Other parameters are dropped. See
+[ad-hoc cuts](/builders/clips#ad-hoc-cuts-from-a-playback-url) for what each one does.
 
 ### JSON Response (Custom Players)
 
@@ -145,16 +163,17 @@ ffmpeg -i %PLAY_URL%/play/abc123def/hls/index.m3u8 -c copy output.mp4
 curl %PLAY_URL%/play/{view-key}
 ```
 
-Returns all available protocols, primary and fallback nodes:
+Returns the primary and fallback edge nodes with every output they expose. Field names are
+camelCase, and each output URL points directly at the edge node's MistServer, not back at `/play`:
 
 ```json
 {
   "primary": {
-    "node_id": "edge-7",
-    "base_url": "%EDGE_URL%",
+    "nodeId": "edge-7",
+    "baseUrl": "%EDGE_URL%/",
     "outputs": {
-      "HLS": {"url": "%PLAY_URL%/play/stream-id/hls/index.m3u8"},
-      "WHEP": {"url": "%PLAY_URL%/play/stream-id/webrtc"}
+      "HLS": {"protocol": "HLS", "url": "%EDGE_URL%/hls/{stream}/index.m3u8"},
+      "WHEP": {"protocol": "WHEP", "url": "%EDGE_URL%/webrtc/{stream}"}
     }
   },
   "fallbacks": [...]
@@ -166,7 +185,7 @@ Returns all available protocols, primary and fallback nodes:
 | URL Pattern                         | Protocol | Description               |
 | ----------------------------------- | -------- | ------------------------- |
 | `srt://<host>:<port>?streamid={id}` | SRT      | Secure Reliable Transport |
-| `rtsp://<host>:<port>/play/{id}`    | RTSP     | IP cameras, VLC, ffmpeg   |
+| `rtsp://<host>:<port>/{id}`         | RTSP     | IP cameras, VLC, ffmpeg   |
 | `rtmp://<host>:<port>/play/{id}`    | RTMP     | Legacy Flash players      |
 | `/play/{id}.ts`                     | MPEG-TS  | Transport stream          |
 | `/play/{id}.flv`                    | FLV      | Flash Video               |
@@ -242,7 +261,7 @@ Gateway resolution returns the right Foghorn-backed edge endpoints for that view
 
 ### Autoplay Issues (No Audio)
 
-- **Browser policies:** Most browsers block autoplay with sound. Set `muted={true}` for autoplay. The player shows a "Click to Unmute" overlay.
+- **Browser policies:** Most browsers block autoplay with sound. The player starts muted unless you pass `options={{ muted: false }}`; keep it muted for autoplay. The player shows a "Click to Unmute" overlay.
 
 ### High Latency
 

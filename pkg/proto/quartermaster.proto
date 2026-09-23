@@ -298,6 +298,57 @@ service NodeService {
   // Batch-report alive edge nodes to refresh last_heartbeat for DNS eligibility.
   // Called periodically by Foghorn (60s) with connected edge node IDs.
   rpc ReportAliveNodes(ReportAliveNodesRequest) returns (google.protobuf.Empty);
+
+  // Operator-only fingerprint administration. Both require a
+  // platform-operator JWT; service and tenant credentials are refused.
+  // ListNodeFingerprints reads bindings across every tenant; duplicates are
+  // the rows the unique indexes uq_qm_fingerprints_machine and
+  // uq_qm_fingerprints_macs would reject.
+  rpc ListNodeFingerprints(ListNodeFingerprintsRequest) returns (ListNodeFingerprintsResponse);
+  // UnbindNodeFingerprint deletes one node's fingerprint binding and records
+  // node.fingerprint_unbound with the operator and reason.
+  rpc UnbindNodeFingerprint(UnbindNodeFingerprintRequest) returns (UnbindNodeFingerprintResponse);
+}
+
+message ListNodeFingerprintsRequest {
+  string cluster_id = 1;          // optional: only bindings of nodes in this cluster
+  bool duplicates_only = 2;       // only bindings whose machine or MAC hash another binding shares
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message NodeFingerprintBinding {
+  string fingerprint_id = 1;
+  string node_id = 2;
+  string tenant_id = 3;
+  // Cluster of the node row; empty when the node row no longer exists.
+  string cluster_id = 4;
+  string fingerprint_machine_sha256 = 5;
+  string fingerprint_macs_sha256 = 6;
+  bool has_identity_key = 7;
+  optional google.protobuf.Timestamp first_seen = 8;
+  optional google.protobuf.Timestamp last_seen = 9;
+  // Bindings sharing this row's machine hash, this row included; 0 when the
+  // hash is empty or unique.
+  int32 machine_duplicate_count = 10;
+  // Bindings sharing this row's MAC hash, this row included; 0 when the hash
+  // is empty or unique.
+  int32 macs_duplicate_count = 11;
+}
+
+message ListNodeFingerprintsResponse {
+  repeated NodeFingerprintBinding fingerprints = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message UnbindNodeFingerprintRequest {
+  string node_id = 1;
+  string fingerprint_id = 2;
+  string reason = 3;              // required; recorded on the service event
+}
+
+message UnbindNodeFingerprintResponse {
+  string node_id = 1;
+  string fingerprint_id = 2;
 }
 
 // BootstrapService handles node enrollment and service discovery

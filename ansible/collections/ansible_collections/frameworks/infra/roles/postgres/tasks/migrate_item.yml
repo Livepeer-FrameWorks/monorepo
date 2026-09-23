@@ -1,0 +1,110 @@
+---
+# Applies one pending migration item. migrate.yml includes this file once per item, in order, so an item's precheck
+# runs immediately before that item and after every earlier item has applied.
+
+# A precheck returns the rows the item's DDL would fail on. It runs in a READ ONLY transaction; when it returns rows
+# the item fails here, before its first statement, and nothing of it is applied.
+- name: Run migration precheck
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    db: "{{ item.db }}"
+    query:
+      - SET TRANSACTION READ ONLY
+      - "{{ item.precheck_query }}"
+  register: postgres_migration_precheck
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - item.precheck_query | default('') | length > 0
+
+- name: Refuse migration its precheck rejects
+  ansible.builtin.fail:
+    msg: >-
+      {{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }} was not applied: its precheck
+      {{ item.precheck_path }} found {{ precheck_rows[0].precheck_total }} row(s) the migration would fail on.
+      Nothing of this item ran. Resolve these rows, then rerun the migration.
+      First {{ precheck_rows | length }}: {{ precheck_rows | map(attribute='precheck_row') | join('; ') }}
+  vars:
+    precheck_rows: "{{ postgres_migration_precheck.query_all_results[1] | default([]) }}"
+  when:
+    - item.precheck_query | default('') | length > 0
+    - precheck_rows | length > 0
+
+# Migrations run while services are live. A transactional item sets lock_timeout, so a statement that cannot get its
+# lock fails fast instead of queueing live traffic behind it, and statement_timeout, and is replayed only when it
+# failed on the lock timeout: its own statements roll back with it (on YugabyteDB, DDL is not transactional by
+# default, so replay relies on migrations being written to re-run cleanly). A .notx.sql item runs without timeouts,
+# because a concurrent index build waits for older transactions and a large build can run long; it is never
+# replayed. An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index that IF NOT EXISTS would skip, so the
+# ledger row would be written over a broken index; the item repairs it itself, inside the advisory lock. Only then is
+# a guarded index known to be abandoned: every migrator builds under that lock, and a build in progress is invalid
+# too. The repair also rechecks the ledger, so an item another migrator applied meanwhile keeps its valid index. A
+# plain DROP INDEX takes the table's ACCESS EXCLUSIVE lock, so the repair runs between its own lock and statement
+# timeouts and resets them before the concurrent build that follows (DROP INDEX CONCURRENTLY cannot run inside the
+# conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
+# it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it.
+- name: Apply migration
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    db: "{{ item.db }}"
+    query: >-
+      {{
+        [
+          "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
+        ]
+        + ((item.invalid_index_guards | default([]) | length > 0) | ternary([
+            "SET statement_timeout = '60s'",
+            "SET lock_timeout = '5s'",
+            invalid_index_repair_sql,
+            "RESET lock_timeout",
+            "RESET statement_timeout"
+          ], []))
+        + ((item.transactional | default(true)) | ternary(["SET lock_timeout = '5s'", "SET statement_timeout = '15min'"], []))
+        + [
+          'SET ROLE "' ~ item.owner ~ '"'
+        ]
+        + item.statements
+        + [
+          "RESET ROLE",
+          migration_ledger_sql,
+          "SELECT pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
+        ]
+      }}
+    autocommit: "{{ not (item.transactional | default(true)) }}"
+  register: postgres_migration_apply
+  until: >-
+    postgres_migration_apply is succeeded
+    or not (item.transactional | default(true))
+    or 'canceling statement due to lock timeout' not in (postgres_migration_apply.msg | default(''))
+  retries: 6
+  delay: 10
+  when: not ansible_check_mode
+  vars:
+    invalid_index_repair_sql: >-
+      DO $repair$
+      DECLARE target text;
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM _migrations
+                        WHERE version = '{{ item.version }}' AND phase = '{{ item.phase }}' AND seq = {{ item.sequence }}) THEN
+          FOR target IN
+            SELECT format('%I.%I', n.nspname, c.relname)
+              FROM pg_index i
+              JOIN pg_class c ON c.oid = i.indexrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE NOT i.indisvalid
+               AND n.nspname || '.' || c.relname = ANY(
+                 ARRAY['{{ item.invalid_index_guards | default([]) | map('replace', "'", "''") | join("', '") }}']::text[])
+          LOOP
+            EXECUTE 'DROP INDEX IF EXISTS ' || target;
+          END LOOP;
+        END IF;
+      END $repair$
+    migration_ledger_sql: >-
+      INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
+      VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},
+              '{{ item.filename }}', '{{ item.checksum }}',
+              {{ item.transactional | default(true) | ternary('true', 'false') }})

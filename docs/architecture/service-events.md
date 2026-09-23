@@ -113,6 +113,7 @@ upload completion or abort that Foghorn's recovery jobs finish after the request
 - `cluster_created`, `cluster_updated` (platform-scoped with no `tenant_id` when the cluster has no owner: Decklog accepts them and Periscope-Ingest writes no tenant audit row)
 - `cluster_invite_created`, `cluster_invite_revoked`
 - `cluster_subscription_requested`, `cluster_subscription_approved`, `cluster_subscription_rejected`
+- `node.fingerprint_unbound`: a platform operator deleted a node fingerprint binding (`UnbindNodeFingerprint`). Platform-scoped with no envelope `tenant_id`; the envelope `user_id` is the operator, and the `ClusterEvent` payload carries the node's cluster, the binding's tenant, the operator's reason, and `before_state` with only `node_id` and `fingerprint_id` (no fingerprint hashes, identity key, or IPs). No domain event.
 
 **Streams (Commodore)**
 

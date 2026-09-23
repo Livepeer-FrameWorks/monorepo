@@ -5,17 +5,19 @@ description: "Multi-source compositing with scenes, layers, layouts, and transit
 
 import { Aside } from "@astrojs/starlight/components";
 
-The compositor enables multi-source layout control — arrange camera and screen share into professional layouts with scenes, layers, and animated transitions.
+The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes, layers, and animated transitions.
 
-<Aside type="tip" title="On by Default">
-  The compositor is enabled by default. It works with a single source (fullscreen solo layout) and
-  scales to multi-source layouts automatically. Disable it only if you want raw single-source
-  streaming without compositing.
+<Aside type="tip" title="On by Default in the Drop-in Components">
+  The React, Svelte, and Web Component drop-in components enable the compositor by default. It works
+  with a single source (fullscreen solo layout) and scales to multi-source layouts automatically.
+  The vanilla `createStreamCrafter()` facade and the headless controllers leave it off until you
+  call `enableCompositor()`.
 </Aside>
 
-## Disabling the Compositor
+## Enabling and Disabling the Compositor
 
-If you need raw source streaming without compositing overhead:
+In the drop-in components, disable it if you need raw source streaming without compositing
+overhead:
 
 **React:**
 
@@ -39,13 +41,16 @@ If you need raw source streaming without compositing overhead:
 </script>
 ```
 
-**Vanilla:**
+**Vanilla:** the compositor is off by default. Enable it with a method call, and optionally pass
+compositor settings:
 
 ```ts
-const studio = createStreamCrafter({
-  whipUrl: "...",
-  enableCompositor: false,
-});
+const studio = createStreamCrafter({ whipUrl: "..." });
+
+await studio.enableCompositor({ width: 1920, height: 1080, frameRate: 30 });
+
+// Later, return to raw source streaming
+studio.disableCompositor();
 ```
 
 ## Layout Modes
@@ -106,7 +111,20 @@ studio.pc
 
 ### Cycling Source Order
 
-When a layout is already active, clicking it again (or calling the same layout) cycles the source order — the first source moves to the back. Hold Shift to cycle backward.
+In the built-in compositor controls, clicking the active layout again cycles the source order: the
+first source moves to the back. Hold Shift to cycle backward.
+
+Calling `applyLayout()` again with the same layout does not cycle. Call `cycleSourceOrder()`
+instead:
+
+```ts
+// React useCompositor hook or Svelte createCompositorStore
+compositor.cycleSourceOrder(); // forward
+compositor.cycleSourceOrder("backward");
+
+// Core SceneManager
+studio.sceneManager?.cycleSourceOrder("forward");
+```
 
 ## Scaling Modes
 
@@ -237,10 +255,10 @@ import {
 
 **Web Components:**
 
-```html
-<fw-sc-compositor for="studio"></fw-sc-compositor>
-<fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
-<fw-sc-layer-list for="studio"></fw-sc-layer-list>
-```
+`<fw-streamcrafter>` renders its own compositor overlay. The standalone `<fw-sc-compositor>`,
+`<fw-sc-scene-switcher>`, and `<fw-sc-layer-list>` elements are presentational: they do not
+connect to a `<fw-streamcrafter>` on their own, so you set their data through JS properties and
+handle their events or callbacks. See
+[Standalone Sub-Components](/builders/ingest-wc/#standalone-sub-components) for the wiring.
 
 The compositor overlay shows layout icons and scaling mode buttons. Click a layout icon to apply it; click the active layout to cycle source order.

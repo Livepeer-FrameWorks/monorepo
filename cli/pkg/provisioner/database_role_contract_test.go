@@ -74,7 +74,7 @@ func TestDatabaseRolesApplyOwnershipBeforeRuntimeGrants(t *testing.T) {
 func TestDatabaseMigrationsRunAsDeclaredOwner(t *testing.T) {
 	for _, engine := range []string{"postgres", "yugabyte"} {
 		t.Run(engine, func(t *testing.T) {
-			migration := databaseRoleTaskFile(t, engine, "migrate.yml")
+			migration := databaseRoleTaskFile(t, engine, "migrate_item.yml")
 			setRole := strings.Index(migration, `SET ROLE "' ~ item.owner ~ '"`)
 			body := strings.Index(migration, `+ item.statements`)
 			resetRole := strings.Index(migration, `"RESET ROLE"`)
@@ -82,7 +82,7 @@ func TestDatabaseMigrationsRunAsDeclaredOwner(t *testing.T) {
 			if setRole < 0 || body < 0 || resetRole < 0 || ledger < 0 || setRole >= body || body >= resetRole || resetRole >= ledger {
 				t.Fatalf("%s migration task must execute body as owner and reset before ledger write", engine)
 			}
-			if !strings.Contains(migration, "Migration owner identifiers must be simple SQL identifiers") {
+			if !strings.Contains(databaseRoleTaskFile(t, engine, "migrate.yml"), "Migration owner identifiers must be simple SQL identifiers") {
 				t.Fatalf("%s migration task does not validate the SET ROLE identifier", engine)
 			}
 		})

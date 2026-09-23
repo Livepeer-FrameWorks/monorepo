@@ -130,11 +130,11 @@ func TestViewerQueryCredentialDoesNotMutateSharedEndpoint(t *testing.T) {
 		Fallbacks: []*sharedpb.ViewerEndpoint{nil, {Url: "https://other.example/live?jwt=old", BaseUrl: "https://other.example",
 			Outputs: map[string]*sharedpb.OutputEndpoint{"hls": {Url: "https://other.example/hls?fwcid=kept"}}}},
 	}
-	first, err := withViewerQueryCredential(original, "first")
+	first, err := withViewerQueryParams(original, url.Values{"jwt": {"first"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := withViewerQueryCredential(original, "second")
+	second, err := withViewerQueryParams(original, url.Values{"jwt": {"second"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,13 +164,74 @@ func TestViewerQueryCredentialRejectsMalformedDestinations(t *testing.T) {
 	for _, raw := range []string{"/relative", "https://user:password@us.example/live", "https://us.example/live#fragment", "https://us.example/live?receipt=%zz", "javascript://us.example/live"} {
 		t.Run(raw, func(t *testing.T) {
 			response := &sharedpb.ViewerEndpointResponse{Primary: &sharedpb.ViewerEndpoint{Url: raw}}
-			if got, err := withViewerQueryCredential(response, "secret"); err == nil || got != nil {
+			if got, err := withViewerQueryParams(response, url.Values{"jwt": {"secret"}}); err == nil || got != nil {
 				t.Fatal("malformed destination accepted")
 			}
 			if response.Primary.Url != raw {
 				t.Fatal("malformed response mutated")
 			}
 		})
+	}
+}
+
+func TestViewerForwardedParams(t *testing.T) {
+	got, bad := viewerForwardedParams(url.Values{
+		"startunix": {"-300"}, "duration": {"30"}, "dl": {"clip.mp4"}, "video": {"all,!JPEG"}, "rate": {"0"},
+		"meta": {"all"}, "token": {"internal"}, "unrelated": {"x"},
+	})
+	if bad != "" {
+		t.Fatalf("valid parameters rejected: %s", bad)
+	}
+	want := url.Values{"startunix": {"-300"}, "duration": {"30"}, "dl": {"clip.mp4"}, "video": {"all,!JPEG"}, "rate": {"0"}}
+	if got.Encode() != want.Encode() {
+		t.Fatalf("forwarded=%s want=%s", got.Encode(), want.Encode())
+	}
+	for name, query := range map[string]url.Values{
+		"startunix": {"startunix": {"-60", "-30"}},
+		"stop":      {"stop": {"12s"}},
+		"dl":        {"dl": {"../etc/passwd"}},
+		"audio":     {"audio": {"all&token=x"}},
+		"duration":  {"duration": {""}},
+	} {
+		if _, bad := viewerForwardedParams(query); bad != name {
+			t.Fatalf("query %v: bad=%q want %q", query, bad, name)
+		}
+	}
+}
+
+func TestPlayForwardsAllowlistedParamsToEdge(t *testing.T) {
+	setupPreparedViewerHTTP(t, false)
+	SetViewerPlacementPreparer(viewerPlacementFunc(func(_ context.Context, request control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		return preparedHTTPViewer(t, request, "https://us.example/hls/public/index.m3u8?receipt=prepared"), nil
+	}))
+	c, w := playbackCtxArms(t, "public/hls")
+	c.Request.URL.RawQuery = url.Values{"startunix": {"-60"}, "duration": {"30"}, "dl": {"cut.mp4"}, "unrelated": {"x"}}.Encode()
+	HandleGenericViewerPlayback(c)
+	if w.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	u, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if u.Host != "us.example" || q.Get("startunix") != "-60" || q.Get("duration") != "30" || q.Get("dl") != "cut.mp4" || q.Get("receipt") != "prepared" || q.Has("unrelated") {
+		t.Fatalf("edge redirect lost or leaked parameters: %s", u.String())
+	}
+}
+
+func TestPlayRejectsMalformedForwardedParamBeforeResolution(t *testing.T) {
+	setupPreparedViewerHTTP(t, false)
+	calls := 0
+	SetViewerPlacementPreparer(viewerPlacementFunc(func(_ context.Context, request control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		calls++
+		return preparedHTTPViewer(t, request, "https://us.example/hls/public/index.m3u8"), nil
+	}))
+	c, w := playbackCtxArms(t, "public/hls")
+	c.Request.URL.RawQuery = "startunix=yesterday"
+	HandleGenericViewerPlayback(c)
+	if w.Code != http.StatusBadRequest || calls != 0 || !strings.Contains(w.Body.String(), "startunix") {
+		t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
 	}
 }
 

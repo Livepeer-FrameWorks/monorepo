@@ -15,22 +15,18 @@ Live playback has an awkward dependency: the media path can be perfectly healthy
 
 A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn reads the signed stream/artifact and tenant authority already persisted in its media cell, then combines it with local runtime placement.
 
-That is the right place to enforce policy. A transport failure, however, is not a policy answer.
+Policy belongs in Foghorn, but a failure to reach Foghorn must not be treated as a policy decision.
 
-The old Mist trigger interface could not distinguish a returned value, an explicit denial, and a handler failure. Its legacy fallback string was `true`; for `PLAY_REWRITE`, that is a literal stream name, not permission. It also does not magically reveal the internal stream behind an unresolved playback token. The real defect was the untyped contract and the different ways each call site consumed the same fallback string.
+The old Mist trigger interface could not distinguish a returned value, an explicit denial, and a handler failure. Its legacy fallback string was `true`; for `PLAY_REWRITE`, that is a literal stream name, not permission. It also does not reveal the internal stream behind an unresolved playback token. The real defect was the untyped contract and the different ways each call site consumed the same fallback string.
 
 The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` uses `deny` when Helmsman cannot answer, and an authoritative rejection is also returned as `deny`. No sentinel stream name is involved. Helmsman continuously repairs the full managed trigger definition, because a missing trigger skips the decision entirely rather than invoking its failure action.
 
-But "no answer" is still a bad viewer experience when the media cell already has a valid, durable answer.
-
-FrameWorks keeps that durable answer in the media cell.
-
-Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
+Denying the viewer is still a poor outcome when the media cell already holds a valid, durable answer, so FrameWorks keeps that answer in the media cell. Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
 
 Helmsman asks Foghorn for each new public play rewrite. It does not replay a previous viewer's successful stream-name mapping when Foghorn is unreachable: that mapping says nothing about the new viewer's location, the selected destination's current permission, or a changed tenant policy.
 
 Signed Foghorn authority protects the media cell from upstream control-plane outages. Losing every reachable Foghorn is a different failure: new requests need reconnect or failover before they can obtain a decision. If no valid answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
 
-This changes admission for new requests, not a command to terminate established playback. The goal is to survive control-plane interruptions using verified authority, without turning a cached stream name into permission.
+This affects admission of new requests; it does not terminate established playback. Control-plane interruptions are covered by verified authority, and a cached stream name is never treated as permission.
 
 The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.

@@ -35,47 +35,66 @@ The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/stre
 
 ## Per-stream analytics
 
-The `/streams/:id/analytics` and `/streams/:id/health` views are powered by a single `analytics` query that aggregates current state and recent rollups for one stream.
+The `/streams/:id/analytics` and `/streams/:id/health` views read the `analytics` root: `analytics.health` for health rollups and `analytics.usage.streaming` for viewer, delivery, and quality-tier summaries over a time range.
 
 ```graphql
-query StreamAnalytics($streamId: ID!, $rangeStartMs: Int!, $rangeEndMs: Int!) {
-  analytics(streamId: $streamId, rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
-    streamHealth {
-      bitrateKbps
-      framerate
-      packetLossPct
-      bufferHealth
+query StreamAnalytics($streamId: ID!, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      streamHealthSummary(streamId: $streamId, timeRange: $timeRange) {
+        avgBitrate
+        avgFps
+        avgBufferHealth
+        totalRebufferCount
+        hasActiveIssues
+        currentQualityTier
+      }
     }
-    viewerMetrics {
-      currentViewers
-      peakViewers
-      bandwidthMbps
-    }
-    qualityTiers {
-      tier
-      currentViewers
+    usage {
+      streaming {
+        streamAnalyticsSummary(streamId: $streamId, timeRange: $timeRange) {
+          rangeAvgViewers
+          rangePeakConcurrentViewers
+          rangeUniqueViewers
+          rangeViewerHours
+          rangeEgressGb
+          rangePacketLossRate
+          rangeQuality {
+            tier1080pMinutes
+            tier720pMinutes
+            tier480pMinutes
+            tierSdMinutes
+          }
+        }
+      }
     }
   }
 }
 ```
 
-For real-time updates, subscribe instead of polling:
+For real-time updates, subscribe instead of polling. `liveStreamEvents` carries lifecycle changes with a metrics snapshot; `liveViewerMetrics` emits per-viewer connect and disconnect records with bandwidth and packet counters.
 
 ```graphql
-subscription LiveHealth($streamId: ID!) {
-  liveSystemHealth(streamId: $streamId) {
+subscription LiveStream($streamId: ID) {
+  liveStreamEvents(streamId: $streamId) {
+    type
+    status
     timestamp
-    bitrateKbps
-    framerate
-    packetLossPct
+    qualityTier
+    primaryBitrate
+    primaryFps
+    totalViewers
   }
 }
 
 subscription LiveViewers($streamId: ID!) {
   liveViewerMetrics(streamId: $streamId) {
     timestamp
-    currentViewers
-    bandwidthMbps
+    action
+    protocol
+    bandwidthOutBps
+    packetsLost
+    clientCountry
   }
 }
 ```
@@ -85,51 +104,81 @@ subscription LiveViewers($streamId: ID!) {
 `/analytics/audience` aggregates viewer counts, geographic distribution, and per-stream rankings across the whole tenant.
 
 ```graphql
-query Audience($rangeStartMs: Int!, $rangeEndMs: Int!) {
-  analytics(rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
-    aggregateViewers {
-      currentViewers
-      peakViewers
-      uniqueViewers
-    }
-    geographicBreakdown {
-      country
-      currentViewers
-      bandwidthMbps
+query Audience($timeRange: TimeRangeInput!, $topN: Int = 10) {
+  analytics {
+    usage {
+      streaming {
+        streamAnalyticsSummariesConnection(timeRange: $timeRange, page: { first: 10 }) {
+          edges {
+            node {
+              streamId
+              rangeUniqueViewers
+              rangeViewerHours
+              rangeViewerSharePercent
+            }
+          }
+        }
+        tenantAnalyticsDailyConnection(timeRange: $timeRange, page: { first: 31 }) {
+          edges {
+            node {
+              day
+              totalStreams
+              totalViews
+              uniqueViewers
+              egressBytes
+            }
+          }
+        }
+        geographicDistribution(timeRange: $timeRange, topN: $topN) {
+          totalViewers
+          uniqueCountries
+          topCountries {
+            countryCode
+            viewerCount
+            percentage
+          }
+        }
+      }
     }
   }
 }
 ```
+
+Omitting `streamId` on `geographicDistribution` aggregates across all of the tenant's streams.
 
 ## Tenant usage and billing
 
 `/analytics/usage` and `/account/billing` share the usage surface. Use `usageAggregates` for the rolled-up summary or `usageRecordsConnection` for paginated raw records.
 
 ```graphql
-query Usage($rangeStartMs: Int!, $rangeEndMs: Int!) {
-  usageAggregates(rangeStartMs: $rangeStartMs, rangeEndMs: $rangeEndMs) {
-    transcodeMinutes
-    deliveredMinutes
-    storageGbDays
-    bandwidthGb
+query Usage($timeRange: TimeRangeInput!) {
+  usageAggregates(timeRange: $timeRange, granularity: "daily") {
+    usageType
+    periodStart
+    periodEnd
+    usageValue
   }
-  tenantUsage {
-    currentPeriod {
-      transcodeMinutes
-      deliveredMinutes
-      storageGbDays
+  tenantUsage(timeRange: $timeRange) {
+    billingPeriod
+    usage {
+      resourceType
+      amount
     }
+    totalCost
+    currency
   }
 }
 
-query DetailedUsage($page: ConnectionInput) {
-  usageRecordsConnection(page: $page) {
+query DetailedUsage($timeRange: TimeRangeInput, $page: ConnectionInput) {
+  usageRecordsConnection(timeRange: $timeRange, page: $page) {
     edges {
       node {
-        timestamp
         usageType
-        quantity
+        usageValue
         unit
+        clusterId
+        periodStart
+        periodEnd
       }
     }
     pageInfo {
@@ -150,17 +199,25 @@ query NetworkStatus {
     clusters {
       clusterId
       region
-      activeStreams
-      activeViewers
-      capacityUtilization
+      status
+      currentStreams
+      currentViewers
+      egressMbps
+      egressCapacityMbps
+    }
+    peerConnections {
+      sourceCluster
+      targetCluster
+      connected
     }
   }
   orchestratorVantages {
-    orchestratorAddress
-    vantagePoints {
-      cluster
-      latencyMs
-    }
+    orchAddr
+    gatewayRegion
+    countryCode
+    latestLatencyMs
+    score
+    lastSeen
   }
 }
 ```
@@ -172,12 +229,28 @@ For dashboards that want the raw event stream (every viewer connect/disconnect, 
 ```graphql
 subscription Firehose {
   liveFirehose {
+    type
+    channel
     timestamp
-    eventType
-    payload
+    streamEvent {
+      streamId
+      type
+      status
+    }
+    connectionEvent {
+      streamId
+      sessionId
+      connector
+    }
+    storageEvent {
+      streamId
+      action
+    }
   }
 }
 ```
+
+`channel` is `STREAMS`, `ANALYTICS`, or `SYSTEM`; exactly one of the typed members (`streamEvent`, `viewerMetrics`, `connectionEvent`, `trackListUpdate`, `storageEvent`, `processingEvent`, `routingEvent`, `systemHealthEvent`, and others) is populated per event.
 
 ## Agents (MCP)
 

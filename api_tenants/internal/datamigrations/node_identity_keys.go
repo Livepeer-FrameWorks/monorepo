@@ -6,36 +6,17 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 )
 
 const NodeIdentityKeysID = "quartermaster_node_identity_keys_v0_3_0"
 
-const managedActiveKeylessNodeCountSQL = `
-SELECT COUNT(*)
-FROM quartermaster.node_fingerprints fingerprint
-JOIN quartermaster.infrastructure_nodes node ON node.node_id = fingerprint.node_id
-JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = node.cluster_id
-WHERE node.status = 'active'
-  AND cluster.is_active = true
-  AND node.enrollment_origin IN ('gitops_seed', 'adopted_local')
-  AND (
-      fingerprint.node_identity_public_key_ed25519 IS NULL
-      OR octet_length(fingerprint.node_identity_public_key_ed25519) <> 32
-  )`
+// The gate and `release apply`'s post-expand report share one managed-keyless
+// query, so the report lists exactly the nodes this verifier blocks on.
+const managedActiveKeylessNodeCountSQL = `SELECT COUNT(*) FROM (` + nodeidentity.ManagedKeylessNodesSQL + `) keyless`
 
-const managedActiveKeylessNodeIDsSQL = `
-SELECT node.node_id
-FROM quartermaster.node_fingerprints fingerprint
-JOIN quartermaster.infrastructure_nodes node ON node.node_id = fingerprint.node_id
-JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = node.cluster_id
-WHERE node.status = 'active'
-  AND cluster.is_active = true
-  AND node.enrollment_origin IN ('gitops_seed', 'adopted_local')
-  AND (
-      fingerprint.node_identity_public_key_ed25519 IS NULL
-      OR octet_length(fingerprint.node_identity_public_key_ed25519) <> 32
-  )
-ORDER BY node.node_id
+const managedActiveKeylessNodeIDsSQL = `SELECT keyless.node_id FROM (` + nodeidentity.ManagedKeylessNodesSQL + `) keyless
+ORDER BY keyless.node_id
 LIMIT 100`
 
 func registerNodeIdentityKeysMigration() {

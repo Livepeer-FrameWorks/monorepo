@@ -121,7 +121,20 @@ func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
 	}
 }
 
+type operatorBearerKey struct{}
+
+// WithOperatorBearer makes this client send jwt instead of its service
+// credential for calls made with the returned context. Only operator tooling
+// holding the operator's own session sets it. A service forwarding a caller's
+// context never does, so a caller JWT still never crosses into Foghorn.
+func WithOperatorBearer(ctx context.Context, jwt string) context.Context {
+	return context.WithValue(ctx, operatorBearerKey{}, jwt)
+}
+
 func outgoingAuthToken(ctx context.Context, configuredServiceToken string) string {
+	if bearer, ok := ctx.Value(operatorBearerKey{}).(string); ok && bearer != "" {
+		return bearer
+	}
 	if configuredServiceToken != "" {
 		return configuredServiceToken
 	}
@@ -324,6 +337,15 @@ func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.
 	var trailers metadata.MD
 	resp, err := c.dvr.ListDVRChapters(ctx, req, grpc.Trailer(&trailers))
 	return resp, trailers, err
+}
+
+// DiagnoseDVR reads one recording's lifecycle, segment ledger, and chapter
+// finalization state. Foghorn admits only a platform-operator JWT, so callers
+// pass a context built with WithOperatorBearer.
+func (c *GRPCClient) DiagnoseDVR(ctx context.Context, dvrHash string) (*foghornpb.DiagnoseDVRResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.dvr.DiagnoseDVR(ctx, &foghornpb.DiagnoseDVRRequest{DvrHash: dvrHash})
 }
 
 // OverrideArtifactRetention pushes a per-asset retention horizon onto an

@@ -201,16 +201,27 @@ Changes that take effect immediately:
 
 ## Backup and Recovery
 
-**What to backup (container mode):** the whole project directory — it carries
-the node's identity and secrets:
+**What to backup (container mode):** the whole project directory and the
+Helmsman state. Together they carry the node's identity and secrets:
 
-- `.edge.env` - Configuration (node identity, domain, control-plane address)
+- `.edge.env` - Configuration (node ID, domain, control-plane address)
 - `.edge-enroll.env` - Write-once enrollment token file
 - `.edge-secrets.env` - MistServer API password (0600)
 - `pki/` - Internal CA bundle for the Foghorn gRPC connection
 - `telemetry/` - Telemetry token (when telemetry is enabled)
 - `docker-compose.edge.yml` (or `docker-compose.yml` on Ansible-provisioned
   nodes)
+- **Required:** Helmsman state mounted at `/data/state` — the `edge_state`
+  named volume on local `edge init` renders, or the `state/` directory next
+  to the compose file on Ansible-provisioned nodes. It holds the node's
+  Ed25519 identity key and enrollment receipt, plus the persisted config
+  seed, trigger WAL, and control outbox.
+
+If the state is lost, Helmsman generates a new identity key and the
+control plane rejects the node because the key no longer matches its registration. Recover
+by re-enrolling with a fresh `edge_node` token and
+`HELMSMAN_ROTATE_NODE_IDENTITY=true`, as described in
+[Recover a legacy keyless node](/hybrid/connecting#recover-a-legacy-keyless-node).
 
 The named volumes (`frameworks_opt`, `frameworks_etc`, `caddy_etc`,
 `caddy_data`) hold binaries, certs, and the activated Caddyfile. You do not
@@ -230,8 +241,9 @@ DVR/clip artifacts across the move.
 1. Install Docker on the new host (container mode)
 2. Run `frameworks edge preflight`
 3. Restore the saved project directory (env files, `pki/`, `telemetry/`,
-   compose file) — do **not** re-run `edge init`, which would mint a new
-   node identity and secrets
+   compose file) and the Helmsman state (`edge_state` volume or `state/`
+   directory) — do **not** re-run `edge init`, which would mint a new node
+   identity and secrets
 4. Start with `frameworks edge enroll --dir .`
 5. Certificates, stream config, and component versions converge from the
    control plane after enrollment

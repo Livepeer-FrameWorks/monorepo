@@ -12,4 +12,5 @@ import (
 //go:embed clickhouse/*.sql
 //go:embed all:migrations
 //go:embed all:clickhouse/migrations
+//go:embed prechecks
 var Content embed.FS

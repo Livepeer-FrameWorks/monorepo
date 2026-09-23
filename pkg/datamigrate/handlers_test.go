@@ -56,6 +56,68 @@ func TestHandleRunDryRunDoesNotWriteState(t *testing.T) {
 	}
 }
 
+func TestHandleRunDryRunPrintsFindings(t *testing.T) {
+	resetForTest()
+	Register(Migration{
+		ID: "findings", Service: "commodore", IntroducedIn: "v0.5.0",
+		Run: func(_ context.Context, _ DB, _ RunOptions) (Progress, error) {
+			return Progress{Scanned: 3, Errors: 3, Summary: []string{"scanned rows=3"}, Findings: []string{"row=a", "row=b"}, FindingsTotal: 3}, nil
+		},
+	})
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("_data_migration_runs").
+		WithArgs("findings", "", "").
+		WillReturnError(errors.New(`pq: relation "_data_migration_runs" does not exist`))
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	var out bytes.Buffer
+	if err := HandleRun(context.Background(), func() (*sql.DB, error) { return db, nil }, &out, []string{"findings", "--dry-run"}); err != nil {
+		t.Fatalf("HandleRun dry-run returned error: %v", err)
+	}
+	for _, want := range []string{"  scanned rows=3\n", "findings: showing 2 of 3", "    row=a\n", "    row=b\n"} {
+		if !bytes.Contains(out.Bytes(), []byte(want)) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestHandleVerifyPrintsReportBeforeFailure(t *testing.T) {
+	resetForTest()
+	verifyErr := errors.New("invariant broken")
+	Register(Migration{
+		ID: "reported", Service: "commodore", IntroducedIn: "v0.5.0",
+		Run:    func(context.Context, DB, RunOptions) (Progress, error) { return Progress{Done: true}, nil },
+		Verify: func(context.Context, DB) error { return verifyErr },
+		Report: func(context.Context, DB) ([]string, error) { return []string{"row=a broken"}, nil },
+	})
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	var out bytes.Buffer
+	err = HandleVerify(context.Background(), func() (*sql.DB, error) { return db, nil }, &out, []string{"reported"})
+	if !errors.Is(err, verifyErr) {
+		t.Fatalf("HandleVerify error = %v, want %v", err, verifyErr)
+	}
+	if out.String() != "row=a broken\n" {
+		t.Fatalf("verify output = %q", out.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected database operation: %v", err)
+	}
+}
+
 func TestRunScopeDoesNotCompleteWhenVerificationFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

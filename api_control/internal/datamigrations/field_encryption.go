@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
@@ -30,6 +31,7 @@ const (
 	fieldEncryptionDecryptError    = "decrypt_failed"
 	fieldEncryptionAllowQuarantine = "FIELD_ENCRYPTION_ALLOW_QUARANTINE"
 	fieldEncryptionLegacyProbeRows = 32
+	fieldEncryptionFindingsLimit   = 100
 )
 
 // FieldEncryptionSettings is the key material and operator acknowledgements
@@ -81,6 +83,7 @@ func registerFieldEncryption(settings FieldEncryptionSettings) {
 		Verify: func(ctx context.Context, db datamigrate.DB) error {
 			return verifyFieldEncryption(ctx, db, settings)
 		},
+		Report: listFieldEncryptionQuarantine,
 	})
 }
 
@@ -203,6 +206,9 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 		checkpoint.AfterID = ""
 		checkpoint.SweepFound = false
 	}
+	if opts.DryRun {
+		return dryRunFieldEncryption(ctx, db, settings, checkpoint, batchSize)
+	}
 	remaining := batchSize
 	var progress datamigrate.Progress
 	done := false
@@ -216,27 +222,7 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 		if err != nil {
 			return progress, fmt.Errorf("configure %s keyring: %w", spec.purpose, err)
 		}
-		query := fieldEncryptionCandidateQuery(spec)
-		type candidate struct{ id, stored string }
-		candidates, err := func() ([]candidate, error) {
-			rows, queryErr := db.QueryContext(ctx, query, limit, cipher.ActiveEnvelopePrefix(), spec.table, spec.column, checkpoint.AfterID, checkpoint.QuarantineRetryAfter)
-			if queryErr != nil {
-				return nil, fmt.Errorf("select %s.%s: %w", spec.table, spec.column, queryErr)
-			}
-			defer rows.Close() //nolint:errcheck // a scan/iteration error is more actionable than a redundant close error
-			var found []candidate
-			for rows.Next() {
-				var row candidate
-				if scanErr := rows.Scan(&row.id, &row.stored); scanErr != nil {
-					return nil, fmt.Errorf("scan %s.%s: %w", spec.table, spec.column, scanErr)
-				}
-				found = append(found, row)
-			}
-			if rowsErr := rows.Err(); rowsErr != nil {
-				return nil, fmt.Errorf("iterate %s.%s: %w", spec.table, spec.column, rowsErr)
-			}
-			return found, nil
-		}()
+		candidates, err := selectFieldEncryptionCandidates(ctx, db, spec, cipher.ActiveEnvelopePrefix(), limit, checkpoint.AfterID, checkpoint.QuarantineRetryAfter)
 		if err != nil {
 			return progress, err
 		}
@@ -248,10 +234,8 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 			progress.Scanned++
 			plain, err := cipher.Decrypt(row.stored)
 			if err != nil {
-				if !opts.DryRun {
-					if quarantineErr := quarantineFieldEncryptionFailure(ctx, db, spec, row); quarantineErr != nil {
-						return progress, fmt.Errorf("quarantine undecryptable %s.%s row %s: %w", spec.table, spec.column, row.id, quarantineErr)
-					}
+				if quarantineErr := quarantineFieldEncryptionFailure(ctx, db, spec, row); quarantineErr != nil {
+					return progress, fmt.Errorf("quarantine undecryptable %s.%s row %s: %w", spec.table, spec.column, row.id, quarantineErr)
 				}
 				progress.Errors++
 				progress.Skipped++
@@ -260,10 +244,6 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 			stored, err := cipher.Encrypt(plain)
 			if err != nil {
 				return progress, fmt.Errorf("encrypt %s.%s row %s: %w", spec.table, spec.column, row.id, err)
-			}
-			if opts.DryRun {
-				progress.Changed++
-				continue
 			}
 			update := fmt.Sprintf(`WITH suppress AS MATERIALIZED (SELECT set_config('frameworks.suppress_media_authority_refresh', 'on', true) AS enabled) UPDATE %s SET %s = $1 FROM suppress WHERE %s::text = $2 AND %s = $3 AND suppress.enabled = 'on'`, spec.table, spec.column, spec.id, spec.column)
 			result, err := db.ExecContext(ctx, update, stored, row.id, row.stored)
@@ -306,13 +286,95 @@ func runFieldEncryption(ctx context.Context, db datamigrate.DB, opts datamigrate
 	if err != nil {
 		return progress, fmt.Errorf("encode field-encryption checkpoint: %w", err)
 	}
-	if done && !opts.DryRun {
+	if done {
 		if err := pruneOrphanFieldEncryptionQuarantine(ctx, db); err != nil {
 			return progress, err
 		}
 	}
 	progress.Checkpoint = encoded
 	progress.Done = done
+	return progress, nil
+}
+
+type fieldEncryptionCandidate struct{ id, stored string }
+
+func selectFieldEncryptionCandidates(ctx context.Context, db datamigrate.DB, spec encryptedColumn, activePrefix string, limit int, afterID string, retryAfter int64) ([]fieldEncryptionCandidate, error) {
+	rows, err := db.QueryContext(ctx, fieldEncryptionCandidateQuery(spec), limit, activePrefix, spec.table, spec.column, afterID, retryAfter)
+	if err != nil {
+		return nil, fmt.Errorf("select %s.%s: %w", spec.table, spec.column, err)
+	}
+	defer rows.Close() //nolint:errcheck // a scan/iteration error is more actionable than a redundant close error
+	var found []fieldEncryptionCandidate
+	for rows.Next() {
+		var row fieldEncryptionCandidate
+		if err := rows.Scan(&row.id, &row.stored); err != nil {
+			return nil, fmt.Errorf("scan %s.%s: %w", spec.table, spec.column, err)
+		}
+		found = append(found, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s.%s: %w", spec.table, spec.column, err)
+	}
+	return found, nil
+}
+
+// dryRunFieldEncryption previews the whole migration in one call: it pages
+// through every candidate row of every encrypted column from the start,
+// ignoring the persisted keyset position, so an empty findings list means no
+// unquarantined row fails to decrypt. Rows already in quarantine are not
+// candidates; verify lists those. batchSize bounds each page, not the scan.
+func dryRunFieldEncryption(ctx context.Context, db datamigrate.DB, settings FieldEncryptionSettings, checkpoint fieldEncryptionCheckpoint, batchSize int) (datamigrate.Progress, error) {
+	knownKeyIDs, keyIDsErr := fieldEncryptionKnownKeyIDs(settings)
+	if keyIDsErr != nil {
+		return datamigrate.Progress{}, keyIDsErr
+	}
+	var progress datamigrate.Progress
+	for _, spec := range encryptedColumns {
+		cipher, ringErr := fieldKeyring(settings, spec.purpose)
+		if ringErr != nil {
+			return progress, fmt.Errorf("configure %s keyring: %w", spec.purpose, ringErr)
+		}
+		var scanned, undecryptable int64
+		afterID := ""
+		for {
+			candidates, selectErr := selectFieldEncryptionCandidates(ctx, db, spec, cipher.ActiveEnvelopePrefix(), batchSize, afterID, checkpoint.QuarantineRetryAfter)
+			if selectErr != nil {
+				return progress, selectErr
+			}
+			for _, row := range candidates {
+				afterID = row.id
+				scanned++
+				plain, decryptErr := cipher.Decrypt(row.stored)
+				if decryptErr != nil {
+					undecryptable++
+					progress.FindingsTotal++
+					if len(progress.Findings) < fieldEncryptionFindingsLimit {
+						progress.Findings = append(progress.Findings, fmt.Sprintf("undecryptable table=%s column=%s row_id=%s error=%s",
+							spec.table, spec.column, row.id, fieldEncryptionFailureKind(row.stored, knownKeyIDs)))
+					}
+					continue
+				}
+				if _, encryptErr := cipher.Encrypt(plain); encryptErr != nil {
+					return progress, fmt.Errorf("encrypt %s.%s row %s: %w", spec.table, spec.column, row.id, encryptErr)
+				}
+				progress.Changed++
+			}
+			if len(candidates) < batchSize {
+				break
+			}
+		}
+		progress.Scanned += scanned
+		progress.Errors += undecryptable
+		progress.Skipped += undecryptable
+		progress.Summary = append(progress.Summary, fmt.Sprintf("scanned table=%s column=%s rows=%d undecryptable=%d",
+			spec.table, spec.column, scanned, undecryptable))
+	}
+	encoded, err := json.Marshal(checkpoint)
+	if err != nil {
+		return progress, fmt.Errorf("encode field-encryption checkpoint: %w", err)
+	}
+	progress.Checkpoint = encoded
+	progress.Done = progress.Scanned == 0
 	return progress, nil
 }
 
@@ -417,6 +479,88 @@ func fieldEncryptionLegacyKeyFingerprintWithKey(secret string, key []byte) strin
 func fieldEncryptionFingerprint(stored string) string {
 	sum := sha256.Sum256([]byte(stored))
 	return fmt.Sprintf("%x", sum[:])
+}
+
+func fieldEncryptionKnownKeyIDs(settings FieldEncryptionSettings) (map[string]bool, error) {
+	previous, err := fieldcrypt.ParseFieldKeySet(settings.PreviousKeys)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{strings.TrimSpace(settings.ActiveKeyID): true}
+	for id := range previous {
+		known[id] = true
+	}
+	return known, nil
+}
+
+// fieldEncryptionFailureKind classifies an undecryptable value from its
+// envelope header alone, so dry-run findings never echo ciphertext or
+// plaintext. Key IDs are printed only when they are well-formed identifiers.
+func fieldEncryptionFailureKind(stored string, knownKeyIDs map[string]bool) string {
+	const v3Prefix = "enc:v3:"
+	if strings.HasPrefix(stored, v3Prefix) {
+		keyID, _, ok := strings.Cut(strings.TrimPrefix(stored, v3Prefix), ":")
+		if !ok || !fieldEncryptionWellFormedKeyID(keyID) {
+			return "malformed_envelope"
+		}
+		if !knownKeyIDs[keyID] {
+			return "unknown_key_id key_id=" + keyID
+		}
+		return "authentication_failed key_id=" + keyID
+	}
+	if strings.HasPrefix(stored, "enc:v1:") || strings.HasPrefix(stored, "enc:v2:") {
+		return "legacy_key_mismatch"
+	}
+	return fieldEncryptionDecryptError
+}
+
+func fieldEncryptionWellFormedKeyID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// listFieldEncryptionQuarantine is the verify report: every quarantined
+// field, newest observation first, capped with the total so a large
+// quarantine stays readable.
+func listFieldEncryptionQuarantine(ctx context.Context, db datamigrate.DB) ([]string, error) {
+	query := fmt.Sprintf(`SELECT table_name, column_name, row_id, error_code, attempts, last_observed_at, COUNT(*) OVER () FROM %s ORDER BY last_observed_at DESC, table_name, column_name, row_id LIMIT $1`, fieldEncryptionQuarantineTable)
+	rows, err := db.QueryContext(ctx, query, fieldEncryptionFindingsLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list field-encryption quarantine: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		lines []string
+		total int64
+	)
+	for rows.Next() {
+		var (
+			table, column, rowID, errorCode string
+			attempts                        int64
+			lastObserved                    time.Time
+		)
+		if err := rows.Scan(&table, &column, &rowID, &errorCode, &attempts, &lastObserved, &total); err != nil {
+			return nil, fmt.Errorf("scan field-encryption quarantine: %w", err)
+		}
+		lines = append(lines, fmt.Sprintf("  table=%s column=%s row_id=%s error_code=%s attempts=%d last_observed_at=%s",
+			table, column, rowID, errorCode, attempts, lastObserved.UTC().Format(time.RFC3339)))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate field-encryption quarantine: %w", err)
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	header := fmt.Sprintf("field-encryption quarantine: showing %d of %d", len(lines), total)
+	return append([]string{header}, lines...), nil
 }
 
 func quarantineFieldEncryptionFailure(ctx context.Context, db datamigrate.DB, spec encryptedColumn, row struct{ id, stored string }) error {

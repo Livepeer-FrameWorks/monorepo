@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Connecting your edge node is the final step in the setup process. Enrollment establishes a secure identity for your node, allowing it to receive traffic and report telemetry to the control plane.
+Connecting your edge node is the last setup step. Enrollment registers the node with its cluster's Foghorn and gives it a node identity, so it can receive traffic and report telemetry.
 
 ## Install the CLI
 
@@ -59,11 +59,11 @@ You need an `edge_node` bootstrap token for a cluster that has an assigned Fogho
 
 **Via Dashboard (tenant owner):**
 
-1. Go to **Infrastructure → Network**
-2. Click **Create Private Cluster**
+1. Go to **Infrastructure → Clusters**
+2. Click **Create Edge Cluster**
 3. Copy the bootstrap token shown in the modal
 
-Use this dashboard token only after the cluster has a Foghorn assignment. The one-command CLI path creates that assignment automatically.
+Creating the cluster this way assigns it a Foghorn automatically, the same as the one-command CLI path.
 
 If a dashboard-created token fails with `Cluster has no Foghorn assignment yet`, use `frameworks edge deploy` without `--cluster-id` or ask an admin to create a token for an assigned edge cluster.
 
@@ -102,7 +102,7 @@ This:
 3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
 4. Foghorn asks Quartermaster to register the node and starts including healthy heartbeats in routing decisions
 
-The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After Foghorn accepts the registration and returns its first configuration seed, Helmsman durably completes any requested identity rotation and writes a non-secret local receipt. Native installs then overwrite the token value in `.edge-enroll.env` directly and remove any obsolete cleanup request. In the managed container, Helmsman submits a durable cleanup request and a narrow root supervisor service scrubs the two root-owned bind mounts in place; this expected deferral is logged as a warning, and the host files are never chowned to the container's numeric service group. A later accepted rotation replaces a stale request atomically. Verify the value is empty after enrollment; if an unmanaged deployment does not expose a writable token file, remove the bearer secret yourself. A previously admitted node can then reconnect from its pinned local admission during a temporary Quartermaster outage. After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
+The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After Foghorn accepts the registration and returns its first configuration seed, Helmsman durably completes any requested identity rotation and writes a non-secret local receipt. Native installs then overwrite the token value in `.edge-enroll.env` directly and remove any obsolete cleanup request. In the managed container, Helmsman submits a durable cleanup request and a narrow root supervisor service scrubs the two root-owned bind mounts in place; this expected deferral is logged as a warning, and the host files are never chowned to the container's numeric service group. A later accepted rotation replaces a stale request atomically. Verify the value is empty after enrollment; if an unmanaged deployment does not expose a writable token file, remove the bearer secret yourself. A previously admitted node can then reconnect from its pinned local admission during a temporary Quartermaster outage. After enrollment, your node appears in the dashboard under **Infrastructure → Nodes**.
 
 ### Bootstrap (Token-Based Provisioning)
 
@@ -147,7 +147,7 @@ This shows:
 - **Service status** for MistServer, Helmsman, and Caddy
 - **HTTPS health check** against your configured `EDGE_DOMAIN`
 
-For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Network** once enrolled.
+For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Nodes** once enrolled.
 
 ## How Traffic Gets Routed
 
@@ -192,10 +192,10 @@ Both work. Direct ingest means lower latency to your node; network ingest means 
 
 ## Capacity and Capabilities
 
-Your node advertises what it can do. Set these in your edge environment file, and pass them through to the helmsman container (add them to `helmsman.environment` or use `env_file` in your edge compose file):
+Your node advertises what it can do. Set these in `.edge.env`, which the compose file already loads into the single `edge` container, then recreate that service with `docker compose -f docker-compose.edge.yml up -d edge` so it picks up the new values (`docker compose restart` does not re-read env files):
 
 ```bash
-# In your edge environment file
+# In .edge.env
 HELMSMAN_CAP_INGEST=true    # Can receive RTMP/E-RTMP/SRT streams
 HELMSMAN_CAP_EDGE=true      # Can serve viewers
 HELMSMAN_CAP_STORAGE=true   # Can store recordings

@@ -129,7 +129,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	}
 	fmt.Fprintln(out, "  6. stale placement cleanup: platform service replicas and kafka-mirrormaker workers the manifest no longer places")
 	fmt.Fprintln(out, "  7. schema postdeploy migrations")
-	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path>`)\n", platformVersion)
+	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 	writeReleasePlanGroup(out, "managed dependencies (independent manifest pins)", classes.Dependencies)
 	writeReleasePlanGroup(out, "host infrastructure (independent OS/data lifecycle)", classes.Infrastructure)
 	fmt.Fprintln(out, "  control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
@@ -148,6 +148,13 @@ func writeReleasePlanGroup(out io.Writer, label string, values []string) {
 // fetchReleaseManifestFn reads the published release manifest `release apply` checks compatibility against. Tests
 // substitute a fixture so the apply sequence runs without the release repositories.
 var fetchReleaseManifestFn = gitops.FetchFromRepositories
+
+// releaseRunMigrateFn and releaseRunUpgradesFn run the migration phases and the service upgrades of `release apply`.
+// Tests substitute them to observe step order without a cluster.
+var (
+	releaseRunMigrateFn  = runMigrate
+	releaseRunUpgradesFn = runReleaseUpgradesInterleaved
+)
 
 type releaseApplyOptions struct {
 	version                      string
@@ -262,6 +269,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", hostSteps)
 	fmt.Fprintln(out, "  2. service databases missing on the cluster (created with roles and current baseline), then expand migrations")
+	fmt.Fprintln(out, "     · read-only Quartermaster report: nodes without an identity key, DNS grants the entitlement migration clears")
 	if len(services) == 0 {
 		fmt.Fprintln(out, "  3. service upgrades: none pending")
 	} else {
@@ -272,7 +280,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	fmt.Fprintln(out, "  4. stale placement cleanup (platform service replicas, kafka-mirrormaker workers)")
 	fmt.Fprintln(out, "  5. postdeploy migrations")
-	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path>`)\n", platformVersion)
+	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 
 	// Every service env the release deploys must pass the schema contract, and
 	// required operator inputs must exist, before the first mutation.
@@ -323,12 +331,16 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 
 	ux.Subheading(out, "[2/4] Expand migrations")
-	if migrateErr := runMigrate(cmd, rc, opts.dryRun, "expand", true, platformVersion, false, opts.completeInterruptedBaselines); migrateErr != nil {
+	if migrateErr := releaseRunMigrateFn(cmd, rc, opts.dryRun, "expand", true, platformVersion, false, opts.completeInterruptedBaselines); migrateErr != nil {
 		return fmt.Errorf("expand migrations: %w", migrateErr)
 	}
+	// Runs once the expand columns exist and before the upgrades install the
+	// binaries that refuse keyless nodes, so operators see who must re-enroll
+	// while those nodes are still served.
+	runReleasePostExpandReport(cmd.Context(), cmd, rc, sshPool)
 
 	ux.Subheading(out, "[3/4] Service upgrades + reconciliations")
-	installed, err := runReleaseUpgradesInterleaved(cmd, rc, env, transitions, services, platformVersion, opts)
+	installed, err := releaseRunUpgradesFn(cmd, rc, env, transitions, services, platformVersion, opts)
 	if err != nil {
 		return err
 	}
@@ -342,10 +354,10 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	// Postdeploy migrations gate on, but do not execute, required data migrations.
 	ux.Subheading(out, "[4/4] Postdeploy migrations")
-	if err := runMigrate(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false, opts.completeInterruptedBaselines); err != nil {
+	if err := releaseRunMigrateFn(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false, opts.completeInterruptedBaselines); err != nil {
 		return fmt.Errorf("postdeploy migrations: %w", err)
 	}
-	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat without --dry-run.\n", platformVersion)
+	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat with --yes in place of --dry-run.\n", platformVersion)
 
 	// Keep the edge target pinned to this release's resolved version.
 	if !opts.dryRun {

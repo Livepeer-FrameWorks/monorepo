@@ -38,21 +38,25 @@ mutation EnableChapters {
 
 | Mode             | Best for                                                                                     |
 | ---------------- | -------------------------------------------------------------------------------------------- |
-| `WINDOW_SIZED`   | Default historical replay buckets sized to the stream's DVR window.                          |
+| `WINDOW_SIZED`   | Historical replay buckets sized to the stream's DVR window.                                  |
 | `FIXED_INTERVAL` | Regular historical replay buckets such as hourly, 6-hour, or 24-hour chapters.               |
-| `NONE`           | Rolling DVR only: record and serve the live DVR window, but do not create chapter artifacts. |
+| `NONE`           | Default. Rolling DVR only: record and serve the live DVR window, but do not create chapters. |
+
+A new stream has chapters off (`NONE`); set `dvrChapterMode` to create them.
 
 `FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour).
 
-All chapter boundaries use UTC epoch milliseconds. Civil-time bucketing belongs in your app: convert "yesterday in Europe/Amsterdam" to a UTC range there, then read or play the chapter that covers it.
+All chapter boundaries use UTC epoch milliseconds. Civil-time bucketing belongs in your app: convert "yesterday in Europe/Amsterdam" to a UTC range there, then list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
 ## Chapter state
 
 ```
 OPEN → CLOSED → FINALIZING → FINALIZED → FROZEN → RECLAIMED
-                                 ↓
-                                 └─→ FAILED_SOURCE_MISSING | FAILED_PERMANENT
+         │          │
+         └──────────┴─→ FAILED_SOURCE_MISSING | FAILED_PERMANENT
 ```
+
+A chapter fails from `CLOSED` or `FINALIZING`, before it reaches `FINALIZED`.
 
 A chapter becomes playable at `FINALIZED` (canonical `.mkv` produced on the recording origin). `FROZEN` means the artifact + `.dtsh` are durably on S3 and source TS segments are safe to delete. `RECLAIMED` is the steady state — the row remains as range metadata; the chapter artifact is the only thing serving playback.
 
@@ -60,9 +64,15 @@ A chapter becomes playable at `FINALIZED` (canonical `.mkv` produced on the reco
 
 ## Retrieve a chapter
 
+`dvrChapter` returns a chapter only when `startMs` and `endMs` are exactly that chapter's
+boundaries; any other range returns not found. It does not search for the chapter that covers a
+range. Take the boundaries from `dvrChapters` (its `startMs` and `endMs`), or compute them from the
+configured mode. With the hourly `FIXED_INTERVAL` configuration above, chapters start on UTC hour
+boundaries and last 3,600,000 ms:
+
 ```graphql
 query DVRChapter {
-  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715212800000) {
+  dvrChapter(dvrId: "dvr-hash", startMs: 1715126400000, endMs: 1715130000000) {
     chapterId
     state
     playbackId
@@ -85,7 +95,7 @@ query DVRChapter {
 
 ```graphql
 query DVRChapters {
-  dvrChapters(dvrId: "dvr-hash") {
+  dvrChapters(dvrId: "dvr-hash", rangeStartMs: 1715126400000, rangeEndMs: 1715212800000) {
     chapters {
       chapterId
       state
@@ -101,7 +111,8 @@ query DVRChapters {
 }
 ```
 
-Paginate with `pageSize` (default 200, max 1000) + `nextPageToken`. Use this for chapter pickers, timeline markers, or quick links into a long archive.
+`rangeStartMs` and `rangeEndMs` limit the list to a UTC time range (here one day); omit them or
+pass `0` for no bound. Paginate with `pageSize` (default 200, max 1000) + `nextPageToken`. Use this for chapter pickers, timeline markers, or quick links into a long archive.
 
 ## Gaps and failed chapters
 

@@ -1,0 +1,21 @@
+---
+title: GraphQL schema reference
+description: Generated public GraphQL fields and types.
+---
+
+Generated from `pkg/graphql/schema.graphql` by `make generate-graphql-reference`. This reference covers GraphQL fields available to tenant and public clients. Operator-only and service-token-only entry points are excluded. A field can still require a token, a role, ownership, or a product capability; read its description and the [authentication guide](/builders/api-reference/#authentication).
+
+**SDK contract:** A field marked **Typed SDK document** has a named operation in the TypeScript, Go, and Python SDKs. Only that document and the schema elements it selects are checked by `make verify-api-compat` and `make verify-schema-compat`. Other fields are callable through raw GraphQL, but do not carry that SDK compatibility promise. See [SDK versions](/builders/sdks/#versions).
+
+## Operations
+
+- [Queries (84)](/builders/api-schema/queries/)
+- [Mutations (81)](/builders/api-schema/mutations/)
+- [Subscriptions (13)](/builders/api-schema/subscriptions/)
+
+## Types
+
+- [Types A-F (172)](/builders/api-schema/types-a-f/)
+- [Types G-L (39)](/builders/api-schema/types-g-l/)
+- [Types M-R (176)](/builders/api-schema/types-m-r/)
+- [Types S-Z (214)](/builders/api-schema/types-s-z/)

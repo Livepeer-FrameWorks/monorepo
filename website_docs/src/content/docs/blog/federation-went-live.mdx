@@ -13,7 +13,7 @@ tags:
 
 A FrameWorks stream is pushed into exactly one cluster. Viewers show up wherever they are. For a long time those two facts forced an awkward choice whenever a viewer's best edge lived in a cluster that had never seen the stream: send the viewer somewhere worse, or copy the stream somewhere it might not be needed.
 
-As of the v0.1.0 cycle, Foghorn — the routing and balancing service that runs in every cluster — answers this itself. Foghorns now talk to each other. The result is that any edge can serve any tenant's stream, regardless of which cluster the broadcaster pushed into, and the clusters collectively behave like one CDN.
+As of the v0.1.0 cycle, Foghorn (the routing and balancing service that runs in every cluster) handles this itself. Foghorn instances in different clusters now exchange telemetry and arrange origin pulls, so any edge can serve any tenant's stream, regardless of which cluster the broadcaster pushed into.
 
 ## The peer channel
 
@@ -38,7 +38,7 @@ The comparison runs in two phases because per-stream answers cost an RPC. Phase 
 
 With merged local and remote candidates, the decision has two shapes:
 
-**Origin pull.** If the best answer is "serve it from a local edge that doesn't have the stream yet," Foghorn notifies the origin cluster, both sides record the replication in progress, and the local edge's MistServer opens a DTSC pull from the origin edge. DTSC is MistServer's native server-to-server transport; Foghorn only decides _which_ node pulls from _which_ source. First viewer eats the setup latency, and everyone after that is served locally.
+**Origin pull.** If the best answer is "serve it from a local edge that doesn't have the stream yet," Foghorn notifies the origin cluster, both sides record the replication in progress, and the local edge's MistServer opens a DTSC pull from the origin edge. DTSC is MistServer's native server-to-server transport; Foghorn only decides _which_ node pulls from _which_ source. The first viewer pays the setup latency; later viewers are served locally.
 
 **Redirect.** If the best answer is simply "the other cluster's edge," the viewer gets a 307 to that cluster's play endpoint and the media never crosses cluster boundaries at all.
 
@@ -70,6 +70,6 @@ Most federation state is designed to expire rather than to be cleaned up. If a p
 
 Cross-cluster serving raises an accounting question we wanted answered precisely: every event a cluster emits is stamped with the cluster that emitted it plus the stream's origin cluster, and each cluster reports its own per-tenant usage. A tenant's bill reflects where their viewers were actually served. The DTSC bandwidth between clusters is infrastructure cost, ours, and never becomes a tenant line item. And if a rated usage row somehow arrives without a cluster ID, billing fails closed and flags it instead of guessing.
 
-Routing decisions land in analytics with the remote cluster marked, so you can see cross-cluster serves in the dashboard (they render amber, with a badge). If federation is doing its job, that badge should be rare: the 200-point penalty means local serving is the strong default, and federation is the escape hatch that makes the worst case "slightly farther edge" instead of "no stream."
+Routing decisions land in analytics with the remote cluster marked, so you can see cross-cluster serves in the dashboard (they render amber, with a badge). That badge should be rare: the 200-point penalty makes local serving the strong default, and federation is the fallback that turns the worst case from "no stream" into a slightly farther edge.
 
 For the operator's view of running multiple clusters, see [multi-cluster operations](/operators/multi-cluster); the scoring pipeline is described in the [architecture overview](/operators/architecture).

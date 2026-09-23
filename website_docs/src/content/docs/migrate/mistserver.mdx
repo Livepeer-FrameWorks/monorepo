@@ -9,7 +9,7 @@ import { Aside } from "@astrojs/starlight/components";
 
 If you run MistServer today, you already run real media infrastructure. FrameWorks is not a drop-in replacement for every standalone MistServer workflow. It is a managed control plane and network layer around the same media-engine family, with MistServer at the edge and GraphQL, federation, analytics, billing, playback access control, and support tooling above it.
 
-We co-maintain MistServer, so this guide starts with the uncomfortable but useful question: should you migrate at all?
+We co-maintain MistServer. Start with the table below; for some workloads raw MistServer remains the better fit.
 
 ## Pick the right path
 
@@ -18,19 +18,18 @@ We co-maintain MistServer, so this guide starts with the uncomfortable but usefu
 | Self-managed MistServer, full control, custom triggers, exec inputs, SCTE-35, multiview, wildcard streams, or raw JSON config | Stay on raw MistServer                                     | [mistserver.com](https://mistserver.com/) - [MistServer manual](https://docs.mistserver.org/) - [GitHub](https://github.com/DDVTech/mistserver) |
 | Your Mist or MistLoadBalancer footprint handles the media, but spike capacity is becoming operational work                    | FrameWorks edge or hybrid path for burst capacity          | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
 | You already know how to do multi-region Mist, but want managed federation, telemetry, and routing controls                    | FrameWorks edge or hybrid path for geo coverage            | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
-| You need a customer-operated Foghorn, federation identity, or whole control plane                                             | Outside the supported FrameWorks edge product              | [Understand the product boundary](#customer-operated-control-plane-is-out-of-scope)                                                             |
+| You want your own Foghorn, federation identity, and control plane                                                             | Full self-host of the entire stack                         | [Self-host the whole stack](#run-your-own-foghorn-self-host-the-whole-stack)                                                                    |
 | You want to stop running the media engine and control plane                                                                   | Fully managed FrameWorks SaaS                              | [Move to managed FrameWorks](#move-to-managed-frameworks)                                                                                       |
 | You want to keep on-prem capture and add managed reach                                                                        | Hybrid: keep Mist where it works, pull or federate outward | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
 
 <Aside type="note">
-  If your workload matches the first row, that is not a failed migration. It is the right tool for
-  the job. Raw MistServer is the better fit when you need direct config control, local scripts, or
-  the full protocol and process surface.
+  If your workload matches the first row, stay on raw MistServer. It is the better fit when you need
+  direct config control, local scripts, or the full protocol and process surface.
 </Aside>
 
 ## TL;DR
 
-- **What stays:** RTMP/RTMPS, E-RTMP, SRT, and WHIP ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
+- **What stays:** RTMP, E-RTMP, SRT, and WHIP ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
 - **What changes:** Mist JSON config and HTTP API calls become GraphQL mutations; Mist triggers become signed webhooks, GraphQL subscriptions, or platform-managed webhook policies; per-node Prometheus becomes FrameWorks telemetry; `pushStart` and automatic pushes become stream-scoped push targets.
 - **What you gain:** provider-operated cross-cluster routing and federation, managed GraphQL, sprite-sheet seek previews, `?jwt=` playback auth across protocols, Skipper diagnostics, managed registration for Mist pull sources, wallet auth, MCP, x402, and a future marketplace path for operator-owned edge capacity.
 - **What you give up:** raw config portability, custom HTTP/exec triggers, exec inputs, FLV workflows, multiview compositor management, SCTE-35 insertion, JWT-on-ingest, wildcard stream inheritance, custom variables in recording paths, and direct Mist analyser workflows.
@@ -39,7 +38,7 @@ We co-maintain MistServer, so this guide starts with the uncomfortable but usefu
 
 ### Burst capacity
 
-MistServer can scale beyond one box, and MistLoadBalancer can support serious multi-node deployments. The FrameWorks pitch is not "Mist cannot scale." It is that the load-balancing layer has been refactored into Foghorn and wrapped in managed cluster inventory, tenant routing, telemetry, federation events, and operator workflows. When traffic spikes, you can keep hand-operating Mist capacity, or let FrameWorks place viewers across eligible edges using the managed control plane. See [multi-cluster operations](/operators/multi-cluster) and the [viewer routing architecture](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/viewer-routing.md).
+MistServer can scale beyond one box, and MistLoadBalancer can support serious multi-node deployments. Foghorn is MistLoadBalancer's logic refactored and wrapped in managed cluster inventory, tenant routing, telemetry, federation events, and operator workflows. When traffic spikes, you can keep hand-operating Mist capacity, or let FrameWorks place viewers across eligible edges using the managed control plane. See [multi-cluster operations](/operators/multi-cluster) and the [viewer routing architecture](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/viewer-routing.md).
 
 ### Geo coverage
 
@@ -47,7 +46,7 @@ Raw MistServer plus MistLoadBalancer can already run large multi-region shows. F
 
 ### One branded URL across your own nodes + platform + marketplace capacity
 
-This is the bit no other managed video platform does, and it matters most for MistServer operators because you already run your own infrastructure.
+A paid tenant gets one hostname namespace that routes across its own nodes, FrameWorks platform clusters, and marketplace clusters. This is most relevant for MistServer operators, who already run their own infrastructure.
 
 **Before (standalone MistServer):** your viewers hit one server IP, or a DNS name you operate. Adding a second region means you either run another Mist + your own GeoDNS, or you build a load balancer in front. If a node goes down, the failover is whatever you wired by hand.
 
@@ -60,7 +59,7 @@ edge-ingest.acme.cdn.frameworks.network    # RTMP / SRT / WHIP push
 edge-egress.acme.cdn.frameworks.network    # direct egress (SRT pull, etc.)
 ```
 
-A single per-tenant TLS cert covers the whole namespace. The DNS smart record geo-routes viewers and streamers to the closest healthy edge across every cluster you subscribe to — your own self-hosted Mist nodes (running as a FrameWorks edge), any FrameWorks platform-official clusters you've enabled for burst coverage, and any third-party marketplace clusters you've added for regions you don't operate. One URL, one cert, one operational view.
+A single per-tenant TLS cert covers the whole namespace. The DNS smart record geo-routes viewers and streamers to the closest healthy edge across every cluster you subscribe to — your own self-hosted Mist nodes (running as a FrameWorks edge), any FrameWorks platform-official clusters you've enabled for burst coverage, and any third-party marketplace clusters you've added for regions you don't operate.
 
 Bring your existing infrastructure in as a `tenant_private` cluster, optionally subscribe to one or two platform-official regions for failover or burst, and your `acme.cdn.frameworks.network` URL transparently spans all of it. When you add a new region (your own or via marketplace), DNS picks it up automatically — no client-side reconfiguration, no certificate juggling, no GeoDNS to operate.
 
@@ -99,7 +98,7 @@ MistServer supports a broad input surface: push inputs over RTMP, RTSP, SRT, WHI
 
 | MistServer feature               | FrameWorks path                                                                                                   |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| RTMP / RTMPS / E-RTMP push       | Push stream with the FrameWorks ingest URL and stream key                                                         |
+| RTMP / E-RTMP push               | Push stream with the FrameWorks ingest URL and stream key                                                         |
 | SRT push                         | Push stream with `streamid` carrying the stream key                                                               |
 | WHIP push                        | StreamCrafter or direct WHIP URL, using MistServer's `/webrtc/{streamKey}` path                                   |
 | RTSP push                        | Hybrid/direct edge only when that port is intentionally exposed; not a managed SaaS ingest default                |
@@ -255,7 +254,7 @@ Hybrid edges are available through the FrameWorks edge workflow, but they are mo
 3. **Provision on a separate box first.** Do not replace your working Mist deployment on day one. Bring up the FrameWorks edge next to it so you can test routing, capacity, and pull behavior without risking the origin.
 4. **Connect the media path.** Either push directly into the FrameWorks edge, or configure a pull-input stream from your existing Mist deployment over DTSC, RTSP, SRT, RIST, HLS, or TS-over-UDP.
 5. **Validate viewer routing.** Watch the stream through FrameWorks playback URLs, confirm recordings and push targets if used, then compare viewer startup, rebuffering, and route selection against your current setup.
-6. **Move traffic gradually.** Switch player embeds, DNS, or encoder presets only after one full traffic cycle. Keep raw Mist available as rollback until the edge behavior is boring.
+6. **Move traffic gradually.** Switch player embeds, DNS, or encoder presets only after one full traffic cycle. Keep raw Mist available as rollback until the edge has run a full traffic cycle without incidents.
 
 Tenant BYO edge path:
 
@@ -273,13 +272,13 @@ The `cluster nodes add` path requires a platform context with Quartermaster/Fogh
 
 For hybrid edge nodes, the practical shape is MistServer plus Helmsman on your host, connected back to the FrameWorks network. You manage the edge box; FrameWorks manages the control plane. See [Selfhosters](/hybrid/overview), [Connecting a node](/hybrid/connecting), and [Edge nodes](/hybrid/edge-nodes).
 
-## Customer-operated control plane is out of scope
+## Run your own Foghorn: self-host the whole stack
 
-The supported self-hosted product stops at MistServer, Helmsman, Caddy, and the customer edge host. FrameWorks operates Foghorn, federation identity, Livepeer, Chandler, object storage, DNS/TLS, analytics stores, billing, and the control plane.
+With a hybrid edge, you run MistServer, Helmsman, Caddy, and the edge host. FrameWorks operates Foghorn, federation identity, Livepeer, Chandler, object storage, DNS/TLS, analytics stores, billing, and the control plane.
 
-Running Foghorn on customer infrastructure is not an advanced edge-install option. It requires a separate federation trust root and compatible deployments of the coupled media and durable services. The repository contains operator tooling for FrameWorks' own environments, but that tooling is not a supported customer whole-stack distribution or runbook.
+Running Foghorn on your own infrastructure is not an edge-install option. Foghorn depends on a federation trust root and on the coupled media and durable services, so running it yourself means self-hosting the entire stack: control plane, Foghorn, edges, Livepeer, Chandler, databases, analytics, and interfaces. FrameWorks is public domain (Unlicense), and full self-hosting is supported: the `frameworks` CLI deploys and upgrades the stack from a GitOps repository, as described in the [operator guides](/operators/deployment).
 
-If that provider boundary does not meet your requirements, remain on raw MistServer or evaluate a separately scoped platform rather than treating edge enrollment as authority to deploy the FrameWorks control plane.
+A self-hosted platform is independent. Attaching your own Foghorn or control plane to the FrameWorks network, or mixing its trust root with the FrameWorks platform's, is not supported.
 
 ## Move to managed FrameWorks
 
@@ -288,7 +287,7 @@ Use this path when you want to stop running the media engine and accept the mana
 1. **Inventory your MistServer setup.** Export config, list streams, triggers, pushes, recordings, JWT keys, external writers, custom variables, and local scripts.
 2. **Classify blockers.** Anything in [What you give up](#what-you-give-up-vs-raw-mistserver) needs a replacement plan before you cut over.
 3. **Create FrameWorks streams.** Use the dashboard or `createStream(input)`.
-4. **Repoint encoders.** RTMP/RTMPS, E-RTMP, SRT, and WHIP remain the normal managed ingest paths.
+4. **Repoint encoders.** RTMP, E-RTMP, SRT, and WHIP remain the normal managed ingest paths.
 5. **Replace trigger scripts.** Point trigger-driven HTTP handlers at a [webhook endpoint](/builders/webhooks) for the public events, or use subscriptions. For Mist `USER_NEW` authorization scripts, use `setPlaybackPolicy` with `type: WEBHOOK` so FrameWorks calls your authorization endpoint on viewer connect.
 6. **Recreate push targets.** Use `createPushTarget(streamId, input)` per stream.
 7. **Recreate recording and DVR behavior.** Use `record: true` or `startDVR(streamId)`.

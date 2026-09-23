@@ -33,7 +33,7 @@ const player = createPlayer({
 });
 
 // Read state (queries)
-player.state; // "playing"
+player.playerState; // "playing"
 player.volume; // 0.75
 player.currentTime; // 12500 (ms)
 player.live; // true
@@ -60,66 +60,66 @@ from the viewer, use the dashboard playback DNS URL directly.
 
 ## Queries (Read State)
 
-| Property       | Type                                          | Description                                        |
-| -------------- | --------------------------------------------- | -------------------------------------------------- |
-| `state`        | `PlayerState`                                 | Current lifecycle state                            |
-| `streamState`  | `StreamState \| null`                         | Upstream stream status                             |
-| `endpoints`    | `ContentEndpoints \| null`                    | Resolved playback endpoints                        |
-| `metadata`     | `object`                                      | Stream metadata from gateway                       |
-| `videoElement` | `HTMLVideoElement \| null`                    | Underlying video element                           |
-| `ready`        | `boolean`                                     | Player initialized and ready                       |
-| `currentTime`  | `number`                                      | Current position (milliseconds)                    |
-| `duration`     | `number`                                      | Total duration in milliseconds (Infinity for live) |
-| `volume`       | `number`                                      | Volume level (0-1)                                 |
-| `muted`        | `boolean`                                     | Whether muted                                      |
-| `paused`       | `boolean`                                     | Whether paused                                     |
-| `playing`      | `boolean`                                     | Whether actively playing                           |
-| `buffering`    | `boolean`                                     | Whether buffering                                  |
-| `started`      | `boolean`                                     | Whether playback started at least once             |
-| `playbackRate` | `number`                                      | Current speed                                      |
-| `loop`         | `boolean`                                     | Looping enabled                                    |
-| `live`         | `boolean`                                     | Whether live stream                                |
-| `nearLive`     | `boolean`                                     | Whether near the live edge                         |
-| `fullscreen`   | `boolean`                                     | Whether in fullscreen                              |
-| `pip`          | `boolean`                                     | Whether in picture-in-picture                      |
-| `error`        | `string \| null`                              | Current error message                              |
-| `quality`      | `PlaybackQuality \| null`                     | Active quality level                               |
-| `abrMode`      | `'auto' \| 'resize' \| 'bitrate' \| 'manual'` | ABR mode                                           |
-| `theme`        | `string`                                      | Current theme                                      |
-| `size`         | `{ width, height }`                           | Container dimensions                               |
-| `capabilities` | `Capabilities`                                | Runtime feature detection                          |
+| Property       | Type                                          | Description                                             |
+| -------------- | --------------------------------------------- | ------------------------------------------------------- |
+| `playerState`  | `PlayerState`                                 | Current lifecycle state (`state` is a deprecated alias) |
+| `streamState`  | `StreamState \| null`                         | Upstream stream status                                  |
+| `endpoints`    | `ContentEndpoints \| null`                    | Resolved playback endpoints                             |
+| `metadata`     | `object`                                      | Stream metadata from gateway                            |
+| `videoElement` | `HTMLVideoElement \| null`                    | Underlying video element                                |
+| `ready`        | `boolean`                                     | Player initialized and ready                            |
+| `currentTime`  | `number`                                      | Current position (milliseconds)                         |
+| `duration`     | `number`                                      | Total duration in milliseconds (Infinity for live)      |
+| `volume`       | `number`                                      | Volume level (0-1)                                      |
+| `muted`        | `boolean`                                     | Whether muted                                           |
+| `paused`       | `boolean`                                     | Whether paused                                          |
+| `playing`      | `boolean`                                     | Whether actively playing                                |
+| `buffering`    | `boolean`                                     | Whether buffering                                       |
+| `started`      | `boolean`                                     | Whether playback started at least once                  |
+| `playbackRate` | `number`                                      | Current speed                                           |
+| `loop`         | `boolean`                                     | Looping enabled                                         |
+| `live`         | `boolean`                                     | Whether live stream                                     |
+| `nearLive`     | `boolean`                                     | Whether near the live edge                              |
+| `fullscreen`   | `boolean`                                     | Whether in fullscreen                                   |
+| `pip`          | `boolean`                                     | Whether in picture-in-picture                           |
+| `error`        | `string \| null`                              | Current error message                                   |
+| `quality`      | `PlaybackQuality \| null`                     | Active quality level                                    |
+| `abrMode`      | `'auto' \| 'resize' \| 'bitrate' \| 'manual'` | ABR mode                                                |
+| `theme`        | `string`                                      | Current theme                                           |
+| `size`         | `{ width, height }`                           | Container dimensions                                    |
+| `capabilities` | `Capabilities`                                | Runtime feature detection                               |
 
 ## Mutations (Change State)
 
-| Mutation               | Signature                 | Description                     |
-| ---------------------- | ------------------------- | ------------------------------- |
-| `volume`               | `set volume(n)`           | Set volume (0-1)                |
-| `muted`                | `set muted(b)`            | Set mute state                  |
-| `playbackRate`         | `set playbackRate(n)`     | Set playback speed              |
-| `loop`                 | `set loop(b)`             | Enable/disable looping          |
-| `abrMode`              | `set abrMode(m)`          | Switch ABR mode                 |
-| `theme`                | `set theme(t)`            | Switch theme preset             |
-| `play()`               | `() => Promise<void>`     | Start playback                  |
-| `pause()`              | `() => void`              | Pause playback                  |
-| `seek(t)`              | `(milliseconds) => void`  | Seek to time                    |
-| `seekBy(d)`            | `(deltaMs) => void`       | Seek relative                   |
-| `jumpToLive()`         | `() => void`              | Jump to live edge               |
-| `skipForward(ms?)`     | `(milliseconds?) => void` | Skip forward (default 10000ms)  |
-| `skipBack(ms?)`        | `(milliseconds?) => void` | Skip backward (default 10000ms) |
-| `togglePlay()`         | `() => void`              | Toggle play/pause               |
-| `toggleMute()`         | `() => void`              | Toggle mute                     |
-| `toggleFullscreen()`   | `() => Promise<void>`     | Toggle fullscreen               |
-| `togglePiP()`          | `() => Promise<void>`     | Toggle picture-in-picture       |
-| `getQualities()`       | `() => Quality[]`         | List available qualities        |
-| `selectQuality(id)`    | `(id) => void`            | Lock to specific quality        |
-| `retry()`              | `() => Promise<void>`     | Retry current connection        |
-| `retryWithFallback()`  | `() => Promise<boolean>`  | Retry with next endpoint        |
-| `reload()`             | `() => Promise<void>`     | Full reload                     |
-| `clearError()`         | `() => void`              | Dismiss error                   |
-| `getStats()`           | `() => Promise<unknown>`  | Playback statistics snapshot    |
-| `setThemeOverrides(o)` | `(overrides) => void`     | Apply theme overrides           |
-| `clearTheme()`         | `() => void`              | Reset to default theme          |
-| `destroy()`            | `() => void`              | Tear down the player            |
+| Mutation               | Signature                 | Description                                                                          |
+| ---------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| `volume`               | `set volume(n)`           | Set volume (0-1)                                                                     |
+| `muted`                | `set muted(b)`            | Set mute state                                                                       |
+| `playbackRate`         | `set playbackRate(n)`     | Set playback speed                                                                   |
+| `loop`                 | `set loop(b)`             | Enable/disable looping                                                               |
+| `abrMode`              | `set abrMode(m)`          | Switch ABR mode                                                                      |
+| `theme`                | `set theme(t)`            | Switch theme preset                                                                  |
+| `play()`               | `() => Promise<void>`     | Start playback                                                                       |
+| `pause()`              | `() => void`              | Pause playback                                                                       |
+| `seek(t)`              | `(milliseconds) => void`  | Seek to time                                                                         |
+| `seekBy(d)`            | `(deltaMs) => void`       | Seek relative                                                                        |
+| `jumpToLive()`         | `() => void`              | Jump to live edge                                                                    |
+| `skipForward(ms?)`     | `(milliseconds?) => void` | Skip forward (default 10000ms)                                                       |
+| `skipBack(ms?)`        | `(milliseconds?) => void` | Skip backward (default 10000ms)                                                      |
+| `togglePlay()`         | `() => void`              | Toggle play/pause                                                                    |
+| `toggleMute()`         | `() => void`              | Toggle mute                                                                          |
+| `toggleFullscreen()`   | `() => Promise<void>`     | Toggle fullscreen                                                                    |
+| `togglePiP()`          | `() => Promise<void>`     | Toggle picture-in-picture                                                            |
+| `getQualities()`       | `() => Quality[]`         | List available qualities                                                             |
+| `selectQuality(id)`    | `(id) => void`            | Lock to a quality by its `getQualities()` id (engine level/track index), or `"auto"` |
+| `retry()`              | `() => Promise<void>`     | Retry current connection                                                             |
+| `retryWithFallback()`  | `() => Promise<boolean>`  | Retry with next endpoint                                                             |
+| `reload()`             | `() => Promise<void>`     | Full reload                                                                          |
+| `clearError()`         | `() => void`              | Dismiss error                                                                        |
+| `getStats()`           | `() => Promise<unknown>`  | Playback statistics snapshot                                                         |
+| `setThemeOverrides(o)` | `(overrides) => void`     | Apply theme overrides                                                                |
+| `clearTheme()`         | `() => void`              | Reset to default theme                                                               |
+| `destroy()`            | `() => void`              | Tear down the player                                                                 |
 
 ## Subscriptions — Events
 
@@ -223,7 +223,7 @@ The `capabilities` object reports runtime feature support:
 
 ```ts
 if (player.capabilities.pip) player.togglePiP();
-if (player.capabilities.qualitySelection) player.selectQuality("720p");
+if (player.capabilities.qualitySelection) player.selectQuality(player.getQualities()[1].id);
 ```
 
 | Property           | Type      | Description                  |
@@ -238,22 +238,22 @@ if (player.capabilities.qualitySelection) player.selectQuality("720p");
 
 ## Options
 
-| Option           | Type                                | Default     | Description                                                                 |
-| ---------------- | ----------------------------------- | ----------- | --------------------------------------------------------------------------- |
-| `target`         | `string \| HTMLElement`             | —           | Container                                                                   |
-| `contentId`      | `string`                            | —           | Playback ID                                                                 |
-| `contentType`    | `string`                            | `"live"`    | Content type                                                                |
-| `gatewayUrl`     | `string`                            | Official    | Gateway GraphQL endpoint override                                           |
-| `mistUrl`        | `string`                            | —           | Direct MistServer URL                                                       |
-| `endpoints`      | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                      |
-| `autoplay`       | `boolean`                           | `true`      | Auto-start                                                                  |
-| `muted`          | `boolean`                           | `false`     | Start muted                                                                 |
-| `controls`       | `boolean`                           | `true`      | Show built-in controls                                                      |
-| `poster`         | `string`                            | —           | Poster image before playback                                                |
-| `animatePreroll` | `boolean`                           | `false`     | Cycle thumbnail sprite tiles as a preroll animation before playback         |
-| `theme`          | `string`                            | `"default"` | Theme preset                                                                |
-| `themeOverrides` | `object`                            | —           | Per-token theme overrides                                                   |
-| `locale`         | `string`                            | `"en"`      | UI language                                                                 |
-| `playbackMode`   | `string`                            | `"auto"`    | Protocol preference                                                         |
-| `skin`           | `string \| SkinDefinition \| false` | `"default"` | Skin for blueprint rendering (see [Advanced](/builders/playback-advanced/)) |
-| `debug`          | `boolean`                           | `false`     | Debug logging                                                               |
+| Option           | Type                                | Default     | Description                                                                                 |
+| ---------------- | ----------------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
+| `target`         | `string \| HTMLElement`             | —           | Container                                                                                   |
+| `contentId`      | `string`                            | —           | Playback ID                                                                                 |
+| `contentType`    | `string`                            | —           | Content type; auto-detected from Gateway or Mist metadata when omitted                      |
+| `gatewayUrl`     | `string`                            | Official    | Gateway GraphQL endpoint override                                                           |
+| `mistUrl`        | `string`                            | —           | Direct MistServer URL                                                                       |
+| `endpoints`      | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                                      |
+| `autoplay`       | `boolean`                           | `true`      | Auto-start                                                                                  |
+| `muted`          | `boolean`                           | `false`     | Start muted                                                                                 |
+| `controls`       | `boolean`                           | `true`      | Show built-in controls                                                                      |
+| `poster`         | `string`                            | —           | Poster image before playback                                                                |
+| `animatePreroll` | `boolean`                           | `false`     | Cycle thumbnail sprite tiles as a preroll animation before playback                         |
+| `theme`          | `string`                            | `"default"` | Theme preset                                                                                |
+| `themeOverrides` | `object`                            | —           | Per-token theme overrides                                                                   |
+| `locale`         | `string`                            | `"en"`      | UI language                                                                                 |
+| `playbackMode`   | `string`                            | `"auto"`    | Protocol selection mode (see [Playback Modes](/builders/playback-advanced/#playback-modes)) |
+| `skin`           | `string \| SkinDefinition \| false` | `"default"` | Skin for blueprint rendering (see [Advanced](/builders/playback-advanced/))                 |
+| `debug`          | `boolean`                           | `false`     | Debug logging                                                                               |

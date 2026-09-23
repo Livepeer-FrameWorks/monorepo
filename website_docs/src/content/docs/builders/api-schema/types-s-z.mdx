@@ -1,0 +1,2466 @@
+---
+title: Types S-Z
+description: Generated public GraphQL type definitions.
+---
+
+[GraphQL schema reference](/builders/api-schema/) · Only types reachable from public entry points are shown.
+
+## SendMessageInput
+
+**input_object**
+
+Input for sending a message.
+
+- **conversationId**: `ID!` — The conversation ID to send the message to.
+- **content**: `String!` — The message content.
+
+## SendMessageResult
+
+**union**
+
+- Member: [Message](/builders/api-schema/types-m-r/#message)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## ServerInfo
+
+**object**
+
+Release and shipped feature set of this server.
+
+- **version**: `String!` — Platform release version, for example v0.3.11.
+- **features**: `[String!]!` — Sorted slugs of shipped product features in the platform feature registry.
+
+## ServiceInstance
+
+**object**
+
+- **id**: `ID!`
+- **instanceId**: `String!`
+- **clusterId**: `String!`
+- **nodeId**: `String`
+- **serviceId**: `String!`
+- **version**: `String`
+- **port**: `Int`
+- **processId**: `Int`
+- **containerId**: `String`
+- **status**: `InstanceStatus!` ([InstanceStatus](/builders/api-schema/types-g-l/#instancestatus))
+- **healthStatus**: `NodeStatus!` ([NodeStatus](/builders/api-schema/types-m-r/#nodestatus))
+- **startedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **stoppedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **lastHealthCheck**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+
+## ServiceInstanceEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ServiceInstance!` ([ServiceInstance](/builders/api-schema/types-s-z/#serviceinstance))
+
+## ServiceInstanceHealth
+
+**object**
+
+- **instanceId**: `String!`
+- **serviceId**: `String!`
+- **clusterId**: `String!`
+- **protocol**: `String!`
+- **host**: `String`
+- **port**: `Int!`
+- **healthEndpoint**: `String`
+- **status**: `String!`
+- **lastHealthCheck**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+
+## ServiceInstancesConnection
+
+**object**
+
+- **edges**: `[ServiceInstanceEdge!]!` ([ServiceInstanceEdge](/builders/api-schema/types-s-z/#serviceinstanceedge))
+- **nodes**: `[ServiceInstance!]!` ([ServiceInstance](/builders/api-schema/types-s-z/#serviceinstance))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## SessionQoeSummary
+
+**object**
+
+Viewer-experienced QoE summary. Ratios are sum(numerator)/sum(denominator) over the player-reported session beacons; rebufferingRatio is the headline QoE number.
+
+- **sessionCount**: `Int!`
+- **playedHours**: `Float!`
+- **rebufferingRatio**: `Float!`
+- **rebuffersPerHour**: `Float!`
+- **avgRebufferMs**: `Float!`
+- **frameDropRatio**: `Float!`
+- **playbackFailureRate**: `Float!`
+- **ebvsRate**: `Float!`
+- **avgBitrateBps**: `Float!`
+- **abrSwitchesPerHour**: `Float!`
+- **avgLiveEdgeLatencyMs**: `Float!`
+
+## SessionQoeTimeSeriesBucket
+
+**object**
+
+One toStartOfInterval window of the viewer-experienced QoE summary. Ratios are sum(numerator)/sum(denominator) over the per-session rollup; `sessionCount` and `playedHours` are the per-bucket denominators.
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **sessionCount**: `Int!`
+- **playedHours**: `Float!`
+- **rebufferingRatio**: `Float!`
+- **frameDropRatio**: `Float!`
+- **avgBitrateBps**: `Float!`
+
+## SetMediaRetentionPolicyInput
+
+**input_object**
+
+- **targetType**: `MediaRetentionTarget!` ([MediaRetentionTarget](/builders/api-schema/types-m-r/#mediaretentiontarget)) — Which class to write: VOD, DVR, or CLIP.
+- **days**: `Int` — Days to retain new artifacts of this class. Range: 0 ≤ value ≤ tier cap (tier cap of 0 means uncapped). 0 = no auto-expire (only honored on uncapped tiers; Free clamps to the cap at write time). Ignored when clear = true.
+- **clear**: `Boolean` — When true, NULLs out the per-class column so the tenant inherits the system default (VOD: keep forever, DVR/clip: 30d). days is ignored.
+
+## SetMediaRetentionPolicyResult
+
+**union**
+
+- Member: [MediaRetentionPolicy](/builders/api-schema/types-m-r/#mediaretentionpolicy)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SetNodeModeInput
+
+**input_object**
+
+- **nodeId**: `ID!` — Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
+- **mode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/types-m-r/#nodeoperationalmode))
+- **reason**: `String` — Free-text reason recorded in Foghorn&#39;s audit trail. Defaults to the calling user/agent identity.
+
+## SetNodeModeResult
+
+**union**
+
+- Member: [InfrastructureNode](/builders/api-schema/types-g-l/#infrastructurenode)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SetPlaybackPolicyInput
+
+**input_object**
+
+- **streamId**: `ID` — Exactly one of streamId, vodAssetId, or clipId must be provided.
+- **vodAssetId**: `ID`
+- **clipId**: `ID`
+- **policy**: `PlaybackPolicyInput!` ([PlaybackPolicyInput](/builders/api-schema/types-m-r/#playbackpolicyinput))
+
+## SetPlaybackPolicyResult
+
+**union**
+
+- Member: [Stream](/builders/api-schema/types-s-z/#stream)
+- Member: [VodAsset](/builders/api-schema/types-s-z/#vodasset)
+- Member: [Clip](/builders/api-schema/types-a-f/#clip)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SetPreferredClusterResult
+
+**union**
+
+- Member: [Cluster](/builders/api-schema/types-a-f/#cluster)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SetStreamRetentionOverridesInput
+
+**input_object**
+
+- **streamId**: `ID!`
+- **dvrRetentionDaysOverride**: `Int` — Per-class override values. Unset on a field leaves the column alone; setting a value writes it (0 = no auto-expire, &gt;0 = days). To remove an existing override and fall back to the tenant default, set the matching clear*Override flag.
+- **clipRetentionDaysOverride**: `Int`
+- **clearDvrRetentionOverride**: `Boolean`
+- **clearClipRetentionOverride**: `Boolean`
+
+## SetStreamRetentionOverridesResult
+
+**union**
+
+- Member: [StreamRetentionOverrides](/builders/api-schema/types-s-z/#streamretentionoverrides)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SigningKey
+
+**object**
+
+A customer-managed signing key for issuing viewer playback JWTs. The private key is returned exactly once at creation time (in CreateSigningKeySuccess); FrameWorks stores only the public key. Up to 10 active keys per tenant.
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **kid**: `String!` — Short ID embedded in JWT header (`kid`) for fast key lookup.
+- **name**: `String!` — Customer-supplied label.
+- **algorithm**: `SigningKeyAlgorithm!` ([SigningKeyAlgorithm](/builders/api-schema/types-s-z/#signingkeyalgorithm)) — Algorithm — ES256 only for v1.
+- **publicKeyPem**: `String!` — Public key in PEM format. The private key is never stored.
+- **status**: `SigningKeyStatus!` ([SigningKeyStatus](/builders/api-schema/types-s-z/#signingkeystatus)) — Lifecycle status.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **lastUsedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Last time a JWT signed by this key successfully verified at playback.
+- **revokedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the key was revoked (null if active).
+
+## SigningKeyAlgorithm
+
+**enum**
+
+Algorithm used to sign viewer playback JWTs. ES256 only for v1.
+
+- `ES256`
+
+## SigningKeyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `SigningKey!` ([SigningKey](/builders/api-schema/types-s-z/#signingkey))
+
+## SigningKeyStatus
+
+**enum**
+
+Lifecycle status of a signing key.
+
+- `ACTIVE`
+- `REVOKED`
+
+## SigningKeysConnection
+
+**object**
+
+- **edges**: `[SigningKeyEdge!]!` ([SigningKeyEdge](/builders/api-schema/types-s-z/#signingkeyedge))
+- **nodes**: `[SigningKey!]!` ([SigningKey](/builders/api-schema/types-s-z/#signingkey))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## SkipperChatEvent
+
+**union**
+
+- Member: [SkipperToken](/builders/api-schema/types-s-z/#skippertoken)
+- Member: [SkipperToolStartEvent](/builders/api-schema/types-s-z/#skippertoolstartevent)
+- Member: [SkipperToolEndEvent](/builders/api-schema/types-s-z/#skippertoolendevent)
+- Member: [SkipperMeta](/builders/api-schema/types-s-z/#skippermeta)
+- Member: [SkipperDone](/builders/api-schema/types-s-z/#skipperdone)
+
+## SkipperChatInput
+
+**input_object**
+
+- **conversationId**: `ID`
+- **message**: `String!`
+- **pageUrl**: `String`
+- **mode**: `SkipperMode` ([SkipperMode](/builders/api-schema/types-s-z/#skippermode))
+
+## SkipperCitation
+
+**object**
+
+- **label**: `String!`
+- **url**: `String!`
+
+## SkipperConfidenceBlock
+
+**object**
+
+- **content**: `String!`
+- **confidence**: `String!`
+- **sources**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/types-s-z/#skippercitation))
+
+## SkipperConversation
+
+**object**
+
+- **id**: `ID!`
+- **title**: `String!`
+- **messages**: `[SkipperMessage!]!` ([SkipperMessage](/builders/api-schema/types-s-z/#skippermessage))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## SkipperConversationSummary
+
+**object**
+
+- **id**: `ID!`
+- **title**: `String!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## SkipperDone
+
+**object**
+
+- **conversationId**: `ID!`
+- **tokensInput**: `Int!`
+- **tokensOutput**: `Int!`
+
+## SkipperInvestigationEvent
+
+**object**
+
+- **reportId**: `String!`
+- **resourceType**: `String!`
+
+## SkipperMessage
+
+**object**
+
+- **id**: `ID!`
+- **role**: `String!`
+- **content**: `String!`
+- **confidence**: `String`
+- **sources**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+- **toolsUsed**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+- **confidenceBlocks**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+- **tokensInput**: `Int!`
+- **tokensOutput**: `Int!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## SkipperMeta
+
+**object**
+
+- **confidence**: `String!`
+- **citations**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/types-s-z/#skippercitation))
+- **externalLinks**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/types-s-z/#skippercitation))
+- **details**: `[SkipperToolDetail!]!` ([SkipperToolDetail](/builders/api-schema/types-s-z/#skippertooldetail))
+- **blocks**: `[SkipperConfidenceBlock!]` ([SkipperConfidenceBlock](/builders/api-schema/types-s-z/#skipperconfidenceblock))
+
+## SkipperMode
+
+**enum**
+
+- `DEFAULT`
+- `DOCS`
+
+## SkipperReport
+
+**object**
+
+- **id**: `ID!`
+- **trigger**: `String!`
+- **summary**: `String!`
+- **metricsReviewed**: `[String!]!`
+- **rootCause**: `String!`
+- **recommendations**: `[SkipperReportRecommendation!]!` ([SkipperReportRecommendation](/builders/api-schema/types-s-z/#skipperreportrecommendation))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **readAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+
+## SkipperReportRecommendation
+
+**object**
+
+- **text**: `String!`
+- **confidence**: `String!`
+
+## SkipperReportsConnection
+
+**object**
+
+- **nodes**: `[SkipperReport!]!` ([SkipperReport](/builders/api-schema/types-s-z/#skipperreport))
+- **totalCount**: `Int!`
+- **unreadCount**: `Int!`
+
+## SkipperToken
+
+**object**
+
+- **content**: `String!`
+
+## SkipperToolDetail
+
+**object**
+
+- **title**: `String!`
+- **payload**: `JSON!` ([JSON](/builders/api-schema/types-g-l/#json))
+
+## SkipperToolEndEvent
+
+**object**
+
+- **tool**: `String!`
+- **error**: `String`
+
+## SkipperToolStartEvent
+
+**object**
+
+- **tool**: `String!`
+
+## SortDirection
+
+**enum**
+
+- `ASC`
+- `DESC`
+
+## SortOrder
+
+**enum**
+
+Sort direction for ordered results.
+
+- `ASC` — Ascending order (oldest first, A-Z).
+- `DESC` — Descending order (newest first, Z-A).
+
+## SourceLocation
+
+**object**
+
+- **mode**: `SourceLocationMode!` ([SourceLocationMode](/builders/api-schema/types-s-z/#sourcelocationmode))
+- **clusters**: `[SourceLocationCluster!]!` ([SourceLocationCluster](/builders/api-schema/types-s-z/#sourcelocationcluster)) — Empty unless mode is RESTRICTED.
+- **avoidNodeIds**: `[ID!]!` — Empty unless mode is RESTRICTED.
+
+## SourceLocationCluster
+
+**object**
+
+- **clusterId**: `ID!`
+- **nodeIds**: `[ID!]!` — Empty means any node of the cluster.
+
+## SourceLocationClusterInput
+
+**input_object**
+
+- **clusterId**: `ID!`
+- **nodeIds**: `[ID!]!` — Nodes of this cluster the source may run on. Empty means any node of the cluster. Only nodes of clusters the tenant owns are accepted.
+
+## SourceLocationInput
+
+**input_object**
+
+Replaces the stream&#39;s own ingest restriction. Private and multicast pull sources require RESTRICTED with clusters that allow private pull sources.
+
+- **mode**: `SourceLocationMode!` ([SourceLocationMode](/builders/api-schema/types-s-z/#sourcelocationmode)) — ANY or RESTRICTED. CUSTOM is rejected.
+- **clusters**: `[SourceLocationClusterInput!]!` ([SourceLocationClusterInput](/builders/api-schema/types-s-z/#sourcelocationclusterinput)) — Required and non-empty for RESTRICTED; must be empty for ANY.
+- **avoidNodeIds**: `[ID!]!` — Nodes the source must never run on. Only nodes of clusters the tenant owns are accepted.
+
+## SourceLocationMode
+
+**enum**
+
+Where a stream&#39;s source may be ingested. It is a summary of the stream&#39;s own ingest placement rules.
+
+- `ANY` — No stream-level restriction; FrameWorks chooses among the tenant&#39;s entitled clusters.
+- `RESTRICTED` — Only the listed clusters, optionally narrowed to specific nodes and excluding avoided nodes.
+- `CUSTOM` — The stream&#39;s own ingest rules contain constraints this summary cannot express. Read-only here; edit them in the stream&#39;s placement rules.
+
+## StartDVRResult
+
+**union**
+
+- Member: [DVRRequest](/builders/api-schema/types-a-f/#dvrrequest)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## StopDVRResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/types-a-f/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## StorageArtifact
+
+**object**
+
+- **key**: `ID!`
+- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/types-s-z/#storageartifactkind))
+- **id**: `ID!`
+- **hash**: `String!`
+- **playbackId**: `String`
+- **streamId**: `ID`
+- **streamTitle**: `String!`
+- **title**: `String!`
+- **secondaryLabel**: `String!`
+- **description**: `String` — User-provided description (VOD uploads and clips); null when unset.
+- **errorMessage**: `String` — Processing failure detail for a failed artifact; null when not failed.
+- **sizeBytes**: `Float`
+- **status**: `String!`
+- **storageLocation**: `String`
+- **storageClusterId**: `String` — ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
+- **syncStatus**: `String`
+- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
+- **isSynced**: `Boolean`
+- **isFinalized**: `Boolean`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/types-a-f/#effectiveretention))
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/types-s-z/#storagecostprojection))
+- **deleteId**: `ID!`
+- **retentionId**: `ID!`
+- **thumbnailUrl**: `String`
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/types-s-z/#thumbnailassets)) — Poster + hover-scrub sprite assets, when the artifact has thumbnails.
+- **durationSeconds**: `Float` — Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized.
+- **tracks**: `[ArtifactTrack!]!` ([ArtifactTrack](/builders/api-schema/types-a-f/#artifacttrack)) — Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
+
+## StorageArtifactKind
+
+**enum**
+
+- `VOD`
+- `DVR`
+- `CHAPTER`
+- `CLIP`
+
+## StorageArtifactKindCounts
+
+**object**
+
+Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles.
+
+- **total**: `Int!`
+- **vod**: `Int!`
+- **dvr**: `Int!`
+- **chapter**: `Int!`
+- **clip**: `Int!`
+
+## StorageArtifactSortField
+
+**enum**
+
+- `CREATED_AT`
+- `TITLE`
+- `KIND`
+- `SIZE_BYTES`
+- `EXPIRES_AT`
+
+## StorageArtifactsConnection
+
+**object**
+
+- **nodes**: `[StorageArtifact!]!` ([StorageArtifact](/builders/api-schema/types-s-z/#storageartifact))
+- **totalCount**: `Int!`
+- **hasNextPage**: `Boolean!`
+- **limit**: `Int!`
+- **offset**: `Int!`
+- **lifecycleAvailable**: `Boolean!` — True only when EVERY returned row&#39;s lifecycle is actually known — resolved from the durable catalog projection or the live overlay. A not-yet-projected/backfilled row makes this false so the client shows an &#34;unknown&#34; lifecycle state rather than reporting the artifacts as not-synced. Per-row availability is derivable from whether syncStatus is set.
+- **kindCounts**: `StorageArtifactKindCounts!` ([StorageArtifactKindCounts](/builders/api-schema/types-s-z/#storageartifactkindcounts)) — Authoritative per-kind counts under the active search/stream scope (ignoring the kind filter).
+
+## StorageArtifactsInput
+
+**input_object**
+
+- **first**: `Int`
+- **offset**: `Int`
+- **streamId**: `ID`
+- **kinds**: `[StorageArtifactKind!]` ([StorageArtifactKind](/builders/api-schema/types-s-z/#storageartifactkind))
+- **search**: `String`
+- **status**: `String` — Account-wide status filter applied server-side before count/facets/pagination: &#34;ready&#34; &#124; &#34;failed&#34; &#124; &#34;processing&#34; &#124; &#34;expired&#34;. Empty = all.
+- **artifactHash**: `String` — Exact artifact-hash match — the canonical lookup for asset detail/analytics routes. Takes precedence over `search`; combine with `first: 1` to fetch a single artifact without a fuzzy scan or page cap.
+- **sort**: `StorageArtifactSortField` ([StorageArtifactSortField](/builders/api-schema/types-s-z/#storageartifactsortfield))
+- **direction**: `SortDirection` ([SortDirection](/builders/api-schema/types-s-z/#sortdirection))
+
+## StorageCostProjection
+
+**object**
+
+Marginal per-asset storage cost projection. Used by the customer-facing storage browser to show &#34;this clip costs you ~$0.01/day&#34;. The unit is the tier&#39;s currency (typically EUR). Rating prices storage at $/GiB-hour internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+
+- **perDay**: `Float!`
+- **perMonth**: `Float!`
+- **currency**: `String!`
+
+## StorageEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **assetHash**: `String!`
+- **action**: `String!`
+- **assetType**: `String!`
+- **sizeBytes**: `Float!`
+- **s3Url**: `String`
+- **localPath**: `String`
+- **nodeId**: `String!`
+- **clusterId**: `String`
+- **originClusterId**: `String`
+- **controlCellId**: `String`
+- **durationMs**: `Int`
+- **warmDurationMs**: `Int`
+- **error**: `String`
+
+## StorageEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StorageEvent!` ([StorageEvent](/builders/api-schema/types-s-z/#storageevent))
+
+## StorageEventsConnection
+
+**object**
+
+- **edges**: `[StorageEventEdge!]!` ([StorageEventEdge](/builders/api-schema/types-s-z/#storageeventedge))
+- **nodes**: `[StorageEvent!]!` ([StorageEvent](/builders/api-schema/types-s-z/#storageevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StorageSnapshot
+
+**object**
+
+- **nodeId**: `String!`
+- **timestamp**: `Int!`
+- **tenantId**: `String`
+- **location**: `String`
+- **storageScope**: `String`
+- **usage**: `[TenantStorageUsage!]!` ([TenantStorageUsage](/builders/api-schema/types-s-z/#tenantstorageusage))
+
+## StorageUsage
+
+**object**
+
+- **storageUsageConnection**: `StorageUsageConnection!` ([StorageUsageConnection](/builders/api-schema/types-s-z/#storageusageconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `nodeId`: `String`
+  - `storageScope`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## StorageUsageConnection
+
+**object**
+
+- **edges**: `[StorageUsageEdge!]!` ([StorageUsageEdge](/builders/api-schema/types-s-z/#storageusageedge))
+- **nodes**: `[StorageUsageRecord!]!` ([StorageUsageRecord](/builders/api-schema/types-s-z/#storageusagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StorageUsageEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StorageUsageRecord!` ([StorageUsageRecord](/builders/api-schema/types-s-z/#storageusagerecord))
+
+## StorageUsageRecord
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **nodeId**: `String!`
+- **storageScope**: `String!`
+- **totalBytes**: `Float!`
+- **fileCount**: `Int!`
+- **dvrBytes**: `Float!`
+- **clipBytes**: `Float!`
+- **vodBytes**: `Float!`
+- **frozenDvrBytes**: `Float!`
+- **frozenClipBytes**: `Float!`
+- **frozenVodBytes**: `Float!`
+
+## Stream
+
+**object**
+
+A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content.
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **streamId**: `String!` — Public stream UUID used for analytics and service APIs (not the Relay ID).
+- **name**: `String!` — Human-readable display name for the stream.
+- **description**: `String` — Optional description for the stream.
+- **streamKey**: `String` — Secret key for publisher-authenticated ingest; null for pull and managed sources.
+- **playbackId**: `String!` — Public identifier for playback URLs.
+- **record**: `Boolean!` — Whether DVR recording is enabled for this stream.
+- **ingestMode**: `IngestMode!` ([IngestMode](/builders/api-schema/types-g-l/#ingestmode)) — How source media enters the stream.
+- **pullSource**: `PullSourceView` ([PullSourceView](/builders/api-schema/types-m-r/#pullsourceview)) — Pull-source config for pull streams; null for push streams.
+- **managedSource**: `ManagedSourceView` ([ManagedSourceView](/builders/api-schema/types-m-r/#managedsourceview)) — Safe source summary for managed streams; null for push and pull streams.
+- **sourceLocation**: `SourceLocation!` ([SourceLocation](/builders/api-schema/types-s-z/#sourcelocation)) — Where the stream&#39;s source may be ingested, derived from the stream&#39;s own ingest placement rules.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When this stream was created.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When this stream was last modified.
+- **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/types-s-z/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics.
+- **pushTargets**: `[PushTarget!]!` ([PushTarget](/builders/api-schema/types-m-r/#pushtarget)) — Configured multistream push targets for this stream.
+- **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/types-m-r/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/types-a-f/#dvrchaptermode)) — DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled.
+- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour).
+- **monitoring**: `MonitoringToggle!` ([MonitoringToggle](/builders/api-schema/types-m-r/#monitoringtoggle)) — Per-stream Skipper monitoring override (INHERIT follows tier).
+- **recentPullSourceEvents**: `[PullSourceEvent!]` ([PullSourceEvent](/builders/api-schema/types-m-r/#pullsourceevent)) — Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams.
+  - `limit`: `Int` (default `50`)
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/types-s-z/#thumbnailassets)) — Server-resolved Chandler URLs for the stream&#39;s poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player&#39;s fallback chain handles.
+- **retentionOverrides**: `StreamRetentionOverrides` ([StreamRetentionOverrides](/builders/api-schema/types-s-z/#streamretentionoverrides)) — Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren&#39;t stream-bound, so they don&#39;t appear here.
+
+## StreamAnalyticsDaily
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **day**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **totalViews**: `Int!`
+- **uniqueViewers**: `Int!`
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **egressBytes**: `Float!`
+
+## StreamAnalyticsDailyConnection
+
+**object**
+
+- **edges**: `[StreamAnalyticsDailyEdge!]!` ([StreamAnalyticsDailyEdge](/builders/api-schema/types-s-z/#streamanalyticsdailyedge))
+- **nodes**: `[StreamAnalyticsDaily!]!` ([StreamAnalyticsDaily](/builders/api-schema/types-s-z/#streamanalyticsdaily))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamAnalyticsDailyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamAnalyticsDaily!` ([StreamAnalyticsDaily](/builders/api-schema/types-s-z/#streamanalyticsdaily))
+
+## StreamAnalyticsSummary
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **timeRange**: `TimeRange!` ([TimeRange](/builders/api-schema/types-s-z/#timerange))
+- **rangeAvgViewers**: `Float!`
+- **rangePeakConcurrentViewers**: `Int!`
+- **rangeTotalViews**: `Int!`
+- **rangeTotalSessions**: `Int!`
+- **rangeAvgBufferHealth**: `Float!`
+- **rangeAvgBitrate**: `Int!`
+- **rangeAvgFps**: `Float!`
+- **rangePacketLossRate**: `Float`
+- **rangeAvgConnectionTime**: `Float`
+- **rangeViewerHours**: `Float!`
+- **rangeEgressGb**: `Float!`
+- **rangeAvgSessionSeconds**: `Float!`
+- **rangeAvgBytesPerSession**: `Float!`
+- **rangeUniqueViewers**: `Int!`
+- **rangeUniqueCountries**: `Int!`
+- **rangeRebufferCount**: `Int!`
+- **rangeIssueCount**: `Int!`
+- **rangeBufferDryCount**: `Int!`
+- **rangeQuality**: `QualityTierSummary!` ([QualityTierSummary](/builders/api-schema/types-m-r/#qualitytiersummary))
+- **rangeEgressSharePercent**: `Float` — This stream&#39;s percentage of tenant total egress (only set in bulk queries).
+- **rangeViewerSharePercent**: `Float` — This stream&#39;s percentage of tenant total unique viewers (only set in bulk queries).
+- **rangeViewerHoursSharePercent**: `Float` — This stream&#39;s percentage of tenant total viewer hours (only set in bulk queries).
+
+## StreamAnalyticsSummaryConnection
+
+**object**
+
+Connection for paginated stream analytics summaries. Returns pre-aggregated summaries for multiple streams with share percentages.
+
+- **edges**: `[StreamAnalyticsSummaryEdge!]!` ([StreamAnalyticsSummaryEdge](/builders/api-schema/types-s-z/#streamanalyticssummaryedge))
+- **nodes**: `[StreamAnalyticsSummary!]!` ([StreamAnalyticsSummary](/builders/api-schema/types-s-z/#streamanalyticssummary))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamAnalyticsSummaryEdge
+
+**object**
+
+Edge for StreamAnalyticsSummary connection.
+
+- **cursor**: `String!`
+- **node**: `StreamAnalyticsSummary!` ([StreamAnalyticsSummary](/builders/api-schema/types-s-z/#streamanalyticssummary))
+
+## StreamConnected
+
+**object**
+
+`stream.connected` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **protocol**: `EventIngestProtocol!` ([EventIngestProtocol](/builders/api-schema/types-a-f/#eventingestprotocol))
+
+## StreamConnectionHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **totalBytes**: `Float!`
+- **uniqueViewers**: `Int!`
+- **totalSessions**: `Int!`
+
+## StreamConnectionHourlyConnection
+
+**object**
+
+- **edges**: `[StreamConnectionHourlyEdge!]!` ([StreamConnectionHourlyEdge](/builders/api-schema/types-s-z/#streamconnectionhourlyedge))
+- **nodes**: `[StreamConnectionHourly!]!` ([StreamConnectionHourly](/builders/api-schema/types-s-z/#streamconnectionhourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamConnectionHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamConnectionHourly!` ([StreamConnectionHourly](/builders/api-schema/types-s-z/#streamconnectionhourly))
+
+## StreamCreated
+
+**object**
+
+`stream.created` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **name**: `String!`
+- **playbackId**: `ID!`
+
+## StreamDeleted
+
+**object**
+
+`stream.deleted` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+## StreamEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Stream!` ([Stream](/builders/api-schema/types-s-z/#stream))
+
+## StreamEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **eventId**: `ID!`
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **nodeId**: `String`
+- **type**: `StreamEventType!` ([StreamEventType](/builders/api-schema/types-s-z/#streameventtype))
+- **status**: `StreamStatus` ([StreamStatus](/builders/api-schema/types-s-z/#streamstatus))
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **details**: `String`
+- **payload**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+- **source**: `StreamEventSource!` ([StreamEventSource](/builders/api-schema/types-s-z/#streameventsource))
+- **bufferState**: `String`
+- **hasIssues**: `Boolean`
+- **trackCount**: `Int`
+- **qualityTier**: `String`
+- **primaryWidth**: `Int`
+- **primaryHeight**: `Int`
+- **primaryFps**: `Float`
+- **primaryCodec**: `String`
+- **primaryBitrate**: `Int`
+- **downloadedBytes**: `Float`
+- **uploadedBytes**: `Float`
+- **totalViewers**: `Int`
+- **totalInputs**: `Int`
+- **totalOutputs**: `Int`
+- **viewerSeconds**: `Float`
+- **requestUrl**: `String`
+- **protocol**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **location**: `String`
+- **countryCode**: `String`
+- **city**: `String`
+- **sourceRegion**: `String!`
+- **sourceClusterId**: `String!`
+- **streamOriginRegion**: `String!`
+- **streamOriginClusterId**: `String!`
+- **schemaVersion**: `Int!`
+
+## StreamEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamEvent!` ([StreamEvent](/builders/api-schema/types-s-z/#streamevent))
+
+## StreamEventSource
+
+**enum**
+
+- `HISTORICAL`
+- `LIVE`
+
+## StreamEventType
+
+**enum**
+
+- `STREAM_LIFECYCLE_UPDATE`
+- `STREAM_START`
+- `STREAM_END`
+- `BUFFER_UPDATE`
+- `TRACK_LIST_UPDATE`
+- `PLAY_REWRITE`
+- `STREAM_SOURCE`
+
+## StreamEventsConnection
+
+**object**
+
+- **edges**: `[StreamEventEdge!]!` ([StreamEventEdge](/builders/api-schema/types-s-z/#streameventedge))
+- **nodes**: `[StreamEvent!]!` ([StreamEvent](/builders/api-schema/types-s-z/#streamevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealth5m
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **nodeId**: `String`
+- **rebufferCount**: `Int!`
+- **issueCount**: `Int!`
+- **sampleIssues**: `String`
+- **avgBitrate**: `Int!`
+- **avgFps**: `Float!`
+- **avgBufferHealth**: `Float!`
+- **avgFrameJitterMs**: `Float`
+- **maxFrameJitterMs**: `Float`
+- **bufferDryCount**: `Int!`
+- **qualityTier**: `String`
+
+## StreamHealth5mConnection
+
+**object**
+
+- **edges**: `[StreamHealth5mEdge!]!` ([StreamHealth5mEdge](/builders/api-schema/types-s-z/#streamhealth5medge))
+- **nodes**: `[StreamHealth5m!]!` ([StreamHealth5m](/builders/api-schema/types-s-z/#streamhealth5m))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealth5mEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamHealth5m!` ([StreamHealth5m](/builders/api-schema/types-s-z/#streamhealth5m))
+
+## StreamHealthMetric
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **nodeId**: `String!`
+- **issuesDescription**: `String`
+- **hasIssues**: `Boolean!`
+- **bitrate**: `Int`
+- **fps**: `Float`
+- **width**: `Int`
+- **height**: `Int`
+- **codec**: `String`
+- **qualityTier**: `String`
+- **gopSize**: `Int`
+- **frameMsMax**: `Float`
+- **frameMsMin**: `Float`
+- **framesMax**: `Int`
+- **framesMin**: `Int`
+- **keyframeMsMax**: `Float`
+- **keyframeMsMin**: `Float`
+- **frameJitterMs**: `Float`
+- **trackCount**: `Int`
+- **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/types-a-f/#bufferstate))
+- **bufferHealth**: `Float`
+- **bufferSize**: `Int`
+- **audioChannels**: `Int`
+- **audioSampleRate**: `Int`
+- **audioCodec**: `String`
+- **audioBitrate**: `Int`
+- **trackMetadata**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+
+## StreamHealthMetricEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamHealthMetric!` ([StreamHealthMetric](/builders/api-schema/types-s-z/#streamhealthmetric))
+
+## StreamHealthMetricsConnection
+
+**object**
+
+- **edges**: `[StreamHealthMetricEdge!]!` ([StreamHealthMetricEdge](/builders/api-schema/types-s-z/#streamhealthmetricedge))
+- **nodes**: `[StreamHealthMetric!]!` ([StreamHealthMetric](/builders/api-schema/types-s-z/#streamhealthmetric))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealthSummary
+
+**object**
+
+Pre-aggregated stream health summary from stream_health_5m.
+
+- **avgBitrate**: `Float!`
+- **avgFps**: `Float!`
+- **avgBufferHealth**: `Float!`
+- **totalRebufferCount**: `Int!`
+- **totalIssueCount**: `Int!`
+- **sampleCount**: `Int!`
+- **hasActiveIssues**: `Boolean!`
+- **currentQualityTier**: `String`
+
+## StreamIdle
+
+**object**
+
+`stream.idle` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+## StreamKey
+
+**object**
+
+- **id**: `ID!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **keyValue**: `String!`
+- **keyName**: `String`
+- **isActive**: `Boolean!`
+- **lastUsedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## StreamKeyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamKey!` ([StreamKey](/builders/api-schema/types-s-z/#streamkey))
+
+## StreamKeyRotated
+
+**object**
+
+`stream.key_rotated` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+## StreamKeysConnection
+
+**object**
+
+- **edges**: `[StreamKeyEdge!]!` ([StreamKeyEdge](/builders/api-schema/types-s-z/#streamkeyedge))
+- **nodes**: `[StreamKey!]!` ([StreamKey](/builders/api-schema/types-s-z/#streamkey))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamLive
+
+**object**
+
+`stream.live` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+## StreamMetrics
+
+**object**
+
+Real-time operational metrics for a stream from the analytics data plane. Updated frequently while stream is live, represents latest known state.
+
+- **status**: `StreamStatus!` ([StreamStatus](/builders/api-schema/types-s-z/#streamstatus)) — Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.).
+- **isLive**: `Boolean!` — Whether the stream is currently broadcasting.
+- **currentViewers**: `Int!` — Number of viewers currently watching.
+- **startedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the current live session started (null if offline).
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When these metrics were last updated.
+- **nodeId**: `String` — ID of the edge node handling this stream.
+- **trackCount**: `Int` — Number of quality tracks available.
+- **totalInputs**: `Int` — Total ingest connections to this stream.
+- **uploadedBytes**: `Float!` — Total bytes uploaded (ingested) for current session.
+- **downloadedBytes**: `Float!` — Total bytes downloaded (egress) for current session.
+- **viewerSeconds**: `Float!` — Total viewer-seconds accumulated.
+- **packetsSent**: `Float` — Total packets sent to viewers.
+- **packetsLost**: `Float` — Total packets lost in transit.
+- **packetsRetransmitted**: `Float` — Total packets retransmitted.
+- **bufferState**: `String` — Buffer health state (HEALTHY, WARNING, CRITICAL).
+- **qualityTier**: `String` — Highest quality tier available (4K, 1080p, 720p, etc.).
+- **primaryWidth**: `Int` — Primary video track width in pixels.
+- **primaryHeight**: `Int` — Primary video track height in pixels.
+- **primaryFps**: `Float` — Primary video track framerate.
+- **primaryCodec**: `String` — Primary video codec (H.264, H.265, VP9, AV1).
+- **primaryBitrate**: `Int` — Primary video bitrate in kbps.
+- **hasIssues**: `Boolean` — Whether the stream has active quality issues.
+- **issuesDescription**: `String` — Human-readable description of current issues.
+
+## StreamRetentionOverrides
+
+**object**
+
+Per-stream retention overrides for DVR and clips. VOD uploads aren&#39;t stream-bound, so they have no stream-level knob here.
+
+- **streamId**: `ID!`
+- **dvrRetentionDaysOverride**: `Int` — Null = no override (inherit tenant default). 0 = no auto-expire.
+- **clipRetentionDaysOverride**: `Int`
+
+## StreamStatus
+
+**enum**
+
+Live stream status.
+
+- `OFFLINE` — Stream is not broadcasting.
+- `LIVE` — Stream is currently live.
+- `RECORDING` — Stream is live and recording.
+- `ENDED` — Stream has ended (no longer live).
+
+## StreamSummarySortField
+
+**enum**
+
+Sort field for stream analytics summaries.
+
+- `EGRESS_GB` — Sort by egress bandwidth (cost attribution).
+- `UNIQUE_VIEWERS` — Sort by unique viewers (engagement).
+- `TOTAL_VIEWS` — Sort by total views (popularity).
+- `VIEWER_HOURS` — Sort by viewer hours (watch time).
+
+## StreamTrack
+
+**object**
+
+- **trackName**: `String!`
+- **trackType**: `String!`
+- **codec**: `String`
+- **bitrateKbps**: `Int`
+- **bitrateBps**: `Int`
+- **buffer**: `Int`
+- **jitter**: `Int`
+- **width**: `Int`
+- **height**: `Int`
+- **fps**: `Float`
+- **resolution**: `String`
+- **hasBFrames**: `Boolean`
+- **channels**: `Int`
+- **sampleRate**: `Int`
+
+## StreamUpdated
+
+**object**
+
+`stream.updated` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **changedFields**: `[String!]!`
+
+## StreamValidation
+
+**object**
+
+- **status**: `ValidationStatus!` ([ValidationStatus](/builders/api-schema/types-s-z/#validationstatus))
+- **streamKey**: `String!`
+- **error**: `String`
+
+## StreamingConfig
+
+**object**
+
+- **preferredClusterLabel**: `String`
+- **ingestDomain**: `String`
+- **edgeDomain**: `String`
+- **playDomain**: `String`
+- **officialClusterLabel**: `String`
+- **officialIngestDomain**: `String`
+- **officialEdgeDomain**: `String`
+- **officialPlayDomain**: `String`
+- **globalIngestDomain**: `String`
+- **globalEdgeDomain**: `String`
+- **globalPlayDomain**: `String`
+- **globalLivepeerDomain**: `String`
+- **tenantIngestDomain**: `String`
+- **tenantEdgeDomain**: `String`
+- **tenantPlayDomain**: `String`
+- **tenantLivepeerDomain**: `String`
+- **srtPort**: `Int`
+- **rtmpPort**: `Int`
+
+## StreamingUsage
+
+**object**
+
+Streaming usage analytics. `streamId` arguments accept Stream.id (Relay global ID).
+
+- **viewerGeographicsConnection**: `ViewerGeographicsConnection!` ([ViewerGeographicsConnection](/builders/api-schema/types-s-z/#viewergeographicsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+- **geographicDistribution**: `GeographicDistribution` ([GeographicDistribution](/builders/api-schema/types-g-l/#geographicdistribution))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `topN`: `Int` (default `10`)
+- **streamAnalyticsSummary**: `StreamAnalyticsSummary!` ([StreamAnalyticsSummary](/builders/api-schema/types-s-z/#streamanalyticssummary))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+- **streamAnalyticsSummariesConnection**: `StreamAnalyticsSummaryConnection!` ([StreamAnalyticsSummaryConnection](/builders/api-schema/types-s-z/#streamanalyticssummaryconnection)) — Pre-aggregated analytics summaries for multiple streams. Returns sorted, paginated results with tenant-wide share percentages.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `sortBy`: `StreamSummarySortField` ([StreamSummarySortField](/builders/api-schema/types-s-z/#streamsummarysortfield)) (default `EGRESS_GB`) — Sort field (default: EGRESS_GB for cost attribution).
+  - `sortOrder`: `SortOrder` ([SortOrder](/builders/api-schema/types-s-z/#sortorder)) (default `DESC`) — Sort direction (default: DESC for top results first).
+- **viewerHoursHourlyConnection**: `ViewerHoursHourlyConnection!` ([ViewerHoursHourlyConnection](/builders/api-schema/types-s-z/#viewerhourshourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **viewerGeoHourlyConnection**: `ViewerGeoHourlyConnection!` ([ViewerGeoHourlyConnection](/builders/api-schema/types-s-z/#viewergeohourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **viewerTimeSeriesConnection**: `ViewerTimeSeriesConnection!` ([ViewerTimeSeriesConnection](/builders/api-schema/types-s-z/#viewertimeseriesconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `interval`: `String`
+- **qualityTierDailyConnection**: `QualityTierDailyConnection!` ([QualityTierDailyConnection](/builders/api-schema/types-m-r/#qualitytierdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamConnectionHourlyConnection**: `StreamConnectionHourlyConnection!` ([StreamConnectionHourlyConnection](/builders/api-schema/types-s-z/#streamconnectionhourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **tenantAnalyticsDailyConnection**: `TenantAnalyticsDailyConnection!` ([TenantAnalyticsDailyConnection](/builders/api-schema/types-s-z/#tenantanalyticsdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamAnalyticsDailyConnection**: `StreamAnalyticsDailyConnection!` ([StreamAnalyticsDailyConnection](/builders/api-schema/types-s-z/#streamanalyticsdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/types-a-f/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/types-s-z/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## StreamsConnection
+
+**object**
+
+- **edges**: `[StreamEdge!]!` ([StreamEdge](/builders/api-schema/types-s-z/#streamedge))
+- **nodes**: `[Stream!]!` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## StripeBillingPortalResult
+
+**union**
+
+- Member: [StripeBillingPortalSession](/builders/api-schema/types-s-z/#stripebillingportalsession)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## StripeBillingPortalSession
+
+**object**
+
+Stripe Billing Portal Session - redirect URL for subscription management.
+
+- **portalUrl**: `String!` — URL to redirect user to for billing management.
+
+## StripeCheckoutResult
+
+**union**
+
+- Member: [StripeCheckoutSession](/builders/api-schema/types-s-z/#stripecheckoutsession)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## StripeCheckoutSession
+
+**object**
+
+Stripe Checkout Session - redirect URL for hosted checkout.
+
+- **sessionId**: `ID!` — Stripe Checkout Session ID (cs_xxx).
+- **checkoutUrl**: `String!` — URL to redirect user to for checkout.
+
+## SubmitX402PaymentResult
+
+**union**
+
+- Member: [X402PaymentResult](/builders/api-schema/types-s-z/#x402paymentresult)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## SystemHealthEvent
+
+**object**
+
+- **nodeId**: `ID`
+- **node**: `String!`
+- **location**: `String!`
+- **status**: `NodeStatus!` ([NodeStatus](/builders/api-schema/types-m-r/#nodestatus))
+- **cpuTenths**: `Int!`
+- **isHealthy**: `Boolean!`
+- **ramMax**: `Float`
+- **ramCurrent**: `Float`
+- **diskTotalBytes**: `Float`
+- **diskUsedBytes**: `Float`
+- **shmTotalBytes**: `Float`
+- **shmUsedBytes**: `Float`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## Tenant
+
+**object**
+
+- **id**: `ID!`
+- **name**: `String!`
+- **subdomain**: `String` — Platform-managed tenant DNS label. When set and the tenant alias has issued TLS, playback uses foghorn.&lt;subdomain&gt;.cdn.&lt;root&gt; instead of the global Foghorn host.
+- **cluster**: `String`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **customDomain**: `String` — BYO domain configured for this tenant. Null when the tenant has not opted in.
+- **customDomainStatus**: `CustomDomainStatus` ([CustomDomainStatus](/builders/api-schema/types-a-f/#customdomainstatus)) — Lifecycle state for the BYO domain, surfacing the CNAMEs the operator must publish for verification + traffic plus any current error/expiry timestamps. Null when no customDomain is configured.
+- **monitoringEnabled**: `Boolean!` — Tenant-wide Skipper AI monitoring master switch. Default true.
+
+## TenantAnalyticsDaily
+
+**object**
+
+- **id**: `ID!`
+- **day**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **totalStreams**: `Int!`
+- **totalViews**: `Int!`
+- **uniqueViewers**: `Int!`
+- **egressBytes**: `Float!`
+
+## TenantAnalyticsDailyConnection
+
+**object**
+
+- **edges**: `[TenantAnalyticsDailyEdge!]!` ([TenantAnalyticsDailyEdge](/builders/api-schema/types-s-z/#tenantanalyticsdailyedge))
+- **nodes**: `[TenantAnalyticsDaily!]!` ([TenantAnalyticsDaily](/builders/api-schema/types-s-z/#tenantanalyticsdaily))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## TenantAnalyticsDailyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `TenantAnalyticsDaily!` ([TenantAnalyticsDaily](/builders/api-schema/types-s-z/#tenantanalyticsdaily))
+
+## TenantCapabilities
+
+**object**
+
+Tenant-wide gates.
+
+- **platformOperator**: `Boolean!` — Whether the caller holds the platform operator grant.
+- **recordingRetention**: `RecordingRetentionCap!` ([RecordingRetentionCap](/builders/api-schema/types-m-r/#recordingretentioncap)) — Upper bound on recording retention the tenant can set.
+- **processingCustomizable**: `Boolean!` — Whether the tenant may override the tier&#39;s processing profiles.
+- **customSubdomain**: `Boolean!` — Whether the tenant&#39;s custom subdomain alias is published.
+- **customDomain**: `Boolean!` — Whether the tenant&#39;s custom domain is published.
+
+## TenantDailyStat
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **date**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **egressGb**: `Float!`
+- **viewerHours**: `Float!`
+- **uniqueViewers**: `Int!`
+- **totalSessions**: `Int!`
+- **totalViews**: `Int!`
+
+## TenantEvent
+
+**object**
+
+- **type**: `String!`
+- **channel**: `String!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamEvent**: `StreamEvent` ([StreamEvent](/builders/api-schema/types-s-z/#streamevent))
+- **viewerMetrics**: `ViewerMetrics` ([ViewerMetrics](/builders/api-schema/types-s-z/#viewermetrics))
+- **connectionEvent**: `ConnectionEvent` ([ConnectionEvent](/builders/api-schema/types-a-f/#connectionevent))
+- **trackListUpdate**: `TrackListUpdate` ([TrackListUpdate](/builders/api-schema/types-s-z/#tracklistupdate))
+- **storageEvent**: `StorageEvent` ([StorageEvent](/builders/api-schema/types-s-z/#storageevent))
+- **storageSnapshot**: `StorageSnapshot` ([StorageSnapshot](/builders/api-schema/types-s-z/#storagesnapshot))
+- **processingEvent**: `ProcessingUsageRecord` ([ProcessingUsageRecord](/builders/api-schema/types-m-r/#processingusagerecord))
+- **routingEvent**: `RoutingEvent` ([RoutingEvent](/builders/api-schema/types-m-r/#routingevent))
+- **systemHealthEvent**: `SystemHealthEvent` ([SystemHealthEvent](/builders/api-schema/types-s-z/#systemhealthevent))
+- **skipperInvestigation**: `SkipperInvestigationEvent` ([SkipperInvestigationEvent](/builders/api-schema/types-s-z/#skipperinvestigationevent))
+- **incidentUpdated**: `IncidentUpdatedEvent` ([IncidentUpdatedEvent](/builders/api-schema/types-g-l/#incidentupdatedevent))
+
+## TenantStorageUsage
+
+**object**
+
+- **tenantId**: `String!`
+- **totalBytes**: `Float!`
+- **fileCount**: `Int!`
+- **dvrBytes**: `Float!`
+- **clipBytes**: `Float!`
+- **vodBytes**: `Float!`
+- **frozenDvrBytes**: `Float!`
+- **frozenClipBytes**: `Float!`
+- **frozenVodBytes**: `Float!`
+
+## TenantSubscription
+
+**object**
+
+- **id**: `ID!`
+- **tenantId**: `ID!`
+- **tierId**: `String!`
+- **status**: `String!`
+- **billingEmail**: `String!`
+- **startedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **trialEndsAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **nextBillingDate**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **cancelledAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **customFeatures**: `BillingFeatures` ([BillingFeatures](/builders/api-schema/types-a-f/#billingfeatures))
+- **pricingOverrides**: `[PricingRule!]!` ([PricingRule](/builders/api-schema/types-m-r/#pricingrule))
+- **entitlementOverrides**: `[EntitlementEntry!]!` ([EntitlementEntry](/builders/api-schema/types-a-f/#entitlemententry))
+- **paymentMethod**: `String`
+- **billingModel**: `String!`
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/types-a-f/#billingtier))
+- **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **pendingReason**: `String`
+- **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/types-a-f/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## TenantUsage
+
+**object**
+
+- **billingPeriod**: `String!`
+- **usage**: `[UsageEntry!]!` ([UsageEntry](/builders/api-schema/types-s-z/#usageentry))
+- **costs**: `[CostEntry!]!` ([CostEntry](/builders/api-schema/types-a-f/#costentry))
+- **totalCost**: `Float!`
+- **currency**: `String!`
+- **lineItems**: `[LineItem!]!` ([LineItem](/builders/api-schema/types-g-l/#lineitem)) — Rated line items for the period (rating engine output).
+- **baseAmount**: `String!` — Decimal-string base subscription portion.
+- **usageAmount**: `String!` — Decimal-string metered portion.
+
+## TestPlaybackAccessInput
+
+**input_object**
+
+Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must be set (the server rejects both-set and neither-set). viewerToken is required for JWT policies and is forwarded to the webhook payload for webhook policies. fireWebhook gates a real outbound HTTPS call to the customer URL. That call uses the same SSRF-hardened evaluator path as live viewer admission, and customer endpoints may log, rate-limit, or trigger side effects from the test request. When playbackId is supplied, the server resolves the canonical internalName before invoking the evaluator so webhook payloads carry the same streamName the live USER_NEW path would.
+
+- **playbackId**: `String`
+- **internalName**: `String`
+- **viewerToken**: `String` — JWT to test (required for type=jwt; passed through in the webhook payload for type=webhook).
+- **viewerIp**: `String`
+- **requestUrl**: `String`
+- **connector**: `String`
+- **sessionId**: `String`
+- **fireWebhook**: `Boolean` — Webhook policies only: when true, Foghorn will POST to the configured customer URL with an HMAC-signed payload (same path the live evaluator uses). When false, the evaluator returns reason=&#34;webhook-test-skipped&#34; without making the call so operators can inspect the resolved policy without side effects.
+
+## TestPlaybackAccessResult
+
+**union**
+
+- Member: [PlaybackAccessDecision](/builders/api-schema/types-m-r/#playbackaccessdecision)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## TestWebhookEndpointResult
+
+**union**
+
+- Member: [WebhookTestResult](/builders/api-schema/types-s-z/#webhooktestresult)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [RateLimitError](/builders/api-schema/types-m-r/#ratelimiterror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## ThumbnailAssets
+
+**object**
+
+Chandler-served thumbnail asset URLs (poster, sprite, VTT cues). URL shape is `&#123;chandlerBase&#125;/assets/&#123;assetKey&#125;/poster.jpg`, `/assets/&#123;assetKey&#125;/sprite.jpg`, `/assets/&#123;assetKey&#125;/sprite.vtt` — Chandler serves the object key directly, no version resolution. assetKey is stream_id for live streams; clip_hash / dvr_hash / vod_hash (= artifact_hash) for artifacts.
+
+- **posterUrl**: `String!`
+- **spriteVttUrl**: `String!`
+- **spriteJpgUrl**: `String!`
+- **assetKey**: `String!`
+
+## Time
+
+**scalar**
+
+## TimeRange
+
+**object**
+
+Time range returned in query results.
+
+- **start**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — Start of the time range.
+- **end**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — End of the time range.
+
+## TimeRangeInput
+
+**input_object**
+
+Time range for filtering time-series data.
+
+- **start**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — Start of the time range.
+- **end**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — End of the time range.
+
+## TopAssetEntry
+
+**object**
+
+One ranked asset for the Top Assets surface — cross-kind, ranked server-side by audience sessions in the window. `kind` badges the asset type; title/playbackId are composed from the catalog. (Named distinctly from the periscope proto TopAsset to avoid gqlgen autobinding to that message.)
+
+- **artifactHash**: `String!`
+- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/types-s-z/#storageartifactkind))
+- **totalSessions**: `Int!`
+- **watchHours**: `Float!`
+- **durationS**: `Int!`
+- **title**: `String`
+- **playbackId**: `String`
+
+## TopupCredited
+
+**object**
+
+`billing.topup_credited` event. Aggregate: `topups`.
+
+- **topupId**: `ID!`
+- **amount**: `EventMoney` ([EventMoney](/builders/api-schema/types-a-f/#eventmoney))
+
+## TrackListEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **nodeId**: `String`
+- **trackList**: `String!`
+- **trackCount**: `Int!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **tracks**: `[StreamTrack!]` ([StreamTrack](/builders/api-schema/types-s-z/#streamtrack))
+
+## TrackListEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `TrackListEvent!` ([TrackListEvent](/builders/api-schema/types-s-z/#tracklistevent))
+
+## TrackListEventsConnection
+
+**object**
+
+- **edges**: `[TrackListEventEdge!]!` ([TrackListEventEdge](/builders/api-schema/types-s-z/#tracklisteventedge))
+- **nodes**: `[TrackListEvent!]!` ([TrackListEvent](/builders/api-schema/types-s-z/#tracklistevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## TrackListUpdate
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **tracks**: `[StreamTrack!]` ([StreamTrack](/builders/api-schema/types-s-z/#streamtrack))
+- **totalTracks**: `Int`
+- **videoTrackCount**: `Int`
+- **audioTrackCount**: `Int`
+- **qualityTier**: `String`
+- **primaryWidth**: `Int`
+- **primaryHeight**: `Int`
+- **primaryFps**: `Float`
+- **primaryVideoBitrate**: `Int`
+- **primaryVideoCodec**: `String`
+- **primaryAudioBitrate**: `Int`
+- **primaryAudioCodec**: `String`
+- **primaryAudioChannels**: `Int`
+- **primaryAudioSampleRate**: `Int`
+
+## UnlinkWalletResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/types-a-f/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UpdateBillingDetailsInput
+
+**input_object**
+
+Input for updating billing details.
+
+- **email**: `String` — Billing contact email.
+- **name**: `String` — Customer legal or person name shown on full invoices.
+- **company**: `String` — Company name for invoices.
+- **vatNumber**: `String` — VAT number (EU format: XX123456789).
+- **address**: `BillingAddressInput` ([BillingAddressInput](/builders/api-schema/types-a-f/#billingaddressinput)) — Structured billing address.
+
+## UpdateClusterMarketplaceInput
+
+**input_object**
+
+Input for updating cluster marketplace settings.
+
+- **visibility**: `ClusterVisibility` ([ClusterVisibility](/builders/api-schema/types-a-f/#clustervisibility)) — Marketplace visibility (PUBLIC, UNLISTED, PRIVATE).
+- **pricingModel**: `ClusterPricingModel` ([ClusterPricingModel](/builders/api-schema/types-a-f/#clusterpricingmodel)) — Pricing model for subscriptions.
+- **monthlyPriceCents**: `Int` — Monthly subscription price in cents.
+- **requiresApproval**: `Boolean` — Whether access requires owner approval.
+- **shortDescription**: `String` — Short marketplace description.
+
+## UpdateClusterResult
+
+**union**
+
+- Member: [Cluster](/builders/api-schema/types-a-f/#cluster)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UpdateMediaRetentionInput
+
+**input_object**
+
+- **targetType**: `MediaRetentionTarget!` ([MediaRetentionTarget](/builders/api-schema/types-m-r/#mediaretentiontarget))
+- **targetId**: `ID!` — Canonical asset ID — accepts either the asset&#39;s UUID or its hash.
+- **retentionDays**: `Int` — Either retentionDays (relative to NOW) or retentionUntil must be set.
+- **retentionUntil**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+
+## UpdateMediaRetentionResult
+
+**union**
+
+- Member: [EffectiveRetention](/builders/api-schema/types-a-f/#effectiveretention)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UpdatePushTargetInput
+
+**input_object**
+
+- **name**: `String` — Updated label.
+- **targetUri**: `String` — Updated target URI.
+- **isEnabled**: `Boolean` — Enable or disable this target.
+
+## UpdateStreamInput
+
+**input_object**
+
+Input for updating an existing stream. All fields are optional - only provided fields are updated.
+
+- **name**: `String` — New name for the stream.
+- **description**: `String` — New description for the stream.
+- **record**: `Boolean` — Enable or disable DVR recording.
+- **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/types-g-l/#ingestmode)) — Ingest model cannot be changed after create; sending a different value returns a validation error.
+- **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/types-m-r/#pullsourceinput)) — Update the pull-source configuration for an existing pull stream.
+- **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/types-s-z/#sourcelocationinput)) — Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/types-a-f/#dvrchaptermode)) — Historical chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording, not in-flight. NONE means rolling DVR playback only: recording still runs, but no finalized chapter artifacts are produced for historical replay.
+- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour).
+- **monitoring**: `MonitoringToggle` ([MonitoringToggle](/builders/api-schema/types-m-r/#monitoringtoggle)) — Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
+
+## UpdateStreamResult
+
+**union**
+
+- Member: [Stream](/builders/api-schema/types-s-z/#stream)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UpdateSubscriptionCustomTermsInput
+
+**input_object**
+
+Input for updating enterprise subscription custom terms.
+
+- **customFeatures**: `BillingFeaturesInput` ([BillingFeaturesInput](/builders/api-schema/types-a-f/#billingfeaturesinput)) — Custom support terms.
+- **pricingOverrides**: `[PricingRuleInput!]` ([PricingRuleInput](/builders/api-schema/types-m-r/#pricingruleinput)) — Per-subscription pricing rule overrides (wholesale replace by meter).
+- **entitlementOverrides**: `[EntitlementEntryInput!]` ([EntitlementEntryInput](/builders/api-schema/types-a-f/#entitlemententryinput)) — Per-subscription entitlement overrides.
+
+## UpdateTenantInput
+
+**input_object**
+
+Input for updating tenant settings.
+
+- **name**: `String` — New tenant name.
+- **settings**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json)) — Custom settings JSON. Supports primaryClusterId, subdomain, customDomain, and deploymentModel.
+- **customDomain**: `String` — BYO domain. Empty string clears it; null leaves it unchanged. Navigator picks up the change on the next reconciler tick and starts/teardowns the verification + cert lifecycle accordingly.
+- **monitoringEnabled**: `Boolean` — Tenant-wide Skipper AI monitoring master switch. null leaves it unchanged.
+
+## UpdateTenantResult
+
+**union**
+
+- Member: [Tenant](/builders/api-schema/types-s-z/#tenant)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UpdateWebhookEndpointInput
+
+**input_object**
+
+- **url**: `String`
+- **description**: `String`
+- **eventTypes**: `[String!]` — Replaces the subscribed event types when set.
+
+## UpdateWebhookEndpointResult
+
+**union**
+
+- Member: [WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## UploadAborted
+
+**object**
+
+`upload.aborted` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/types-a-f/#eventartifact))
+
+## UploadCompleted
+
+**object**
+
+`upload.completed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/types-a-f/#eventartifact))
+- **sizeBytes**: `Int!`
+
+## UploadCreated
+
+**object**
+
+`upload.created` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/types-a-f/#eventartifact))
+- **filename**: `String!`
+- **expectedSizeBytes**: `Int!`
+
+## UploadFailed
+
+**object**
+
+`upload.failed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/types-a-f/#eventartifact))
+- **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/types-a-f/#eventmediafailurereason))
+
+## UploadReady
+
+**object**
+
+`upload.ready` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/types-a-f/#eventartifact))
+- **durationMs**: `Int!`
+- **sizeBytes**: `Int!`
+
+## UsageAggregate
+
+**object**
+
+- **usageType**: `String!`
+- **periodStart**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **usageValue**: `Float!`
+- **granularity**: `String!`
+
+## UsageEntry
+
+**object**
+
+- **resourceType**: `String!`
+- **amount**: `Float!`
+
+## UsageRecord
+
+**object**
+
+- **id**: `ID!`
+- **clusterId**: `String`
+- **clusterName**: `String`
+- **usageType**: `String!`
+- **unit**: `String!` — Canonical physical unit for usageValue.
+- **dimensions**: `JSON!` ([JSON](/builders/api-schema/types-g-l/#json)) — Bounded dimensions that distinguish records for the same meter.
+- **usageValue**: `Float!`
+- **createdAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **periodStart**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **granularity**: `String`
+
+## UsageRecordEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `UsageRecord!` ([UsageRecord](/builders/api-schema/types-s-z/#usagerecord))
+
+## UsageRecordsConnection
+
+**object**
+
+- **edges**: `[UsageRecordEdge!]!` ([UsageRecordEdge](/builders/api-schema/types-s-z/#usagerecordedge))
+- **nodes**: `[UsageRecord!]!` ([UsageRecord](/builders/api-schema/types-s-z/#usagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## User
+
+**object**
+
+- **id**: `ID!`
+- **email**: `String` — User&#39;s email address. Null for wallet-only accounts.
+- **name**: `String`
+- **role**: `String!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **wallets**: `[WalletIdentity!]!` ([WalletIdentity](/builders/api-schema/types-s-z/#walletidentity)) — Linked wallet addresses for this user.
+
+## ValidationError
+
+**object**
+
+Implements [Error](/builders/api-schema/types-a-f/#error).
+
+- **message**: `String!`
+- **code**: `String`
+- **field**: `String`
+- **constraint**: `String`
+
+## ValidationStatus
+
+**enum**
+
+- `VALID`
+- `INVALID`
+- `ERROR`
+
+## ViewerCountBucket
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **viewerCount**: `Int!`
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+
+## ViewerCountBucketEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerCountBucket!` ([ViewerCountBucket](/builders/api-schema/types-s-z/#viewercountbucket))
+
+## ViewerEndpoint
+
+**object**
+
+- **nodeId**: `String!`
+- **baseUrl**: `String!`
+- **protocol**: `String!`
+- **url**: `String!`
+- **geoDistance**: `Float`
+- **loadScore**: `Float`
+- **outputs**: `JSON` ([JSON](/builders/api-schema/types-g-l/#json))
+
+## ViewerEndpointResponse
+
+**object**
+
+- **primary**: `ViewerEndpoint` ([ViewerEndpoint](/builders/api-schema/types-s-z/#viewerendpoint))
+- **fallbacks**: `[ViewerEndpoint!]!` ([ViewerEndpoint](/builders/api-schema/types-s-z/#viewerendpoint))
+- **metadata**: `PlaybackMetadata` ([PlaybackMetadata](/builders/api-schema/types-m-r/#playbackmetadata))
+
+## ViewerGeoHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **countryCode**: `String!`
+- **viewerCount**: `Int!`
+- **viewerHours**: `Float!`
+- **egressGb**: `Float!`
+
+## ViewerGeoHourlyConnection
+
+**object**
+
+- **edges**: `[ViewerGeoHourlyEdge!]!` ([ViewerGeoHourlyEdge](/builders/api-schema/types-s-z/#viewergeohourlyedge))
+- **nodes**: `[ViewerGeoHourly!]!` ([ViewerGeoHourly](/builders/api-schema/types-s-z/#viewergeohourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerGeoHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerGeoHourly!` ([ViewerGeoHourly](/builders/api-schema/types-s-z/#viewergeohourly))
+
+## ViewerGeographic
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **nodeId**: `String`
+- **countryCode**: `String`
+- **city**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **viewerCount**: `Int`
+- **connectionAddr**: `String`
+- **eventType**: `String`
+- **source**: `String`
+- **sessionDurationSeconds**: `Int`
+- **bytesTransferred**: `Float`
+- **connector**: `String`
+
+## ViewerGeographicEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerGeographic!` ([ViewerGeographic](/builders/api-schema/types-s-z/#viewergeographic))
+
+## ViewerGeographicsConnection
+
+**object**
+
+- **edges**: `[ViewerGeographicEdge!]!` ([ViewerGeographicEdge](/builders/api-schema/types-s-z/#viewergeographicedge))
+- **nodes**: `[ViewerGeographic!]!` ([ViewerGeographic](/builders/api-schema/types-s-z/#viewergeographic))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerHoursHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **countryCode**: `String`
+- **uniqueViewers**: `Int!`
+- **totalSessionSeconds**: `Int!`
+- **totalBytes**: `Float!`
+- **viewerHours**: `Float!`
+- **egressGb**: `Float!`
+
+## ViewerHoursHourlyConnection
+
+**object**
+
+- **edges**: `[ViewerHoursHourlyEdge!]!` ([ViewerHoursHourlyEdge](/builders/api-schema/types-s-z/#viewerhourshourlyedge))
+- **nodes**: `[ViewerHoursHourly!]!` ([ViewerHoursHourly](/builders/api-schema/types-s-z/#viewerhourshourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerHoursHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerHoursHourly!` ([ViewerHoursHourly](/builders/api-schema/types-s-z/#viewerhourshourly))
+
+## ViewerMetrics
+
+**object**
+
+- **nodeId**: `String!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **action**: `String!`
+- **protocol**: `String!`
+- **host**: `String`
+- **sessionId**: `String`
+- **connectionTime**: `Float`
+- **position**: `Float`
+- **bandwidthInBps**: `Int`
+- **bandwidthOutBps**: `Int`
+- **bytesDownloaded**: `Float`
+- **bytesUploaded**: `Float`
+- **packetsSent**: `Int`
+- **packetsLost**: `Int`
+- **packetsRetransmitted**: `Int`
+- **timestamp**: `Int!`
+- **clientCountry**: `String`
+- **clientCity**: `String`
+- **clientLatitude**: `Float`
+- **clientLongitude**: `Float`
+
+## ViewerSession
+
+**object**
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/types-s-z/#stream))
+- **nodeId**: `String`
+- **sessionId**: `String!`
+- **connectedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **disconnectedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **connector**: `String`
+- **countryCode**: `String`
+- **city**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **durationSeconds**: `Int`
+- **bytesUp**: `Float`
+- **bytesDown**: `Float`
+- **connectionQuality**: `Float`
+- **bufferHealth**: `Float`
+- **clientBucket**: `GeoBucket` ([GeoBucket](/builders/api-schema/types-g-l/#geobucket))
+
+## ViewerSessionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerSession!` ([ViewerSession](/builders/api-schema/types-s-z/#viewersession))
+
+## ViewerSessionsConnection
+
+**object**
+
+- **edges**: `[ViewerSessionEdge!]!` ([ViewerSessionEdge](/builders/api-schema/types-s-z/#viewersessionedge))
+- **nodes**: `[ViewerSession!]!` ([ViewerSession](/builders/api-schema/types-s-z/#viewersession))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerTimeSeriesConnection
+
+**object**
+
+- **edges**: `[ViewerCountBucketEdge!]!` ([ViewerCountBucketEdge](/builders/api-schema/types-s-z/#viewercountbucketedge))
+- **nodes**: `[ViewerCountBucket!]!` ([ViewerCountBucket](/builders/api-schema/types-s-z/#viewercountbucket))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## VodAsset
+
+**object**
+
+A Video-on-Demand asset uploaded by the tenant. VOD assets can be played back using the playbackId in playback URLs.
+
+Implements [Node](/builders/api-schema/types-m-r/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **artifactHash**: `String!` — Internal hash used for playback URL resolution.
+- **playbackId**: `String!` — Public playback identifier for generating playback URLs.
+- **streamId**: `String` — Source stream UUID for stream-derived VOD artifacts such as DVR chapters.
+- **originType**: `String` — Registry origin kind. Null/user_upload for ordinary uploads; dvr_chapter for finalized DVR chapters.
+- **originId**: `String` — Origin entity id, such as DVR chapter_id when originType=dvr_chapter.
+- **title**: `String` — Optional display title for the asset.
+- **description**: `String` — Optional description of the asset content.
+- **filename**: `String` — Original filename when uploaded.
+- **status**: `VodAssetStatus!` ([VodAssetStatus](/builders/api-schema/types-s-z/#vodassetstatus)) — Current processing/storage status of the asset.
+- **storageLocation**: `String!` — Where the asset is stored (s3, local, freezing).
+- **syncStatus**: `String` — Current S3 sync state (pending, in_progress, synced, failed, lost_local).
+- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via Helmsman&#39;s read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
+- **isSynced**: `Boolean!` — True when S3 has an authoritative copy.
+- **isFinalized**: `Boolean!` — True when the S3 copy includes the Mist .dtsh index.
+- **sizeBytes**: `Float` — File size in bytes (available after validation).
+- **durationMs**: `Int` — Video duration in milliseconds.
+- **resolution**: `String` — Video resolution (e.g., &#39;1920x1080&#39;).
+- **videoCodec**: `String` — Video codec (h264, h265, vp9, av1).
+- **audioCodec**: `String` — Audio codec (aac, opus).
+- **bitrateKbps**: `Int` — Average bitrate in kbps.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When the asset was created/uploaded.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When the asset was last modified.
+- **expiresAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Optional expiration time for auto-deletion.
+- **errorMessage**: `String` — Error message if processing failed.
+- **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/types-m-r/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/types-s-z/#thumbnailassets)) — Server-resolved Chandler URLs for the VOD&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
+- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/types-a-f/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset&#39;s retention_until column is unset (infinite).
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/types-s-z/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+
+## VodAssetStatus
+
+**enum**
+
+VOD asset processing status.
+
+- `UPLOADING` — S3 multipart upload in progress.
+- `PROCESSING` — Upload complete, validating and extracting metadata.
+- `READY` — Validated and ready for playback.
+- `FAILED` — Validation failed or upload error.
+- `DELETED` — Marked for deletion.
+- `EXPIRED` — Multipart upload session deadline elapsed without completion; client must restart.
+
+## VodRetention
+
+**object**
+
+VOD retention curve for an artifact. retention(T) = points[T].reached / totalSessions (monotonic non-increasing); density(T) = points[T].secondsWatched (the &#34;most replayed&#34; curve). Buckets are fixed-width (bucketWidthS) along the asset timeline. These differ because a seek-to-end raises reach without adding density.
+
+- **bucketWidthS**: `Int!`
+- **assetDurationS**: `Int!`
+- **totalSessions**: `Int!`
+- **points**: `[VodRetentionPoint!]!` ([VodRetentionPoint](/builders/api-schema/types-s-z/#vodretentionpoint))
+
+## VodRetentionAsset
+
+**object**
+
+A VOD asset with retention data in the window. Eligibility + stats (sessions, duration, lastSeen) come from analytics; title/playbackId are composed from the catalog by artifactHash — both may be null when the asset is uncatalogued (e.g. deleted but retention still within TTL).
+
+- **artifactHash**: `String!`
+- **totalSessions**: `Int!`
+- **durationS**: `Int!`
+- **lastSeen**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **title**: `String`
+- **playbackId**: `String`
+
+## VodRetentionAssetConnection
+
+**object**
+
+- **edges**: `[VodRetentionAssetEdge!]!` ([VodRetentionAssetEdge](/builders/api-schema/types-s-z/#vodretentionassetedge))
+- **nodes**: `[VodRetentionAsset!]!` ([VodRetentionAsset](/builders/api-schema/types-s-z/#vodretentionasset))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## VodRetentionAssetEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `VodRetentionAsset!` ([VodRetentionAsset](/builders/api-schema/types-s-z/#vodretentionasset))
+
+## VodRetentionPoint
+
+**object**
+
+One point of the VOD retention curve: a fixed-width timeline bucket with its watched-seconds density and the count of sessions that reached it.
+
+- **bucketIndex**: `Int!`
+- **secondsWatched**: `Float!`
+- **reached**: `Int!` — Sessions whose furthest playhead position is at or beyond this bucket (audience retention numerator).
+
+## VodUploadCompletedPart
+
+**input_object**
+
+Completed part info returned by S3 after each part upload.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **etag**: `String!` — ETag header value returned by S3 on part upload.
+
+## VodUploadPart
+
+**object**
+
+Individual part upload instruction with presigned S3 URL.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **presignedUrl**: `String!` — Presigned PUT URL for uploading this part.
+
+## VodUploadSession
+
+**object**
+
+Response from createVodUpload with S3 multipart upload instructions. Use the presigned URLs to upload file parts directly to S3.
+
+- **id**: `ID!` — Upload session ID (S3 uploadId).
+- **artifactId**: `ID!` — Internal artifact ID.
+- **artifactHash**: `String!` — Hash for playback URL resolution.
+- **playbackId**: `String!` — Public playback identifier.
+- **partSize**: `Float!` — Recommended part size in bytes.
+- **parts**: `[VodUploadPart!]!` ([VodUploadPart](/builders/api-schema/types-s-z/#voduploadpart)) — Presigned URLs for each part.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When presigned URLs expire (typically 2 hours).
+
+## VodUploadStatus
+
+**object**
+
+Server-authoritative state of an in-flight multipart upload. Returned as a polling complement to the upload events of the tenantEvents subscription, used for reload-recovery and agent (MCP) workflows.
+
+- **uploadId**: `ID!` — Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming.
+- **state**: `VodAssetStatus!` ([VodAssetStatus](/builders/api-schema/types-s-z/#vodassetstatus)) — Current state of the upload session.
+- **expiresAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — S3 multipart session deadline. Past this point, state is EXPIRED.
+- **retentionUntil**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Asset retention deadline (informational; distinct from upload-session expiry).
+- **uploadedParts**: `[VodUploadedPart!]!` ([VodUploadedPart](/builders/api-schema/types-s-z/#voduploadedpart)) — Parts S3 has already received.
+- **missingParts**: `[Int!]!` — Part numbers still missing for completion (1-indexed).
+- **lastErrorCode**: `String` — Last error code emitted by the pipeline, if any.
+- **artifactHash**: `String` — Hash for playback URL resolution.
+- **playbackId**: `ID` — Public playback identifier (available once known).
+
+## VodUploadStatusResult
+
+**union**
+
+- Member: [VodUploadStatus](/builders/api-schema/types-s-z/#voduploadstatus)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## VodUploadedPart
+
+**object**
+
+A part S3 has already received for an in-flight multipart upload (returned by ListParts). Used by the client uploader to reconcile local resume state against the server.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **etag**: `String!` — ETag header value returned by S3.
+- **sizeBytes**: `Float!` — Size of the uploaded part in bytes.
+
+## WalletIdentity
+
+**object**
+
+A linked cryptocurrency wallet for authentication. Users can link multiple wallets across different chains.
+
+- **id**: `ID!` — Unique identifier for this wallet link.
+- **address**: `String!` — The wallet address (chain-specific format, e.g. 0x... for Ethereum).
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When this wallet was linked.
+- **lastAuthAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When this wallet was last used for authentication.
+
+## WalletLoginInput
+
+**input_object**
+
+Input for wallet-based authentication. The signature proves ownership of the wallet address.
+
+- **address**: `String!` — Ethereum address (0x-prefixed, 40 hex characters).
+- **message**: `String!` — Message that was signed, including timestamp and nonce for replay protection.
+- **signature**: `String!` — EIP-191 personal_sign signature (0x-prefixed, 65 bytes hex).
+
+## WalletLoginPayload
+
+**object**
+
+Successful wallet login response containing JWT and user info.
+
+- **token**: `String!` — JWT access token for API authentication.
+- **user**: `User!` ([User](/builders/api-schema/types-s-z/#user)) — The authenticated user.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time)) — When the token expires.
+- **isNewAccount**: `Boolean!` — True if this was a new account created by the login.
+
+## WalletLoginResult
+
+**union**
+
+- Member: [WalletLoginPayload](/builders/api-schema/types-s-z/#walletloginpayload)
+- Member: [ValidationError](/builders/api-schema/types-s-z/#validationerror)
+
+## WebhookDeliveriesConnection
+
+**object**
+
+- **edges**: `[WebhookDeliveryEdge!]!` ([WebhookDeliveryEdge](/builders/api-schema/types-s-z/#webhookdeliveryedge))
+- **nodes**: `[WebhookDelivery!]!` ([WebhookDelivery](/builders/api-schema/types-s-z/#webhookdelivery))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## WebhookDelivery
+
+**object**
+
+One delivery of one event to one endpoint, or a test delivery.
+
+- **id**: `ID!` — Delivery ID. A replay keeps it.
+- **endpointId**: `ID!`
+- **eventId**: `ID` — The event ID, sent as webhook-id and as the body&#39;s id. Null for test deliveries.
+- **eventType**: `String!`
+- **kind**: `WebhookDeliveryKind!` ([WebhookDeliveryKind](/builders/api-schema/types-s-z/#webhookdeliverykind))
+- **status**: `WebhookDeliveryStatus!` ([WebhookDeliveryStatus](/builders/api-schema/types-s-z/#webhookdeliverystatus))
+- **attempts**: `Int!` — Attempts since the delivery was created or last replayed.
+- **nextAttemptAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the next attempt is due; null unless pending.
+- **lastStatusCode**: `Int!` — HTTP status of the last attempt; 0 when no response arrived.
+- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+- **deliveredAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **replayCount**: `Int!`
+- **lastReplayedAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/types-s-z/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+
+## WebhookDeliveryAttempt
+
+**object**
+
+One HTTP attempt of a delivery.
+
+- **id**: `ID!`
+- **attemptNumber**: `Int!`
+- **statusCode**: `Int!` — HTTP status; 0 when no response arrived.
+- **errorClass**: `String!`
+- **latencyMs**: `Int!`
+- **responseExcerpt**: `String!` — At most 1 KiB of the response body.
+- **attemptedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## WebhookDeliveryEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `WebhookDelivery!` ([WebhookDelivery](/builders/api-schema/types-s-z/#webhookdelivery))
+
+## WebhookDeliveryKind
+
+**enum**
+
+- `EVENT`
+- `TEST`
+
+## WebhookDeliveryStatus
+
+**enum**
+
+- `PENDING` — Waiting for the first attempt or a retry.
+- `SUCCEEDED`
+- `FAILED` — Every attempt of the retry schedule (about 3 days) failed, or a test delivery failed.
+- `SKIPPED` — The endpoint was disabled before the delivery succeeded.
+
+## WebhookEndpoint
+
+**object**
+
+An outbound webhook endpoint. FrameWorks POSTs the tenant&#39;s public events of the subscribed types to its URL, signed with the Standard Webhooks scheme (webhook-id, webhook-timestamp, webhook-signature headers).
+
+- **id**: `ID!` — Endpoint ID.
+- **url**: `String!` — The https URL deliveries are sent to.
+- **description**: `String!` — Free-text description.
+- **eventTypes**: `[String!]!` — Public event types the endpoint receives; &#34;*&#34; receives every type.
+- **apiVersion**: `String!` — Public event package version the payloads are rendered with, e.g. &#34;v1&#34;.
+- **status**: `WebhookEndpointStatus!` ([WebhookEndpointStatus](/builders/api-schema/types-s-z/#webhookendpointstatus))
+- **disabledReason**: `WebhookEndpointDisabledReason` ([WebhookEndpointDisabledReason](/builders/api-schema/types-s-z/#webhookendpointdisabledreason)) — Why the endpoint is disabled; null while enabled.
+- **disabledAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — When the endpoint was disabled; null while enabled.
+- **consecutiveFailures**: `Int!` — Failed attempts since the last successful delivery.
+- **failingSince**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — First failed attempt since the last successful delivery.
+- **lastSuccessAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **lastFailureAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time))
+- **previousSecretExpiresAt**: `Time` ([Time](/builders/api-schema/types-s-z/#time)) — Until when the previous signing secret still signs deliveries; null when there is none.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/types-s-z/#time))
+
+## WebhookEndpointDisabledReason
+
+**enum**
+
+- `USER` — Disabled through the API or dashboard.
+- `FAILING` — Disabled automatically after at least 20 consecutive failed attempts over at least 5 days without a success.
+
+## WebhookEndpointEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `WebhookEndpoint!` ([WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint))
+
+## WebhookEndpointResult
+
+**union**
+
+- Member: [WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint)
+- Member: [NotFoundError](/builders/api-schema/types-m-r/#notfounderror)
+- Member: [AuthError](/builders/api-schema/types-a-f/#autherror)
+
+## WebhookEndpointSecret
+
+**object**
+
+An endpoint with its signing secret, returned only when the secret is created or rotated.
+
+- **endpoint**: `WebhookEndpoint!` ([WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint))
+- **secret**: `String!` — The signing secret, &#34;whsec_&#34; followed by base64. Store it now; it is never shown again.
+
+## WebhookEndpointStatus
+
+**enum**
+
+- `ENABLED`
+- `DISABLED`
+
+## WebhookEndpointsConnection
+
+**object**
+
+- **edges**: `[WebhookEndpointEdge!]!` ([WebhookEndpointEdge](/builders/api-schema/types-s-z/#webhookendpointedge))
+- **nodes**: `[WebhookEndpoint!]!` ([WebhookEndpoint](/builders/api-schema/types-s-z/#webhookendpoint))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/types-m-r/#pageinfo))
+- **totalCount**: `Int!`
+
+## WebhookReplayResult
+
+**object**
+
+The result of a range replay.
+
+- **replayedCount**: `Int!`
+- **hasMore**: `Boolean!` — More failed or skipped deliveries remain in the range.
+
+## WebhookTestResult
+
+**object**
+
+The result of a test delivery.
+
+- **delivery**: `WebhookDelivery!` ([WebhookDelivery](/builders/api-schema/types-s-z/#webhookdelivery))
+- **attempt**: `WebhookDeliveryAttempt!` ([WebhookDeliveryAttempt](/builders/api-schema/types-s-z/#webhookdeliveryattempt))
+
+## X402PaymentResult
+
+**object**
+
+Result from submitting an x402 payment for settlement.
+
+- **success**: `Boolean!` — Whether the payment settlement succeeded.
+- **isAuthOnly**: `Boolean!` — True if this was an auth-only payload (always false for settlement).
+- **tenantId**: `ID!` — Tenant that was credited.
+- **walletAddress**: `String!` — Wallet address that paid.
+- **creditedCents**: `Int!` — Amount credited in cents.
+- **newBalanceCents**: `Int` — New balance in cents (if available).
+- **txHash**: `String` — Blockchain transaction hash (if available).
+- **message**: `String!` — Human-readable status message.
