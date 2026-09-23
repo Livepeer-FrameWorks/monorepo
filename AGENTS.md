@@ -126,6 +126,14 @@ Scripts provide: discoverable defaults, consistent flags, and documentation via 
 
 ## Git: Read-Only
 
+**Agents never push or tag.** Do not run `git push` (including force pushes),
+`git tag` to create, move, or delete a tag, `make release-tag`, `gh release create`,
+or any equivalent command or API that publishes a release or changes a remote
+ref. Do not request elevated permissions to do so. This applies even when a task
+mentions committing, preparing a release candidate, or making a release. Agents
+may audit, test, and make local commits when requested, then hand the human
+maintainer the release results and the commands they must run themselves.
+
 Never run: `reset`, `checkout <file>`, `clean`, `stash`, `revert`, `cherry-pick`
 
 If changes need undoing, tell the user what to run.
@@ -156,7 +164,7 @@ Required flow:
 
 **Code comments**: explain current behavior, a non-obvious invariant, or why the code is written this way at this site. Never history, roadmap, inner monologue, or obvious restatement. See `docs/standards/code-comments.md`.
 
-**Avoid destructive commands without asking**: `git push --force`, deleting production data, modifying external repos
+**Avoid destructive commands without asking**: deleting production data, modifying external repos. The no-push/no-tag rule above is absolute, not an action to ask permission for.
 
 ## Agent Workflow
 

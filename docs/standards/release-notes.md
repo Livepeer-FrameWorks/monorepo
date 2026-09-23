@@ -129,6 +129,10 @@ Run these before writing a single bullet.
 Before creating a platform tag, commit the new release entry and all schema or
 migration changes, then use the guarded tag path:
 
+**Human maintainer only:** agents may run release preflight and report its
+result, but must not create tags or push refs. The tag and push commands below
+are handoff instructions for the maintainer, not agent actions.
+
     make release-preflight RELEASE_VERSION=vX.Y.Z
     make release-tag RELEASE_VERSION=vX.Y.Z
     git push origin vX.Y.Z
