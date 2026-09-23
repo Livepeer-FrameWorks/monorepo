@@ -8,6 +8,9 @@
 # Strips Houdini-specific directives (@paginate, @mask_disable) that
 # the gateway GraphQL endpoint doesn't understand.
 set -euo pipefail
+# Glob expansion order follows the collation locale; pin it so the generated
+# file is byte-identical on every machine.
+export LC_ALL=C
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OPS_DIR="$REPO_ROOT/pkg/graphql/operations"
