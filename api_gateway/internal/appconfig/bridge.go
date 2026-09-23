@@ -88,7 +88,7 @@ type Bridge struct {
 	TrustedProxyCIDRs string `env:"TRUSTED_PROXY_CIDRS" desc:"Comma-separated CIDRs or IPs of reverse proxies whose forwarding headers identify the client. Re-read after an env-file reload." introduced:"v0.3.0"`
 	UsageHashSecret   string `env:"USAGE_HASH_SECRET" secret:"true" desc:"HMAC key for the user and API token hashes in API usage records. Bridge, Commodore, Purser, and Quartermaster must share one value, so the token hash a domain event records joins Bridge's usage rows for the same token. Empty in Bridge uses a random per-process key: hashes change on restart and match no domain event." introduced:"v0.3.0"`
 
-	GraphQLComplexityLimit   int    `env:"GRAPHQL_COMPLEXITY_LIMIT" default:"1000" desc:"Maximum GraphQL operation complexity. 0 disables the limit." introduced:"v0.3.0"`
+	GraphQLComplexityLimit   int    `env:"GRAPHQL_COMPLEXITY_LIMIT" default:"2000" desc:"Maximum GraphQL operation complexity. 0 disables the limit." introduced:"v0.3.0"`
 	GraphQLMaxDepth          int    `env:"GRAPHQL_MAX_DEPTH" default:"10" desc:"Maximum GraphQL selection depth. 0 disables the limit." introduced:"v0.3.0"`
 	GraphQLPlaygroundEnabled string `env:"GRAPHQL_PLAYGROUND_ENABLED" desc:"Serves the GraphQL playground at /graphql/playground when true. Empty enables it unless GIN_MODE is release." introduced:"v0.3.0"`
 

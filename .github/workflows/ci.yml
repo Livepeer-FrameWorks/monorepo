@@ -561,6 +561,8 @@ jobs:
         run: make test-sdk-go
       - name: Python SDK (mypy, pytest, examples)
         run: make sdk-py-venv test-sdk-py typecheck-sdk-py
+      - name: Every SDK operation fits the gateway complexity limit
+        run: make test-bridge GO_TEST_PACKAGES=./graph/ GO_TEST_FLAGS="-run TestPublicOperationsUnderComplexityLimit"
       - name: SDK playback tokens pass the playback verifier
         run: make test-foghorn GO_TEST_PACKAGES=./internal/triggers/ GO_TEST_FLAGS="-run TestSDKPlaybackTokensPassThePlaybackVerifier"
 

@@ -5,6 +5,9 @@ import (
 
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/graph/model"
+
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // DefaultPageSize is the default pagination size when none is specified.
@@ -114,6 +117,9 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.StreamingUsage.ViewerTimeSeriesConnection = func(childComplexity int, page *model.ConnectionInput, _ string, _ *model.TimeRangeInput, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
+	c.StreamingUsage.StreamAnalyticsSummariesConnection = func(childComplexity int, page *model.ConnectionInput, _ model.TimeRangeInput, _ *periscopepb.StreamSummarySortField, _ *commonpb.SortOrder) int {
+		return connectionComplexity(childComplexity, page)
+	}
 
 	// AnalyticsHealth connections
 	c.AnalyticsHealth.ClientQoeConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *string, _ *model.TimeRangeInput, _ *bool) int {
@@ -126,6 +132,9 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.AnalyticsHealth.StreamHealthConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.TimeRangeInput, _ *bool) int {
+		return connectionComplexity(childComplexity, page)
+	}
+	c.AnalyticsHealth.VodRetentionAssets = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput, _ *bool) int {
 		return connectionComplexity(childComplexity, page)
 	}
 
@@ -231,7 +240,19 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	c.Query.DiscoverServicesConnection = func(childComplexity int, page *model.ConnectionInput, _ string, _ *string) int {
 		return connectionComplexity(childComplexity, page)
 	}
+	c.Query.IncidentsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.IncidentFilterInput) int {
+		return connectionComplexity(childComplexity, page)
+	}
 	c.Query.InvoicesConnection = func(childComplexity int, page *model.ConnectionInput) int {
+		return connectionComplexity(childComplexity, page)
+	}
+	c.Query.OrchestratorsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string) int {
+		return connectionComplexity(childComplexity, page)
+	}
+	c.Query.PaymentsConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *string, _ *string) int {
+		return connectionComplexity(childComplexity, page)
+	}
+	c.Query.SigningKeysConnection = func(childComplexity int, _ *string, page *model.ConnectionInput) int {
 		return connectionComplexity(childComplexity, page)
 	}
 	c.Query.MarketplaceClustersConnection = func(childComplexity int, page *model.ConnectionInput) int {

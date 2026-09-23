@@ -681,7 +681,7 @@
         {
           "key": "GRAPHQL_COMPLEXITY_LIMIT",
           "type": "integer",
-          "default": "1000",
+          "default": "2000",
           "introduced": "v0.3.0",
           "description": "Maximum GraphQL operation complexity. 0 disables the limit."
         },
