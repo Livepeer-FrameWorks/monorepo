@@ -30,6 +30,48 @@ type operation struct {
 	// kind.field.field, with a member type name after a field of union or
 	// interface type (query.node.InfrastructureNode.metricsConnection).
 	Target string
+	// Experimental is the @experimental mark of the first field on the
+	// target path that carries one (targetExperimental); Until is empty for
+	// an operation on stable fields only.
+	Experimental experimentalTarget
+}
+
+// experimentalTarget is the @experimental mark an operation inherits from
+// its target path.
+type experimentalTarget struct {
+	Until  string `json:"until"`
+	Reason string `json:"reason"`
+}
+
+// targetExperimental returns the @experimental mark of the first field on
+// target (kind.field.field, a member type name after a field of union or
+// interface type) that carries one. An operation whose root or any field on
+// its path is experimental is itself experimental: removing that field
+// removes the operation.
+func targetExperimental(schema *ast.Schema, target string) (experimentalTarget, bool) {
+	segments := strings.Split(target, ".")
+	if len(segments) < 2 {
+		return experimentalTarget{}, false
+	}
+	parent := rootDefinition(schema, ast.Operation(segments[0]))
+	for _, seg := range segments[1:] {
+		if parent == nil {
+			return experimentalTarget{}, false
+		}
+		if member := abstractMember(schema, parent, seg); member != nil {
+			parent = member
+			continue
+		}
+		field := parent.Fields.ForName(seg)
+		if field == nil {
+			return experimentalTarget{}, false
+		}
+		if reason, until, ok := experimentalMark(field); ok {
+			return experimentalTarget{Until: until, Reason: reason}, true
+		}
+		parent = schema.Types[field.Type.Name()]
+	}
+	return experimentalTarget{}, false
 }
 
 // loadOperations parses every operation document under pkg/graphql/public,
@@ -141,13 +183,15 @@ func parseOperations(schema *ast.Schema, sources []*ast.Source) ([]operation, er
 		formatter.NewFormatter(&buf, formatter.WithIndent("  "), formatter.WithoutDescription()).FormatQueryDocument(doc)
 		text := strings.TrimSpace(buf.String()) + "\n"
 		sum := sha256.Sum256([]byte(text))
+		experimental, _ := targetExperimental(schema, target)
 		out = append(out, operation{
-			Name:     item.op.Name,
-			Kind:     string(item.op.Operation),
-			Document: text,
-			Hash:     "sha256:" + hex.EncodeToString(sum[:]),
-			File:     item.file,
-			Target:   target,
+			Name:         item.op.Name,
+			Kind:         string(item.op.Operation),
+			Document:     text,
+			Hash:         "sha256:" + hex.EncodeToString(sum[:]),
+			File:         item.file,
+			Target:       target,
+			Experimental: experimental,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

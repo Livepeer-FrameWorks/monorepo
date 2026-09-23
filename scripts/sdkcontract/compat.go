@@ -120,7 +120,7 @@ func currentLineOperations(cache *schemaCache, matrix releaseMatrix, line suppor
 			problems = append(problems, fmt.Sprintf("%s: %v", op.Name, err))
 			continue
 		}
-		out = append(out, manifestOperation{Name: op.Name, Kind: op.Kind, Since: since.String(), Hash: op.Hash, Document: op.Document})
+		out = append(out, manifestOperation{Name: op.Name, Kind: op.Kind, Since: since.String(), Hash: op.Hash, Document: op.Document, Experimental: op.Experimental.Until})
 	}
 	return out, problems
 }

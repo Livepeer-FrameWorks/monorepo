@@ -119,6 +119,10 @@ type manifestOperation struct {
 	Since    string `json:"since"`
 	Hash     string `json:"hash"`
 	Document string `json:"document"`
+	// Experimental is the until release of the @experimental field the
+	// operation targets. api-compat lets a line drop such an operation, or
+	// raise its since, after the line is released.
+	Experimental string `json:"experimental,omitempty"`
 }
 
 func manifestPath(repo string, major int) string {

@@ -45,7 +45,14 @@ import (
 // whose type differs from the other members' is aliased there
 // (memberAliases). Fields that take
 // arguments are never part of a selection (they are targets of their own),
-// nor are deprecated fields and arguments.
+// nor are deprecated fields and arguments, nor @experimental fields
+// (selectableByDefault). An experimental field is reached through its own
+// operation when it is a root or takes arguments; that operation is
+// experimental (targetExperimental). An argument-free experimental field
+// below a root has no generated operation: callers select it through the
+// TypeScript select client or a custom document. The lint rejects any
+// operation, hand-written included, that selects an @experimental field
+// without having an experimental target.
 //
 // Overrides. A hand-written operation in pkg/graphql/public/{queries,
 // mutations,subscriptions} replaces the default operation of the target it
@@ -62,7 +69,10 @@ import (
 //
 // Targets file. generated/targets.json maps every operation, hand-written
 // and generated, to its target; the SDK code generators read it to document
-// each operation with its target field's description.
+// each operation with its target field's description. Its experimental map
+// lists the operations whose target path has an @experimental field; the
+// SDKs mark them experimental in their doc comments, and api-compat lets a
+// released line drop them (the field may go by its until release).
 const (
 	generatedOpsDir     = publicDir + "/generated"
 	defaultSelectDepth  = 2
@@ -109,8 +119,19 @@ func rootTypes(schema *ast.Schema) []struct {
 
 func isDeprecated(dirs ast.DirectiveList) bool { return dirs.ForName("deprecated") != nil }
 
+// selectable reports whether f can be a target or lie on a target's path.
+// An @experimental field can: its operation is then experimental
+// (targetExperimental).
 func selectable(f *ast.FieldDefinition) bool {
 	return !strings.HasPrefix(f.Name, "__") && !isDeprecated(f.Directives)
+}
+
+// selectableByDefault reports whether f belongs in a default selection. An
+// @experimental field never does, so no operation that is stable by its
+// target selects a field that may be removed within the line.
+func selectableByDefault(f *ast.FieldDefinition) bool {
+	_, _, experimental := experimentalMark(f)
+	return selectable(f) && !experimental
 }
 
 // opTargets returns every target of the schema in a deterministic order, and
@@ -260,7 +281,7 @@ func (b *selectionBuilder) fields(def *ast.Definition, depth int, aliased map[st
 	connection := b.connectionNode(def) != nil
 	var out []*selNode
 	for _, f := range def.Fields {
-		if !selectable(f) || len(f.Arguments) > 0 || (connection && f.Name == "nodes") {
+		if !selectableByDefault(f) || len(f.Arguments) > 0 || (connection && f.Name == "nodes") {
 			continue
 		}
 		node := b.fieldSelection(f, depth)
@@ -338,7 +359,7 @@ func (b *selectionBuilder) memberAliases(def *ast.Definition) map[string]map[str
 	order := map[string][]string{}
 	for _, m := range ms {
 		for _, f := range m.Fields {
-			if !selectable(f) || len(f.Arguments) > 0 {
+			if !selectableByDefault(f) || len(f.Arguments) > 0 {
 				continue
 			}
 			t := f.Type.String()
@@ -364,7 +385,7 @@ func (b *selectionBuilder) memberAliases(def *ast.Definition) map[string]map[str
 		}
 		for _, m := range ms {
 			f := m.Fields.ForName(field)
-			if f == nil || !selectable(f) || len(f.Arguments) > 0 || f.Type.String() == canonical {
+			if f == nil || !selectableByDefault(f) || len(f.Arguments) > 0 || f.Type.String() == canonical {
 				continue
 			}
 			if out[m.Name] == nil {
@@ -439,7 +460,7 @@ func (b *selectionBuilder) targetSelection(def *ast.Definition) []*selNode {
 	}
 	var out []*selNode
 	for _, f := range def.Fields {
-		if !selectable(f) || len(f.Arguments) > 0 || f.Name == "nodes" {
+		if !selectableByDefault(f) || len(f.Arguments) > 0 || f.Name == "nodes" {
 			continue
 		}
 		switch f.Name {
@@ -766,21 +787,47 @@ func buildDefaultOps(repo string) (map[string]string, []defaultOp, []operation, 
 const targetsFile = generatedOpsDir + "/targets.json"
 
 func renderTargets(ops []operation) (string, error) {
+	type experimentalEntry struct {
+		experimentalTarget
+		// Note is the sentence every SDK appends to the operation's doc
+		// comment, so the three generators word it identically.
+		Note string `json:"note"`
+	}
 	targets := map[string]string{}
+	experimental := map[string]experimentalEntry{}
 	for _, op := range ops {
 		targets[op.Name] = op.Target
+		if op.Experimental.Until != "" {
+			experimental[op.Name] = experimentalEntry{experimentalTarget: op.Experimental, Note: experimentalNote(op.Experimental)}
+		}
 	}
 	data, err := json.MarshalIndent(struct {
-		Description string            `json:"description"`
-		Targets     map[string]string `json:"targets"`
+		Description  string                       `json:"description"`
+		Targets      map[string]string            `json:"targets"`
+		Experimental map[string]experimentalEntry `json:"experimental"`
 	}{
-		Description: "Generated by scripts/sdkcontract (make generate-ops); do not edit. The field each public operation addresses: kind.field.field, with a member type name after a field of union or interface type.",
-		Targets:     targets,
+		Description:  "Generated by scripts/sdkcontract (make generate-ops); do not edit. targets: the field each public operation addresses: kind.field.field, with a member type name after a field of union or interface type. experimental: the operations whose target path has an @experimental field, with that field's until release, reason, and the note the SDKs add to the operation's doc comment.",
+		Targets:      targets,
+		Experimental: experimental,
 	}, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	return string(data) + "\n", nil
+}
+
+// experimentalNote is the doc-comment sentence for an operation on an
+// @experimental field.
+func experimentalNote(e experimentalTarget) string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason != "" && !strings.HasSuffix(reason, ".") {
+		reason += "."
+	}
+	note := "Experimental until " + e.Until + ":"
+	if reason != "" {
+		note += " " + reason
+	}
+	return note + " A later SDK release of this line may change or remove this operation."
 }
 
 func runGenerateOps(repo string, check bool) error {

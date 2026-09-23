@@ -19,7 +19,7 @@ type Query {
 `})
 	generated := []byte("package example\n\nconst ViewerCount_Operation = `query ViewerCount { viewerCount }`\n\n// @target query.viewerCount\nfunc ViewerCount() {}\n")
 
-	documented, err := documentOperations(generated, schema, map[string]string{"ViewerCount": "query.viewerCount"})
+	documented, err := documentOperations(generated, schema, map[string]string{"ViewerCount": "query.viewerCount"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +36,30 @@ type Query {
 	if strings.Contains(output, "@target") {
 		t.Fatalf("the @target annotation reached the Go doc comment:\n%s", output)
 	}
-	if _, err := documentOperations(generated, schema, nil); err == nil {
+	if strings.Contains(output, "Experimental") {
+		t.Fatalf("a stable operation carries an experimental note:\n%s", output)
+	}
+	if _, err := documentOperations(generated, schema, nil, nil); err == nil {
 		t.Fatal("an operation without a target was documented")
+	}
+}
+
+func TestDocumentOperationsCarriesExperimentalNote(t *testing.T) {
+	t.Parallel()
+	schema := gqlparser.MustLoadSchema(&gqlast.Source{Input: `
+type Query {
+  """Return the current viewer count."""
+  viewerCount: Int!
+}
+`})
+	generated := []byte("package example\n\nconst ViewerCount_Operation = `query ViewerCount { viewerCount }`\n\nfunc ViewerCount() {}\n")
+	note := "Experimental until v0.4.0: Counting is sampled. A later SDK release of this line may change or remove this operation."
+	documented, err := documentOperations(generated, schema, map[string]string{"ViewerCount": "query.viewerCount"}, map[string]string{"ViewerCount": note})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "// Return the current viewer count.\n// " + note + "\n"; !strings.Contains(string(documented), want) {
+		t.Fatalf("doc comment lacks %q:\n%s", want, documented)
 	}
 }
 
@@ -47,7 +69,7 @@ func TestDocumentGeneratedOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	targets, err := loadTargets("../../../pkg/graphql/public/schema.public.graphql")
+	targets, notes, err := loadTargets("../../../pkg/graphql/public/schema.public.graphql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +106,7 @@ func TestDocumentGeneratedOperations(t *testing.T) {
 		t.Fatal("CreateStream operation was not extracted")
 	}
 
-	documented, err := documentOperations(generated, schema, targets)
+	documented, err := documentOperations(generated, schema, targets, notes)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,7 @@ import ast
 import functools
 import json
 from pathlib import Path
+from typing import Any
 
 from ariadne_codegen.plugins.base import Plugin
 from graphql import (
@@ -91,7 +92,10 @@ class ForwardCompatPlugin(Plugin):
         method_def: ast.FunctionDef | ast.AsyncFunctionDef,
         operation_definition: OperationDefinitionNode,
     ) -> ast.FunctionDef | ast.AsyncFunctionDef:
-        description = _operation_description(self.schema, operation_definition)
+        name = operation_definition.name.value if operation_definition.name else ""
+        description = _method_docstring(
+            _operation_description(self.schema, operation_definition), _experimental_note(name)
+        )
         if description:
             method_def.body.insert(0, ast.Expr(value=ast.Constant(value=description)))
         return method_def
@@ -307,11 +311,31 @@ _TARGETS_FILE = Path(__file__).resolve().parents[2] / "pkg/graphql/public/genera
 
 
 @functools.cache
+def _targets_file() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(_TARGETS_FILE.read_text())
+    return data
+
+
 def _targets() -> dict[str, str]:
     """Each public operation's target, from scripts/sdkcontract (make
     generate-ops)."""
-    targets: dict[str, str] = json.loads(_TARGETS_FILE.read_text())["targets"]
+    targets: dict[str, str] = _targets_file()["targets"]
     return targets
+
+
+def _experimental_note(name: str) -> str | None:
+    """The note for an operation whose target path has an @experimental
+    field, worded by scripts/sdkcontract so every SDK says the same."""
+    entry = _targets_file().get("experimental", {}).get(name)
+    return entry["note"] if entry else None
+
+
+def _method_docstring(description: str | None, note: str | None) -> str | None:
+    """A client method's docstring: the target field's description, then the
+    experimental note as its own paragraph."""
+    if not note:
+        return description
+    return f"{description}\n\n{note}" if description else note
 
 
 def _operation_description(

@@ -83,6 +83,9 @@ func (r rootField) heading() string {
 type sdkBinding struct {
 	Operation, Kind string
 	Path            []string
+	// ExperimentalUntil is set when the target path has an @experimental
+	// field: the operation may be removed by that release.
+	ExperimentalUntil string
 }
 
 func runReference(repo string, check bool) error {
@@ -181,7 +184,7 @@ func sdkBindings(schema *ast.Schema, ops []operation) (map[string][]sdkBinding, 
 				if target := strings.Split(op.Target, "."); len(target) > 1 && target[0] == string(definition.Operation) && target[1] == field.Name {
 					path = target[1:]
 				}
-				out[key] = append(out[key], sdkBinding{Operation: op.Name, Kind: string(definition.Operation), Path: path})
+				out[key] = append(out[key], sdkBinding{Operation: op.Name, Kind: string(definition.Operation), Path: path, ExperimentalUntil: op.Experimental.Until})
 			}
 		}
 	}
@@ -575,7 +578,7 @@ func renderReferenceIndex(shared []string, group func(int) (referenceDomain, []r
 	b.WriteString("## How to read this reference\n\n")
 	b.WriteString("- Each domain page lists its root queries, mutations, and subscriptions, then the types that only that domain's root fields reach. Types reached from two or more domains are on [Shared types](" + referenceRoute + sharedDomainSlug + "/).\n")
 	b.WriteString("- A root field shows its GraphQL signature, return type, arguments with defaults, description, and deprecation. Every type name links to its definition.\n")
-	b.WriteString("- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then.\n")
+	b.WriteString("- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then. An SDK operation whose root or selected path has such a field is marked the same way in the **SDK** table and in its SDK doc comment; an SDK release on the same line may drop it.\n")
 	b.WriteString("- **SDK** lists the generated operations that select a root field, with the TypeScript document, Go function, and Python method names. Python generates subscriptions in its async client only. A path in the **Selects** column is the field an operation below the root addresses; a type name in it stands for an inline fragment on that type (`node.<Type>.<field>` selects `node(id:) { ... on <Type> { <field> } }`).\n")
 	b.WriteString("- Every root field that is not deprecated and returns data of its own has an operation of its own. ")
 	if len(namespaces) > 0 {
@@ -663,6 +666,9 @@ func writeSDKBindings(b *strings.Builder, field *ast.FieldDefinition, bindings [
 			python += " (async)"
 		}
 		fmt.Fprintf(b, "| %s ", binding.Operation)
+		if binding.ExperimentalUntil != "" {
+			fmt.Fprintf(b, "(experimental until %s) ", safeText(binding.ExperimentalUntil))
+		}
 		if nested {
 			fmt.Fprintf(b, "| `%s` ", strings.Join(binding.Path, "."))
 		}

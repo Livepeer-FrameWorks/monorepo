@@ -10,7 +10,8 @@
 //
 //	api-compat     every operation of every live SDK line validates against
 //	               the schema of every stable release at or above the line's
-//	               minimum server, and no operation's since rises within a line
+//	               minimum server, and no operation's since rises within a line;
+//	               an operation whose target is @experimental is exempt
 //	schema-compat  the working-tree public schema makes no breaking change to
 //	               anything reachable in the latest release tag's public
 //	               schema; report only while that tag is older than the
@@ -216,7 +217,7 @@ func runAPICompat(repo string) error {
 	for _, op := range computed.Operations {
 		prev, ok := byName[op.Name]
 		switch {
-		case !ok || prev.Hash != op.Hash || prev.Since != op.Since || prev.Kind != op.Kind:
+		case !ok || prev.Hash != op.Hash || prev.Since != op.Since || prev.Kind != op.Kind || prev.Experimental != op.Experimental:
 			problems = append(problems, fmt.Sprintf("%s: manifest entry is stale; run make sdk-manifest", op.Name))
 		}
 	}
@@ -235,22 +236,7 @@ func runAPICompat(repo string) error {
 			return rerr
 		}
 		if released != nil {
-			now := map[string]manifestOperation{}
-			for _, op := range computed.Operations {
-				now[op.Name] = op
-			}
-			for _, op := range released.Operations {
-				cur, ok := now[op.Name]
-				if !ok {
-					problems = append(problems, fmt.Sprintf("%s: released in %s and removed within line %s", op.Name, tag, support.Current))
-					continue
-				}
-				was, _ := parseSemver(op.Since)
-				is, _ := parseSemver(cur.Since)
-				if was.Less(is) {
-					problems = append(problems, fmt.Sprintf("%s: since rose from %s (released in %s) to %s within line %s", op.Name, op.Since, tag, cur.Since, support.Current))
-				}
-			}
+			problems = append(problems, releasedLineProblems(released.Operations, computed.Operations, tag, support.Current)...)
 		}
 	}
 
@@ -270,16 +256,9 @@ func runAPICompat(repo string) error {
 			continue
 		}
 		min, _ := parseSemver(line.MinServer)
-		for _, op := range frozen.Operations {
-			since, err := sinceOf(cache, matrix, min, op.Document)
-			if err != nil {
-				problems = append(problems, fmt.Sprintf("line %s: %s: %v", line.Line, op.Name, err))
-				continue
-			}
-			if was, _ := parseSemver(op.Since); was.Less(since) {
-				problems = append(problems, fmt.Sprintf("line %s: %s: since rose from %s to %s", line.Line, op.Name, op.Since, since))
-			}
-		}
+		problems = append(problems, frozenLineProblems(line.Line, frozen.Operations, func(document string) (semver, error) {
+			return sinceOf(cache, matrix, min, document)
+		})...)
 	}
 
 	if len(problems) > 0 {
@@ -299,4 +278,55 @@ func runAPICompat(repo string) error {
 	}
 	fmt.Printf("sdkcontract: %d operations of line %s validate on %s\n", len(computed.Operations), support.Current, strings.Join(checked, ", "))
 	return nil
+}
+
+// releasedLineProblems holds the current line to what its latest SDK release
+// shipped: no released operation disappears and no since rises. An operation
+// the release marked experimental (its target field was @experimental) is
+// exempt from both, since that field may be removed or changed by its until
+// release.
+func releasedLineProblems(released, current []manifestOperation, tag, line string) []string {
+	now := map[string]manifestOperation{}
+	for _, op := range current {
+		now[op.Name] = op
+	}
+	var problems []string
+	for _, op := range released {
+		if op.Experimental != "" {
+			continue
+		}
+		cur, ok := now[op.Name]
+		if !ok {
+			problems = append(problems, fmt.Sprintf("%s: released in %s and removed within line %s", op.Name, tag, line))
+			continue
+		}
+		was, _ := parseSemver(op.Since)
+		is, _ := parseSemver(cur.Since)
+		if was.Less(is) {
+			problems = append(problems, fmt.Sprintf("%s: since rose from %s (released in %s) to %s within line %s", op.Name, op.Since, tag, cur.Since, line))
+		}
+	}
+	return problems
+}
+
+// frozenLineProblems checks that every operation of a frozen live line still
+// validates from its recorded since onward; since computes that range for a
+// document. Experimental operations are exempt: their target field may be
+// removed by its until release.
+func frozenLineProblems(line string, ops []manifestOperation, since func(document string) (semver, error)) []string {
+	var problems []string
+	for _, op := range ops {
+		if op.Experimental != "" {
+			continue
+		}
+		got, err := since(op.Document)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("line %s: %s: %v", line, op.Name, err))
+			continue
+		}
+		if was, _ := parseSemver(op.Since); was.Less(got) {
+			problems = append(problems, fmt.Sprintf("line %s: %s: since rose from %s to %s", line, op.Name, op.Since, got))
+		}
+	}
+	return problems
 }

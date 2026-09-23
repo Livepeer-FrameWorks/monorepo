@@ -18,8 +18,11 @@ skips both at runtime (`skip_runtime` in `api_gateway/gqlgen.yml`).
 - **`@experimental(reason: String!, until: String!)`** marks a public field that is not stable yet. `until` is the
   platform release (`vMAJOR.MINOR.PATCH`) by which the field either loses the directive or is removed. Experimental
   fields are in the public schema, the SDKs, and the reference (badged **Experimental until vX.Y.Z**); they are exempt
-  from the compatibility check. `make verify-experimental-fields` lists every experimental field and fails once the
-  pending release in `cli/internal/releases/catalog.yaml` reaches a field's `until`.
+  from the schema compatibility check. An SDK operation whose target path has an experimental field (the root or any
+  field on the path) is an experimental operation: its doc comment in all three SDKs and its row in the reference's
+  **SDK** table say so, and it is exempt from the operation rules of a line (see [What may change](#what-may-change)).
+  `make verify-experimental-fields` lists every experimental field and fails once the pending release in
+  `cli/internal/releases/catalog.yaml` reaches a field's `until`.
 
 Everything else in the public schema is stable. The SDK generators (genqlient, graphql-codegen, Genql,
 ariadne-codegen), the operation lint, the compatibility checks, and the reference read `schema.public.graphql`, never
@@ -48,8 +51,11 @@ fragments}.graphql` from the public schema (`scripts/sdkcontract/defaultops.go` 
 - **Selection.** A per-type fragment `<Type>DefaultFields`: the type's scalar and enum fields and its argument-free
   object, union, and interface fields to depth 2. Connections select `edges { cursor node }`, `pageInfo`, and
   `totalCount`. Unions and interfaces select `__typename` and each member's fragment; a member field whose type
-  differs from the other members' is aliased `<member><Field>`. Fields that take arguments and deprecated fields are
-  never part of a selection.
+  differs from the other members' is aliased `<member><Field>`. Fields that take arguments, deprecated fields, and
+  `@experimental` fields are never part of a selection, so no operation with a stable target selects a field that may
+  be removed within the line. An experimental field that is a root or takes arguments is reached through its own
+  experimental operation; an argument-free experimental field below a root has no generated operation and is
+  selected through the TypeScript select client or a custom document.
 - **Names.** A query is `Get<Field>`, a mutation or subscription `<Field>`, in PascalCase. A nested query is
   `Get<Field>`, or `Get` followed by every field of its path when another query target ends in a field of the same
   name. A query through `Query.node` is `Get<Type><Field>` (`GetInfrastructureNodeMetricsConnection`). A name equal
@@ -81,11 +87,16 @@ operations address the same target. The generator emits nothing for a target an 
 annotates its own `Query.node` operations. genqlient copies the comment into the Go doc comment, and
 `sdk_go/tools/genclient` removes it there; graphql-codegen and ariadne-codegen drop comments.
 
-`make generate-ops` also writes `generated/targets.json`, every operation's target. The SDK code generators read it to
-document each method with its target field's description, so none of them re-derives a target.
+`make generate-ops` also writes `generated/targets.json`, every operation's target, and under `experimental` each
+experimental operation with its field's `until`, `reason`, and the `note` the SDKs print ("Experimental until vX.Y.Z:
+<reason> A later SDK release of this line may change or remove this operation."). The SDK code generators read it to
+document each method with its target field's description and, for an experimental operation, that note, so none of
+them re-derives a target. The manifest records the same `until` as each experimental operation's `experimental`.
 
 The operation lint holds every document, generated or hand-written, to the public schema: it validates, selects
-`__typename` and every error member in each union selection, and uses no deprecated field, argument, or enum value.
+`__typename` and every error member in each union selection, uses no deprecated field, argument, or enum value, and
+selects an `@experimental` field only when its own target is experimental (a hand-written override with a stable
+target that selects one fails).
 `make sdk-audit` fails when a target has no operation. `make sdk-manifest` depends on `generate-ops`, so the manifest
 is never built from a stale set.
 
@@ -137,6 +148,10 @@ frozen at what they shipped.
 - Never remove an operation, and never raise an operation's `since`. `make verify-api-compat` compares the manifest
   with the one tagged `sdk-v<line>.<patch>` at the latest release of the line, and validates every frozen live line's
   documents on every release from its minimum server.
+- Exception: an operation the released manifest marks `experimental` (its target path had an `@experimental` field)
+  may be removed or have its `since` raised within the line, and a frozen line's experimental operation may stop
+  validating. Its field can be removed by its `until` release, and the operation goes with it. A stable field's
+  operations cannot become experimental, because the field cannot (see below).
 
 **The public schema.** The contract is everything a client can reach from the released public schema's root types,
 whether or not an SDK operation selects it. `make verify-schema-compat` (`scripts/sdkcontract/schemadiff.go`) walks
@@ -149,6 +164,10 @@ and reports as breaking:
 - an output position that was non-null becoming nullable;
 - an input position (argument or input field) that was nullable becoming non-null, or a non-null one losing its
   default;
+- an argument or input field whose default value changed or was removed, nullable or not: a request that omits it
+  would then mean something else (for example `MediaPlacementOptionsFilter.spillover` moving off `NEVER`). Defaults are
+  compared as normalized literals, so respelling one (a block string, reordered input object fields) is not a change.
+  Adding a default, including to a previously required input, is compatible;
 - a new required argument or required input field without a default;
 - an enum value removed in either position: as input a client sending it is rejected, as output the regenerated SDK
   of the same line drops the constant, so consumer code that names it stops compiling;
@@ -196,7 +215,7 @@ operations, so the previous line's frozen manifest entry is what it shipped:
 | `make verify-ops`                                               | `pkg/graphql/public/generated/` matches the public schema and the overrides             |
 | `make verify-graphql-reference`                                 | `website_docs/.../builders/api-schema/` matches the public schema and the operations    |
 | `make verify-experimental-fields`                               | no `@experimental` field is at or past its `until` release                              |
-| `make verify-api-compat`                                        | the manifest is current, no operation removed or `since` raised within a released line  |
+| `make verify-api-compat`                                        | the manifest is current, no stable operation removed or `since` raised within a line    |
 | `make verify-schema-compat`                                     | no breaking public-schema change since the latest release (report-only before baseline) |
 | `make verify-sdk-generated`                                     | the generated SDK code, manifest, and fixtures match a fresh `make graphql-sdk`         |
 | `test-sdk-ts`, `test-sdk-go`, `test-sdk-py`, `typecheck-sdk-py` | each SDK's tests, examples, and type checks                                             |

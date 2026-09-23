@@ -70,7 +70,7 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
-	targets, err := loadTargets(config.Schema[0])
+	targets, notes, err := loadTargets(config.Schema[0])
 	if err != nil {
 		return err
 	}
@@ -80,10 +80,10 @@ func run(configPath string) error {
 	}
 	for name, src := range files {
 		if strings.HasSuffix(name, ".go") {
-			if src, err = subscriptionFunctions(src, schema, targets); err != nil {
+			if src, err = subscriptionFunctions(src, schema, targets, notes); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
-			if src, err = documentOperations(src, schema, targets); err != nil {
+			if src, err = documentOperations(src, schema, targets, notes); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
 			if src, err = openUnions(src); err != nil {
@@ -232,21 +232,44 @@ func loadSchema(paths []string) (*gqlast.Schema, error) {
 }
 
 // targetsFile, next to the public schema, maps each public operation to the
-// field it targets (scripts/sdkcontract, make generate-ops).
+// field it targets (scripts/sdkcontract, make generate-ops), and carries the
+// experimental note of each operation whose target path is @experimental.
 const targetsFile = "generated/targets.json"
 
-func loadTargets(schemaPath string) (map[string]string, error) {
+// loadTargets returns each operation's target and the experimental notes,
+// both by operation name.
+func loadTargets(schemaPath string) (targets, notes map[string]string, err error) {
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(schemaPath), targetsFile))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var file struct {
-		Targets map[string]string `json:"targets"`
+		Targets      map[string]string `json:"targets"`
+		Experimental map[string]struct {
+			Note string `json:"note"`
+		} `json:"experimental"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("%s: %w", targetsFile, err)
+		return nil, nil, fmt.Errorf("%s: %w", targetsFile, err)
 	}
-	return file.Targets, nil
+	notes = map[string]string{}
+	for name, e := range file.Experimental {
+		notes[name] = e.Note
+	}
+	return file.Targets, notes, nil
+}
+
+// describeOperation is an operation's doc text: its target field's
+// description, then its experimental note on a line of its own.
+func describeOperation(schema *gqlast.Schema, target, note string) (string, error) {
+	description, err := operationDescription(schema, target)
+	if err != nil || note == "" {
+		return description, err
+	}
+	if description == "" {
+		return note, nil
+	}
+	return description + "\n" + note, nil
 }
 
 // targetAnnotation matches the "# @target <path>" line of a hand-written
@@ -255,8 +278,9 @@ func loadTargets(schemaPath string) (map[string]string, error) {
 var targetAnnotation = regexp.MustCompile(`(?m)^// @target \S+\n`)
 
 // documentOperations adds the description of each operation's target field
-// (targets, by operation name) to the generated Go functions.
-func documentOperations(src []byte, schema *gqlast.Schema, targets map[string]string) ([]byte, error) {
+// (targets, by operation name) to the generated Go functions, followed by
+// the operation's experimental note (notes, by operation name) when it has one.
+func documentOperations(src []byte, schema *gqlast.Schema, targets, notes map[string]string) ([]byte, error) {
 	src = targetAnnotation.ReplaceAll(src, nil)
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "generated.go", src, parser.ParseComments)
@@ -270,7 +294,7 @@ func documentOperations(src []byte, schema *gqlast.Schema, targets map[string]st
 		if !ok {
 			return nil, fmt.Errorf("%s_Operation: no target in %s; run make generate-ops", name, targetsFile)
 		}
-		description, err := operationDescription(schema, target)
+		description, err := describeOperation(schema, target, notes[name])
 		if err != nil {
 			return nil, fmt.Errorf("%s_Operation: %w", name, err)
 		}

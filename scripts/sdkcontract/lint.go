@@ -13,8 +13,9 @@ const errorInterface = "Error"
 
 // lintOperations validates every operation against schema and applies the
 // public-operation rules: each union selection selects __typename and covers
-// every error member, and no operation uses a deprecated field, argument, or
-// enum value.
+// every error member, no operation uses a deprecated field, argument, or
+// enum value, and only an operation with an experimental target selects an
+// @experimental field.
 func lintOperations(schema *ast.Schema, ops []operation) []string {
 	var problems []string
 	for _, op := range ops {
@@ -48,6 +49,9 @@ func lintSelection(schema *ast.Schema, op operation, set ast.SelectionSet, fragm
 			where := fmt.Sprintf("%s (%s): %s", op.Name, op.File, s.Name)
 			if dep := s.Definition.Directives.ForName("deprecated"); dep != nil {
 				problems = append(problems, where+" is deprecated")
+			}
+			if _, until, ok := experimentalMark(s.Definition); ok && op.Experimental.Until == "" {
+				problems = append(problems, fmt.Sprintf("%s is @experimental until %s, but the operation's target %s is stable; a stable operation cannot select a field that may be removed within the line (target the experimental field or leave it out)", where, until, op.Target))
 			}
 			for _, arg := range s.Arguments {
 				if def := s.Definition.Arguments.ForName(arg.Name); def != nil && def.Directives.ForName("deprecated") != nil {

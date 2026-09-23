@@ -84,6 +84,11 @@ func TestSchemaDiffBreakingRules(t *testing.T) {
 		{"required argument added", "node(id: ID!)", "node(id: ID!, scope: String!)", "argument Query.node(scope:) was added as required without a default"},
 		{"argument nullability tightened", "streams(first: Int = 10,", "streams(first: Int!,", "argument Query.streams(first:) changed type from Int to Int!"},
 		{"non-null argument lost its default", "record: Boolean mode: Mode = PUSH region: String! = \"eu\"", "record: Boolean mode: Mode = PUSH region: String!", "input field CreateStreamInput.region became required: its default was removed"},
+		{"argument default changed", "streams(first: Int = 10,", "streams(first: Int = 20,", "argument Query.streams(first:) changed its default from 10 to 20; a request that omits it changes meaning"},
+		{"input field default changed", "mode: Mode = PUSH", "mode: Mode = PULL", "input field CreateStreamInput.mode changed its default from PUSH to PULL; a request that omits it changes meaning"},
+		{"non-null input field default changed", "region: String! = \"eu\"", "region: String! = \"us\"", "input field CreateStreamInput.region changed its default from \"eu\" to \"us\"; a request that omits it changes meaning"},
+		{"nullable argument lost its default", "streams(first: Int = 10,", "streams(first: Int,", "argument Query.streams(first:) lost its default 10; a request that omits it no longer gets that value"},
+		{"nullable input field lost its default", "mode: Mode = PUSH", "mode: Mode", "input field CreateStreamInput.mode lost its default PUSH; a request that omits it no longer gets that value"},
 		{"input type removed", "labels: [LabelInput!]", "labels: [String!]", "type LabelInput was removed"},
 		{"input field removed", "record: Boolean ", "", "input field CreateStreamInput.record was removed"},
 		{"required input field added", "input LabelInput { key: String! }", "input LabelInput { key: String! value: String! }", "input field LabelInput.value was added as required without a default"},
@@ -141,6 +146,9 @@ func TestSchemaDiffCompatibleChanges(t *testing.T) {
 		{"input nullability loosened", "input LabelInput { key: String! }", "input LabelInput { key: String }", "input field LabelInput.key changed type from String! to String (compatible)"},
 		{"optional argument added", "node(id: ID!)", "node(id: ID!, scope: String)", "argument Query.node(scope:) was added"},
 		{"required argument with default added", "node(id: ID!)", "node(id: ID!, scope: String! = \"all\")", "argument Query.node(scope:) was added"},
+		{"required input field gained a default", "input CreateStreamInput { name: String! ", "input CreateStreamInput { name: String! = \"untitled\" ", "input field CreateStreamInput.name gained the default \"untitled\""},
+		{"optional argument gained a default", "stream(id: ID!, verbose: Boolean)", "stream(id: ID!, verbose: Boolean = false)", "argument Query.stream(verbose:) gained the default false"},
+		{"default respelled as a block string", "region: String! = \"eu\"", "region: String! = \"\"\"eu\"\"\"", ""},
 		{"optional input field added", "input LabelInput { key: String! }", "input LabelInput { key: String! value: String }", "input field LabelInput.value was added"},
 		{"field added", "type Owner { id: ID! }", "type Owner { id: ID! name: String }", "Owner.name was added"},
 		{"type added", "type Owner { id: ID! }", "type Owner { id: ID! team: Team }\ntype Team { id: ID! }", "type Team was added"},
@@ -232,5 +240,22 @@ func TestSchemaCompatReportOnlyBeforeTheBaseline(t *testing.T) {
 	}
 	if err := schemaCompatVerdict(schemaDiff{Info: []string{"type X was added"}}, v0311, baseline); err != nil {
 		t.Fatalf("additions failed the gate: %v", err)
+	}
+}
+
+func TestNormalizedValueComparesEqualLiterals(t *testing.T) {
+	parse := func(sdl string) *ast.Value {
+		t.Helper()
+		s := mustSchema(t, "input P { a: Int b: String }\ntype Query { f(x: P = "+sdl+"): Int }")
+		return s.Query.Fields.ForName("f").Arguments.ForName("x").DefaultValue
+	}
+	if a, b := normalizedValue(parse(`{a: 1, b: "x"}`)), normalizedValue(parse(`{b: """x""", a: 1}`)); a != b {
+		t.Fatalf("equal object literals normalize to %s and %s", a, b)
+	}
+	if a, b := normalizedValue(parse(`{a: 1}`)), normalizedValue(parse(`{a: 2}`)); a == b {
+		t.Fatalf("different object literals both normalize to %s", a)
+	}
+	if got := normalizedValue(nil); got != "" {
+		t.Fatalf("no default normalizes to %q", got)
 	}
 }

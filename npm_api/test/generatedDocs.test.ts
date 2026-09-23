@@ -18,4 +18,25 @@ describe("generated schema documentation", () => {
     expect(generated).toContain(`${description}\nexport type CreateStreamMutation`);
     expect(generated).toContain(`${description}\nexport const CreateStreamDocument`);
   });
+
+  it("marks exactly the operations on @experimental fields as experimental", () => {
+    const targets = JSON.parse(
+      readFileSync(
+        new URL("../../pkg/graphql/public/generated/targets.json", import.meta.url),
+        "utf8"
+      )
+    ) as { experimental: Record<string, { note: string }> };
+    const documented = [
+      ...generated.matchAll(/\/\*\* ([^\n]*) \*\/\nexport const (\w+)Document\b/g),
+    ].map(([, comment = "", name = ""]) => ({ comment, name }));
+    const marked = documented
+      .filter(({ comment }) => comment.includes("Experimental until"))
+      .map(({ name }) => name)
+      .sort();
+    expect(marked).toEqual(Object.keys(targets.experimental).sort());
+    for (const { comment, name } of documented) {
+      const note = targets.experimental[name]?.note;
+      if (note) expect(comment.endsWith(note)).toBe(true);
+    }
+  });
 });

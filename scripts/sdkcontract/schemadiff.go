@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -290,19 +292,22 @@ func (c *schemaComparison) internalNote(typeName, field string) string {
 	return ""
 }
 
-// inputValue is an argument or an input field.
+// inputValue is an argument or an input field. defaultValue is the
+// normalized literal of its default (normalizedValue), "" when it has none.
 type inputValue struct {
-	name       string
-	typ        *ast.Type
-	hasDefault bool
+	name         string
+	typ          *ast.Type
+	defaultValue string
 }
 
-func (v inputValue) required() bool { return v.typ.NonNull && !v.hasDefault }
+func (v inputValue) hasDefault() bool { return v.defaultValue != "" }
+
+func (v inputValue) required() bool { return v.typ.NonNull && !v.hasDefault() }
 
 func inputArguments(args ast.ArgumentDefinitionList) []inputValue {
 	out := make([]inputValue, 0, len(args))
 	for _, a := range args {
-		out = append(out, inputValue{name: a.Name, typ: a.Type, hasDefault: a.DefaultValue != nil})
+		out = append(out, inputValue{name: a.Name, typ: a.Type, defaultValue: normalizedValue(a.DefaultValue)})
 	}
 	return out
 }
@@ -310,9 +315,45 @@ func inputArguments(args ast.ArgumentDefinitionList) []inputValue {
 func inputFields(fields ast.FieldList) []inputValue {
 	out := make([]inputValue, 0, len(fields))
 	for _, f := range fields {
-		out = append(out, inputValue{name: f.Name, typ: f.Type, hasDefault: f.DefaultValue != nil})
+		out = append(out, inputValue{name: f.Name, typ: f.Type, defaultValue: normalizedValue(f.DefaultValue)})
 	}
 	return out
+}
+
+// normalizedValue prints a default value literal so that two literals of the
+// same value compare equal: input object fields sorted by name, string and
+// block strings quoted alike, and numbers in their shortest form. It returns
+// "" for no value.
+func normalizedValue(v *ast.Value) string {
+	if v == nil {
+		return ""
+	}
+	switch v.Kind {
+	case ast.StringValue, ast.BlockValue:
+		return strconv.Quote(v.Raw)
+	case ast.IntValue, ast.FloatValue:
+		if f, err := strconv.ParseFloat(v.Raw, 64); err == nil {
+			return strconv.FormatFloat(f, 'g', -1, 64)
+		}
+		return v.Raw
+	case ast.ListValue:
+		items := make([]string, 0, len(v.Children))
+		for _, c := range v.Children {
+			items = append(items, normalizedValue(c.Value))
+		}
+		return "[" + strings.Join(items, ", ") + "]"
+	case ast.ObjectValue:
+		fields := make([]string, 0, len(v.Children))
+		for _, c := range v.Children {
+			fields = append(fields, c.Name+": "+normalizedValue(c.Value))
+		}
+		sort.Strings(fields)
+		return "{" + strings.Join(fields, ", ") + "}"
+	case ast.NullValue:
+		return "null"
+	default:
+		return v.Raw
+	}
 }
 
 func findInput(values []inputValue, name string) *inputValue {
@@ -327,7 +368,10 @@ func findInput(values []inputValue, name string) *inputValue {
 // compareInputValues compares the arguments of a field or the fields of an
 // input type. A value a client could send to the old schema must still be
 // accepted: nothing it may set is removed or retyped, no nullable position
-// becomes required, and nothing new is required.
+// becomes required, and nothing new is required. A request that omits a value
+// must also keep its meaning: a default may not change or go away, since the
+// server would then act on a different value (or on none) for the same
+// request. Adding a default is compatible; it only accepts more requests.
 func (c *schemaComparison) compareInputValues(kind, owner string, oldVals, newVals []inputValue, exempt func(owner, name string) bool) {
 	label := func(name string) string {
 		if kind == "argument" {
@@ -350,8 +394,17 @@ func (c *schemaComparison) compareInputValues(kind, owner string, oldVals, newVa
 			c.addBreaking("%s changed type from %s to %s", label(ov.name), ov.typ, nv.typ)
 		case !ov.required() && nv.required():
 			c.addBreaking("%s became required: its default was removed", label(ov.name))
-		case ov.typ.String() != nv.typ.String():
-			c.addInfo("%s changed type from %s to %s (compatible)", label(ov.name), ov.typ, nv.typ)
+		case ov.hasDefault() && !nv.hasDefault():
+			c.addBreaking("%s lost its default %s; a request that omits it no longer gets that value", label(ov.name), ov.defaultValue)
+		case ov.hasDefault() && ov.defaultValue != nv.defaultValue:
+			c.addBreaking("%s changed its default from %s to %s; a request that omits it changes meaning", label(ov.name), ov.defaultValue, nv.defaultValue)
+		default:
+			if ov.typ.String() != nv.typ.String() {
+				c.addInfo("%s changed type from %s to %s (compatible)", label(ov.name), ov.typ, nv.typ)
+			}
+			if !ov.hasDefault() && nv.hasDefault() {
+				c.addInfo("%s gained the default %s", label(ov.name), nv.defaultValue)
+			}
 		}
 	}
 	for _, nv := range newVals {

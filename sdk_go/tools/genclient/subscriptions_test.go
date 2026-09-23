@@ -97,6 +97,8 @@ type Subscription {
 	out, err := subscriptionFunctions([]byte(genqlientSubscriptions), schema, map[string]string{
 		"Views":    "subscription.views",
 		"Firehose": "subscription.firehose",
+	}, map[string]string{
+		"Firehose": "Experimental until v0.4.0: The firehose shape is not final.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +109,7 @@ type Subscription {
 		"// The subscription executed by SubscribeViews.\n",
 		"// SubscribeViews runs the Views subscription",
 		"// View count updates of one stream.\n",
+		"//\n// Experimental until v0.4.0: The firehose shape is not final.\nfunc SubscribeFirehose(",
 		"func SubscribeViews(ctx context.Context, sc *SubscriptionClient, streamId *string) iter.Seq2[*ViewsResponse, error] {",
 		"return Subscribe[ViewsResponse](ctx, sc, \"Views\", Views_Operation, &__ViewsInput{\n\t\tStreamId: streamId,\n\t})",
 		"func SubscribeFirehose(ctx context.Context, sc *SubscriptionClient) iter.Seq2[*FirehoseResponse, error] {",
@@ -132,7 +135,7 @@ type Subscription { views(sc: ID): Int! }
 `})
 	src := strings.NewReplacer("streamId", "sc", "StreamId", "Sc").Replace(genqlientSubscriptions)
 	targets := map[string]string{"Views": "subscription.views", "Firehose": "subscription.views"}
-	if _, err := subscriptionFunctions([]byte(src), schema, targets); err == nil || !strings.Contains(err.Error(), "variable named sc") {
+	if _, err := subscriptionFunctions([]byte(src), schema, targets, nil); err == nil || !strings.Contains(err.Error(), "variable named sc") {
 		t.Fatalf("err = %v, want a variable named sc", err)
 	}
 }

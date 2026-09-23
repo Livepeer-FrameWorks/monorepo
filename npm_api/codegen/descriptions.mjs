@@ -78,9 +78,22 @@ for (const operation of operations.values())
 // Each operation's target from scripts/sdkcontract (make generate-ops):
 // kind.field.field, with a member type name after a field of union or
 // interface type (query.node.InfrastructureNode.metricsConnection).
-const targets = JSON.parse(
+// Its experimental map carries the note for each operation whose target path
+// has an @experimental field.
+const targetsFile = JSON.parse(
   readFileSync(join(repositoryRoot, "pkg/graphql/public/generated/targets.json"), "utf8")
-).targets;
+);
+const targets = targetsFile.targets;
+const experimental = targetsFile.experimental ?? {};
+
+// The operation's doc comment: its target field's description, then the
+// experimental note when the target is @experimental.
+function operationDescription(operation) {
+  const description = rootFieldDescription(operation);
+  const note = experimental[operation.name.value]?.note;
+  if (!note) return description;
+  return description ? `${description} ${note}` : note;
+}
 
 // The description of the field an operation targets.
 function rootFieldDescription(operation) {
@@ -186,7 +199,7 @@ for (const statement of sourceFile.statements) {
       return `${value.name.value}${suffix}` === name;
     });
     if (operation) {
-      addDescription(statement.getStart(sourceFile), rootFieldDescription(operation));
+      addDescription(statement.getStart(sourceFile), operationDescription(operation));
       documentType(statement.type, operationRoot(operation));
     }
     continue;
@@ -198,7 +211,7 @@ for (const statement of sourceFile.statements) {
       if (name.endsWith("Document")) {
         const operation = operations.get(name.slice(0, -"Document".length));
         if (operation)
-          addDescription(statement.getStart(sourceFile), rootFieldDescription(operation));
+          addDescription(statement.getStart(sourceFile), operationDescription(operation));
       }
       if (name.endsWith("FragmentDoc")) {
         const fragment = fragments.get(name.slice(0, -"FragmentDoc".length));

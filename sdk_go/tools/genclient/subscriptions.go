@@ -24,7 +24,7 @@ const subscriptionPrefix = "Subscribe"
 // same variables and runs the subscription on the SDK's SubscriptionClient.
 // The variables go out as genqlient's input struct, so a variable marked
 // @genqlient(omitempty: true) is left out when unset exactly as in queries.
-func subscriptionFunctions(src []byte, schema *gqlast.Schema, targets map[string]string) ([]byte, error) {
+func subscriptionFunctions(src []byte, schema *gqlast.Schema, targets, notes map[string]string) ([]byte, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "generated.go", src, parser.ParseComments)
 	if err != nil {
@@ -61,7 +61,7 @@ func subscriptionFunctions(src []byte, schema *gqlast.Schema, targets map[string
 		if !ok {
 			return nil, fmt.Errorf("subscription %s has no target in %s; run make generate-ops", name, targetsFile)
 		}
-		description, descErr := operationDescription(schema, target)
+		description, descErr := describeOperation(schema, target, notes[name])
 		if descErr != nil {
 			return nil, fmt.Errorf("%s_Operation: %w", name, descErr)
 		}
