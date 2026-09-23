@@ -1,4 +1,19 @@
 ---
+- name: Discover system services before MistServer transition (linux)
+  ansible.builtin.service_facts:
+  when: ansible_facts.os_family != 'Darwin'
+
+- name: Stop and disable legacy MistServer service (linux)
+  ansible.builtin.systemd:
+    name: "{{ mistserver_legacy_systemd_name }}"
+    state: stopped
+    enabled: false
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
+    - mistserver_legacy_systemd_name != mistserver_systemd_name
+    - (mistserver_legacy_systemd_name ~ '.service') in ansible_facts.services
+
 - name: Ensure systemd service running (linux)
   ansible.builtin.systemd:
     name: "{{ mistserver_systemd_name }}"

@@ -37,6 +37,8 @@ mistserver_env_file: /etc/frameworks/mistserver.env
 mistserver_config_file: /etc/mistserver.conf
 mistserver_systemd_name: frameworks-mistserver
 mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service"
+# The upstream unit must not run beside the managed service: both bind the same media ports.
+mistserver_legacy_systemd_name: mistserver
 mistserver_controller_port: 4242
 mistserver_controller_interface: 127.0.0.1
 mistserver_runtime_packages:

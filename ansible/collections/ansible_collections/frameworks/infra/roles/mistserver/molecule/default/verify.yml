@@ -15,10 +15,30 @@
       ansible.builtin.assert:
         that: ansible_facts.services['frameworks-mistserver.service'].state == 'running'
 
+    - name: Read legacy MistServer active state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, mistserver.service]
+      register: mistserver_legacy_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read legacy MistServer enablement
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, mistserver.service]
+      register: mistserver_legacy_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Assert legacy MistServer retired
+      ansible.builtin.assert:
+        that:
+          - mistserver_legacy_active.stdout == 'inactive'
+          - mistserver_legacy_enabled.stdout == 'disabled'
+
     - name: Wait for MistServer controller port
       ansible.builtin.wait_for:
         host: 127.0.0.1
-        port: "{{ mistserver_controller_port }}"
+        port: "{{ mistserver_controller_port | default(4242) }}"
         timeout: 30
 
     - name: Rerun role (idempotence)

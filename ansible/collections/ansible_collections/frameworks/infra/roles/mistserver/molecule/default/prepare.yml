@@ -1,0 +1,32 @@
+---
+- name: Prepare
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refresh APT metadata
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts.pkg_mgr == 'apt'
+
+    - name: Install legacy MistServer service fixture
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/mistserver.service
+        content: |
+          [Unit]
+          Description=Legacy MistServer fixture
+          [Service]
+          ExecStart=/usr/bin/sleep infinity
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Start legacy MistServer service fixture
+      ansible.builtin.systemd:
+        name: mistserver
+        state: started
+        enabled: true
+        daemon_reload: true
